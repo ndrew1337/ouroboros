@@ -201,3 +201,20 @@ def test_widgets_render_subscription_children():
     assert "items_key" in source
     assert "route_prefix" in source
     assert "type === 'key_value'" in source
+
+
+def test_widgets_json_download_control_and_loading_states():
+    source = _widgets_js()
+    css = (REPO_ROOT / "web" / "style.css").read_text(encoding="utf-8")
+
+    # Verify form & action loading indicator attributes
+    assert "isLoading = status[target] === 'loading'" in source
+    assert "disabledAttr = isLoading" in source
+    assert "widget-json-download-btn" in source
+    assert "data-widget-download-json" in source
+    assert "event.stopPropagation();" in source
+
+    # Verify JSON container wrapping rule prevents overflow
+    assert ".widget-json pre" in css
+    assert "white-space: pre-wrap;" in css
+    assert "word-break: break-all;" in css

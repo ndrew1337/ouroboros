@@ -689,7 +689,10 @@ Rules for widget changes:
 - Download controls must use the host download helper (`data-widget-download-url`
   / desktop bridge / fetch-blob fallback). Raw in-app navigation links are not
   acceptable for downloads because desktop WebView may replace the Ouroboros UI
-  with the media file.
+  with the media file. Direct client-side JSON text downloads via in-memory Blob
+  and mock download anchor clicks are a safe, compatible exception (they generate
+  and download files instantly in RAM without any in-app navigation or backend fetch
+  requests, and are fully supported under WebKit / WebView2 WebView runtimes).
 - Do not load arbitrary JS modules from skill directories into the SPA origin.
   `kind: "module"` is allowed only through the sandboxed iframe + parent fetch
   bridge above, and must be covered by the `widget_module_safety` review item.
