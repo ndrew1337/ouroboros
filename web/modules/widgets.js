@@ -212,7 +212,11 @@ function renderDataComponent(tab, component, state, status, componentState = {},
     }
     if (type === 'json') {
         const value = component.path ? getPath(data, component.path, {}) : data;
-        return `<details class="widget-json"><summary>${escapeHtml(component.label || 'JSON')}</summary><div class="widget-json-content"><div class="widget-json-actions"><button type="button" class="btn btn-xs btn-default widget-json-download-btn" data-widget-download-json="${componentKey}">Download JSON</button></div><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></div></details>`;
+        const isLoading = status[target] === 'loading';
+        const stateKey = `details:${componentKey}`;
+        const isOpen = isLoading || componentState[stateKey] === true;
+        const loadingIndicator = isLoading ? `<span class="widget-json-loader"><span class="widget-loading-pulse"></span> Running...</span>` : '';
+        return `<details class="widget-json" ${isOpen ? 'open' : ''} data-widget-details-key="${escapeHtml(stateKey)}"><summary>${escapeHtml(component.label || 'JSON')}${loadingIndicator}</summary><div class="widget-json-content"><div class="widget-json-actions"><button type="button" class="btn btn-xs btn-default widget-json-download-btn" data-widget-download-json="${componentKey}">Download JSON</button></div><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></div></details>`;
     }
     if (type === 'code') {
         const value = component.text ?? getPath(data, component.path || '', '');
@@ -663,6 +667,11 @@ async function mountDeclarativeWidget(mount, tab, render) {
                     link.remove();
                     setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
                 }
+            });
+        });
+        mount.querySelectorAll('[data-widget-details-key]').forEach((details) => {
+            details.addEventListener('toggle', () => {
+                componentState[details.dataset.widgetDetailsKey] = details.open;
             });
         });
         mount.querySelectorAll('[data-widget-kanban]').forEach((board) => {
