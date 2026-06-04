@@ -3919,13 +3919,21 @@ body {
     border-radius: var(--radius-xs);
 }
 .widget-progress progress::-webkit-progress-value {
-    background: linear-gradient(90deg, #c93545, #e85d6f);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f));
     border-radius: var(--radius-xs);
     box-shadow: 0 0 8px rgba(232, 93, 111, 0.4);
 }
 .widget-progress progress::-moz-progress-bar {
-    background: linear-gradient(90deg, #c93545, #e85d6f);
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f));
     border-radius: var(--radius-xs);
+}
+.widget-progress-text {
+    display: inline-flex;
+    align-items: center;
+}
+.widget-progress .widget-loading-pulse {
+    margin-left: 6px;
+    display: inline-block;
 }
 
 .widget-code pre {

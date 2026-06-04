@@ -7,7 +7,7 @@
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/razzant/ouroboros/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/razzant/ouroboros/releases)
 [![OuroborosHub](https://img.shields.io/badge/OuroborosHub-skills%20marketplace-8A2BE2.svg)](https://github.com/razzant/OuroborosHub)
-[![Version 6.15.4](https://img.shields.io/badge/version-6.15.4-green.svg)](VERSION)
+[![Version 6.15.5](https://img.shields.io/badge/version-6.15.5-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -514,6 +514,7 @@ the contribution guide only routes to those sources.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 6.15.5 | 2026-06-04 | **patch(widgets): extract inline style bindings to named CSS classes.** Migrates progress bar and inline loading dots' dynamic style rules in `web/modules/widgets.js` to clean class-based declarations in `web/style.css`, rigorously complying with the "No inline styles in JS" standard. Standardizes CSS progress color keys to use the official design tokens, prevents Starlette HEAD-request token-popping race conditions, and expands regression test suites. |
 | 6.15.4 | 2026-06-04 | **patch(widgets): unify visual progress aesthetics with pulsing loading indicators.** Integrates an elegant crimson pulsing indicator alongside the HTML5 progress elements on ongoing actions. Re-styles progress nodes inside the widgets pane to carry frosted glassmorphic styling, glowing linear gradients, and soft accent shadows in complete harmony with the new DuckDuckGo Search layout. Protects download_store from Starlette HEAD-request token consumption. |
 | 6.15.3 | 2026-06-04 | **patch(widgets): fix WebView navigation trapping on local JSON downloads.** Configures the "Download JSON" click handler to securely store JSON content in-memory via `/api/files/download_store` prior to downloading via the native desktop bridge. Adds a standard HTML5 browser Blob fallback to prevent WebKit/WebView2 WebView runtimes from trapping or destroying parent SPA states. |
 | 6.15.2 | 2026-06-04 | **patch(widgets): improve loading states, overflow wrapping, and local JSON download actions.** Adds visual loading and disabled indicators on active widget forms and action buttons during execution to eliminate stale status states. Configures '.widget-json pre' to carry white-space: 'pre-wrap', word-break: 'break-all', max-width: '100%' and overflow-x: 'auto' to structurally prevent layout-breaking horizontal overflow in the search results pane. Implements event-isolated, WebKit/WebView2-compatible client-side JSON text downloads via an in-memory browser Blob button within the JSON details panel, avoiding raw navigation and redundant backend fetch requests under PyWebView. |

@@ -216,9 +216,11 @@ def test_widgets_json_download_control_and_loading_states():
     assert "/api/files/download_store" in source
     assert "downloadViaHostBridge(" in source
 
-    # Verify progress widget dynamic pulsing dot support
+    # Verify progress widget dynamic pulsing dot support and "No inline styles in JS" compliance
     assert "const isOngoing = bounded > 0 && bounded < 100;" in source
     assert "widget-loading-pulse" in source
+    assert 'class="widget-loading-pulse" style="' not in source
+    assert 'class="widget-progress-text"' in source
 
     # Verify JSON container wrapping rule prevents overflow
     assert ".widget-json pre" in css
@@ -227,4 +229,4 @@ def test_widgets_json_download_control_and_loading_states():
     
     # Verify standard HTML5 progress bar styling matches layout
     assert ".widget-progress progress" in css
-    assert "linear-gradient(90deg, #c93545, #e85d6f)" in css
+    assert "linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f))" in css
