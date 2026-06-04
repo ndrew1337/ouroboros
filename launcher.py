@@ -1134,7 +1134,9 @@ def main():
                 while target.exists():
                     target = downloads / f"{stem}-{counter}{suffix}"
                     counter += 1
-                with urllib.request.urlopen(full_url, timeout=60) as resp:  # noqa: S310 - localhost validated above
+                proxy_handler = urllib.request.ProxyHandler({})
+                opener = urllib.request.build_opener(proxy_handler)
+                with opener.open(full_url, timeout=60) as resp:  # noqa: S310 - localhost validated above
                     with target.open("wb") as fh:
                         shutil.copyfileobj(resp, fh)
                 if open_external:
