@@ -9,6 +9,7 @@
     --text-muted: rgba(255, 255, 255, 0.38);
     --accent: #c93545;
     --accent-light: #f07a86;
+    --accent-hover: #e85d6f;
     --accent-dim: rgba(201, 53, 69, 0.15);
     --accent-glow: rgba(201, 53, 69, 0.08);
     /* Accent alpha tokens; keep future tweaks off hardcoded rgba literals. */
@@ -3919,12 +3920,12 @@ body {
     border-radius: var(--radius-xs);
 }
 .widget-progress progress::-webkit-progress-value {
-    background: linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f));
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
     border-radius: var(--radius-xs);
     box-shadow: 0 0 8px rgba(232, 93, 111, 0.4);
 }
 .widget-progress progress::-moz-progress-bar {
-    background: linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f));
+    background: linear-gradient(90deg, var(--accent), var(--accent-hover));
     border-radius: var(--radius-xs);
 }
 .widget-progress-text {

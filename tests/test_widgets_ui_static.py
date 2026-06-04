@@ -229,4 +229,4 @@ def test_widgets_json_download_control_and_loading_states():
     
     # Verify standard HTML5 progress bar styling matches layout
     assert ".widget-progress progress" in css
-    assert "linear-gradient(90deg, var(--accent), var(--accent-hover, #e85d6f))" in css
+    assert "linear-gradient(90deg, var(--accent), var(--accent-hover))" in css
