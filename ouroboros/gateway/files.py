@@ -15,7 +15,7 @@ log = logging.getLogger(__name__)
 
 from starlette.datastructures import UploadFile
 from starlette.requests import Request
-from starlette.responses import FileResponse, JSONResponse
+from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from ouroboros.gateway._helpers import json_error
@@ -398,7 +398,39 @@ async def api_files_read(request: Request) -> JSONResponse:
         return json_error(str(exc), status=500)
 
 
-async def api_files_download(request: Request) -> FileResponse | JSONResponse:
+_TEMP_DOWNLOADS: dict[str, tuple[str, str]] = {}
+
+
+async def api_files_download_store(request: Request) -> JSONResponse:
+    try:
+        payload = await request.json()
+    except Exception:
+        return json_error("Invalid JSON payload.", status=400)
+    filename = str(payload.get("filename") or "download.json")
+    content = str(payload.get("content") or "")
+    temp_id = str(uuid.uuid4())
+    _TEMP_DOWNLOADS[temp_id] = (filename, content)
+    if len(_TEMP_DOWNLOADS) > 100:
+        oldest_to_remove = list(_TEMP_DOWNLOADS.keys())[:50]
+        for k in oldest_to_remove:
+            _TEMP_DOWNLOADS.pop(k, None)
+    return JSONResponse({"ok": True, "temp_id": temp_id})
+
+
+async def api_files_download(request: Request) -> FileResponse | JSONResponse | StreamingResponse:
+    temp_id = request.query_params.get("temp_id", "")
+    if temp_id:
+        store = _TEMP_DOWNLOADS.get(temp_id)
+        if not store:
+            return JSONResponse({"error": "Temporary download link expired or not found."}, status_code=404)
+        filename, content = store
+        import io
+        return StreamingResponse(
+            io.BytesIO(content.encode("utf-8")),
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        )
+
     rel_path = request.query_params.get("path", "")
     try:
         if not rel_path:
@@ -758,6 +790,7 @@ def file_browser_routes() -> list[Route]:
         Route("/api/files/delete", endpoint=api_files_delete, methods=["POST"]),
         Route("/api/files/transfer", endpoint=api_files_transfer, methods=["POST"]),
         Route("/api/files/download", endpoint=api_files_download),
+        Route("/api/files/download_store", endpoint=api_files_download_store, methods=["POST"]),
         Route("/api/files/upload", endpoint=api_files_upload, methods=["POST"]),
     ]
 

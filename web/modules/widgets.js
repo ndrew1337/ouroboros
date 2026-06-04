@@ -648,7 +648,7 @@ async function mountDeclarativeWidget(mount, tab, render) {
             });
         });
         mount.querySelectorAll('[data-widget-download-json]').forEach((button) => {
-            button.addEventListener('click', (event) => {
+            button.addEventListener('click', async (event) => {
                 event.preventDefault();
                 event.stopPropagation();
                 const details = button.closest('.widget-json');
@@ -658,14 +658,32 @@ async function mountDeclarativeWidget(mount, tab, render) {
                     const cleanSkill = String(tab.skill || 'skill').replace(/[^a-zA-Z0-9_-]/g, '_');
                     const cleanKey = String(button.dataset.widgetDownloadJson || 'results').replace(/[^a-zA-Z0-9_-]/g, '_');
                     const filename = `${cleanSkill}-${cleanKey}.json`;
-                    const blob = new Blob([content], { type: 'application/json' });
-                    const blobUrl = URL.createObjectURL(blob);
-                    const link = document.createElement('a');
-                    Object.assign(link, { href: blobUrl, download: filename, rel: 'noopener' });
-                    document.body.appendChild(link);
-                    link.click();
-                    link.remove();
-                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                    
+                    button.disabled = true;
+                    const oldText = button.textContent;
+                    button.textContent = 'Storing...';
+                    try {
+                        const storeResp = await apiFetch('/api/files/download_store', {
+                            method: 'POST',
+                            body: JSON.stringify({ filename, content }),
+                        });
+                        const storeData = await storeResp.json();
+                        if (!storeData?.ok) throw new Error(storeData?.error || 'Failed to store temp download');
+                        await downloadViaHostBridge(`/api/files/download?temp_id=${storeData.temp_id}`, filename);
+                    } catch (err) {
+                        console.error('Download failed, using HTML5 fallback:', err);
+                        const blob = new Blob([content], { type: 'application/json' });
+                        const blobUrl = URL.createObjectURL(blob);
+                        const link = document.createElement('a');
+                        Object.assign(link, { href: blobUrl, download: filename, rel: 'noopener' });
+                        document.body.appendChild(link);
+                        link.click();
+                        link.remove();
+                        setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                    } finally {
+                        button.disabled = false;
+                        button.textContent = oldText;
+                    }
                 }
             });
         });

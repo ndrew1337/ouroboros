@@ -213,6 +213,8 @@ def test_widgets_json_download_control_and_loading_states():
     assert "widget-json-download-btn" in source
     assert "data-widget-download-json" in source
     assert "event.stopPropagation();" in source
+    assert "/api/files/download_store" in source
+    assert "downloadViaHostBridge(" in source
 
     # Verify JSON container wrapping rule prevents overflow
     assert ".widget-json pre" in css

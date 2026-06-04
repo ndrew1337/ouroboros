@@ -509,6 +509,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/files/read",
     "GET /api/files/content",
     "GET /api/files/download",
+    "POST /api/files/download_store",
     "POST /api/files/upload",
     "POST /api/files/mkdir",
     "POST /api/files/write",
