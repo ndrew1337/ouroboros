@@ -270,7 +270,9 @@ function renderDataComponent(tab, component, state, status, componentState = {},
         const value = Number(getPath(data, component.path || component.value_key || 'progress', 0));
         const bounded = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 0;
         const label = component.label_key ? getPath(data, component.label_key, '') : '';
-        return `<div class="widget-progress"><progress max="100" value="${bounded}"></progress><span>${bounded}%${label ? ` · ${escapeHtml(label)}` : ''}</span></div>`;
+        const isOngoing = bounded > 0 && bounded < 100;
+        const pulse = isOngoing ? '<span class="widget-loading-pulse" style="margin-left: 6px; display: inline-block;"></span>' : '';
+        return `<div class="widget-progress"><progress max="100" value="${bounded}"></progress><span style="display: inline-flex; align-items: center;">${bounded}%${label ? ` · ${escapeHtml(label)}` : ''}${pulse}</span></div>`;
     }
     // Host-owned map renderer; no skill-supplied JS reaches the SPA origin.
     if (type === 'map') {

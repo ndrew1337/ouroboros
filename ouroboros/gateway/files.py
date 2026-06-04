@@ -427,7 +427,10 @@ async def api_files_download_store(request: Request) -> JSONResponse:
 async def api_files_download(request: Request) -> FileResponse | JSONResponse | StreamingResponse:
     temp_id = request.query_params.get("temp_id", "")
     if temp_id:
-        store = _TEMP_DOWNLOADS.pop(temp_id, None)
+        if request.method == "GET":
+            store = _TEMP_DOWNLOADS.pop(temp_id, None)
+        else:
+            store = _TEMP_DOWNLOADS.get(temp_id)
         if not store:
             return JSONResponse({"error": "Temporary download link expired or not found."}, status_code=404)
         filename, content = store

@@ -198,6 +198,11 @@ def test_api_files_download_store_and_consume(monkeypatch: pytest.MonkeyPatch, t
         temp_id = data["temp_id"]
         assert temp_id
 
+        # 1.5. Hitting normal download with HEAD request should return headers and NOT pop the temp_id
+        head_response = client.head(f"/api/files/download?temp_id={temp_id}")
+        assert head_response.status_code == 200
+        assert head_response.headers["content-disposition"] == 'attachment; filename="test_quote_name.json"'
+
         # 2. Hitting normal download with temp_id should successfully retrieve stored json and sanitize filename
         download_response = client.get(f"/api/files/download?temp_id={temp_id}")
         assert download_response.status_code == 200
