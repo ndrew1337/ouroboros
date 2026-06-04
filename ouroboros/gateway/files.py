@@ -406,10 +406,17 @@ async def api_files_download_store(request: Request) -> JSONResponse:
         payload = await request.json()
     except Exception:
         return json_error("Invalid JSON payload.", status=400)
-    filename = str(payload.get("filename") or "download.json")
+    
+    import re
+    raw_filename = str(payload.get("filename") or "download.json")
+    base_name = pathlib.Path(raw_filename).name
+    clean_name = re.sub(r'[^a-zA-Z0-9_\-\.]', '_', base_name)
+    if not clean_name or clean_name.startswith('.'):
+        clean_name = "download.json"
+
     content = str(payload.get("content") or "")
     temp_id = str(uuid.uuid4())
-    _TEMP_DOWNLOADS[temp_id] = (filename, content)
+    _TEMP_DOWNLOADS[temp_id] = (clean_name, content)
     if len(_TEMP_DOWNLOADS) > 100:
         oldest_to_remove = list(_TEMP_DOWNLOADS.keys())[:50]
         for k in oldest_to_remove:
@@ -420,7 +427,7 @@ async def api_files_download_store(request: Request) -> JSONResponse:
 async def api_files_download(request: Request) -> FileResponse | JSONResponse | StreamingResponse:
     temp_id = request.query_params.get("temp_id", "")
     if temp_id:
-        store = _TEMP_DOWNLOADS.get(temp_id)
+        store = _TEMP_DOWNLOADS.pop(temp_id, None)
         if not store:
             return JSONResponse({"error": "Temporary download link expired or not found."}, status_code=404)
         filename, content = store

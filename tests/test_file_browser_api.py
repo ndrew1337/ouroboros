@@ -177,3 +177,34 @@ def test_upload_limit_returns_413(monkeypatch: pytest.MonkeyPatch, tmp_path: pat
     assert response.status_code == 413
     payload = json.loads(response.body.decode("utf-8"))
     assert "upload exceeds" in payload["error"].lower()
+
+
+def test_api_files_download_store_and_consume(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path):
+    root = tmp_path / "root"
+    root.mkdir()
+    
+    with _make_client(root, monkeypatch) as client:
+        # 1. POST JSON payload to the store
+        store_response = client.post(
+            "/api/files/download_store",
+            json={
+                "filename": 'test"quote;name.json',
+                "content": '{"test": "data"}',
+            }
+        )
+        assert store_response.status_code == 200
+        data = store_response.json()
+        assert data["ok"] is True
+        temp_id = data["temp_id"]
+        assert temp_id
+
+        # 2. Hitting normal download with temp_id should successfully retrieve stored json and sanitize filename
+        download_response = client.get(f"/api/files/download?temp_id={temp_id}")
+        assert download_response.status_code == 200
+        assert download_response.headers["content-disposition"] == 'attachment; filename="test_quote_name.json"'
+        assert download_response.content == b'{"test": "data"}'
+
+        # 3. Subsequent download with same temp_id should return 404 (one-shot popping prevents lingering or reuse)
+        second_response = client.get(f"/api/files/download?temp_id={temp_id}")
+        assert second_response.status_code == 404
+        assert "not found" in second_response.json()["error"].lower()

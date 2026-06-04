@@ -710,6 +710,7 @@ The executable route SSOT is `ouroboros/gateway/router.py`; file-browser routes 
 | GET | `/api/files/read` | `gateway.files.api_files_read` |
 | GET | `/api/files/content` | `gateway.files.api_files_content` |
 | GET | `/api/files/download` | `gateway.files.api_files_download` |
+| POST | `/api/files/download_store` | `gateway.files.api_files_download_store` |
 | POST | `/api/files/upload` | `gateway.files.api_files_upload` |
 | POST | `/api/files/mkdir` | `gateway.files.api_files_mkdir` |
 | POST | `/api/files/write` | `gateway.files.api_files_write` |
