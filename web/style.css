@@ -3913,6 +3913,76 @@ body {
     overflow-x: auto;
 }
 
+.widget-json {
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.015);
+    padding: 2px 10px;
+}
+
+.widget-json summary {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+    user-select: none;
+    outline: none;
+    padding: 6px 0;
+}
+
+.widget-json summary:hover {
+    color: var(--text-primary);
+}
+
+.widget-json[open] summary {
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding-bottom: 6px;
+}
+
+.widget-json-content {
+    position: relative;
+    margin-bottom: 5px;
+}
+
+.widget-json-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 6px;
+}
+
+.widget-json-download-btn {
+    border: 1px solid rgba(255, 255, 255, 0.08) !important;
+    background: rgba(255, 255, 255, 0.03) !important;
+    padding: 3px 8px !important;
+    font-size: 11px !important;
+    border-radius: var(--radius-sm) !important;
+    line-height: normal !important;
+    height: auto !important;
+    color: var(--text-secondary) !important;
+}
+
+.widget-json-download-btn:hover {
+    background: rgba(250, 250, 250, 0.07) !important;
+    border-color: rgba(255, 255, 255, 0.2) !important;
+    color: var(--text-primary) !important;
+}
+
+.widget-json pre {
+    margin: 0;
+    padding: 10px;
+    border-radius: var(--radius-sm);
+    background: rgba(0, 0, 0, 0.24);
+    overflow-x: auto;
+    font-family: inherit;
+    font-size: 13px;
+    max-width: 100%;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
 .widget-code-label {
     color: rgba(250, 250, 250, 0.65);
     font-size: 12px;

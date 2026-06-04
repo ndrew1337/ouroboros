@@ -212,7 +212,7 @@ function renderDataComponent(tab, component, state, status, componentState = {},
     }
     if (type === 'json') {
         const value = component.path ? getPath(data, component.path, {}) : data;
-        return `<details class="widget-json"><summary>${escapeHtml(component.label || 'JSON')}</summary><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></details>`;
+        return `<details class="widget-json"><summary>${escapeHtml(component.label || 'JSON')}</summary><div class="widget-json-content"><div class="widget-json-actions"><button type="button" class="btn btn-xs btn-default widget-json-download-btn" data-widget-download-json="${componentKey}">Download JSON</button></div><pre>${escapeHtml(JSON.stringify(value, null, 2))}</pre></div></details>`;
     }
     if (type === 'code') {
         const value = component.text ?? getPath(data, component.path || '', '');
@@ -545,10 +545,18 @@ async function mountDeclarativeWidget(mount, tab, render) {
                 const fields = (component.fields || [])
                     .map((field) => renderField(field, formValues[idx] || {}))
                     .join('');
-                return `<form class="widget-form" data-widget-form="${idx}">${component.title ? `<h4>${escapeHtml(component.title)}</h4>` : ''}${fields}<button class="btn btn-primary" type="submit">${escapeHtml(component.submit_label || 'Submit')}</button></form>`;
+                const target = component.target || 'result';
+                const isLoading = status[target] === 'loading';
+                const submitBtnLabel = isLoading ? `${component.submit_label || 'Submit'}...` : (component.submit_label || 'Submit');
+                const disabledAttr = isLoading ? 'disabled' : '';
+                return `<form class="widget-form" data-widget-form="${idx}">${component.title ? `<h4>${escapeHtml(component.title)}</h4>` : ''}${fields}<button class="btn btn-primary" type="submit" ${disabledAttr}>${escapeHtml(submitBtnLabel)}</button></form>`;
             }
             if (type === 'action') {
-                return `<button class="btn btn-default" data-widget-action="${idx}">${escapeHtml(component.label || 'Run')}</button>`;
+                const target = component.target || 'result';
+                const isLoading = status[target] === 'loading';
+                const actionLabel = isLoading ? `${component.label || 'Run'}...` : (component.label || 'Run');
+                const disabledAttr = isLoading ? 'disabled' : '';
+                return `<button class="btn btn-default" data-widget-action="${idx}" ${disabledAttr}>${escapeHtml(actionLabel)}</button>`;
             }
             if (type === 'poll') {
                 return `<button class="btn btn-default" data-widget-poll="${idx}">${escapeHtml(component.label || 'Start polling')}</button>`;
@@ -632,6 +640,28 @@ async function mountDeclarativeWidget(mount, tab, render) {
                     status.download = 'error';
                 } finally {
                     button.disabled = false;
+                }
+            });
+        });
+        mount.querySelectorAll('[data-widget-download-json]').forEach((button) => {
+            button.addEventListener('click', (event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                const details = button.closest('.widget-json');
+                const pre = details ? details.querySelector('pre') : null;
+                if (pre) {
+                    const content = pre.textContent;
+                    const cleanSkill = String(tab.skill || 'skill').replace(/[^a-zA-Z0-9_-]/g, '_');
+                    const cleanKey = String(button.dataset.widgetDownloadJson || 'results').replace(/[^a-zA-Z0-9_-]/g, '_');
+                    const filename = `${cleanSkill}-${cleanKey}.json`;
+                    const blob = new Blob([content], { type: 'application/json' });
+                    const blobUrl = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    Object.assign(link, { href: blobUrl, download: filename, rel: 'noopener' });
+                    document.body.appendChild(link);
+                    link.click();
+                    link.remove();
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
                 }
             });
         });
