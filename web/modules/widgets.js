@@ -272,7 +272,7 @@ function renderDataComponent(tab, component, state, status, componentState = {},
         const label = component.label_key ? getPath(data, component.label_key, '') : '';
         const isOngoing = bounded > 0 && bounded < 100;
         const pulse = isOngoing ? '<span class="widget-loading-pulse"></span>' : '';
-        return `<div class="widget-progress"><progress max="100" value="${bounded}"></progress><span class="widget-progress-text">${bounded}%${label ? ` · ${escapeHtml(label)}` : ''}${pulse}</span></div>`;
+        return `<div class="widget-progress"><div class="widget-progress-bar-row"><progress max="100" value="${bounded}"></progress><span class="widget-progress-text">${bounded}%${pulse}</span></div>${label ? `<div class="widget-progress-label">${escapeHtml(label)}</div>` : ''}</div>`;
     }
     // Host-owned map renderer; no skill-supplied JS reaches the SPA origin.
     if (type === 'map') {

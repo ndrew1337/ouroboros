@@ -221,6 +221,8 @@ def test_widgets_json_download_control_and_loading_states():
     assert "widget-loading-pulse" in source
     assert 'class="widget-loading-pulse" style="' not in source
     assert 'class="widget-progress-text"' in source
+    assert 'class="widget-progress-bar-row"' in source
+    assert 'class="widget-progress-label"' in source
 
     # Verify JSON container wrapping rule prevents overflow
     assert ".widget-json pre" in css
@@ -229,4 +231,6 @@ def test_widgets_json_download_control_and_loading_states():
     
     # Verify standard HTML5 progress bar styling matches layout
     assert ".widget-progress progress" in css
+    assert ".widget-progress-bar-row" in css
+    assert ".widget-progress-label" in css
     assert "linear-gradient(90deg, var(--accent), var(--accent-hover))" in css

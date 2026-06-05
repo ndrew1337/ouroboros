@@ -3902,8 +3902,15 @@ body {
 
 .widget-progress {
     display: flex;
+    flex-direction: column;
+    gap: 6px;
+    width: 100%;
+}
+.widget-progress-bar-row {
+    display: flex;
     align-items: center;
     gap: 10px;
+    width: 100%;
 }
 .widget-progress progress {
     -webkit-appearance: none;
@@ -3914,6 +3921,14 @@ body {
     border-radius: var(--radius-xs);
     overflow: hidden;
     background: rgba(255, 255, 255, 0.08);
+    flex: 1;
+    min-width: 0;
+}
+.widget-progress-label {
+    font-size: 11px;
+    color: var(--text-secondary);
+    word-break: break-all;
+    padding-left: 2px;
 }
 .widget-progress progress::-webkit-progress-bar {
     background: rgba(255, 255, 255, 0.08);
