@@ -36,6 +36,7 @@ on:
       - 'VERSION'
       - 'README.md'
       - 'launcher.py'
+      - 'notebooks/**'
     tags:
       - 'v*'
   workflow_dispatch:

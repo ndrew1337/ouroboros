@@ -1,4 +1,4 @@
-# Ouroboros v6.31.2 — Architecture & Reference
+# Ouroboros v6.31.3 — Architecture & Reference
 
 This file is NOT a changelog. Version history lives in README.md, git tags, and commit log.
 
@@ -32,7 +32,7 @@ server.py (Starlette+uvicorn) ← HTTP + WebSocket on configurable host:port (de
   │
   └── ouroboros/               ← Agent core (runs inside worker processes)
       ├── config.py            ← SSOT: paths, settings defaults, load/save, PID lock
-      ├── colab_bootstrap.py   ← Google Colab source-mode bootstrap helpers, driven by the `notebooks/colab_quickstart.py` cell script: Drive-backed data/settings, fork-safe env, personal origin provisioning, no-UI server command assembly, and loopback install/enable/full_access of the Telegram bridge
+      ├── colab_bootstrap.py   ← Google Colab source-mode bootstrap helpers, driven by the \`notebooks/colab_quickstart.py\` cell script or the user-friendly \`notebooks/colab_quickstart.ipynb\` notebook wrapper: Drive-backed data/settings, fork-safe env, personal origin provisioning, no-UI server command assembly, and loopback install/enable/full_access of the Telegram bridge
       ├── cli.py               ← Source/headless CLI over gateway tasks, logs, settings, skills, marketplace, local-model, and MCP wrappers
       ├── packaged_cli.py      ← Packaged desktop CLI bridge: resolves bundle roots, bootstraps the launcher-managed repo, and delegates to cli.py
       ├── packaged_cli_install.py ← Packaged CLI installer planning/execution for user-local command shims
