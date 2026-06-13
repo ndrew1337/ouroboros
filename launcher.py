@@ -635,12 +635,23 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
                     force_kill_pid(child.pid)
                 except (ProcessLookupError, PermissionError, OSError):
                     pass
-            if _webview_window:
-                try:
-                    _webview_window.destroy()
-                except Exception:
-                    pass
-            break
+            # This lifecycle loop runs on a daemon thread; the main thread owns
+            # webview.start()'s GUI loop. Calling _webview_window.destroy() from
+            # here does NOT reliably terminate that loop (notably on macOS/Cocoa,
+            # where GUI teardown must happen on the main thread), which left the
+            # app a black, unresponsive window after /panic. Panic means "kill
+            # everything", so hard-exit the whole launcher process: os._exit tears
+            # down the GUI and every thread on all platforms. Release the
+            # single-instance pid lock first — os._exit bypasses the atexit
+            # handler, and a relaunch would otherwise be refused as "already
+            # running". (destroy() is intentionally NOT called: from this thread
+            # it can block on the stuck GUI loop and never reach the hard exit.)
+            try:
+                release_pid_lock()
+            except Exception:
+                pass
+            log.info("Panic shutdown complete — hard-exiting launcher process.")
+            os._exit(0)
 
         time.sleep(2)
 
