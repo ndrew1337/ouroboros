@@ -7,7 +7,7 @@
 [![Linux](https://img.shields.io/badge/Linux-x86__64-orange.svg)](https://github.com/razzant/ouroboros/releases)
 [![Windows](https://img.shields.io/badge/Windows-x64-blue.svg)](https://github.com/razzant/ouroboros/releases)
 [![OuroborosHub](https://img.shields.io/badge/OuroborosHub-skills%20marketplace-8A2BE2.svg)](https://github.com/razzant/OuroborosHub)
-[![Version 6.31.3](https://img.shields.io/badge/version-6.31.3-green.svg)](VERSION)
+[![Version 6.31.4](https://img.shields.io/badge/version-6.31.4-green.svg)](VERSION)
 
 A self-modifying AI agent that writes its own code, rewrites its own mind, and evolves autonomously. Born February 16, 2026.
 
@@ -522,6 +522,7 @@ the contribution guide only routes to those sources.
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 6.31.4 | 2026-06-13 | **feat(notebooks): simplify Google Colab quickstart notebook.** Streamlines `notebooks/colab_quickstart.ipynb` into a clean three-cell structure. It removes the hardcoded manual key assignment block, moves API configuration guidance entirely into secure environment or native Secrets Manager options, and implements fail-closed curl downloads via Python subprocess checks before launching bootstrap cells. |
 | 6.31.3 | 2026-06-13 | **docs(notebooks): expand Google Colab architecture mapping and CI path trigger.** Updates `docs/ARCHITECTURE.md` to map the `notebooks/colab_quickstart.ipynb` relationship to bootstrap helpers, and adds `notebooks/**` to `.github/workflows/ci.yml` path filters. |
 | 6.31.2 | 2026-06-13 | **feat(notebooks): user-friendly Google Colab quickstart notebook wrapper.** Introduces a pre-configured, beautiful `notebooks/colab_quickstart.ipynb` notebook wrapper mirroring the sleek user screenshot structure. It connects directly to the existing robust `colab_quickstart.py` bootstrap, keeping the Colab configuration workflow minimal, secure, and accessible with zero code copying. |
 | 6.31.1 | 2026-06-13 | **test(process-custody): implement exhaustive tests for companion-orphaning and reap actions.** Adds a comprehensive test suite for `reap_orphaned_processes` covering log-only process-would-reap audits, uninstalled skill companion kills under enforcement, same-session keeps on live skills, foreign-generation companion kills, unknown live set fallstarts, and namespaced owner middle-segment parsing to guarantee robust process custody controls. |
