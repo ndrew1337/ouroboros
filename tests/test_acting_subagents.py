@@ -411,7 +411,8 @@ def test_integrate_reject_records_verdict(tmp_path):
     assert (repo / "a.txt").read_text(encoding="utf-8") == "hi\n"  # unchanged
 
 
-def test_integrate_protected_blocked_in_advanced(tmp_path):
+def test_integrate_protected_blocked_in_advanced(tmp_path, monkeypatch):
+    monkeypatch.setattr("ouroboros.tools.subagent_integration.get_runtime_mode", lambda: "advanced")
     from ouroboros.tools.subagent_integration import _integrate_subagent_patch
     repo = tmp_path / "repo"
     _init_repo(repo, {"ouroboros/safety.py": "X = 1\n"})
@@ -706,7 +707,8 @@ def test_integrate_lineage_forbidden_for_non_child(tmp_path):
 # --------------------------------------------------------------------------- #
 # 10. Triad+scope round-2/3/4 deep fixes
 # --------------------------------------------------------------------------- #
-def test_integrate_protected_derived_from_patch_not_manifest(tmp_path):
+def test_integrate_protected_derived_from_patch_not_manifest(tmp_path, monkeypatch):
+    monkeypatch.setattr("ouroboros.tools.subagent_integration.get_runtime_mode", lambda: "advanced")
     # A malicious child cannot hide a protected edit by omitting it from the manifest.
     from ouroboros.tools.subagent_integration import _integrate_subagent_patch
     repo = tmp_path / "repo"

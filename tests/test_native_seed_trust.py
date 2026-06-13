@@ -98,6 +98,7 @@ def test_externally_facing_permissions_stay_disabled(seed_env):
 
 
 def test_flag_off_skips_stamp_entirely(seed_env, monkeypatch):
+    monkeypatch.setattr("ouroboros.config.get_trust_native_seeded_skills", lambda: False)
     seed_dir, target_root, data_root = seed_env
     monkeypatch.setenv("OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS", "false")
     _write_skill(seed_dir, "zero_grant_ext", permissions="[tool, subprocess]")

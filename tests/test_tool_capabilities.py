@@ -230,6 +230,7 @@ def test_code_search_empty_query(tmp_path):
 def test_code_search_invalid_regex(tmp_path):
     from ouroboros.tools.core import _code_search
     ctx = _make_ctx(tmp_path)
+    (tmp_path / "dummy.py").write_text("dummy", encoding="utf-8")
     result = _code_search(ctx, "[invalid", regex=True)
     assert "SEARCH_ERROR" in result
 
