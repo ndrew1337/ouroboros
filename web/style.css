@@ -1423,6 +1423,33 @@ body.resizing-panels { user-select: none; }
     border-radius: var(--radius-sm);
 }
 
+.chat-file {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    background: rgba(201, 53, 69, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: var(--text-primary);
+    font: inherit;
+    text-align: left;
+    text-decoration: none;
+    word-break: break-all;
+    cursor: pointer;
+}
+
+button.chat-file:hover,
+.chat-file:hover {
+    border-color: rgba(232, 93, 111, 0.4);
+}
+
+.chat-file-empty {
+    opacity: 0.6;
+    cursor: default;
+}
+
 .chat-bubble.user .message { color: var(--user-text); }
 .chat-bubble.assistant .message { color: rgba(255, 235, 238, 0.96); }
 .chat-bubble.system .message { color: var(--system-text); }

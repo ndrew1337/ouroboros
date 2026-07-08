@@ -10,7 +10,7 @@ import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
-from ouroboros.event_bus import CHAT_OUTBOUND, CHAT_PHOTO, CHAT_TYPING, CHAT_VIDEO, publish_event
+from ouroboros.event_bus import CHAT_DOCUMENT, CHAT_OUTBOUND, CHAT_PHOTO, CHAT_TYPING, CHAT_VIDEO, publish_event
 from supervisor.state import append_jsonl, load_state
 from ouroboros.utils import utc_now_iso
 
@@ -396,6 +396,43 @@ class LocalChatBridge:
             "caption": str(caption or ""),
             "video_base64": b64_str,
             "mime": str(mime or ""),
+            "ts": msg["ts"],
+        })
+        return True, "ok"
+
+    def send_document(
+        self,
+        chat_id: int,
+        file_bytes: bytes,
+        filename: str = "file",
+        caption: str = "",
+        mime: str = "application/octet-stream",
+    ) -> Tuple[bool, str]:
+        """Send an arbitrary document/file to UI and host event subscribers."""
+        if is_a2a_chat_id(chat_id):
+            return True, "ok"
+        b64_str = base64.b64encode(file_bytes).decode("ascii")
+        safe_name = str(filename or "file")
+        msg = {
+            "type": "document",
+            "role": "assistant",
+            "file_base64": b64_str,
+            "mime": mime,
+            "filename": safe_name,
+            "caption": caption,
+            "ts": utc_now_iso(),
+            "chat_id": int(chat_id or 0),
+        }
+        if self._broadcast_fn:
+            self._broadcast_fn(msg)
+        document_transport = dict(self._chat_transports.get(int(chat_id or 0), {}) or {})
+        publish_event(CHAT_DOCUMENT, {
+            "chat_id": int(chat_id or 0),
+            "transport": document_transport,
+            "caption": str(caption or ""),
+            "file_base64": b64_str,
+            "mime": str(mime or ""),
+            "filename": safe_name,
             "ts": msg["ts"],
         })
         return True, "ok"

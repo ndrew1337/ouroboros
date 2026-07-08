@@ -86,7 +86,12 @@ MAX_FUNCTION_LINES = 300
 # ceiling resolver, loop transport wrapper, media ffmpeg resolver chain,
 # protected-artifact round-2 classifiers) — deliberate feature growth; 3690 -> 3699
 # with the usual small headroom.
-MAX_TOTAL_FUNCTIONS = 3699
+# v6.57.0 outbound file delivery: +4 functions (_detect_document_mime + _send_file
+# in tools/core.py, LocalChatBridge.send_document in supervisor/message_bus.py,
+# _handle_send_document in supervisor/events.py) for the send_file capability —
+# deliberate feature growth. Measured post-diff count is 3702 (the prior 3699 cap
+# carried 1 headroom slot); cap 3699 -> 3703 keeps the usual small headroom.
+MAX_TOTAL_FUNCTIONS = 3703
 GRANDFATHERED_OVERSIZED_FUNCTIONS = {
     ("agent_startup_checks.py", "verify_restart"),  # managed #53 boot diagnostic flow, 307 lines
     ("git.py", "_run_reviewed_stage_cycle"),  # reviewed-commit gate orchestration, 302 lines

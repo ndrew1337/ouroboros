@@ -2705,6 +2705,62 @@ export function createChatInstance({
         incrementUnreadIfNeeded();
     });
 
+    ws.on('document', (msg) => {
+        if (!isMyThread(msg)) return;
+        hideTyping();
+        const role = msg.role === 'user' ? 'user' : 'assistant';
+        const sender = role === 'user'
+            ? getSenderLabel('user', false, '', {
+                source: msg.source || '',
+                senderLabel: msg.sender_label || '',
+                senderSessionId: msg.sender_session_id || '',
+            })
+            : 'Ouroboros';
+        const bubble = document.createElement('div');
+        bubble.className = `chat-bubble ${role}`;
+        const timeFmt = formatMsgTime(msg.ts || new Date().toISOString());
+        const timeHtml = timeFmt ? `<div class="msg-time" title="${escapeHtmlAttr(timeFmt.full)}">${escapeHtml(timeFmt.short)}</div>` : '';
+        const captionHtml = msg.caption ? `<div class="message">${escapeHtml(msg.caption)}</div>` : '';
+        const mime = /^[A-Za-z0-9!#$&^_.+-]+\/[A-Za-z0-9!#$&^_.+-]+$/.test(String(msg.mime || ''))
+            ? String(msg.mime)
+            : 'application/octet-stream';
+        const fileBase64 = /^[A-Za-z0-9+/=\s]+$/.test(String(msg.file_base64 || ''))
+            ? String(msg.file_base64 || '').replace(/\s+/g, '')
+            : '';
+        const filename = String(msg.filename || 'file').replace(/[\r\n]+/g, ' ').slice(0, 200);
+        // No persistent data: href — a raw download link can make the desktop
+        // WebView navigate away from the UI (DEVELOPMENT.md). Render a button and
+        // trigger an in-memory blob download on click instead.
+        const linkHtml = fileBase64
+            ? `<button type="button" class="chat-file" data-download="1">📎 ${escapeHtml(filename)}</button>`
+            : `<span class="chat-file chat-file-empty">📎 ${escapeHtml(filename)}</span>`;
+        bubble.innerHTML = `
+            <div class="sender">${escapeHtml(sender)}</div>
+            ${captionHtml}
+            <div class="message">${linkHtml}</div>
+            ${timeHtml}
+        `;
+        const dlBtn = bubble.querySelector('.chat-file[data-download]');
+        if (dlBtn && fileBase64) {
+            dlBtn.addEventListener('click', () => {
+                try {
+                    const bytes = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
+                    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+                    const tmp = document.createElement('a');
+                    Object.assign(tmp, { href: blobUrl, download: filename, rel: 'noopener' });
+                    document.body.appendChild(tmp);
+                    tmp.click();
+                    tmp.remove();
+                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                } catch (err) {
+                    showToast(`Could not download file: ${err && err.message ? err.message : err}`, 'error');
+                }
+            });
+        }
+        insertMessageNode(bubble);
+        incrementUnreadIfNeeded();
+    });
+
     let wsHasConnectedOnce = false;
 
     ws.on('open', () => {
