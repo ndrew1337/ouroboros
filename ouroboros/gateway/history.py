@@ -217,10 +217,47 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
         combined: list = []
 
         chat_path = data_dir / "logs" / "chat.jsonl"
+        archive_dir = data_dir / "archive"
         try:
             # WS4: parse the jsonl off the event loop (file read + json decode) so a
             # large history can't block the loop / delay WS broadcasts on reconnect.
-            _chat_entries = await asyncio.to_thread(lambda p=chat_path: list(iter_jsonl_objects(p)))
+            def _read_chat_entries(live=chat_path, adir=archive_dir, want=n_human):
+                # The live chat.jsonl is rotated to archive/chat_<ts>.jsonl once it
+                # crosses ~800KB. Reading only the live file would erase the visible
+                # conversation right after a rotation (and any file bubble delivered
+                # before it). Backfill from the most recent archives — newest first,
+                # until we have enough human rows to satisfy `want`, bounded to a few
+                # files — then reassemble chronologically (oldest archive -> live).
+                live_entries = list(iter_jsonl_objects(live))
+                def _human_count(entries):
+                    return sum(
+                        1 for e in entries
+                        if str(e.get("direction", "")).lower() in ("in", "out")
+                    )
+                collected = _human_count(live_entries)
+                try:
+                    archives = sorted(
+                        adir.glob("chat_*.jsonl"), key=lambda p: p.name, reverse=True
+                    )
+                except Exception:
+                    archives = []
+                chosen: list = []
+                for ap in archives:
+                    if collected >= want or len(chosen) >= 3:
+                        break
+                    try:
+                        aents = list(iter_jsonl_objects(ap))
+                    except Exception:
+                        continue
+                    chosen.append(aents)
+                    collected += _human_count(aents)
+                ordered: list = []
+                for aents in reversed(chosen):  # oldest archive first
+                    ordered.extend(aents)
+                ordered.extend(live_entries)
+                return ordered
+
+            _chat_entries = await asyncio.to_thread(_read_chat_entries)
             for entry in _chat_entries:
                 # Skip A2A virtual chat_ids so A2A task traffic does not appear in human chat history.
                 if is_a2a_chat_id(entry.get("chat_id", 1)):

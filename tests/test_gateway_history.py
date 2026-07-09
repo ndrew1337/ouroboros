@@ -79,6 +79,78 @@ def test_chat_history_replays_delivered_document_row(tmp_path):
     assert rec["caption"] == "quarterly numbers"
 
 
+def test_chat_history_backfills_from_rotated_archive(tmp_path):
+    """The live chat.jsonl is rotated to archive/chat_<ts>.jsonl at ~800KB. History
+    replay must backfill from the most recent archive(s) so a rotation does not
+    silently erase the visible conversation — including delivered file bubbles —
+    that scrolled just before it (BIBLE P1: no silent loss)."""
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    # Older conversation + a delivered document, now rotated into the archive.
+    (archive / "chat_20260709T165729.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-07-09T16:00:00Z",
+                "direction": "in",
+                "chat_id": 1,
+                "user_id": 1,
+                "text": "older message before the rotation",
+            }
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "ts": "2026-07-09T16:05:00Z",
+                "direction": "out",
+                "chat_id": 1,
+                "user_id": 7,
+                "text": "here is the old pdf",
+                "type": "document",
+                "filename": "archived_report.pdf",
+                "mime": "application/pdf",
+                "download_url": "/api/files/download?path=Desktop/archived_report.pdf",
+                "caption": "here is the old pdf",
+                "task_id": "t-old-doc",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # Small live file written after the rotation.
+    (logs / "chat.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-07-09T17:29:00Z",
+                "direction": "in",
+                "chat_id": 1,
+                "user_id": 1,
+                "text": "newest live message",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (logs / "progress.jsonl").write_text("", encoding="utf-8")
+
+    endpoint = make_chat_history_endpoint(tmp_path)
+    response = asyncio.run(endpoint(SimpleNamespace(query_params={"limit": "50"})))
+    payload = json.loads(response.body.decode("utf-8"))["messages"]
+
+    texts = [item.get("text", "") for item in payload]
+    # The archived human message survives the rotation.
+    assert "older message before the rotation" in texts
+    assert "newest live message" in texts
+    # The archived delivered-document row is replayed as a document bubble.
+    doc = next(item for item in payload if item.get("msg_type") == "document")
+    assert doc["filename"] == "archived_report.pdf"
+    assert doc["download_url"] == "/api/files/download?path=Desktop/archived_report.pdf"
+    # Chronological reassembly: archived rows precede the newer live row.
+    assert texts.index("older message before the rotation") < texts.index("newest live message")
+
+
 def test_chat_history_preserves_subagent_accept_markers(tmp_path):
     """WS8 accept/count markers must survive chat-history replay (gateway contract)."""
     logs = tmp_path / "logs"
