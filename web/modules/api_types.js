@@ -397,4 +397,4 @@
  * @property {boolean=} ok
  */
 
-export const GATEWAY_CONTRACT_VERSION = '6.58.5';
+export const GATEWAY_CONTRACT_VERSION = '6.58.6';

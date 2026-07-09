@@ -229,11 +229,26 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
                 # until we have enough human rows to satisfy `want`, bounded to a few
                 # files — then reassemble chronologically (oldest archive -> live).
                 live_entries = list(iter_jsonl_objects(live))
+                def _counts_toward_thread(e):
+                    # Count a human row toward the backfill quota ONLY if it would
+                    # survive the same A2A + chat_id/project-thread filter applied
+                    # in the render loop below. Otherwise a project-thread request
+                    # whose live file already holds `want` unrelated main-chat rows
+                    # would skip the archives and still lose the rotated project
+                    # messages/documents this backfill exists to recover.
+                    if not isinstance(e, dict):
+                        return False
+                    if str(e.get("direction", "")).lower() not in ("in", "out"):
+                        return False
+                    if is_a2a_chat_id(e.get("chat_id", 1)):
+                        return False
+                    try:
+                        ec = int(e.get("chat_id", 1) or 1)
+                    except (TypeError, ValueError):
+                        ec = 1
+                    return _row_matches_thread(ec, e)
                 def _human_count(entries):
-                    return sum(
-                        1 for e in entries
-                        if str(e.get("direction", "")).lower() in ("in", "out")
-                    )
+                    return sum(1 for e in entries if _counts_toward_thread(e))
                 collected = _human_count(live_entries)
                 try:
                     archives = sorted(

@@ -151,6 +151,78 @@ def test_chat_history_backfills_from_rotated_archive(tmp_path):
     assert texts.index("older message before the rotation") < texts.index("newest live message")
 
 
+def test_chat_history_backfill_quota_is_thread_aware(tmp_path):
+    """Regression for the v6.58.5 review finding: the archive-backfill human-row
+    quota must be counted with the SAME thread filter used at render time. A
+    project-thread request whose LIVE file already holds `want` unrelated
+    main-chat rows must still read the archive so rotated PROJECT rows/documents
+    are recovered (they used to be skipped because the quota counted every live
+    human row before the thread filter)."""
+    from ouroboros import projects_registry
+    from ouroboros.contracts.chat_id_policy import project_chat_id
+
+    # A registered project so its chat_id classifies as a project thread.
+    projects_registry.create_project(tmp_path, "proj_demo", name="Demo")
+    pc = project_chat_id("proj_demo")
+
+    logs = tmp_path / "logs"
+    logs.mkdir()
+    archive = tmp_path / "archive"
+    archive.mkdir()
+
+    # Rotated archive holds a PROJECT-thread delivered document.
+    (archive / "chat_20260709T150000.jsonl").write_text(
+        json.dumps(
+            {
+                "ts": "2026-07-09T14:00:00Z",
+                "direction": "out",
+                "chat_id": pc,
+                "user_id": 7,
+                "text": "project pdf",
+                "type": "document",
+                "filename": "project_report.pdf",
+                "mime": "application/pdf",
+                "download_url": "/api/files/download?path=Desktop/project_report.pdf",
+                "caption": "project pdf",
+                "task_id": "t-proj-doc",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    # Live file: only UNRELATED main-chat rows (chat_id defaults to 1).
+    (logs / "chat.jsonl").write_text(
+        "\n".join(
+            json.dumps(
+                {
+                    "ts": f"2026-07-09T17:0{i}:00Z",
+                    "direction": "in" if i % 2 else "out",
+                    "chat_id": 1,
+                    "user_id": 1,
+                    "text": f"main chat row {i}",
+                }
+            )
+            for i in range(4)
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (logs / "progress.jsonl").write_text("", encoding="utf-8")
+
+    endpoint = make_chat_history_endpoint(tmp_path)
+    # want=2 (< the 4 unrelated live rows): old quota would stop before reading
+    # the archive; thread-aware quota reads it because 0 live rows match `pc`.
+    response = asyncio.run(
+        endpoint(SimpleNamespace(query_params={"chat_id": str(pc), "n_human": "2"}))
+    )
+    payload = json.loads(response.body.decode("utf-8"))["messages"]
+
+    doc = next(item for item in payload if item.get("msg_type") == "document")
+    assert doc["filename"] == "project_report.pdf"
+    # And unrelated main-chat rows do NOT leak into the project thread.
+    assert not any(item.get("text", "").startswith("main chat row") for item in payload)
+
+
 def test_chat_history_preserves_subagent_accept_markers(tmp_path):
     """WS8 accept/count markers must survive chat-history replay (gateway contract)."""
     logs = tmp_path / "logs"
