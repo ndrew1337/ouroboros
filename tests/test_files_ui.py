@@ -79,9 +79,14 @@ def test_chat_document_bubble_opens_externally_and_downloads_separately():
     # Shared loopback guard reused by both bridge methods (DRY).
     assert "_resolve_bridge_file_url(url)" in launcher
 
-    # JS open helper prefers the native bridge, falls back to a new tab.
+    # JS open helper prefers the native open bridge, degrades to the long-shipped
+    # download_file_to_downloads(open_external=true) bridge when a packaged
+    # launcher predates open_file_with_default_app (version skew), and only falls
+    # back to a new tab on true web.
     assert "export async function openViaHostBridge(url, filename = 'file')" in helper
-    assert "window.pywebview?.api?.open_file_with_default_app" in helper
+    assert "api?.open_file_with_default_app" in helper
+    assert "api?.download_file_to_downloads" in helper
+    assert "await downloadBridge(url, filename, true)" in helper
 
     # Bubble body click = open externally; separate ↓ button = download.
     assert "import { downloadViaHostBridge, openViaHostBridge } from './ui_helpers.js';" in chat

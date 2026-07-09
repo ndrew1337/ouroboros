@@ -34,14 +34,28 @@ export function setInlineStatus(el, text, tone = 'muted') {
 }
 
 export async function openViaHostBridge(url, filename = 'file') {
-    const bridge = window.pywebview?.api?.open_file_with_default_app;
-    if (bridge) {
-        const result = await bridge(url, filename);
+    const api = window.pywebview?.api;
+    const openBridge = api?.open_file_with_default_app;
+    if (openBridge) {
+        const result = await openBridge(url, filename);
         if (!result?.ok) throw new Error(result?.error || 'open failed');
         return { ...result, native: true };
     }
-    // Web / non-desktop: open in a new tab. This never navigates the app itself;
-    // the browser previews (e.g. PDF) or downloads per its own content handling.
+    // Version-skew fallback: the served frontend auto-updates via the managed
+    // repo, but the outer desktop launcher only changes on a full app reinstall,
+    // so a packaged launcher can predate open_file_with_default_app (added
+    // v6.58.3) while still shipping download_file_to_downloads with an
+    // open_external flag (since v5.5.0). Reuse that long-shipped bridge — it
+    // saves to ~/Downloads AND opens externally — instead of window.open, which
+    // is a silent no-op in the desktop WKWebView.
+    const downloadBridge = api?.download_file_to_downloads;
+    if (downloadBridge) {
+        const result = await downloadBridge(url, filename, true);
+        if (!result?.ok) throw new Error(result?.error || 'open failed');
+        return { ...result, native: true };
+    }
+    // True web / non-desktop: open in a new tab. This never navigates the app
+    // itself; the browser previews (e.g. PDF) or downloads per its own handling.
     window.open(url, '_blank', 'noopener');
     return { ok: true, native: false };
 }
