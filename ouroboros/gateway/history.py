@@ -249,6 +249,15 @@ def make_chat_history_endpoint(data_dir: pathlib.Path):
                     "task_id": str(entry.get("task_id", "")),
                     "telegram_chat_id": int(entry.get("telegram_chat_id") or 0),
                 }
+                # Delivered document rows carry lightweight media metadata (no
+                # base64); surface a msg_type + download_url so the frontend
+                # rebuilds the file bubble on reload instead of a bare text line.
+                if entry.get("type") == "document":
+                    rec["msg_type"] = "document"
+                    rec["filename"] = str(entry.get("filename") or "file")
+                    rec["mime"] = str(entry.get("mime") or "application/octet-stream")
+                    rec["download_url"] = str(entry.get("download_url") or "")
+                    rec["caption"] = str(entry.get("caption") or "")
                 # Pass task metadata for task_summary entries so the frontend can decide whether to show a live card.
                 if entry.get("type") == "task_summary":
                     if "tool_calls" in entry:

@@ -1464,6 +1464,21 @@ def _send_file(ctx: ToolContext, file_path: str = "", caption: str = "") -> str:
     except Exception as e:
         return f"⚠️ Failed to read file: {e}"
 
+    # Copy into the task's canonical artifact store so the delivered file stays
+    # downloadable after reload even if the original path is temporary / GC'd,
+    # and derive a loopback download URL from that DURABLE copy (WKWebView-safe
+    # desktop download + base64-free history replay).
+    download_url = ""
+    try:
+        from ouroboros.artifacts import copy_file_to_task_artifacts
+        from ouroboros.gateway.files import download_url_for_local_file
+
+        record = copy_file_to_task_artifacts(ctx, fp, kind="user_file")
+        durable = pathlib.Path(str(record.get("path"))) if record and record.get("path") else fp
+        download_url = download_url_for_local_file(durable)
+    except Exception:
+        download_url = ""  # non-fatal: fall back to base64 blob delivery
+
     _doc_meta = getattr(ctx, "task_metadata", {})
     _doc_meta = _doc_meta if isinstance(_doc_meta, dict) else {}
     ctx.pending_events.append({
@@ -1476,6 +1491,7 @@ def _send_file(ctx: ToolContext, file_path: str = "", caption: str = "") -> str:
         "mime": mime,
         "filename": fp.name,
         "caption": caption or "",
+        "download_url": download_url,
     })
     return f"OK: file '{fp.name}' queued for delivery to owner."
 

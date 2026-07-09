@@ -3,12 +3,16 @@ import base64
 import types
 
 from ouroboros.tools.core import _send_file, _detect_document_mime, _MAX_DOCUMENT_FILE_BYTES
+from ouroboros.gateway.files import download_url_for_local_file
 
 
-def _make_ctx(chat_id=123):
+def _make_ctx(chat_id=123, drive_root=None):
     return types.SimpleNamespace(
         current_chat_id=chat_id,
         pending_events=[],
+        drive_root=drive_root,
+        task_id="t-send-file",
+        task_metadata={},
     )
 
 
@@ -82,6 +86,55 @@ class TestSendFile:
         ctx = _make_ctx()
         result = _send_file(ctx)
         assert "provide" in result.lower()
+
+    def test_event_carries_download_url_from_durable_artifact(self, tmp_path, monkeypatch):
+        # File-browser root = tmp_path so the durable artifact copy (under the
+        # task drive) resolves to a servable /api/files/download URL.
+        monkeypatch.setenv("OUROBOROS_FILE_BROWSER_DEFAULT", str(tmp_path))
+        doc = tmp_path / "report.pdf"
+        doc.write_bytes(b"%PDF-1.4 test")
+
+        ctx = _make_ctx(drive_root=tmp_path)
+        result = _send_file(ctx, file_path=str(doc), caption="q4")
+
+        assert "OK" in result
+        event = ctx.pending_events[0]
+        assert event["download_url"].startswith("/api/files/download?path=")
+        # The URL points at the durable artifact copy, not the original path.
+        assert "task_results/artifacts" in event["download_url"]
+
+    def test_event_download_url_empty_when_outside_browser_root(self, tmp_path, monkeypatch):
+        # Root is an unrelated dir; the delivered file is not servable → "".
+        other = tmp_path / "root"
+        other.mkdir()
+        monkeypatch.setenv("OUROBOROS_FILE_BROWSER_DEFAULT", str(other))
+        doc = tmp_path / "outside.txt"
+        doc.write_text("x", encoding="utf-8")
+
+        ctx = _make_ctx(drive_root=tmp_path / "drive")
+        result = _send_file(ctx, file_path=str(doc))
+
+        assert "OK" in result
+        assert ctx.pending_events[0]["download_url"] == ""
+
+
+class TestDownloadUrlForLocalFile:
+    def test_inside_root_returns_relative_url(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("OUROBOROS_FILE_BROWSER_DEFAULT", str(tmp_path))
+        (tmp_path / "Desktop").mkdir()
+        f = tmp_path / "Desktop" / "a b.pdf"
+        f.write_text("x", encoding="utf-8")
+        url = download_url_for_local_file(f)
+        # Root-relative + URL-quoted (space -> %20), never absolute.
+        assert url == "/api/files/download?path=Desktop/a%20b.pdf"
+
+    def test_outside_root_returns_empty(self, tmp_path, monkeypatch):
+        root = tmp_path / "root"
+        root.mkdir()
+        monkeypatch.setenv("OUROBOROS_FILE_BROWSER_DEFAULT", str(root))
+        outside = tmp_path / "elsewhere.txt"
+        outside.write_text("x", encoding="utf-8")
+        assert download_url_for_local_file(outside) == ""
 
 
 class TestDetectDocumentMime:

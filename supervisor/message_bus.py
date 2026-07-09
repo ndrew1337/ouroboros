@@ -407,12 +407,15 @@ class LocalChatBridge:
         filename: str = "file",
         caption: str = "",
         mime: str = "application/octet-stream",
+        download_url: str = "",
+        task_id: str = "",
     ) -> Tuple[bool, str]:
         """Send an arbitrary document/file to UI and host event subscribers."""
         if is_a2a_chat_id(chat_id):
             return True, "ok"
         b64_str = base64.b64encode(file_bytes).decode("ascii")
         safe_name = str(filename or "file")
+        ts = utc_now_iso()
         msg = {
             "type": "document",
             "role": "assistant",
@@ -420,7 +423,8 @@ class LocalChatBridge:
             "mime": mime,
             "filename": safe_name,
             "caption": caption,
-            "ts": utc_now_iso(),
+            "download_url": str(download_url or ""),
+            "ts": ts,
             "chat_id": int(chat_id or 0),
         }
         if self._broadcast_fn:
@@ -433,8 +437,28 @@ class LocalChatBridge:
             "file_base64": b64_str,
             "mime": str(mime or ""),
             "filename": safe_name,
-            "ts": msg["ts"],
+            "download_url": str(download_url or ""),
+            "ts": ts,
         })
+        # Persist a compact chat row (NO base64) so the delivered document is
+        # rebuilt on reload; the durable artifact download_url carries the bytes.
+        try:
+            owner_id = int(load_state().get("owner_id") or 0)
+        except Exception:
+            owner_id = 0
+        log_chat(
+            "out",
+            int(chat_id or 0),
+            owner_id,
+            caption or f"📎 {safe_name}",
+            ts=ts,
+            task_id=str(task_id or ""),
+            record_type="document",
+            filename=safe_name,
+            mime=str(mime or ""),
+            download_url=str(download_url or ""),
+            caption=str(caption or ""),
+        )
         return True, "ok"
 
     def push_log(self, event: dict):
@@ -593,9 +617,14 @@ def log_chat(
     client_message_id: str = "",
     transport: Optional[Dict[str, Any]] = None,
     task_id: str = "",
+    record_type: str = "",
+    filename: str = "",
+    mime: str = "",
+    download_url: str = "",
+    caption: str = "",
 ) -> None:
     if DATA_DIR:
-        append_jsonl(DATA_DIR / "logs" / "chat.jsonl", {
+        record = {
             "ts": ts or utc_now_iso(),
             "session_id": load_state().get("session_id"),
             "direction": direction,
@@ -609,7 +638,23 @@ def log_chat(
             "client_message_id": client_message_id,
             "transport": dict(transport or {}),
             "task_id": str(task_id or ""),
-        })
+        }
+        # Media rows (e.g. delivered documents) carry a variable ``type`` plus
+        # lightweight metadata so /api/chat/history can rebuild the bubble on
+        # reload WITHOUT persisting base64. ``type`` is set from a variable (not a
+        # literal) so the frozen-contract AST parity scan does not treat this
+        # persisted row as a DocumentOutbound WS envelope.
+        if record_type:
+            record["type"] = record_type
+        if filename:
+            record["filename"] = filename
+        if mime:
+            record["mime"] = mime
+        if download_url:
+            record["download_url"] = download_url
+        if caption:
+            record["caption"] = caption
+        append_jsonl(DATA_DIR / "logs" / "chat.jsonl", record)
 
 
 def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,

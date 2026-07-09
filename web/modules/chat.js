@@ -2,6 +2,7 @@ import { escapeHtmlAttr, escapeHtmlText as escapeHtml, formatUsdWhole, renderMar
 import { renderPageHeader } from './page_header.js';
 import { PAGE_ICONS } from './page_icons.js';
 import { showToast } from './toast.js';
+import { downloadViaHostBridge } from './ui_helpers.js';
 import { apiClient, apiFetch } from './api_client.js';
 import {
     compactModel,
@@ -2001,6 +2002,10 @@ export function createChatInstance({
                         const preservedPhase = taskState?.completedPhase || record?.phaseEl?.dataset?.phase || 'done';
                         finishLiveCard(taskId, preservedPhase);
                     }
+                    if (msg.msg_type === 'document') {
+                        appendDocumentBubble(msg);
+                        continue;
+                    }
                     addMessage(msg.text, msg.role, !!msg.markdown, msg.ts || null, false, {
                         systemType: msg.system_type || '',
                         source: msg.source || '',
@@ -2705,9 +2710,12 @@ export function createChatInstance({
         incrementUnreadIfNeeded();
     });
 
-    ws.on('document', (msg) => {
-        if (!isMyThread(msg)) return;
-        hideTyping();
+    // Shared document-bubble builder for both live WS frames and history replay.
+    // Download priority: a durable server download_url routed through
+    // downloadViaHostBridge (desktop host-bridge saves to Downloads instead of
+    // navigating the WKWebView fullscreen; browser falls back to fetch+blob),
+    // else an in-memory base64 blob (live-only), else a disabled label.
+    function buildDocumentBubble(msg) {
         const role = msg.role === 'user' ? 'user' : 'assistant';
         const sender = role === 'user'
             ? getSenderLabel('user', false, '', {
@@ -2727,11 +2735,12 @@ export function createChatInstance({
         const fileBase64 = /^[A-Za-z0-9+/=\s]+$/.test(String(msg.file_base64 || ''))
             ? String(msg.file_base64 || '').replace(/\s+/g, '')
             : '';
+        const downloadUrl = /^\/api\/files\/download\?/.test(String(msg.download_url || ''))
+            ? String(msg.download_url)
+            : '';
         const filename = String(msg.filename || 'file').replace(/[\r\n]+/g, ' ').slice(0, 200);
-        // No persistent data: href — a raw download link can make the desktop
-        // WebView navigate away from the UI (DEVELOPMENT.md). Render a button and
-        // trigger an in-memory blob download on click instead.
-        const linkHtml = fileBase64
+        const canDownload = Boolean(downloadUrl || fileBase64);
+        const linkHtml = canDownload
             ? `<button type="button" class="chat-file" data-download="1">📎 ${escapeHtml(filename)}</button>`
             : `<span class="chat-file chat-file-empty">📎 ${escapeHtml(filename)}</span>`;
         bubble.innerHTML = `
@@ -2741,9 +2750,13 @@ export function createChatInstance({
             ${timeHtml}
         `;
         const dlBtn = bubble.querySelector('.chat-file[data-download]');
-        if (dlBtn && fileBase64) {
-            dlBtn.addEventListener('click', () => {
+        if (dlBtn && canDownload) {
+            dlBtn.addEventListener('click', async () => {
                 try {
+                    if (downloadUrl) {
+                        await downloadViaHostBridge(downloadUrl, filename);
+                        return;
+                    }
                     const bytes = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
                     const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
                     const tmp = document.createElement('a');
@@ -2757,8 +2770,35 @@ export function createChatInstance({
                 }
             });
         }
-        insertMessageNode(bubble);
-        incrementUnreadIfNeeded();
+        return bubble;
+    }
+
+    // Dedup key shared by the live WS insert and history replay of the SAME
+    // document (send_document uses one ts for both the frame and the persisted
+    // row), so a routine background sync (rebuildAll=false, bubbles not cleared)
+    // does not re-insert an already-rendered file bubble.
+    function documentMessageKey(msg) {
+        return [
+            'document',
+            String(msg.ts || ''),
+            String(msg.download_url || ''),
+            String(msg.filename || ''),
+            String(msg.caption || ''),
+        ].join('|');
+    }
+
+    function appendDocumentBubble(msg) {
+        const key = documentMessageKey(msg);
+        if (key && seenMessageKeys.has(key)) return false;
+        rememberMessageKey(key);
+        insertMessageNode(buildDocumentBubble(msg));
+        return true;
+    }
+
+    ws.on('document', (msg) => {
+        if (!isMyThread(msg)) return;
+        hideTyping();
+        if (appendDocumentBubble(msg)) incrementUnreadIfNeeded();
     });
 
     let wsHasConnectedOnce = false;

@@ -172,6 +172,7 @@
  * @property {string} filename
  * @property {string} ts
  * @property {string=} caption
+ * @property {string=} download_url
  * @property {string=} content
  * @property {string=} source
  * @property {string=} sender_label
@@ -396,4 +397,4 @@
  * @property {boolean=} ok
  */
 
-export const GATEWAY_CONTRACT_VERSION = '6.57.1';
+export const GATEWAY_CONTRACT_VERSION = '6.57.2';

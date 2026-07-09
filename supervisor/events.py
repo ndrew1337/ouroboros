@@ -2160,10 +2160,15 @@ def _handle_send_document(evt: Dict[str, Any], ctx: Any) -> None:
         caption = str(evt.get("caption") or "")
         filename = str(evt.get("filename") or "file")
         mime = str(evt.get("mime") or "application/octet-stream")
+        download_url = str(evt.get("download_url") or "")
+        task_id = str(evt.get("task_id") or "")
         if not file_b64:
             return
         file_bytes = b64mod.b64decode(file_b64)
-        ok, err = ctx.bridge.send_document(chat_id, file_bytes, filename=filename, caption=caption, mime=mime)
+        ok, err = ctx.bridge.send_document(
+            chat_id, file_bytes, filename=filename, caption=caption, mime=mime,
+            download_url=download_url, task_id=task_id,
+        )
         if not ok:
             ctx.append_jsonl(
                 ctx.DRIVE_ROOT / "logs" / "supervisor.jsonl",
