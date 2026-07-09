@@ -112,6 +112,9 @@ export function createChatInstance({
     page.innerHTML = `
         ${headerHtml}
         <div id="chat-messages"></div>
+        <button class="chat-scroll-bottom-btn" id="chat-scroll-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+        </button>
         <div id="chat-input-area">
             <div id="chat-attachment-preview" class="chat-attachment-preview"></div>
             <div class="chat-input-wrap">
@@ -160,6 +163,7 @@ export function createChatInstance({
     const attachBtn = byId('attach');
     const fileInput = byId('file-input');
     const attachmentPreview = byId('attachment-preview');
+    const scrollBottomBtn = byId('scroll-bottom');
     let pendingAttachments = [];
     let attachmentsUploading = false;
     let nestedSubagentsExpanded = false;
@@ -559,6 +563,7 @@ export function createChatInstance({
         const shouldStick = Boolean(options.forceStick) || isNearBottom();
         if (node.parentNode === messagesDiv) {
             if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            updateScrollButton();
             return;
         }
         // Scope to THIS instance's column — a global id lookup would resolve to
@@ -567,6 +572,9 @@ export function createChatInstance({
         if (typing && typing.parentNode === messagesDiv) messagesDiv.insertBefore(node, typing);
         else messagesDiv.appendChild(node);
         if (shouldStick) messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        // A new message arriving while the user is scrolled up reveals the
+        // jump-to-newest button instead of silently piling up off-screen.
+        updateScrollButton();
     }
 
     function isBackgroundTaskId(taskId = '') {
@@ -2391,25 +2399,57 @@ export function createChatInstance({
     // message in the common case, or the exact spot they'd scrolled back to.
     let _savedScrollTop = 0;
     let _savedStick = true;  // a fresh thread starts pinned to the newest message
+    let _restoring = false;  // suppress saved-state writes during a restore pass
     const isInstanceVisible = () =>
         Boolean(messagesDiv) && messagesDiv.offsetParent !== null && !document.hidden;
     messagesDiv?.addEventListener('scroll', () => {
         // Ignore the spurious scrollTop=0 a browser emits while the column is
         // hidden — that would erase the real position we want to restore.
         if (!isInstanceVisible()) return;
+        // WebKit fires a scrollTop=0 event when a hidden column is re-shown, and
+        // our own re-pin loop writes scrollTop too — neither is a real user
+        // scroll, so during a restore pass we only refresh the button, never the
+        // saved position (which would corrupt a mid-history restore to the top).
+        if (_restoring) { updateScrollButton(); return; }
         _savedScrollTop = messagesDiv.scrollTop;
         _savedStick = isNearBottom();
+        updateScrollButton();
     }, { passive: true });
+
+    // Round glass "jump to newest" affordance — shown only when the user has
+    // scrolled up away from the bottom, for both the main chat and panels.
+    function updateScrollButton() {
+        if (!scrollBottomBtn) return;
+        scrollBottomBtn.classList.toggle('visible', isInstanceVisible() && !isNearBottom());
+    }
+    scrollBottomBtn?.addEventListener('click', () => {
+        _savedStick = true;
+        scrollToBottomAfterLayout();
+        updateScrollButton();
+    });
 
     function restoreScrollPosition() {
         if (!isInstanceVisible()) return;  // hidden column has no geometry yet
-        requestAnimationFrame(() => {
-            if (_savedStick) scrollToBottom();          // keep them at the latest message
-            else messagesDiv.scrollTop = _savedScrollTop;  // or exactly where they were
-            // A second frame settles late card-layout height changes, but only
-            // re-pins when sticky so a restored mid-history spot isn't overridden.
-            requestAnimationFrame(() => { if (_savedStick) scrollToBottom(); });
-        });
+        // WebKit (the desktop WKWebView) leaves a freshly un-hidden flex column's
+        // scrollTop pinned at 0 for a frame or two after the page is shown, so a
+        // single/double rAF re-pin (which is enough in Chromium) lands the user at
+        // the very top. Re-apply the target position across several frames until
+        // the late relayout settles, then keep the button state in sync.
+        _restoring = true;
+        const targetStick = _savedStick;
+        const targetTop = _savedScrollTop;
+        let frames = 0;
+        const apply = () => {
+            if (!isInstanceVisible()) { _restoring = false; return; }
+            // scrollHeight is re-read each frame so a sticky thread tracks late
+            // card-layout growth; a restored mid-history spot re-pins to the exact
+            // saved offset (idempotent, so it isn't overridden).
+            messagesDiv.scrollTop = targetStick ? messagesDiv.scrollHeight : targetTop;
+            updateScrollButton();
+            if (++frames < 12) requestAnimationFrame(apply);
+            else _restoring = false;
+        };
+        requestAnimationFrame(apply);
     }
 
     function updateMessagesPadding(options = {}) {
@@ -2417,9 +2457,12 @@ export function createChatInstance({
         const shouldStick = preserveStickiness && isNearBottom();
         if (inputArea && messagesDiv) {
             const reserve = Math.max(92, Math.ceil(inputArea.offsetHeight || 0) + 16);
-            messagesDiv.style.setProperty('--chat-input-reserve', `${reserve}px`);
+            // Set on the instance page root so it cascades to #chat-messages
+            // (padding) AND the sibling scroll-to-bottom button (bottom offset).
+            page.style.setProperty('--chat-input-reserve', `${reserve}px`);
         }
         if (shouldStick) scrollToBottomAfterLayout();
+        updateScrollButton();
     }
 
     function installChatResizeObservers() {
