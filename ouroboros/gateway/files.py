@@ -100,8 +100,6 @@ def download_url_for_local_file(abs_path: pathlib.Path | str) -> str:
     root-relative, URL-quoted path because ``safe_relpath`` lstrips a leading
     ``/`` (an absolute ``path=`` would resolve under the root, not to the file).
     """
-    from urllib.parse import quote
-
     raw = _configured_root_text()
     root = _normalize_root(raw) if raw and _normalize_root(raw).is_dir() else pathlib.Path.home().resolve()
     try:

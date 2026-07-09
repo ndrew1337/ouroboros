@@ -1986,6 +1986,14 @@ export function createChatInstance({
                         continue;
                     }
                     if (msg.system_type === 'task_summary') continue;
+                    // A delivered document is a media bubble, not a task-final
+                    // message — render it BEFORE the taskId/finishLiveCard block so
+                    // a mid-task file delivery replayed while its task is still
+                    // running does not falsely finalize that task's live card.
+                    if (msg.msg_type === 'document') {
+                        appendDocumentBubble(msg);
+                        continue;
+                    }
                     if (taskId && (msg.role === 'assistant' || msg.role === 'system')) {
                         if (subagentChildParents.has(taskId)) {
                             insertCardIfNeeded(taskId);
@@ -2001,10 +2009,6 @@ export function createChatInstance({
                         const record = liveCardRecords.get(taskId);
                         const preservedPhase = taskState?.completedPhase || record?.phaseEl?.dataset?.phase || 'done';
                         finishLiveCard(taskId, preservedPhase);
-                    }
-                    if (msg.msg_type === 'document') {
-                        appendDocumentBubble(msg);
-                        continue;
                     }
                     addMessage(msg.text, msg.role, !!msg.markdown, msg.ts || null, false, {
                         systemType: msg.system_type || '',
