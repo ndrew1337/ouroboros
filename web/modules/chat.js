@@ -112,9 +112,6 @@ export function createChatInstance({
     page.innerHTML = `
         ${headerHtml}
         <div id="chat-messages"></div>
-        <button class="chat-scroll-bottom-btn" id="chat-scroll-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
-        </button>
         <div id="chat-input-area">
             <div id="chat-attachment-preview" class="chat-attachment-preview"></div>
             <div class="chat-input-wrap">
@@ -134,6 +131,9 @@ export function createChatInstance({
                     <input type="file" id="chat-file-input" class="chat-file-input-hidden" accept="*/*" multiple>
                     <textarea id="chat-input" placeholder="Message Ouroboros..." rows="1" autocorrect="off" autocapitalize="off" spellcheck="false"></textarea>
                     <div class="chat-send-group">
+                        <button class="chat-scroll-bottom-btn" id="chat-scroll-bottom" type="button" aria-label="Scroll to latest message" title="Scroll to latest message">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/></svg>
+                        </button>
                         <button class="chat-send-inline" id="chat-send" title="Send message">Send</button>
                     </div>
                 </div>
