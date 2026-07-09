@@ -1245,12 +1245,10 @@ def main():
             """
             try:
                 full_url = _resolve_bridge_file_url(url)
-                open_root = pathlib.Path(tempfile.gettempdir()) / "ouroboros-open"
-                open_root.mkdir(parents=True, exist_ok=True)
-                try:
-                    open_root.chmod(0o700)
-                except OSError:
-                    pass
+                # Per-open private dir: mkdtemp atomically creates a fresh 0700
+                # directory, so a pre-placed symlink/dir at a shared temp path
+                # cannot redirect the write (hardens over a fixed shared root).
+                open_root = pathlib.Path(tempfile.mkdtemp(prefix="ouroboros-open-"))
                 target = _unique_bridge_target(open_root, filename)
                 _fetch_bridge_url_to(full_url, target)
                 open_path_external(target)
@@ -1260,7 +1258,8 @@ def main():
                 return {"ok": False, "error": str(exc)}
 
     # Prune stale externally-opened temp copies from previous sessions (privacy + disk).
-    shutil.rmtree(pathlib.Path(tempfile.gettempdir()) / "ouroboros-open", ignore_errors=True)
+    for _stale_open in pathlib.Path(tempfile.gettempdir()).glob("ouroboros-open-*"):
+        shutil.rmtree(_stale_open, ignore_errors=True)
 
     url = f"http://127.0.0.1:{actual_port}"
     window = webview.create_window(

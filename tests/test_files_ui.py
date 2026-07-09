@@ -75,7 +75,7 @@ def test_chat_document_bubble_opens_externally_and_downloads_separately():
     # Desktop bridge: open in the OS default app without navigating the WebView.
     assert "def open_file_with_default_app(self, url: str, filename: str) -> dict:" in launcher
     assert "open_path_external(target)" in launcher
-    assert 'pathlib.Path(tempfile.gettempdir()) / "ouroboros-open"' in launcher
+    assert 'tempfile.mkdtemp(prefix="ouroboros-open-")' in launcher
     # Shared loopback guard reused by both bridge methods (DRY).
     assert "_resolve_bridge_file_url(url)" in launcher
 
