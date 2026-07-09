@@ -1379,7 +1379,7 @@ body.resizing-panels { user-select: none; }
     align-items: center;
     justify-content: center;
     border-radius: 50%;
-    color: #e9b7be;
+    color: var(--accent-light);
     background: rgba(26, 21, 32, 0.72);
     border: 1px solid rgba(201, 53, 69, 0.42);
     backdrop-filter: blur(12px);
