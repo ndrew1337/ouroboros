@@ -1495,6 +1495,45 @@ button.chat-file:hover,
     cursor: default;
 }
 
+.chat-file-row {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 100%;
+}
+
+.chat-file-download {
+    flex: 0 0 auto;
+    width: 30px;
+    height: 30px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 50%;
+    color: var(--accent-light);
+    background: rgba(26, 21, 32, 0.72);
+    border: 1px solid rgba(201, 53, 69, 0.42);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.18s ease, background 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.chat-file-download:hover {
+    color: #fff;
+    background: rgba(201, 53, 69, 0.16);
+    border-color: rgba(232, 93, 111, 0.6);
+    transform: scale(1.05);
+}
+
+.chat-file-download:focus-visible {
+    outline: none;
+    border-color: rgba(232, 93, 111, 0.6);
+    box-shadow: 0 0 0 3px rgba(201, 53, 69, 0.18);
+}
+
 .chat-bubble.user .message { color: var(--user-text); }
 .chat-bubble.assistant .message { color: rgba(255, 235, 238, 0.96); }
 .chat-bubble.system .message { color: var(--system-text); }

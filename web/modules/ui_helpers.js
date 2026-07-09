@@ -33,6 +33,19 @@ export function setInlineStatus(el, text, tone = 'muted') {
     if (el) { el.textContent = text || ''; el.dataset.tone = normalizeTone(tone); }
 }
 
+export async function openViaHostBridge(url, filename = 'file') {
+    const bridge = window.pywebview?.api?.open_file_with_default_app;
+    if (bridge) {
+        const result = await bridge(url, filename);
+        if (!result?.ok) throw new Error(result?.error || 'open failed');
+        return { ...result, native: true };
+    }
+    // Web / non-desktop: open in a new tab. This never navigates the app itself;
+    // the browser previews (e.g. PDF) or downloads per its own content handling.
+    window.open(url, '_blank', 'noopener');
+    return { ok: true, native: false };
+}
+
 export async function downloadViaHostBridge(url, filename = 'download', { openExternal = false, fetchOptions = {} } = {}) {
     const bridge = window.pywebview?.api?.download_file_to_downloads;
     if (bridge) {

@@ -2,7 +2,7 @@ import { escapeHtmlAttr, escapeHtmlText as escapeHtml, formatUsdWhole, renderMar
 import { renderPageHeader } from './page_header.js';
 import { PAGE_ICONS } from './page_icons.js';
 import { showToast } from './toast.js';
-import { downloadViaHostBridge } from './ui_helpers.js';
+import { downloadViaHostBridge, openViaHostBridge } from './ui_helpers.js';
 import { apiClient, apiFetch } from './api_client.js';
 import {
     compactModel,
@@ -2787,16 +2787,46 @@ export function createChatInstance({
             : '';
         const filename = String(msg.filename || 'file').replace(/[\r\n]+/g, ' ').slice(0, 200);
         const canDownload = Boolean(downloadUrl || fileBase64);
-        const linkHtml = canDownload
-            ? `<button type="button" class="chat-file" data-download="1">📎 ${escapeHtml(filename)}</button>`
+        // Body click = open in default OS app (external window); a separate ↓
+        // button saves to ~/Downloads. Both degrade to a base64 blob when only
+        // the live payload is present (no durable server URL to hand the bridge).
+        const openHtml = canDownload
+            ? `<button type="button" class="chat-file" data-open="1">📎 ${escapeHtml(filename)}</button>`
             : `<span class="chat-file chat-file-empty">📎 ${escapeHtml(filename)}</span>`;
+        const downloadHtml = canDownload
+            ? `<button type="button" class="chat-file-download" data-download="1" title="Download" aria-label="Download">↓</button>`
+            : '';
         bubble.innerHTML = `
             <div class="sender">${escapeHtml(sender)}</div>
             ${captionHtml}
-            <div class="message">${linkHtml}</div>
+            <div class="message"><div class="chat-file-row">${openHtml}${downloadHtml}</div></div>
             ${timeHtml}
         `;
-        const dlBtn = bubble.querySelector('.chat-file[data-download]');
+        const saveBlobFallback = () => {
+            const bytes = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
+            const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
+            const tmp = document.createElement('a');
+            Object.assign(tmp, { href: blobUrl, download: filename, rel: 'noopener' });
+            document.body.appendChild(tmp);
+            tmp.click();
+            tmp.remove();
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+        };
+        const openBtn = bubble.querySelector('.chat-file[data-open]');
+        if (openBtn && canDownload) {
+            openBtn.addEventListener('click', async () => {
+                try {
+                    if (downloadUrl) {
+                        await openViaHostBridge(downloadUrl, filename);
+                        return;
+                    }
+                    saveBlobFallback();
+                } catch (err) {
+                    showToast(`Could not open file: ${err && err.message ? err.message : err}`, 'error');
+                }
+            });
+        }
+        const dlBtn = bubble.querySelector('.chat-file-download[data-download]');
         if (dlBtn && canDownload) {
             dlBtn.addEventListener('click', async () => {
                 try {
@@ -2804,14 +2834,7 @@ export function createChatInstance({
                         await downloadViaHostBridge(downloadUrl, filename);
                         return;
                     }
-                    const bytes = Uint8Array.from(atob(fileBase64), (c) => c.charCodeAt(0));
-                    const blobUrl = URL.createObjectURL(new Blob([bytes], { type: mime }));
-                    const tmp = document.createElement('a');
-                    Object.assign(tmp, { href: blobUrl, download: filename, rel: 'noopener' });
-                    document.body.appendChild(tmp);
-                    tmp.click();
-                    tmp.remove();
-                    setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+                    saveBlobFallback();
                 } catch (err) {
                     showToast(`Could not download file: ${err && err.message ? err.message : err}`, 'error');
                 }
