@@ -2312,8 +2312,11 @@ row is recorded as `budget_omitted` naming the artifact and the reason, the pack
 status becomes `required_artifact_omitted`, and no consumer reviews the
 remainder — the ladder keeps shrinking the FIXED part and retries, so the
 refusal is a step, not the end (`budget_exceeded` is the sibling failure, when
-even the content-free manifest cannot fit); 4) the largest touched
-files degrade to diff-only — their full post-change snapshots are replaced by
+even the content-free manifest cannot fit); 4) touched files degrade to
+diff-only, FREELY DEGRADABLE ones first and largest-first within each tier — an
+artifact owed in full is reached only after rung 5, since degrading one is a
+typed assembly failure and can never buy a fitting pack — their full
+post-change snapshots are replaced by
 an explicit `TOUCHED FILE BUDGET DEGRADATION NOTE` while their complete
 changes remain visible in the staged diff, and the ladder DECLARES those paths
 to the atlas (`ReviewContextAtlasRequest.diff_only_included`, v6.87.15) so the

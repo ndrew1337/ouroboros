@@ -766,8 +766,9 @@ degradation ladder — full atlas → compact atlas (durable `context_manifest`
 keeps full per-file coverage) → a `required` artifact the atlas cannot fit is a
 FAILURE TO ASSEMBLE (typed `budget_omitted` row naming artifact and reason,
 `required_artifact_omitted` pack status, no review of the remainder), which the
-ladder answers by shrinking the fixed part and retrying → the largest touched files degrade to
-diff-only with an explicit `TOUCHED FILE BUDGET DEGRADATION NOTE` (their full
+ladder answers by shrinking the fixed part and retrying → touched files degrade to
+diff-only, freely degradable ones first and largest-first within each tier (an artifact owed in
+full is reached only after the `-U0` rung), with an explicit `TOUCHED FILE BUDGET DEGRADATION NOTE` (their full
 changes stay visible in the staged diff, and those paths are DECLARED to the
 atlas via `diff_only_included`, so the durable coverage row records the dropped
 snapshot rather than claiming the file is fully in the prompt; legal only for

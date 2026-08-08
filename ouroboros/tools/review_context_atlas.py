@@ -495,7 +495,7 @@ def _build_file_facts(
     # BECAUSE it is touched, and its complete change-evidence is the staged
     # diff itself — so merely-touched files may legally degrade to diff-only
     # (the ladder's disclosed step), while these classes may not.
-    required_beyond_diff = force_include or is_canonical
+    required_beyond_diff = atlas_required_beyond_diff(rel)
     if rel in already_included or rel in diff_only_included:
         facts.disposition = "already_included"
         # The caller owns which snapshots actually survived in the fixed prompt;
@@ -775,6 +775,16 @@ def _is_force_include(rel: str) -> bool:
         or any(rel.startswith(prefix) for prefix in PROTECTED_RUNTIME_PATH_PREFIXES)
         or any(rel.startswith(prefix) for prefix in _FORCE_INCLUDE_PREFIXES)
     )
+
+
+def atlas_required_beyond_diff(rel: str) -> bool:
+    """True when the staged diff is never a substitute for this artifact.
+
+    The ONE definition of the class owed in full (BIBLE P3 scope floor), so the
+    ladder that chooses what to degrade and the assembler that refuses a
+    degraded required artifact cannot drift apart.
+    """
+    return _is_force_include(rel) or rel in _CANONICAL_CONTEXT_DOCS
 
 
 def _skip_by_dir(rel: str) -> bool:

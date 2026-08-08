@@ -2811,6 +2811,81 @@ def test_ladder_cannot_degrade_a_required_beyond_diff_artifact_to_diff_only(
     assert rows["prompts/big_prompt.md"]["disposition"] == "budget_omitted"
     # An ORDINARY touched file may still ride the disclosed diff-only step
     # (pinned by test_diff_only_degradation_is_not_reported_as_fully_included).
+    # ORDERING: the tier sort only reorders, so the pop loop must also refuse to cross
+    # into the required tier until the zero-context rung has been tried — degrading a
+    # required artifact provably cannot buy a fitting pack, while -U0 still might. Every
+    # recorded step that already shows the artifact degraded must show -U0 attempted.
+    for step in steps:
+        if step.get("unassembled_required") and step.get("diff_only_files"):
+            assert step["zero_context_diff"] is True, step
+    assert any(step.get("zero_context_diff") for step in steps), steps
+
+
+def test_ladder_degrades_ordinary_files_before_a_required_artifact(tmp_path, monkeypatch):
+    """Defect B. The ladder sorted ALL touched paths by size with no requiredness
+    filter, so the LARGEST file was degraded first even when it was an artifact
+    owed in full. Degrading one of those can never buy a fitting pack — the atlas
+    turns it into an assembly refusal (`required_artifact_omitted`), which the
+    ladder then reads as a further deficit and degrades further. The deficit was
+    manufactured: the ordinary files alone covered it.
+
+    The fixture is deliberately shaped so a size-only sort CANNOT pass it: the
+    required artifact is the LARGEST touched file (~40K tokens), while the three
+    ordinary files are individually smaller (~20K each) but collectively cover
+    the deficit. Pre-fix this reaches the terminal with
+    `status == "fixed_overflow"` and `unassembled_required ==
+    ["prompts/large_prompt.md"]`; post-fix the three ordinary files degrade, the
+    prompt's full snapshot survives, and the pack assembles."""
+    import subprocess
+
+    from ouroboros.tools import scope_review as sr
+
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "CHECKLISTS.md").write_text(
+        "## Intent / Scope Review Checklist\n\nplaceholder\n", encoding="utf-8",
+    )
+    (tmp_path / "prompts").mkdir()
+    # ~40K touched tokens: the LARGEST touched file, and owed in full.
+    (tmp_path / "prompts" / "large_prompt.md").write_text(
+        "word here\n" * 16_000, encoding="utf-8",
+    )
+    ordinary = ["a_mod.py", "b_mod.py", "c_mod.py"]
+    for name in ordinary:
+        # ~20K touched tokens each: individually smaller than the artifact,
+        # together (~60K) more than the ~50K deficit.
+        (tmp_path / name).write_text("y = 1\n" * 13_334, encoding="utf-8")
+    subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=T", "commit", "-m", "init"],
+        cwd=str(tmp_path), capture_output=True,
+    )
+    # Tiny changes inside big files: the diff fits, the snapshots do not.
+    (tmp_path / "prompts" / "large_prompt.md").write_text(
+        "CHANGED\n" + "word here\n" * 15_999, encoding="utf-8",
+    )
+    for name in ordinary:
+        (tmp_path / name).write_text("z = 0\n" + "y = 1\n" * 13_333, encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
+
+    monkeypatch.setattr(sr, "_effective_scope_input_limit", lambda **_kw: 90_000)
+    monkeypatch.setattr(sr, "_scope_window",
+                        lambda _m, **_k: sr.ReviewerWindow(window_tokens=1_000_000, status="confirmed"))
+
+    prompt, status = sr._build_scope_prompt(tmp_path, "test commit")
+
+    # The pack assembles: the deficit was always coverable by optional content.
+    assert status is None, getattr(status, "unassembled_required", status)
+    assert prompt
+    # The required artifact keeps its full snapshot in the fixed part…
+    assert "### prompts/large_prompt.md" in prompt
+    # …and the disclosed degradation names the ordinary files, and only those.
+    note = prompt.split("## TOUCHED FILE BUDGET DEGRADATION NOTE", 1)[1].split("\n\n", 1)[0]
+    for name in ordinary:
+        assert f"- {name}" in note, note
+    assert "prompts/large_prompt.md" not in note, note
+    rows = {r["path"]: r for r in sr._current_scope_context_manifest()["coverage"]}
+    assert rows["prompts/large_prompt.md"]["disposition"] == "already_included"
 
 
 def test_cold_start_sizes_down_and_passes_instead_of_400ing(tmp_path, monkeypatch):

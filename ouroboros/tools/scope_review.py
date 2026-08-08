@@ -26,6 +26,7 @@ from ouroboros.tools.review_context_atlas import (
     atlas_assembly_failed,
     atlas_assembly_failure_reason,
     atlas_hard_budget_overflowed,
+    atlas_required_beyond_diff,
     atlas_unassembled_required,
     compile_review_context_atlas,
 )
@@ -554,7 +555,7 @@ def _render_touched_section(
         degrade_note = (
             "## TOUCHED FILE BUDGET DEGRADATION NOTE\n"
             "The full post-change snapshots of the following touched files were "
-            "OMITTED to fit the reviewer input budget (largest files first). "
+            "OMITTED to fit the budget (freely degradable first, largest per tier). "
             "Their complete changes are still visible in the staged diff below; "
             "treat this as an explicit, disclosed omission of unchanged "
             "surrounding context, not a hidden gap:\n"
@@ -761,17 +762,15 @@ def _build_scope_prompt(
         except OSError:
             return 0
 
-    # Guaranteed-fit ladder: 1) full atlas; 2) compact atlas; 3) degrade the
-    # largest touched files to diff-only (explicit disclosed note — their
-    # changes stay fully visible in the staged diff); 4) remove unchanged diff
-    # context while preserving every +/- line. Only an
-    # irreducible prompt still not fitting fails CLOSED (fixed_overflow).
+    # Guaranteed-fit ladder: 1) full atlas; 2) compact atlas; 3) degrade freely degradable touched
+    # files to diff-only, largest first (disclosed; changes stay visible in the staged diff);
+    # 4) drop unchanged diff context; 5) artifacts owed in full, last resort. Else fails CLOSED.
     input_limit = _effective_scope_input_limit(scope_model=scope_model)
     _atlas_min_allowance = 35_000  # manifest reserve + hard headroom, see review_context_atlas
     diff_only_paths: list = []
     degradable = sorted(
         current_context_paths,
-        key=lambda path: -_touched_token_estimate(path),
+        key=lambda path: (atlas_required_beyond_diff(path), -_touched_token_estimate(path)),
     )
     compact = False
     compact_diff_attempted = False
@@ -847,9 +846,11 @@ def _build_scope_prompt(
             # the fixed part enough to give the manifest its minimum room.
             deficit = max(50_000, fixed_prompt_tokens + _atlas_min_allowance - input_limit)
 
-        if not degradable:
-            if not compact_diff_attempted:
-                # Every staged +/- line without unchanged hunk context.
+        def can_degrade() -> bool:  # required tier only after -U0
+            return bool(degradable) and (compact_diff_attempted or not atlas_required_beyond_diff(degradable[0]))
+
+        if not can_degrade():
+            if not compact_diff_attempted:  # every +/- line, no unchanged context
                 compact_diff_attempted = True
                 try:
                     compact_diff = run_cmd(["git", "diff", "--cached", "-U0"], cwd=repo_dir)
@@ -857,6 +858,8 @@ def _build_scope_prompt(
                     compact_diff = ""
                 if compact_diff.strip() and compact_diff != diff_text:
                     diff_text = compact_diff
+                    continue
+                if can_degrade():  # -U0 gave nothing, but the required tier is open now
                     continue
             # Terminal pack status: >=1M authority is fixed_overflow; a sub-floor
             # pack is budget_exceeded here and the authority policy turns it into
@@ -874,7 +877,7 @@ def _build_scope_prompt(
                 atlas_overflowed=bool(atlas_overflowed),
             )
         freed = 0
-        while degradable and freed < deficit + 2_000:
+        while can_degrade() and freed < deficit + 2_000:
             path = degradable.pop(0)
             diff_only_paths.append(path)
             freed += _touched_token_estimate(path)

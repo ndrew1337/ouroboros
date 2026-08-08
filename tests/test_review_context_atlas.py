@@ -626,3 +626,24 @@ def test_deep_self_review_refuses_a_pack_that_did_not_assemble(monkeypatch, tmp_
     assert pack_text == ""
     assert "ouroboros/llm.py" in stats["skipped"][0]
     assert stats["context_manifest"]["unassembled_required"][0]["path"] == "ouroboros/llm.py"
+
+
+def test_required_beyond_diff_is_one_public_definition_for_every_consumer():
+    """The class owed IN FULL is exported so the scope ladder (which chooses what
+    to degrade) and the assembler (which refuses a degraded required artifact)
+    read ONE definition. If they drift, the ladder degrades a path the assembler
+    can only refuse — a manufactured, unfixable budget deficit."""
+    from ouroboros.tools.review_context_atlas import atlas_required_beyond_diff
+
+    # force-include: prompts/, contracts/, protected runtime, review stack
+    assert atlas_required_beyond_diff("prompts/x.md")
+    assert atlas_required_beyond_diff("ouroboros/contracts/thing.py")
+    assert atlas_required_beyond_diff(".github/workflows/ci.yml")
+    assert atlas_required_beyond_diff("ouroboros/tools/scope_review.py")
+    # canonical context docs (the second clause — BIBLE.md is also force-include,
+    # so ARCHITECTURE.md is what proves the clause is not dead)
+    assert atlas_required_beyond_diff("BIBLE.md")
+    assert atlas_required_beyond_diff("docs/ARCHITECTURE.md")
+    # a merely-touched ordinary file may legally degrade to diff-only
+    assert not atlas_required_beyond_diff("module.py")
+    assert not atlas_required_beyond_diff("tests/test_thing.py")
