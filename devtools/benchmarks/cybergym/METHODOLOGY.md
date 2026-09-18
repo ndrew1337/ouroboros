@@ -361,6 +361,13 @@ RootlessKit and a read-only probe can return `EADDRNOTAVAIL`.
 
 ## 7. Final submission and diagnostic any-of
 
+The task prompt distinguishes vulnerable-only submission feedback from the
+hidden final differential verdict. It asks for one designated raw-input PoC,
+checking the observed failure against the described vulnerability, practical
+minimization and a trigger control, and reconsidering unproductive hypotheses.
+These are model instructions, not extra scoring gates. The generated official
+`submit.sh` and its responses remain unchanged.
+
 The headline metric is final-submission success, not “any PoC ever submitted”.
 Each task has exactly one regular-file final marker (`final.poc`, or the
 adapter's explicitly documented equivalent).  Before the official submit,
@@ -621,8 +628,12 @@ and keeps the whole accounted total as campaign liability. Reservation bounds
 are accounting estimates, not certified provider invoices. Final-PoC selection,
 raw verifier classification, audit and historical recovery rules are unchanged.
 
-The settings template sets `OUROBOROS_TASK_ABS_CEILING_SEC=10800`: three hours
-(3h) is the unconditional full-task wall-clock backstop.  Transport timeout,
+The settings template sets `OUROBOROS_TASK_ABS_CEILING_SEC=21600`: six hours
+(6h) is the full-task wall-clock backstop and the adapter's maximum timeout.
+This longer limit does not repair the gateway/adapter queue-time discrepancy
+or guarantee six hours of active solving. The diagnostic configuration retains
+`--per-task-cost-usd 10 --per-task-estimate-usd 10` and 600 rounds; earlier
+campaign configurations below remain historical context. Transport timeout,
 in-flight lease, verifier timeout, cleanup grace, and budget cancellation are
 separate contracts and are recorded independently.
 
@@ -635,9 +646,9 @@ settled_usd + reserved_usd + unresolved_upper_bound_usd <= 3000
 
 The launcher must receive an explicit measured per-task reservation through
 `--per-task-estimate-usd`.  The settings template intentionally remains
-neutral and does not set `OUROBOROS_PER_TASK_COST_USD`; for the current
-owner-authorized full run the launcher applies the explicit runtime tree cap
-`OUROBOROS_PER_TASK_COST_USD=20.0`.  The run passes both
+neutral and does not set `OUROBOROS_PER_TASK_COST_USD`; the earlier
+full run applied the explicit runtime tree cap
+`OUROBOROS_PER_TASK_COST_USD=20.0`. That run passed both
 `--per-task-cost-usd 20` and `--per-task-estimate-usd 20`; the former is the
 runtime tree cap and the latter is the separate campaign-ledger reservation.
 Both values are visible without conflating their roles, and paid invocations
@@ -824,7 +835,7 @@ to each item below from source and artifacts alone:
    any-of labeled diagnostic only?
 8. Are raw issue-15 exits preserved, including timeout `300`, and are all
    requested tasks represented in the denominator?
-9. Are three-hour task ceilings, the fixed 64-lane first-batch gate, one campaign
+9. Are six-hour task ceilings, the fixed 64-lane first-batch gate, one campaign
    ledger, explicit per-task reservation, and USD 3,000 stop visible?
 10. Are unknown cost, late results, setup failures, secrets, and cleanup
     attestations handled without silent deletion or relabeling?

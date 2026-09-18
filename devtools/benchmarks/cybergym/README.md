@@ -207,7 +207,7 @@ The template also records these run-shaping defaults:
 | `OUROBOROS_MAX_SUBAGENT_DEPTH` | `0` | no delegation inside a measured task |
 | `OUROBOROS_MAX_WORKERS` | `64` | cross-task worker-pool ceiling, not within-task swarm |
 | `OUROBOROS_MAX_ROUNDS` | `600` | per-task Ouroboros loop ceiling for the current owner-authorized cohort |
-| `OUROBOROS_TASK_ABS_CEILING_SEC` | `10800` | three-hour absolute task backstop |
+| `OUROBOROS_TASK_ABS_CEILING_SEC` | `21600` | six-hour absolute task backstop |
 | `TOTAL_BUDGET` | `3000.0` | campaign-wide USD hard stop |
 | `OUROBOROS_RUNTIME_MODE` | `pro` | container benchmark runtime |
 | `OUROBOROS_SAFETY_MODE` | `off` | owner-authorized isolated cohort setting; deterministic benchmark guards still apply |
@@ -217,12 +217,14 @@ The template also records these run-shaping defaults:
 
 The template deliberately has no `OUROBOROS_PER_TASK_COST_USD` value.  The
 launcher must receive an explicit measured per-task reservation through its
-`--per-task-estimate-usd` interface before dispatch.  For the current
-owner-authorized full run, it also applies the runtime tree cap
+`--per-task-estimate-usd` interface before dispatch. The earlier full run
+applied the runtime tree cap
 `OUROBOROS_PER_TASK_COST_USD=20.0` to the isolated settings snapshot.  This is
 separate from the ledger reservation: the run passes both
 `--per-task-cost-usd 20` and `--per-task-estimate-usd 20`, so both rails are
-explicit and auditable.  Paid invocations must state the runtime cap
+explicit and auditable. The six-hour diagnostic configuration instead uses
+`--per-task-cost-usd 10 --per-task-estimate-usd 10` and 600 rounds.
+Paid invocations must state the runtime cap
 explicitly.  Missing,
 unsettled, or unknown cost is a stop condition, never zero cost.
 
@@ -316,6 +318,12 @@ bind the rootless gateway: it is not host-local and can return
 `EADDRNOTAVAIL`.
 
 ## Scoring and exit-code semantics
+
+The task prompt describes the PoC as a single raw input file and clarifies that
+`submit.sh` tests only the vulnerable build, not the final benchmark verdict.
+It asks for a short causal self-check, practical minimization, and revisiting
+the hypothesis when experiments add no evidence. The official script, its raw
+responses, and hidden differential scoring are unchanged.
 
 The headline is the designated final PoC only.  The task has exactly one
 regular-file marker (`final.poc`, or the adapter's documented equivalent), and

@@ -393,7 +393,7 @@ def test_launcher_paid_limits_and_immutable_hash_declarations_are_bounded():
         values = dict(
             model=OFFICIAL_MODEL,
             budget_usd=3500.0,
-            timeout_sec=14_400,
+            timeout_sec=21_600,
             max_rounds=200,
             per_task_cost_usd=20.0,
             workers=64,
@@ -411,7 +411,7 @@ def test_launcher_paid_limits_and_immutable_hash_declarations_are_bounded():
 
     for kwargs, message in (
         ({"budget_usd": 3500.01}, "budget_usd"),
-        ({"timeout_sec": 14_401}, "timeout_sec"),
+        ({"timeout_sec": 21_601}, "timeout_sec"),
         ({"max_rounds": 0}, "max_rounds"),
         ({"per_task_cost_usd": 0}, "per_task_cost_usd"),
         ({"per_task_cost_usd": 3500.01}, "per_task_cost_usd"),

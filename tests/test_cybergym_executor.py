@@ -1557,7 +1557,7 @@ def test_task_body_states_wall_clock_budget_derived_from_ceiling(tmp_path):
         "attempt-1",
     )
     guidance = body["description"]
-    assert "Time budget: you have at most 3 hours of wall time" in guidance
+    assert "Time budget: you have at most 6 hours of wall time" in guidance
     assert "best-effort /workspace/final.poc before the deadline" in guidance
 
 

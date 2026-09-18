@@ -82,7 +82,7 @@ from devtools.benchmarks.cybergym.cybergym_result_index import (
 )
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-DEFAULT_TIMEOUT_SEC = 3 * 60 * 60
+DEFAULT_TIMEOUT_SEC = 6 * 60 * 60
 DEFAULT_MAX_ROUNDS = 600
 DEFAULT_CAMPAIGN_BUDGET_USD = 3000.0
 # Runtime tree cap for each measured task.  This is deliberately separate from
