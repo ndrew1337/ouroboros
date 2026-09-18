@@ -147,6 +147,7 @@ def test_benchmark_inventory_points_to_cybergym_docs():
     architecture = architecture_text(REPO)
     assert "cybergym/" in common_readme
     assert "devtools/benchmarks/cybergym/" in architecture
+    assert "workspace-custody gate" in architecture
 
 
 def test_cybergym_docs_pin_the_owner_approved_contract():
@@ -187,9 +188,12 @@ def test_cybergym_docs_pin_the_owner_approved_contract():
         "finalize_run_manifest",
         "append-only",
         "cleanup",
+        "verbatim",
+        "workspace_custody_timeout",
     )
     for phrase in required:
         assert phrase in combined, phrase
     assert "template" in readme.lower()
     assert "applied" in readme.lower()
     assert "leaderboard" in readme.lower()
+    assert "workspace_custody_timeout" in readme and "verbatim" in readme

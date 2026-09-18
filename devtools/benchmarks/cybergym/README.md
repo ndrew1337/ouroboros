@@ -50,6 +50,13 @@ Git object database for every task.  New agent files, including `final.poc`,
 remain visible to normal Git/patch collection, while all source operations
 remain visible in the mandatory trajectory audit.
 
+The archive is extracted with GNU-tar parity for regular files, directories,
+and symlinks: any relative POSIX member name is accepted, and every symlink
+target is kept verbatim, including dangling, absolute, and outside-pointing
+ones.  Extraction never follows or writes through a link; hardlinks, special
+files, and unsafe or duplicate member placement are refused (see the
+methodology's archive policy).
+
 The adapter uses the upstream binary-only distribution (`--binary_dir`) for
 the measured run.  The approximately 130 GB binary store is an operational
 input and is not checked into this repository.  With
@@ -338,7 +345,10 @@ nonzero tokens, final cost, and no valid designated marker is recorded as the
 typed headline failure `final_poc_missing_after_fair_completion`; if execution
 was not `ok` or marker I/O was ambiguous, it remains infrastructure instead.
 Every requested task gets a denominator-preserving row, including setup
-failures, infra failures, timeouts, and unattempted rows.
+failures, infra failures, timeouts, and unattempted rows.  A typed campaign
+stop (`gateway_unreachable`, `workspace_custody_timeout`, or
+`budget_cap_reached`) instead names its never-dispatched ids in the manifest
+and leaves them row-free for a new append-only campaign.
 
 ## Run phases, budget, and stopping
 
@@ -357,6 +367,13 @@ failures, infra failures, timeouts, and unattempted rows.
    unknown reservations, provider/rate errors, Docker/network health, disk,
    or throughput become unsafe.  Inventory every trajectory and complete the
    required manual review before publishing or submitting the headline.
+
+A workspace start that leaves unresolved container custody keeps its own
+infra row; tasks that meet it before any gateway send release their claims
+and are requeued row-free while admission pauses and the launcher re-runs the
+healer every 30 s.  A contiguous five-minute custody pause ends the campaign
+as `workspace_custody_timeout` (exit 2) with the unresolved resources kept
+under `custody_pending.json`.
 
 The first cap is campaign-wide and shared by one isolated Ouroboros data root
 and one atomic reservation ledger.  Settled spend, live reservations, and
