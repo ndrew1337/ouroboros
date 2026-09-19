@@ -53,7 +53,7 @@ def _row_chat_id(row: Dict[str, Any]) -> int:
         return 0
 
 
-# The closed lifecycle vocabulary of a required Project question, shared with
+# The closed lifecycle vocabulary of a Project question, shared with
 # web/modules/question_presentation.js: one leading word answers "is there an
 # unanswered question for me?", the rest is context. Both sides are pinned on the
 # rows this module actually emits by web/tests/fixtures/question_presentation_parity.json.
@@ -80,7 +80,9 @@ def owner_wait_projection(quiz_id: str, owner_wait: Any, block: Any) -> Dict[str
         facts["owner_wait_state"] = str(waiting["state"])
         if waiting.get("resume_reason"):
             facts["owner_wait_resume_reason"] = str(waiting["resume_reason"])
-    elif waiting.get("quiz_id") and str(waiting.get("quiz_id")) != quiz_id:
+    elif (waiting.get("quiz_id") and str(waiting.get("quiz_id")) != quiz_id
+          and (block.get("wait_for_answer") is True or block.get("wait_ended_at"))):
+        # Only a question the task actually waited on can have been resumed.
         facts["owner_wait_state"] = "resumed"
     if block.get("wait_ended_at"):
         facts["wait_ended_at"] = str(block["wait_ended_at"])
@@ -102,7 +104,7 @@ def question_status(state: str, facts: Dict[str, Any], wait_for_answer: bool) ->
 
 def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
                              owner_wait: Any = None) -> Optional[Dict[str, Any]]:
-    """Read projection of one required Project question; never another ask.
+    """Read projection of one Project question into Main; never another ask.
 
     The row is complete for display: question, option labels, the recorded answer and the
     wait facts ride with the pointer, so the browser paints it from history or the live
@@ -113,12 +115,11 @@ def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
     task_id, quiz_id = str(row.get("task_id") or ""), str(quiz.get("quiz_id") or "")
     block = block if isinstance(block, dict) else {}
     project = project if isinstance(project, dict) else {}
-    if (not task_id or not quiz_id or not project.get("id") or not project.get("chat_id")
-            or not (quiz.get("wait_for_answer") is True or block.get("wait_for_answer") is True)):
+    if not task_id or not quiz_id or not project.get("id") or not project.get("chat_id"):
         return None
     state = str(block.get("state") or "")
     known = block.get("quiz_id") == quiz_id and state in _QUIZ_LIFECYCLE
-    facts = owner_wait_projection(quiz_id, owner_wait, block)
+    facts = owner_wait_projection(quiz_id, owner_wait, block or quiz)
     # The block drops its required flag when its bound closes; the durable row keeps it.
     still_required = bool(block.get("wait_for_answer")) if block else bool(quiz.get("wait_for_answer"))
     name = str(project.get("name") or "Project")
@@ -127,6 +128,11 @@ def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
     labels = [str(option.get("label") if isinstance(option, dict) else option or "")
               for option in (options if isinstance(options, list) else [])]
     question = str(quiz.get("question") or row.get("text") or block.get("question") or "")
+    assumption = str(quiz.get("assumption") or block.get("assumption") or "")
+    recommended = block.get("recommended_index")
+    if not isinstance(recommended, int) or isinstance(recommended, bool):
+        recommended = next((i for i, option in enumerate(options if isinstance(options, list) else [])
+                            if isinstance(option, dict) and option.get("recommended") is True), None)
     pointer: Dict[str, Any] = {
         "role": "system", "system_type": "project_question_pointer", "task_id": task_id,
         "quiz_id": quiz_id, "quiz_state": state if known else "unknown",
@@ -137,6 +143,8 @@ def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
         # Display fields only when known: a narrower producer must never blank a complete row.
         **({"question": question} if question else {}),
         **({"options": labels} if labels else {}),
+        **({"assumption": assumption} if assumption else {}),
+        **({"recommended_index": recommended} if recommended is not None else {}),
         **facts,
         **({"source_status": "unavailable"} if not known else {}),
     }
@@ -721,6 +729,8 @@ TASK_CAUSE_PHRASES = {
     # so clean_pass and clean_pass_obligations_closed carry no sentence; an
     # accepted decision with a sentence here still states its cause.
     "previous_revision_accepted": "The reviewers approved the earlier version of this answer; it changed before they finished.",
+    "author_stop": "Main stopped with unfinished work; no review approval was granted.",
+    "review_outcome_received": "Main received the review outcome or recorded limitation.",
     "author_finish": "The answer was delivered on Main's own judgement; the reviewers had not signed it off.",
     "review_degraded": "No reviewer verdict was established for this answer.",
     "infra_failure": "A review infrastructure failure prevented a settled verdict.",
@@ -782,8 +792,9 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
     lifecycle = axis.get("lifecycle") or status
     if lifecycle in {"cancelled", "cancel_requested"}:
         return "cancelled"
+    author_finished = axis.get("objective") == "pass" and (axes.get("objective") or {}).get("source") == "author_acceptance"
     if (lifecycle == "failed" or axis.get("execution") in {"failed", "infra_failed"}
-            or axis.get("objective") == "fail" or axis.get("review") == "fail"
+            or axis.get("objective") == "fail" or (axis.get("review") == "fail" and not author_finished)
             or {axis.get("artifacts"), str(record.get("artifact_status") or "").lower()} & {"failed", "missing"}):
         return "error"
     if str(record.get("reason_code") or "") == REASON_OWNER_REQUESTED_FINALIZATION:
@@ -791,7 +802,7 @@ def outcome_phase(result: Dict[str, Any], event: Dict[str, Any]) -> str:
     if (lifecycle == "rejected_duplicate" or bool((axes.get("objective") or {}).get("warning"))
             or axis.get("execution") in {"degraded", "best_effort"}
             or axis.get("objective") in {"degraded", "best_effort"}
-            or axis.get("review") == "degraded"):
+            or (axis.get("review") == "degraded" and not author_finished)):
         return "warn"
     return "done"
 

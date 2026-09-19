@@ -517,3 +517,38 @@ def test_supervision_loop_holds_one_handshaken_gateway_and_drops_it_on_a_failed_
     first, second = gateways
     assert (first.handshakes, first.reads, first.closed) == (1, 4, True)
     assert (second.handshakes, second.reads, second.closed) == (1, 2, True)
+
+
+def test_the_empty_checkpoint_pair_asks_for_no_checkpoint(tmp_path):
+    """Models fill both optional keys with 0 and "" (six live refusals in one day): that
+    pair is the schema's empty form. A genuinely half-filled pair is still refused, and
+    the refusal names the half that is missing and echoes what it received."""
+    _child(tmp_path)
+    ctx = _ctx(tmp_path)
+
+    def wait_once(_ctx, _run_id, _timeout, _cursor):
+        return json.dumps({"status": "completed", "run_id": "run-1", "last_seq": 1})
+
+    wake = json.loads(supervised_wait(
+        ctx, "run-1", checkpoint_after_sec=0, checkpoint_reason="", wait_once=wait_once).text)
+    assert wake["status"] == "completed" and "error" not in wake
+    assert wake["ignored_arguments"] == [
+        "checkpoint_after_sec=0 ignored: with an empty checkpoint_reason it asks for no checkpoint"]
+
+    for args, missing in (({"checkpoint_after_sec": 60}, "checkpoint_reason is missing"),
+                          ({"checkpoint_reason": "look again"}, "checkpoint_after_sec is missing")):
+        result = supervised_wait(ctx, "run-1", wait_once=wait_once, **args)
+        assert result.status == "error" and result.code == "TOOL_ARG_ERROR"
+        assert missing in result.text and "checkpoint_requires_time_and_reason" in result.text
+
+    # 0 seconds WITH a reason genuinely asks for an immediate inspection: on a fresh run
+    # (no pending wake to replay) the checkpoint is really scheduled with that reason.
+    from ouroboros.delegate_supervision import _load_state
+
+    fresh_root = tmp_path / "fresh"
+    fresh_root.mkdir()
+    _child(fresh_root)
+    fresh = _ctx(fresh_root)
+    asked = supervised_wait(fresh, "run-2", checkpoint_after_sec=0, checkpoint_reason="look", wait_once=wait_once)
+    assert asked.status == "ok" and "ignored_arguments" not in json.loads(asked.text)
+    assert (_load_state(fresh, "run-2").get("checkpoint") or {}).get("reason") == "look"

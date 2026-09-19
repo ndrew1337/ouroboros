@@ -135,7 +135,7 @@ def _drain_incoming_messages(
             break
 
     if drive_root is not None and task_id:
-        from ouroboros.owner_mailbox import KIND_FINALIZE_NOW, KIND_HURRY, KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_TASK_MESSAGE, PROVENANCE_INDEPENDENT_TASK, acknowledge_transcript_entry, deliver_quiz_answer, deliver_task_message, drain_owner_entries
+        from ouroboros.owner_mailbox import CONTEXT_ONLY_TASK_PROVENANCES, KIND_FINALIZE_NOW, KIND_HURRY, KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_TASK_MESSAGE, acknowledge_transcript_entry, deliver_quiz_answer, deliver_task_message, drain_owner_entries
 
         if owner_ctx:
             owner_ctx._loop_mailbox_seen_ids = _owner_msg_seen
@@ -170,7 +170,7 @@ def _drain_incoming_messages(
                 # owner's messages supersede a reviewed answer). The typed provenance
                 # and the sender id ride the row, the injected event and the ack.
                 provenance = str(entry.get("provenance") or "ancestor_task")
-                if provenance not in {"system", "descendant_task", PROVENANCE_INDEPENDENT_TASK}:
+                if provenance not in CONTEXT_ONLY_TASK_PROVENANCES:
                     _loop()._record_owner_directive(
                         owner_ctx, content=dmsg, msg_id=str(entry.get("msg_id") or ""),
                         source=("relayed_peer_message" if provenance == "peer_via_ancestor"
@@ -182,6 +182,8 @@ def _drain_incoming_messages(
                     entry, task_id, event_queue,
                     lambda text: _loop()._append_or_merge_user_message(messages, text, slot=owner_ctx),
                 )
+                if provenance == "system" and isinstance(entry.get("review_feedback"), dict) and messages:
+                    messages[-1].setdefault("review_feedback", []).append(dict(entry["review_feedback"]))
                 acknowledge_transcript_entry(drive_root, task_id, entry)
                 continue
             if kind == KIND_QUIZ_ANSWER:
@@ -328,10 +330,11 @@ def _run_authored_context_view(messages, ctx, pending, selected_names):
                if selected_names is not None else list(current_tools))
     fit_candidate = ctx.fit_candidate
     if fit_candidate is None:
-        tool_ctx._pending_compaction = None
-        tool_ctx._pending_tool_schema_names = None
-        ctx.emit_progress("Context view kept unchanged: prospective physical fit is unavailable.")
-        return messages
+        # Main's applied route/mode already live on its tool context, including
+        # after a wait or fallback; do not carry a second routing snapshot here.
+        fit_candidate = lambda candidate, selected: _loop()._measure_main_context_view(
+            getattr(tool_ctx, "context_fit_plan", None), candidate, selected,
+            mode, getattr(tool_ctx, "active_effort", "medium"), str(ctx.round_idx))
     if pending is None:
         # Schema-only enablement uses the same candidate fit/publication. It
         # does not fabricate an authored note or rewrite existing history.

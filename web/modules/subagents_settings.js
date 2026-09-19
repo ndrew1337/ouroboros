@@ -367,7 +367,7 @@ export function availableSubagentRowMarkup(row, state, index = 0) {
             </div>
             ${processingDetailsHtml(`data-subagent-field="processing_preference" aria-label="Processing for Subagent ${ordinal}"`, row.processing_preference, state.processingPreference)}
             ${session ? `<div class="ui-field-help" id="actor-${escapeHtml(rowKey)}-access-help">Full system access can reach outside the working folder. The selected agent must support it. Explicit task restrictions still apply.</div>` : ''}
-            <div id="actor-${escapeHtml(rowKey)}-meta" class="available-subagent-meta ui-field-help" data-subagent-meta${meta.tone ? ` data-tone="${escapeHtml(meta.tone)}"` : ''} title="${escapeHtml(meta.text)}"${meta.text ? '' : ' hidden'}>${escapeHtml(meta.text)}</div>
+            <div id="actor-${escapeHtml(rowKey)}-meta" class="available-subagent-meta ui-field-help" data-subagent-meta${meta.history ? ' data-run-history' : ''}${meta.tone ? ` data-tone="${escapeHtml(meta.tone)}"` : ''} title="${escapeHtml(meta.text)}"${meta.text ? '' : ' hidden'}>${escapeHtml(meta.text)}</div>
         </article>`;
 }
 
@@ -455,10 +455,8 @@ export function createAvailableSubagentsEditor({
 
     function validationErrors() {
         if (!state.loaded) {
-            // An unrelated Settings save may omit a field the response did not
-            // load at all. Once the response carries saved bytes or an explicit
-            // migration/repair candidate, though, its parse error is actionable
-            // and must block rather than masquerade as an accepted repair.
+            // Only an omitted response field may stay out of an unrelated save;
+            // malformed saved bytes or an explicit repair candidate must report errors.
             if (state.unloadedOmissionAllowed) return [];
             return [state.parseError
                 || 'Available subagents draft is still loading. Retry the preview before finishing.'];
@@ -500,6 +498,7 @@ export function createAvailableSubagentsEditor({
             const metaEl = el.querySelector('[data-subagent-meta]');
             if (!metaEl) return;
             Object.assign(metaEl, { hidden: !meta.text, textContent: meta.text, title: meta.text });
+            metaEl.toggleAttribute('data-run-history', Boolean(meta.history));
             if (meta.tone) metaEl.dataset.tone = meta.tone;
             else delete metaEl.dataset.tone;
         });
@@ -509,7 +508,6 @@ export function createAvailableSubagentsEditor({
         if (state.saveAttempted) onJudged(!shown.length);
     }
 
-    // Judge existing rows on Save/Finish; later new rows remain fresh.
     function noteSaveAttempt() {
         state.saveAttempted = true;
         state.setting.items.forEach((row) => { row._uiAttempted = true; });
@@ -771,9 +769,7 @@ export function createAvailableSubagentsEditor({
                 subscriptionsConnected: state.accountsKnown && connected.length > 0,
             });
             if (generation !== state.previewGeneration) return false;
-            // This is still the unsaved migration/default candidate.  Preserve
-            // that provenance so a later clean account-status change may
-            // refresh it again; onboarding editors keep the endpoint source.
+            // Retain migration provenance for later clean refreshes; onboarding keeps the endpoint source.
             const result = applyGeneratedPreview({ ...response, source: state.source });
             if (!result.applied) state.previewSignature = '';
             return result.applied;
@@ -834,6 +830,13 @@ export function createAvailableSubagentsEditor({
         reloadStatus,
         refreshGeneratedPreview: maybeRefreshGeneratedPreview,
         applyGeneratedPreview,
+        applyOwnerPreview(response) {
+            const parsed = parseAvailableSubagentsSetting(response?.available_subagents);
+            if (!parsed.setting) return { applied: false, error: parsed.error };
+            load(parsed.setting, { source: 'configured_by_owner', diagnostics: response?.diagnostics || [] });
+            markDirty({ structural: true }); paint();
+            return { applied: true, error: '' };
+        },
         setPreviewFailure,
         validate: validationErrors,
         noteSaveAttempt,

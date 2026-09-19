@@ -988,7 +988,8 @@ def test_loop_parallel_executor_crash_preserves_input_order_and_typed_trace(
         CODE_TOOLS = frozenset()
         # tip drift: handle_tool_calls drains the request-wire custom receipts
         # off the ctx, so the fake carries a real attribute surface.
-        _ctx = SimpleNamespace(_request_wire_custom_receipts=())
+        _ctx = SimpleNamespace(_request_wire_custom_receipts=(),
+                               _current_llm_call_meta={"round_id": "exec:round:10"})
 
         @staticmethod
         def get_timeout(_name):
@@ -1032,6 +1033,7 @@ def test_loop_parallel_executor_crash_preserves_input_order_and_typed_trace(
             "result": expected,
             "is_error": True,
             "trace_ref": None,
+            "round_id": "exec:round:10",
             "status": "executor_error",
             "tool_result_status": "error",
             "tool_result_code": "EXECUTOR_ERROR",

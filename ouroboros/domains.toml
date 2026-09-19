@@ -392,6 +392,7 @@ D20 = "Presence"
 "ouroboros/skill_token.py" = "D14"
 "ouroboros/subagent_bootstrap.py" = "D07"
 "ouroboros/subagent_dispatch_notes.py" = "D07"
+"ouroboros/subagent_history.py" = "D07"
 "ouroboros/subagent_messages.py" = "D07"
 "ouroboros/subagent_runtime.py" = "D07"
 "ouroboros/subagent_work_order.py" = "D07"
@@ -416,6 +417,7 @@ D20 = "Presence"
 "ouroboros/tool_capabilities.py" = "D04"
 "ouroboros/tool_policy.py" = "D04"
 "ouroboros/tools/__init__.py" = "D04"
+"ouroboros/tools/arg_feedback.py" = "D04"
 "ouroboros/tools/browser.py" = "D05"
 "ouroboros/tools/ci.py" = "D10"
 "ouroboros/tools/claude_advisory_review.py" = "D06"
@@ -838,7 +840,6 @@ lazy_only = [
   "D05->D06",
   "D05->D07",
   "D05->D14",
-  "D05->D20",
   "D06->D03",
   "D06->D05",
   "D06->D08",

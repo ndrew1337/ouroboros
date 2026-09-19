@@ -654,7 +654,7 @@ def _execute_single_tool(
             "tool_args": {},
             "args_for_log": {},
             "is_code_tool": is_code_tool,
-            "trace_ref": trace_ref,
+            "trace_ref": trace_ref, "round_id": correlation.get("round_id"),
             "result_meta": result_meta,
             "tool_result": tool_result,
         }
@@ -770,7 +770,7 @@ def _execute_single_tool(
         "tool_args": args if isinstance(args, dict) else {},
         "args_for_log": args_for_log,
         "is_code_tool": is_code_tool,
-        "trace_ref": trace_ref,
+        "trace_ref": trace_ref, "round_id": correlation.get("round_id"),
         "result_meta": result_meta,
         "tool_result": tool_result,
     }
@@ -903,7 +903,7 @@ def _make_timeout_result(
         "is_error": True,
         "args_for_log": args_for_log,
         "is_code_tool": is_code_tool,
-        "trace_ref": trace_ref,
+        "trace_ref": trace_ref, "round_id": corr.get("round_id"),
         "result_meta": result_meta,
         "tool_result": tool_result,
     }
@@ -1152,6 +1152,7 @@ def handle_tool_calls(
             fn_name = str((tc.get("function") or {}).get("name") or "").strip()
             result = custom_tool_argument_error(fn_name, receipt)
             return {
+                "round_id": getattr(tools._ctx, "_current_llm_call_meta", {}).get("round_id"),
                 "tool_call_id": str(tc.get("id") or ""),
                 "fn_name": fn_name,
                 "result": result,
@@ -1209,6 +1210,7 @@ def handle_tool_calls(
                         text=result,
                     )
                     results[idx] = {
+                        "round_id": getattr(tools._ctx, "_current_llm_call_meta", {}).get("round_id"),
                         "tool_call_id": tc.get("id", ""),
                         "fn_name": fn_name,
                         "result": result,
@@ -1402,7 +1404,7 @@ def process_tool_results(
             # "not shown in trace" verdicts → acceptance loops (BIBLE P1/P3).
             "result": truncated_result,
             "is_error": is_error,
-            "trace_ref": exec_result.get("trace_ref"),
+            "trace_ref": exec_result.get("trace_ref"), **({"round_id": exec_result["round_id"]} if exec_result.get("round_id") else {}),
             **({
                 "result_partial": True,
                 "result_source_ref": result_source_ref,

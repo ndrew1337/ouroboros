@@ -267,12 +267,14 @@ def _server_process_identity_matches(record: dict) -> bool:
     return expected_server in command or ("server.py" in command and expected_repo in command)
 
 
-def _write_server_process_record(proc: subprocess.Popen, *, port: int, server_py: pathlib.Path) -> None:
+def _write_server_process_record(proc: subprocess.Popen, *, port: int, server_py: pathlib.Path,
+                                 server_host_source: str) -> None:
     try:
         record = {
             "pid": int(proc.pid),
             "pgid": process_group_id(proc.pid),
             "server_path": str(server_py.resolve()),
+            "server_host_source": server_host_source,
             "repo_dir": str(REPO_DIR.resolve()),
             "requested_port": int(port),
             "port": int(port),
@@ -386,6 +388,7 @@ def start_agent(port: int = AGENT_SERVER_PORT) -> subprocess.Popen:
     # export exclusion closed — setdefault lets the settings value stand in
     # only when the environment says nothing.
     saved_host = str(settings.get("OUROBOROS_SERVER_HOST") or "").strip()
+    host_source = "environment" if str(env.get("OUROBOROS_SERVER_HOST") or "").strip() else "settings"
     if saved_host:
         env.setdefault("OUROBOROS_SERVER_HOST", saved_host)
     env["OUROBOROS_SERVER_PORT"] = str(port)
@@ -465,7 +468,7 @@ def start_agent(port: int = AGENT_SERVER_PORT) -> subprocess.Popen:
             return proc
         log.info("Agent pid %d assigned to Windows Job Object", proc.pid)
 
-    _write_server_process_record(proc, port=port, server_py=server_py)
+    _write_server_process_record(proc, port=port, server_py=server_py, server_host_source=host_source)
 
     def _stream_output() -> None:
         # Size-capped copy (CPL4-C5): same bound as the server.log stdlib
@@ -1067,18 +1070,15 @@ def _headless_signal_handler(signum, frame) -> None:
 
 def _open_browser_detached(url: str, outcome: Optional[list] = None) -> threading.Thread:
     """Open the default browser without ever blocking the caller.
-
     `webbrowser.open` waits for the child on a stdlib-resolved console
     browser (w3m/lynx or an unrecognized $BROWSER), which would stall the
     keep-alive loop for that browser's lifetime; the URL is already printed,
     so the open is best-effort and rides a daemon thread. Returns the thread
     so a short-lived caller (the already-running notice) can bound-join it
     before process exit would kill the daemon thread under the opener.
-
     An ``outcome`` list, when given, receives exactly one entry — True/False
     from ``webbrowser.open`` or the raised exception — so a bounded-join
     caller (the desktop bridge) can report failure honestly.
-
     DELIBERATE (owner-approved): the opened browser is the USER'S own
     application, intentionally outside process custody and launcher teardown —
     the Emergency-Stop invariant governs the AGENT'S tree, and killing the
@@ -1097,6 +1097,23 @@ def _open_browser_detached(url: str, outcome: Optional[list] = None) -> threadin
     thread = threading.Thread(target=_open, name="ouroboros-open-browser", daemon=True)
     thread.start()
     return thread
+
+
+def _open_external_url(url: str) -> dict:
+    """Shared external-link handoff for both desktop window bridges."""
+    try:
+        raw = str(url or "")
+        if not raw.lower().startswith(("http://", "https://", "mailto:")):
+            return {"ok": False, "error": "Only absolute http://, https:// or mailto: links can be opened."}
+        outcome: list = []
+        # Settled failure is reported; a slow browser stays detached.
+        _open_browser_detached(raw, outcome).join(timeout=3.0)
+        if outcome and outcome[0] is not True:
+            return {"ok": False, "error": f"The default browser could not be opened: {outcome[0] or 'no handler found'}"}
+        return {"ok": True}
+    except Exception as exc:
+        log.warning("Desktop external-URL open failed: %s", exc, exc_info=True)
+        return {"ok": False, "error": str(exc)}
 
 
 def _run_headless_main(url: str, port: int, lifecycle_thread: threading.Thread) -> None:
@@ -1209,7 +1226,7 @@ def main(argv=()):
             width=420,
             height=200,
         )
-        webview.start()
+        webview.start(private_mode=False)
         return
 
     import atexit
@@ -1296,7 +1313,7 @@ def main(argv=()):
             width=520,
             height=300,
         )
-        webview.start(func=_git_page, args=[git_window])
+        webview.start(func=_git_page, args=[git_window], private_mode=False)
         if not check_git():
             sys.exit(1)
 
@@ -1342,7 +1359,8 @@ def main(argv=()):
         # The gateway is live and, with no provider configured, runs WITHOUT a
         # supervisor — the supported state that lets the wizard reach /api/*.
         onboarding = _present_first_run_onboarding(
-            onboarding_settings, actual_port, headless=_headless
+            onboarding_settings, actual_port, headless=_headless,
+            open_external_url=_open_external_url,
         )
         if not onboarding["saved"]:
             log.info(
@@ -1397,7 +1415,7 @@ def main(argv=()):
             width=520,
             height=260,
         )
-        webview.start()
+        webview.start(private_mode=False)
         return
 
     def _resolve_bridge_file_url(raw_url: str) -> str:
@@ -1495,19 +1513,7 @@ def main(argv=()):
                 return {"ok": False, "error": str(exc)}
 
         def open_external_url(self, url: str) -> dict:
-            try:
-                raw = str(url or "")
-                if not raw.lower().startswith(("http://", "https://", "mailto:")):
-                    return {"ok": False, "error": "Only absolute http://, https:// or mailto: links can be opened."}
-                outcome: list = []
-                # Bounded join: settled failure reported honestly; still-running stays detached.
-                _open_browser_detached(raw, outcome).join(timeout=3.0)
-                if outcome and outcome[0] is not True:
-                    return {"ok": False, "error": f"The default browser could not be opened: {outcome[0] or 'no handler found'}"}
-                return {"ok": True}
-            except Exception as exc:
-                log.warning("Desktop external-URL open failed: %s", exc, exc_info=True)
-                return {"ok": False, "error": str(exc)}
+            return _open_external_url(url)
 
         def save_bytes_to_downloads(self, filename: str, b64: str) -> dict:
             try:
@@ -1569,9 +1575,9 @@ def main(argv=()):
         os._exit(0)
 
     window.events.closing += _on_closing
-    _webview_window = window
+    _webview_window = window  # Persist cookies and website data (ouroboros.theme); rebuild/limits: ARCHITECTURE §3.
 
-    webview.start(debug=False)
+    webview.start(debug=False, private_mode=False)
 
 
 if __name__ == "__main__":

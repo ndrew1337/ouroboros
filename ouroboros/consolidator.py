@@ -45,9 +45,6 @@ def _consolidation_route() -> Tuple[str, bool]:
     return resolve_credentialed_model(lane.model), False
 
 
-CONSOLIDATION_REASONING_EFFORT = "medium"
-
-
 def retain_memory_source(context: Any, source_id: str, data: bytes, extension: str = "md") -> Dict[str, Any]:
     """Use existing immutable source storage with a reader valid after this task."""
     from ouroboros.artifacts import store_actor_source_bytes, task_artifact_dir_path
@@ -682,6 +679,7 @@ def _call_consolidation_llm(
     model_route: Optional[Dict[str, Any]] = None,
     knowledge: Optional[KnowledgeReadContext] = None,
     source_ref: Optional[Dict[str, Any]] = None,
+    reasoning_effort: str = "low",
 ) -> Tuple[str, Dict[str, Any]]:
     from contextlib import nullcontext
     from math import ceil
@@ -791,7 +789,7 @@ def _call_consolidation_llm(
         model, use_local = _consolidation_route()
         values = dict(messages=[{"role": "user", "content": prompt}], model=model,
                       model_role="light", tools=knowledge.tools if knowledge else None,
-                      reasoning_effort="low", max_tokens=16384,
+                      reasoning_effort=reasoning_effort, max_tokens=16384,
                       use_local=use_local,
                       model_account_override=model_role_option(MODEL_ACCOUNTS_KEY, "light"))
         if waiter:

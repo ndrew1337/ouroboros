@@ -335,7 +335,7 @@ def _request(target: dict, messages: list, tools: list | None, parameters: dict)
     # Claudexor payloads and tool schemas are opaque here and are never walked.
     prepared = scrub_native_custody(_MessageShapingMixin._normalize_system_message_placement(messages))
     for message in prepared:
-        for name in ("_context_capsule", "acceptance_observation", "_acceptance_observation",
+        for name in ("_context_capsule", "acceptance_observation", "_acceptance_observation", "review_feedback",
                      "reasoning", "reasoning_details", "reasoning_content", "response_id", "stop_reason"):
             message.pop(name, None)
         # A direct provider's refusal is assistant content, not routing metadata.
@@ -679,6 +679,7 @@ class _ModelInvocation:
         usage.update(provider="claudexor", resolved_model=self.target["usage_model"], cost=cost, cost_final=final,
                      cost_estimated=cost is not None and not final,
                      claudexor={"operation_id": self.operation_id, "model_role": self.role,
+                                "requested_profile": str((self.payload.get("account") or {}).get("profileId") or ""),
                                 "route": copy.deepcopy(route), "cost_evidence": copy.deepcopy(result.get("cost")),
                                 "outcome": result.get("outcome"), "problem": copy.deepcopy(result.get("problem")),
                                 "requested_options": requested_options, "applied_options": applied_options,
@@ -721,7 +722,6 @@ class _ModelInvocation:
                 else "incomplete"
             )
         return copy.deepcopy(message), usage
-
     async def offload(self, function, *args):
         """A cancelled caller leaves the current I/O thread owning its gateway."""
         with self.io_lock:
@@ -758,30 +758,20 @@ class _ModelInvocation:
 
 
 def _reset_native(payload: dict, error: ClaudexorModelNotDispatched, invocation: _ModelInvocation) -> dict | None:
+    from ouroboros.llm_messages import reset_native_messages
+
     capture = getattr(error, "physical_attempt_capture", None)
     if error.code != "invalid_continuation" or getattr(capture, "state", None) != "released":
         return None
-    route = error.route
-    changed = []
-    prepared = copy.deepcopy(payload)
-    for message in prepared["messages"]:
-        native = message.get("nativeContinuation")
-        if not isinstance(native, dict):
-            continue
-        old = native.get("route") or {}
-        if (route.get("source") == old.get("source") == payload["source"]
-                and route.get("model") in (None, payload["model"])
-                and any(route.get(key) and old.get(key) and route[key] != old[key]
-                        for key in ("credentialProfileId", "accountFingerprint"))):
-            changed.append({"old_route": old, "new_route": route})
-            message.pop("nativeContinuation")
+    messages, changed = reset_native_messages(
+        payload["messages"], error.route, source=payload["source"], model=payload["model"])
     if not changed:
         return None
     append_jsonl(invocation.root / "logs" / "events.jsonl", {
         "ts": utc_now_iso(), "type": "native_continuation_reset", "task_id": invocation.task_id,
         "model_role": invocation.role, "operation_id": invocation.operation_id, "routes": changed,
     })
-    return prepared
+    return {**payload, "messages": messages}
 
 
 def _accounted_request(invocation: _ModelInvocation):
@@ -801,9 +791,9 @@ def _native_retry_preparation(target: dict, payload: dict, parameters: dict,
                               error: ClaudexorModelNotDispatched):
     """Rebind the already-authorized un-sent repair before preparing its next attempt.
 
-    The engine's new account receipt replaces provisional discovery. Passing
-    the sanitized send copy is essential: rebuilding from the old transcript
-    would reintroduce the incompatible native envelope just removed above.
+    The engine's new account receipt replaces provisional discovery. Pass the
+    sanitized send copy to ordinary callers; Main re-applies this attested
+    account reset to its canonical source before rebuilding its vision view.
     """
     values = {**parameters, "messages": payload["messages"], "tools": payload["tools"],
               "model": target["usage_model"], "use_local": False}
@@ -813,6 +803,10 @@ def _native_retry_preparation(target: dict, payload: dict, parameters: dict,
             raise ModelWaitInterrupted("model_wait_reprepare_required", role=parameters.get("model_role", ""), cause=error)
         return values  # Bare helpers have no captured Main fit to replace.
     values["_model_observed_route"] = {**error.route, "source": target["source"], "model": target["resolved_model"]}
+    if error.code == "invalid_continuation" and getattr(getattr(error, "physical_attempt_capture", None), "state", None) == "released":
+        # A processing-only repair may also report another account. Only the
+        # typed no-start native reset authorizes Main to scrub its source copy.
+        values["_model_observed_route"]["_native_reset"] = True
     return waiter.reprepare(parameters.get("model_role", ""), values)
 
 

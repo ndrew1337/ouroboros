@@ -157,6 +157,7 @@
  * @property {Object=} setup_contract
  * @property {AvailableSubagentsSettingsMeta=} available_subagents
  * @property {SettingsPolicyState=} policy_state
+ * @property {{restart_required:boolean,restart_keys:string[],restart_source_unknown_keys:string[],unknown_keys:string[],local_model:Object,summary:string}=} restart_state Component application and source uncertainty.
  */
 
 /**
@@ -280,6 +281,8 @@
  * @property {string=} wait_ended_at
  * @property {string=} question
  * @property {string[]=} options
+ * @property {string=} assumption
+ * @property {number=} recommended_index
  * @property {number=} answered_index
  * @property {string=} comment
  * @property {"chat"} type
@@ -1169,8 +1172,20 @@
  * @property {string=} applied_model
  * @property {string=} requested_profile
  * @property {string=} applied_profile
+ * @property {Object=} observed_route Actual API attempt route; never the task's mutable last route.
  * @property {string=} run_id
  * @property {string=} ts
+ * @property {string=} occurred_at
+ * @property {string=} observed_at
+ * @property {string=} outcome
+ * @property {string=} failure_code
+ * @property {string=} reset_at
+ * @property {Object=} identity
+ * @property {Object<string, SubagentLastDelegation>=} latest_by_subagent
+ * @property {string=} task_id
+ * @property {string=} invocation_id
+ * @property {string=} attempt_id
+ * @property {Object=} fallback
  */
 
 /**
@@ -1459,7 +1474,7 @@ export const MAX_QUIZ_OPTIONS = 6;
 // REFUSES a longer comment (it is delivered verbatim, never truncated), so
 // the card must not offer to send one.
 export const MAX_DECISION_COMMENT = 2000;
-export const GATEWAY_CONTRACT_VERSION = '7.1.0';
+export const GATEWAY_CONTRACT_VERSION = '7.2.0';
 
 /**
  * @typedef {Object} ChatHistoryPosition

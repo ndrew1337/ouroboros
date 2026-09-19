@@ -40,4 +40,69 @@ def test_invalid_range_cannot_claim_full_source(tmp_path):
     path.parent.mkdir(parents=True)
     path.write_text("Source")
     ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path)
-    assert "range" in _knowledge_read(ctx, "note", start_char=10, end_char=20)
+    refused = _knowledge_read(ctx, "note", start_char=10, end_char=20)
+    assert "range" in refused and "complete_chars=6" in refused and "start_char=10" in refused
+
+
+def _read(ctx, **args):
+    sentinel = object()
+    token = _install_tool_result_sidecar(ctx, sentinel)
+    try:
+        text = _knowledge_read(ctx, "note", **args)
+        return text, _published_tool_result(ctx, sentinel)
+    finally:
+        _restore_tool_result_sidecar(token)
+
+
+def test_a_bound_that_asks_for_nothing_reads_instead_of_refusing(tmp_path):
+    """Models fill both optional bounds: an end past the note, 0..0, or one bound alone
+    each used to cost a refused round (and a learned two-call size probe). The range
+    RETURNED is always the range delivered, so coverage arithmetic stays exact."""
+    path = tmp_path / "memory/knowledge/note.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("Source text", encoding="utf-8")
+    ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path)
+    for args, expected, note in [
+        ({"start_char": 0, "end_char": 20000}, (0, 11), "end_char=20000 ignored: the note ends at 11"),
+        ({"start_char": 0, "end_char": 0}, (0, 11), "end_char=0 ignored: a 0..0 range selects nothing"),
+        ({"start_char": 7}, (7, 11), ""),
+        ({"end_char": 6}, (0, 6), ""),
+    ]:
+        text, result = _read(ctx, **args)
+        source = result.meta["knowledge_source"]
+        assert result.status == "ok" and (source["start_char"], source["end_char"]) == expected
+        assert text[result.meta["knowledge_body_start"]:] == "Source text"[expected[0]:expected[1]]
+        assert result.meta["knowledge_body_chars"] == expected[1] - expected[0]
+        assert result.meta["knowledge_source_complete"] == (expected == (0, 11))
+        assert json.loads(text.splitlines()[0].removeprefix("[Knowledge source] ")) == source
+        assert (f"[Range note] {note}" in text) if note else ("[Range note]" not in text)
+    for args in ({"start_char": -1, "end_char": 4}, {"start_char": 5, "end_char": 2}, {"start_char": "0", "end_char": 4}):
+        text, result = _read(ctx, **args)
+        assert result.status == "error" and result.code == "TOOL_ARG_ERROR" and "complete_chars=11" in text
+
+
+def test_blank_revision_creates_only_a_missing_note(tmp_path):
+    from ouroboros.tools.knowledge import _knowledge_write
+
+    ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path)
+    assert "saved" in _knowledge_write(ctx, "new", "First body", expected_revision="")
+    path = tmp_path / "memory/knowledge/new.md"
+    original = path.read_bytes()
+    for mode in ("overwrite", "append"):
+        assert "revision_conflict" in _knowledge_write(ctx, "new", "Unsafe change", mode=mode, expected_revision="")
+        assert path.read_bytes() == original
+    assert "revision_required" in _knowledge_write(ctx, "new", "Unsafe change")
+    revision = hashlib.sha256(original).hexdigest()
+    assert "saved" in _knowledge_write(ctx, "new", "Fresh body", expected_revision=revision)
+    assert "Fresh body" in path.read_text()
+    assert "revision_conflict" in _knowledge_write(ctx, "new", "Stale body", expected_revision=revision)
+
+
+def test_boolean_range_bounds_are_not_integer_offsets(tmp_path):
+    path = tmp_path / "memory/knowledge/note.md"
+    path.parent.mkdir(parents=True)
+    path.write_text("Source")
+    ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path)
+    for args in ({"start_char": False}, {"end_char": True}):
+        text, result = _read(ctx, **args)
+        assert result.code == "TOOL_ARG_ERROR" and "complete_chars=6" in text

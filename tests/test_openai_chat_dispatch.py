@@ -620,6 +620,8 @@ def test_main_custom_schema_error_continues_without_handler(tmp_path):
     message, receipts = _invalid_custom_exchange()
     tools = _FakeTools()
     tools._ctx._request_wire_custom_receipts = receipts
+    tools._ctx._current_llm_call_meta = {"round_id": "exec:round:9"}
+    trace = {"tool_calls": []}
     messages = [dict(message)]
     logs = tmp_path / "logs"
     logs.mkdir()
@@ -631,11 +633,12 @@ def test_main_custom_schema_error_continues_without_handler(tmp_path):
         "task",
         StatefulToolExecutor(),
         messages,
-        {"tool_calls": []},
+        trace,
         lambda _text: None,
     )
 
     assert errors == 1
+    assert trace["tool_calls"][0]["round_id"] == "exec:round:9"
     assert tools.calls == []
     assert messages[-1]["role"] == "tool"
     assert "TOOL_ARG_ERROR" in messages[-1]["content"]

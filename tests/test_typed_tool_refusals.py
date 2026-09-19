@@ -25,6 +25,12 @@ Scope limit (disclosed): only RETURNED string literals (plain, f-string with a s
 head, or a leading-literal concatenation) are scanned. A failure text that reaches the
 model through a variable, a tuple or a helper is invisible to this lint; the typed
 producer path is the repair for those, pinned by their own tests.
+
+A DYNAMIC head (``f"⚠️ {code}: ..."``) cannot be judged statically: whether the adapter
+types it depends on the runtime identifier, and a lowercase or out-of-vocabulary code is
+recorded ``ok`` (the live `schedule_subagent` / `escalate` refusal loops were exactly
+this shape). The producer always knows it refused, so new code publishes such a text
+typed; the pre-existing sites are counted per file in ``ALLOWED_DYNAMIC`` and may not grow.
 """
 
 from __future__ import annotations
@@ -49,6 +55,17 @@ ALLOWED: dict[str, tuple[int, str]] = {
     ),
 }
 
+# Pre-existing returns whose marker identifier is interpolated. Growth fails; a stale
+# (larger) count is harmless here, because concurrent branches retire these sites one by one.
+_DYNAMIC_WHY = "pre-existing interpolated marker; publish it typed when the producer is next touched"
+ALLOWED_DYNAMIC: dict[str, tuple[int, str]] = {
+    "ouroboros/tools/browser.py": (6, _DYNAMIC_WHY),
+    "ouroboros/tools/core.py": (2, _DYNAMIC_WHY),
+    "ouroboros/tools/core_file_tools.py": (1, "the interpolated identifier always ends in _BLOCKED, which the adapter types"),
+    "ouroboros/tools/edit_ops.py": (1, _DYNAMIC_WHY),
+    "ouroboros/tools/skill_exec.py": (2, _DYNAMIC_WHY),
+    "ouroboros/tools/tool_resolution.py": (1, "protected registry path; the binding-error text is typed by its SKILL_REDIRECT_ family marker"),
+}
 
 
 def _static_head(node: ast.expr) -> tuple[str, bool] | None:
@@ -90,7 +107,11 @@ def _untyped_failure(head: str, partial: bool) -> bool:
     return LegacyTextResultAdapter.from_text("lint", first).status == "ok"
 
 
-def observed_untyped_returns() -> dict[str, list[tuple[int, str]]]:
+def _dynamic_marker(head: str, partial: bool) -> bool:
+    return partial and head.startswith("⚠️") and not head.lstrip("⚠\ufe0f").strip()
+
+
+def observed_untyped_returns(judge=_untyped_failure) -> dict[str, list[tuple[int, str]]]:
     found: dict[str, list[tuple[int, str]]] = {}
     for root in ROOTS:
         for path in sorted((REPO / root).glob("*.py")):
@@ -103,7 +124,7 @@ def observed_untyped_returns() -> dict[str, list[tuple[int, str]]]:
                 if shape is None:
                     continue
                 head, partial = shape
-                if _untyped_failure(head, partial):
+                if judge(head, partial):
                     found.setdefault(rel, []).append((node.lineno, head.splitlines()[0].strip()[:60]))
     return found
 
@@ -128,3 +149,16 @@ def test_untyped_failure_returns_only_shrink() -> None:
     )
     for path, (count, why) in ALLOWED.items():
         assert not count or why.strip(), f"ALLOWED[{path!r}] needs a written reason"
+
+
+def test_dynamic_marker_returns_do_not_grow() -> None:
+    observed = {path: len(rows) for path, rows in observed_untyped_returns(_dynamic_marker).items()}
+    grown = {path: count for path, count in observed.items() if count > ALLOWED_DYNAMIC.get(path, (0, ""))[0]}
+    assert not grown, (
+        "a builtin tool returns a refusal whose ⚠️ identifier is interpolated, so the registry may record "
+        "it as a successful call; publish it typed (tools/arg_feedback.argument_refusal or "
+        f"tool_result._publish_tool_result): {grown}"
+    )
+    for path, (_count, why) in ALLOWED_DYNAMIC.items():
+        assert why.strip(), f"ALLOWED_DYNAMIC[{path!r}] needs a written reason"
+

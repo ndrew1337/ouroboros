@@ -1,10 +1,4 @@
-"""
-LLM call, retry, pricing, and usage-event logic for the main loop.
-
-Handles model pricing estimation, cost tracking, per-call retry with backoff,
-and real-time usage event emission.
-Extracted from loop.py to keep the main loop orchestrator focused.
-"""
+"""Main-loop provider calls: request observation, retries, pricing and usage events."""
 
 from __future__ import annotations
 
@@ -288,6 +282,7 @@ def _record_and_emit_empty_response(
         "_last_llm_error": _short_error_text(log_msg), "execution_status": status,
         "reason_code": reason, "_last_llm_error_kind": kind,
     })
+    accumulated_usage.get("_last_llm_call_meta", {}).update(failure_code=kind)
     return event_type, is_provider_glitch, permanent_body_error
 
 
@@ -435,6 +430,7 @@ class _LlmErrorContext:
     transport_death_retries: int = 0
     transport_reserve_sec: Optional[float] = None
     stop_retry_check: Optional[Callable[[], bool]] = None
+    requested_profile: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -635,7 +631,6 @@ def _exception_provider_values(exc: Exception) -> List[str]:
 
 
 def _exception_provider_code(exc: Exception, safe_error: str) -> str:
-    del safe_error
     values = _exception_provider_values(exc)
     for value in values:
         if value.lower() in _STRUCTURED_CONTEXT_OVERFLOW_CODES:
@@ -814,20 +809,15 @@ def classify_llm_exception(exc: Exception, safe_error: str = "") -> LlmErrorClas
 def _remember_llm_call(
     usage: Dict[str, Any],
     *,
-    llm_call_id: str,
-    execution_id: str,
-    round_id: str,
-    round_idx: int,
-    attempt: int,
-    model: str,
-    display_model: str,
-    provider: str,
+    llm_call_id: str, execution_id: str, round_id: str,
+    round_idx: int, attempt: int, model: str, display_model: str, provider: str,
     request_ref: Dict[str, Any],
     response_ref: Dict[str, Any],
     reported_model: Any = None,
     use_local: Optional[bool] = None,
+    requested_profile: Optional[str] = None, observed_route: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
-    call_meta = {
+    call_meta = {"ts": utc_now_iso(),
         "llm_call_id": llm_call_id,
         "execution_id": execution_id,
         "round_id": round_id,
@@ -840,6 +830,8 @@ def _remember_llm_call(
         "use_local": use_local,
         "request_ref": request_ref.get("manifest_ref") if request_ref else None,
         "response_ref": response_ref.get("manifest_ref") if response_ref else None,
+        "requested_profile": requested_profile,
+        "observed_route": dict(observed_route or {}),
     }
     usage["_last_llm_call_meta"] = call_meta
     usage.setdefault("llm_call_refs", []).append(call_meta)
@@ -943,10 +935,8 @@ def _record_llm_call_error(
             "route": dict(getattr(error, "route", {}) or {}), "outcome": "unknown",
             "request_ref": ctx.request_ref.get("manifest_ref") if ctx.request_ref else None,
         }
-        # The caller chooses this existing repeat rail. Ordinary managed tasks
-        # set it to zero: their transport episode requires upstream recovery
-        # before a marked NEW attempt. Other callers retain their bounded rail;
-        # grant before logging, and uncount a grant refused before dispatch.
+        # Ordinary managed tasks require upstream recovery before a new attempt;
+        # other callers retain their bounded repeat rail.
         if (
             is_retryable_transport_death(error)
             and repeats < ctx.transport_death_retries and ctx.attempt < ctx.transient_budget - 1
@@ -973,26 +963,30 @@ def _record_llm_call_error(
         "llm_call_id": ctx.llm_call_id, "round": ctx.round_idx, "attempt": ctx.attempt + 1,
         "model": ctx.model,
     }
-    # ONE error row (#355): a successful append's registered sink owns live
-    # delivery. Without that path, send the SAME evidence through the queue,
-    # preserving its identity for live/backfill dedupe. No llm_round_error
-    # sibling here; Background Consciousness keeps its own separate producer.
+    # The append sink owns delivery; queue fallback preserves the same identity.
+    # No llm_round_error sibling: Background Consciousness owns its separate producer.
     error_event = {
         "ts": utc_now_iso(), "type": "llm_api_error", **identity, "error": display_error,
         "error_kind": classification.kind, "retry_same_request": will_retry,
         "status_code": classification.status_code, "provider_code": classification.provider_code,
         "provider_message": provider_message,
+        "requested_profile": ((getattr(error, "usage", {}) or {}).get("claudexor") or {}).get("requested_profile", ctx.requested_profile),
+        "observed_route": dict(getattr(error, "route", {}) or {}),
         **custody_fields,
         **(ctx.context_fit_event_fields or {}),
         "request_ref": ctx.request_ref.get("manifest_ref") if ctx.request_ref else None,
     }
     if not append_jsonl(ctx.drive_logs / "events.jsonl", error_event) or not has_log_sink():
         emit_log_event(ctx.event_queue, error_event, log_label="LLM call error")
+    ctx.accumulated_usage.setdefault("llm_call_refs", []).append({
+        **{key: error_event[key] for key in ("ts", "llm_call_id", "model", "requested_profile", "observed_route")},
+        "failure_code": classification.kind, "reset_at": classification.reset_at,
+    })
     ctx.accumulated_usage.update(_last_llm_error=_short_error_text(display_error),
                                  _last_llm_error_kind=classification.kind, _last_llm_retry_same_request=will_retry)
     if classification.retry_after_sec is not None:
-        ctx.accumulated_usage["_last_llm_retry_after_sec"] = classification.retry_after_sec
-        ctx.accumulated_usage["_last_llm_reset_at"] = classification.reset_at
+        ctx.accumulated_usage.update(_last_llm_retry_after_sec=classification.retry_after_sec,
+                                     _last_llm_reset_at=classification.reset_at)
     else:
         ctx.accumulated_usage.pop("_last_llm_retry_after_sec", None)
         ctx.accumulated_usage.pop("_last_llm_reset_at", None)
@@ -1198,13 +1192,17 @@ def _send_main_candidate(
     deadline_ts: Optional[float],
     physical_context: Optional[PhysicalAttemptContext],
     candidate_predicate: Optional[Callable[[Any], Any]],
+    model_context_observer: Any = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     binding = (
         contextlib.nullcontext() if physical_context is None and candidate_predicate is None
         else bind_physical_attempt_context(physical_context, candidate_predicate=candidate_predicate)
     )
     with model_concurrency.model_call_slot(model, use_local, deadline_ts), binding:
-        return llm.chat(**kwargs)
+        result = llm.chat(**kwargs)
+        if callable(model_context_observer):
+            model_context_observer(kwargs["messages"])
+        return result
 
 
 def _take_custom_receipts(
@@ -1427,7 +1425,7 @@ def call_llm_with_retry(
             _emit_main_llm_call_state(event_queue, call_identity, "started")
             msg, usage = _send_main_candidate(
                 llm, kwargs, model=model, use_local=use_local, deadline_ts=deadline_ts,
-                physical_context=physical_context, candidate_predicate=candidate_predicate if attempt == 0 else None,
+                physical_context=physical_context, candidate_predicate=candidate_predicate if attempt == 0 else None, model_context_observer=model_context_observer,
             )
             host_route = usage.get("model_role_route") or {}
             model, use_local = host_route.get("model", model), host_route.get("use_local", use_local)
@@ -1465,16 +1463,13 @@ def call_llm_with_retry(
             )
             _remember_llm_call(
                 accumulated_usage,
-                llm_call_id=llm_call_id,
-                execution_id=execution_id,
-                round_id=round_id,
-                round_idx=round_idx,
-                attempt=attempt + 1,
-                model=model,
-                display_model=display_model,
-                provider=provider,
+                llm_call_id=llm_call_id, execution_id=execution_id, round_id=round_id,
+                round_idx=round_idx, attempt=attempt + 1, model=model,
+                display_model=display_model, provider=provider,
                 request_ref=request_ref,
                 response_ref=response_ref, reported_model=usage.get("resolved_model"), use_local=bool(use_local),
+                requested_profile=(usage.get("claudexor") or {}).get("requested_profile", host_route.get("credential_profile_id", model_account_override)),
+                observed_route=(usage.get("claudexor") or {}).get("route"),
             )
             category = task_type if task_type in ("evolution", "consciousness", "review", "summarize") else "task"
             emit_llm_usage_event(
@@ -1593,6 +1588,7 @@ def call_llm_with_retry(
                     max_retries=max_retries, transient_budget=transient_budget,
                     transport_death_retries=transport_death_retries, transport_reserve_sec=transport_reserve_sec,
                     stop_retry_check=stop_retry_check,
+                    requested_profile=host_route.get("credential_profile_id", model_account_override),
                 ),
                 call_identity,
             ):

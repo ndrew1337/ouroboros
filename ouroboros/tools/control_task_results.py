@@ -236,7 +236,13 @@ def _get_task_result(
             payload["completion_source"] = completion_source_projection(
                 status_drive_root, str(task_id), data, source_start_char, source_end_char,
             )
-        return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        text = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        if any(isinstance(view, dict) and view.get("reason") == "source_range_invalid"
+               for view in (payload.get("work_order_source"), payload.get("completion_source"))):
+            # The requested text was NOT returned: same JSON (it names complete_chars and
+            # the range received), recorded as the argument fault it is, never as `ok`.
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=text))
+        return text
     status = data.get("status", "unknown")
     result = data.get("result", "")
     trace = data.get("trace_summary", "")
@@ -454,6 +460,14 @@ def cache_horizon_note(ctx: Any, elapsed_sec: Any) -> str:
     )
 
 
+def _wait_early_return_note(early) -> str:
+    if not early:
+        return ""
+    if early.get("reason") == "owner_mailbox_pending":
+        return "The ordinary loop will deliver and acknowledge the unread message. This does not stop the child."
+    return "A child attention beacon interrupted this wait. Inspect early_return; the children keep running."
+
+
 def _wait_for_task(
     ctx: ToolContext, task_id: str, timeout_sec: int = 180, known_result_sha256: str = "",
 ) -> str:
@@ -478,7 +492,7 @@ def _wait_for_task(
     early = waited.get("early_return")
     if early and early.get("reason") == "owner_mailbox_pending":
         header = "Task wait interrupted by an unread message for this task"
-        extra = "\n\nThe ordinary loop will deliver and acknowledge the message. This does not stop the child."
+        extra = "\n\n" + _wait_early_return_note(early)
     elif early:
         header = "Task wait interrupted by a child attention beacon"
         extra = f"\n\n[CHILD_BEACONS]\n{json.dumps(early, ensure_ascii=False, indent=2)}\n[/CHILD_BEACONS]"
@@ -879,6 +893,8 @@ def _wait_for_tasks(
                 "max_timeout_sec": float(_WAIT_TASKS_CLAMP_SEC),
                 "live_task_ids": live_ids,
             }
+    if note := _wait_early_return_note(waited.get("early_return")):
+        waited["early_return_note"] = note
     horizon_note = cache_horizon_note(ctx, waited.get("elapsed_sec"))
     if horizon_note:
         waited["cache_horizon_note"] = horizon_note

@@ -25,6 +25,7 @@ from typing import Any, Dict, List
 
 from ouroboros.consciousness_authority import consciousness_origin_metadata
 from ouroboros.deadline_utils import parse_deadline_ts
+from ouroboros.tools.arg_feedback import ignored_argument_note
 from ouroboros.tools.registry import ToolContext, ToolEntry
 
 _MAX_PENDING_FOLLOWUPS = 2
@@ -63,7 +64,7 @@ def get_tools() -> List[ToolEntry]:
                         },
                         "timezone": {
                             "type": "string",
-                            "description": "Optional IANA timezone for cron (blank = system local timezone).",
+                            "description": "Optional IANA timezone for cron (blank = system local timezone). Not for run_at: put the UTC offset into run_at itself (a zone beside an offset-carrying run_at is ignored).",
                         },
                         "objective": {
                             "type": "string",
@@ -111,6 +112,16 @@ def _pending_followups(records: List[Dict[str, Any]], task_id: str) -> List[Dict
     return out
 
 
+def _naive_instant(raw: str) -> bool:
+    """True when an ISO instant names no UTC offset (such a time is read as UTC)."""
+    from datetime import datetime
+
+    try:
+        return datetime.fromisoformat(raw[:-1] + "+00:00" if raw.endswith("Z") else raw).tzinfo is None
+    except ValueError:
+        return False
+
+
 def _handle_schedule_followup(ctx: ToolContext, **params) -> str:
     if _is_delegated_subagent(ctx):
         return (
@@ -129,13 +140,21 @@ def _handle_schedule_followup(ctx: ToolContext, **params) -> str:
             "or cron (recurring).")))
         )
     timezone = str(params.get("timezone") or "").strip()
+    timezone_note = ""
     if run_at_raw:
-        if timezone:
-            return (
-                _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=("ERROR: FOLLOWUP_TIMEZONE_WITH_RUN_AT: timezone applies only to recurring "
-                "cron follow-ups; run_at is an absolute instant.")))
-            )
         instant = parse_deadline_ts(run_at_raw)
+        if timezone and instant is not None:
+            if _naive_instant(run_at_raw):
+                # A zone beside a run_at WITHOUT an offset asks for something: ignoring it would
+                # schedule the naive time as UTC, hours away from what was meant.
+                return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(
+                    f"ERROR: FOLLOWUP_TIMEZONE_WITH_RUN_AT: run_at={run_at_raw!r} carries no UTC offset and "
+                    f"timezone={timezone!r} applies only to recurring cron follow-ups. Put the offset into run_at "
+                    "(example: 2026-08-19T12:20:00+03:00) and omit timezone. Nothing was scheduled.")))
+            # run_at with its own offset is an absolute instant: a zone beside it asks for nothing.
+            timezone_note = " " + ignored_argument_note(
+                "timezone", timezone, "it applies only to recurring cron follow-ups; run_at carries its own offset") + "."
+            timezone = ""
         if instant is None:
             return (
                 _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(f"ERROR: FOLLOWUP_RUN_AT_INVALID: {run_at_raw!r} is not a parseable ISO 8601 "
@@ -249,5 +268,5 @@ def _handle_schedule_followup(ctx: ToolContext, **params) -> str:
         "enqueue ordinary root tasks through the supervisor scheduler under normal admission; "
         f"pending follow-ups for this task: {len(pending) + 1}/{_MAX_PENDING_FOLLOWUPS}. The "
         f"record is durable in state/scheduled_tasks.json and {lifecycle}; the owner can "
-        "disable or delete it from the Schedules surface."
+        f"disable or delete it from the Schedules surface.{timezone_note}"
     )

@@ -72,11 +72,18 @@ def test_native_selector_retains_source_task_and_canonical_drive(tmp_path, monke
 @pytest.mark.parametrize('start,end', [(None, 1), (0, None), (True, 2), (0, False), (-1, 2), (2, 2), (0, 1000000)])
 def test_completion_reader_preserves_the_existing_strict_range_contract(tmp_path, monkeypatch, start, end):
     reg, _ref, _path, _canonical, _execution, _row = source_reader(tmp_path, monkeypatch, 'split_readonly')
-    result = json.loads(reg.execute('get_task_result', {
+    typed = reg.execute_result('get_task_result', {
         'task_id': 'source-task', 'include_completion_source': True,
         'source_start_char': start, 'source_end_char': end,
-    }))['completion_source']
+    })
+    # The text was not returned, so the call is recorded as an argument fault, never `ok`.
+    assert (typed.status, typed.code) == ('error', 'TOOL_ARG_ERROR')
+    result = json.loads(typed.text)['completion_source']
     assert result['reason'] == 'source_range_invalid' and 'text' not in result
+    # The refusal carries what a legal range needs: the complete length and what was asked.
+    # ("range_required" stays the no-range answer; "unavailable" would be false for a readable source.)
+    assert result['complete_chars'] > 0 and result['requested_range'] == [start, end]
+    assert 'range_required' not in result and 'status' not in result
 
 
 @pytest.mark.parametrize('fault', ['digest', 'bytes', 'missing', 'traversal'])

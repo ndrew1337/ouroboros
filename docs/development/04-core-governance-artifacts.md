@@ -77,17 +77,19 @@ Ouroboros repo for an external plan. Exact user-managed installed-skill payload
 paths are the one data-plane exception, for CLASSIFICATION only: never a
 self-modification, never attachable evidence (`denied_path`).
 
-SPEC shape, finding classes, verdicts and closure rules: ARCHITECTURE §6 "Plan construction
-and review"; findings are inputs the main agent may accept, reject, or defer.
-Outstanding `need_evidence` closes with no second LLM call, through a separate
-`plan_task` call carrying only `review_disposition`
-(`{review_fingerprint, items: [{finding_id, decision, rationale}]}`, one item per
-required finding, exactly once);
-duplicate, contradictory, unknown, stale or incomplete dispositions fail closed,
-and a mixed or vacuous call is a typed argument error before any attempt is
-recorded (a default-empty optional field is ignored, not meaning:
-`plan_review._vacuous`). Never replay the plan envelope with the
-disposition.
+Specs, findings and closure: ARCHITECTURE §6 "Plan construction and review".
+Accept, reject or defer findings. Disposition-only
+`plan_task(review_disposition={review_fingerprint, items:[{finding_id, decision, rationale}]})`
+closes `need_evidence` at $0, one item per required finding.
+Duplicate, conflicting, unknown, stale, incomplete, mixed or vacuous calls
+return typed argument errors before recording. `plan_review._vacuous` ignores
+default-empty optional fields. Do not replay the plan for dispositions.
+
+Only explicit `review_disposition.author_action`, author disposition and critic
+fingerprint select corrected goal/plan/spec. Exact `current_attempt.author_subject`
+is separate from the critic. Advisory finish buys no panel; Blocking stop saves
+without implementation approval. `closed_plan_review_wave` means critic-closed;
+acceptance reads Advisory author claims as `author_plan`.
 
 Force-plan is an LLM-first pre-implementation obligation on the admitted managed
 root, not a mechanical permission check. `plan_review_state` owns durable review
@@ -127,18 +129,19 @@ in `tests/test_loop_misc.py`.
 
 ### Invariant: Compaction must earn its rewrite
 
-Context compaction is a deficit-requested materializer, not an independent
-threshold, timer, route, or retry policy (the no-reclaim-no-mutation rule and
-the route+round latch: ARCHITECTURE §6 "Context fitting, retry, and compaction"). For a
-non-empty selection, persist the exact actor-visible checkpoint before calling
-the summarizer. A replacement publishes only once transcript/unit binding,
-complete coverage, checkpoint provenance and a strictly smaller size on the
-caller's ContextFit basis are proved, with matching image proxy and density
-(raw base64 bytes are not token reclaim). Only typed summarizer context
-overflow may split a source; capsules keep host-only provenance metadata, so
-recompaction never loses the original provenance union. Enforcement:
-`tests/test_compaction.py`, `tests/test_loop_compaction.py`,
-`tests/test_loop_compaction_policy.py`.
+Helper compaction is deficit-driven: checkpoint the exact actor-visible source
+before summarizing, then publish only completely covered, bound units with
+provenance and a strictly smaller ContextFit size (same image proxy/density).
+Only typed summarizer overflow may split sources; capsules retain the original
+provenance union. No-positive-reclaim and route+round rules belong to ARCHITECTURE
+§6 "Context fitting, retry, and compaction"; the materializer adds no threshold,
+timer, route or retry policy.
+
+Authored views reuse that custody but follow the actor's note/source selection,
+so need not shrink. Preserve complete units, owner/new tail and schema residency;
+measure without new Main admission gates. Test actual loop wiring, not manually
+seeded observations: `tests/test_main_authored_context.py`, alongside the helper
+coverage in `tests/test_compaction.py`.
 
 ### Invariant: No silent truncation
 

@@ -628,6 +628,17 @@ def plan_review_reminder(decision: Dict[str, Any]) -> str:
             "dispositions remain available; a disposition does not close blocking findings "
             "or a degraded wave. Existing in-flight custody can still settle."
         )
+    if decision.get("historical_critic"):
+        # The aggregate and its custody/degraded facts belong to the plan this author
+        # REVISED, so none of the outcome-keyed advice below applies to the current one:
+        # telling the agent to dispose "the latest fingerprint" would point it at a wave
+        # that cannot approve these bytes.
+        return (
+            f"{tag} Plan review is OPEN: the referenced critic reviewed the EARLIER plan "
+            f"({outcome or 'unavailable'}); the revised plan has no verdict of its own. Call "
+            "plan_task with the current goal, plan and spec to have it reviewed — a disposition "
+            "on the earlier wave cannot approve the revised plan. Implementation stays held."
+        )
     if decision.get("custody_pending"):
         return (
             f"{tag} Plan review is OPEN: reviewer work is still running or awaiting collection. "
@@ -682,6 +693,12 @@ def plan_review_disclosure(decision: Dict[str, Any], forced_reason: str = "") ->
         outcome = f"{outcome or 'open'}; reviewer work is running or awaiting collection"
     elif decision.get("reviewer_slots_degraded"):
         outcome = f"{outcome or 'open'}; no parseable reviewer quorum"
+    # A historical critic's aggregate is EVIDENCE about the plan the author corrected,
+    # never this plan's own verdict: unlabelled, "(GREEN)" reads to the owner as
+    # approval of bytes no reviewer ever saw.
+    if decision.get("historical_critic") and outcome:
+        outcome = (f"referenced critic review of the earlier plan: {outcome}; "
+                   "the current plan has no verdict of its own")
     subject = "Blocking plan review" if decision.get("enforcement") == "blocking" else "Plan review"
     # The wave is still OPEN at finalization, so the verb says so: "remained"
     # told the owner a panel had ended that nobody had closed. When a paid slot
@@ -690,6 +707,19 @@ def plan_review_disclosure(decision: Dict[str, Any], forced_reason: str = "") ->
         " A paid reviewer slot can still settle, so a late result is still owed."
         if decision.get("review_late_result_pending") else ""
     )
+    # The author's decision and the rail that forced finalization are BOTH true, and
+    # the rail is what explains why the task ended. Returning the author sentence first
+    # dropped "the cap is spent; the task ends blocked" whenever both applied, so the
+    # author clause now rides the rail's own sentence instead of replacing it.
+    author_note = ""
+    if decision.get("author_action"):
+        action = str(decision["author_action"])
+        result = ("the author stopped with unfinished work" if action == "stop" else
+                  "the current plan was accepted by its author under advisory enforcement"
+                  if decision.get("allow") and decision.get("enforcement") == "advisory" else
+                  "the revised author plan has no current critic approval")
+        author_note = (f" Plan author decision: {action}; {result}. "
+                       "The author decision does not close or replace the critic review.")
     if decision.get("status") == "rail_degraded":
         rail_reason = str(forced_reason or decision.get("reason") or "")
         detail = f" ({outcome})" if outcome else ""
@@ -697,13 +727,13 @@ def plan_review_disclosure(decision: Dict[str, Any], forced_reason: str = "") ->
         rail = f"the task-wide rail `{rail_reason}`" if rail_reason else "a task-wide rail"
         return (
             f"\n\n⚠️ {subject} is open{detail}; {rail} required best-effort "
-            f"finalization.{late}"
+            f"finalization.{author_note}{late}"
         )
     if decision.get("status") == "cycles_exhausted" and decision.get("enforcement") == "blocking":
         return (
             f"\n\n⚠️ Blocking plan review stayed open ({outcome or 'open'}) with the review-cycle "
             f"cap spent ({decision.get('cycles_paid')} paid cycle(s)); the task ends blocked "
-            "with its evidence recorded; the planned work must not be treated as done."
+            f"with its evidence recorded; the planned work must not be treated as done.{author_note}"
         )
     if decision.get("quorum_unreachable") and decision.get("enforcement") == "blocking":
         # B2b: the agent chose the honest blocked terminal while the reviewer quorum
@@ -714,13 +744,20 @@ def plan_review_disclosure(decision: Dict[str, Any], forced_reason: str = "") ->
             "quorum structurally unreachable (typed window-exhausted reviewer lanes"
             + (f"; earliest recorded reset {reset}" if reset else "")
             + "); the task ends blocked with its evidence recorded; the planned work "
-            "must not be treated as done."
+            f"must not be treated as done.{author_note}"
         )
-    if decision.get("allow"):
+    # An author stop carries allow=True in EVERY enforcement, so the generic branch
+    # below would tell the owner "work proceeded under advisory enforcement" about a
+    # blocking stop that finished nothing. It falls to the author fallback instead.
+    if decision.get("allow") and decision.get("status") != "author_stopped":
         return (
             f"\n\n⚠️ Plan review is still open ({outcome or 'unavailable'}); work proceeded "
-            f"under the owner-selected advisory enforcement.{late}"
+            f"under the owner-selected advisory enforcement.{author_note}{late}"
         )
+    # Blocking, no rail, an author decision recorded: the decision is the only thing
+    # that happened and the owner still has to hear it, with the review's own state.
+    if author_note:
+        return f"\n\n⚠️ {subject} is open ({outcome or 'unavailable'}).{author_note}{late}"
     return ""
 
 

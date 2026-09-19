@@ -865,12 +865,24 @@ def supervised_wait(
 ) -> ToolResult:
     """Renew quiet windows internally and return only a meaningful wake batch."""
 
-    if (checkpoint_after_sec is None) != (not str(checkpoint_reason or "").strip()):
+    reason_text = str(checkpoint_reason or "").strip()
+    ignored_note = ""
+    if checkpoint_after_sec == 0 and not reason_text and not isinstance(checkpoint_after_sec, bool):
+        # The schema's empty pair asks for no checkpoint: the omitted path, said in the wake.
+        checkpoint_after_sec = None
+        from ouroboros.tools.arg_feedback import ignored_argument_note
+
+        ignored_note = ignored_argument_note(
+            "checkpoint_after_sec", 0, "with an empty checkpoint_reason it asks for no checkpoint")
+    if (checkpoint_after_sec is None) != (not reason_text):
         # The family's ONE refusal author, not a second literal envelope beside
         # it: this is an argument fault, and it is recorded as one.
+        missing = "checkpoint_after_sec" if checkpoint_after_sec is None else "checkpoint_reason"
         return _fail(
             "delegate_wait", "checkpoint_requires_time_and_reason",
-            "checkpoint_after_sec and non-empty checkpoint_reason must be supplied together.",
+            f"got checkpoint_after_sec={checkpoint_after_sec!r}, checkpoint_reason={reason_text!r}: "
+            f"{missing} is missing. Supply both for one proactive inspection, or omit both "
+            "(0 with an empty reason also means none).",
         )
     owns_transport = wait_once is None
     if wait_once is None:
@@ -988,6 +1000,8 @@ def supervised_wait(
                 if wakes:
                     payload["wake_events"] = wakes
                 payload["coordination_context"] = coordination_live_context(ctx)
+                if ignored_note:
+                    payload["ignored_arguments"] = [ignored_note]
                 wake_id = uuid.uuid4().hex
                 payload["supervision_wake_id"] = wake_id
                 state["status"] = "wake_pending"

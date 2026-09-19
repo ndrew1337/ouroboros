@@ -16,8 +16,19 @@ styles by both the SPA and the served onboarding document. Page styles own
 composition, not another copy of the shared palette. This file names roles;
 it does not copy an inventory.
 
-The theme is **dark only**. There is no light-theme plumbing, and adding a
-second theme is an architecture change, not a styling change.
+The shell offers **Settings → Appearance → Light / Dark / System**. New clients
+start on System; explicit Light or Dark remains pinned. The shared semantic
+palettes in `web/ui.css` preserve geometry and status meanings. Light uses white
+reading surfaces, dark text and an opaque header, with decorative matrix hidden.
+
+Appearance belongs to a browser profile or desktop client, not an account or
+server setting. Existing saved Light/Dark choices keep their meaning. Storage
+failures are visible; clearing site data returns the choice to System. Switching
+repaints mounted charts and diagrams without rebuilding views or losing drafts.
+Independent iframe interiors remain author-owned, not automatically recoloured.
+Desktop persistence requires a launcher built with persistent WebView storage;
+server restart alone cannot verify survival across full quit/relaunch. Mechanism
+and deployment limits: ARCHITECTURE §3 “Navigation and shared UI contracts”.
 
 ---
 
@@ -194,6 +205,22 @@ with room to spare. `--text-disabled` is deliberately BELOW it (3.5:1) and is
 therefore reserved for genuinely disabled or incidental content, which WCAG
 exempts; it must never carry meaning a reader has to obtain.
 
+### A selected state is not exempt from contrast
+
+A **status hue** and a **status foreground** are different values, and the
+selected state of a control must use the foreground. Selected Advisory in the
+enforcement group read `--amber` (`#f59e0b`) over a 12% amber wash: ~2:1 on the
+light surface, unreadable exactly when the owner had chosen it. The rule that
+closes this: a selected control tints with the `--status-*-fg` /
+`--status-*-bg` / `--status-*-border` triple, which is defined per theme, and
+never with the raw hue token, which is not.
+
+The same reasoning covers images. A colour baked into a `data:` URI cannot be
+themed, because a custom property cannot be interpolated into the URI string —
+which is why the select chevron was a pale `#e2e8f0` on white. **The whole
+image is the token** (`--select-arrow`), overridden per theme, not the colour
+inside it. `tests/test_appearance_static.py` holds both facts.
+
 ## 4. Status and chips
 
 A status has **an explicit foreground/background pair**, never a foreground
@@ -266,6 +293,14 @@ pointer alone; a card in another chat keeps the excerpt.
   and `--ui-tone-*`. They were named here and referenced by nothing at all, so
   every surface kept inventing its own literal instead. They are gone; the
   vocabulary above is the whole vocabulary.)
+
+Current completion and independent criticism are separate facts. An informed Advisory
+author finish may complete the current subject while its original review remains
+FAIL or DEGRADED; the old critic alone must not paint that completion Failed.
+Independent execution, artifact, verification or publication failures still apply.
+Blocking corrections saved without fresh approval and an explicit unfinished stop
+remain unaccepted; show the retained work and reason through the existing five-word
+status family and details, without inventing reviewer PASS or a new status badge.
 
 ### The tone primitive
 
@@ -415,6 +450,10 @@ not child-task cards and never prove execution by themselves.
   (`Skill review`, `Plan review`, or `Task acceptance`). Expanding a group
   reveals its ordered attempt rows. Group state and verdict remain
   domain-specific; one blocker never recolours the whole task card.
+- Start progress labels the frozen model/route/profile as requested; settlement
+  reports that same slot's observed execution or says it was not reported. An API
+  model sent in a request is not an independently observed provider label, and
+  duplicate model slots remain distinct. No global last-run identity fills a gap.
 - Disclosure is user-owned. Review results, retries, failures, terminal task
   state, reconnect, and lazy-detail loading update content in place but never
   open or close the task, Reviews section, or group.
@@ -495,9 +534,9 @@ element in the card shares one keyboard ring (2px `--focus-accent-border`,
 2px offset). Component geometry (card min/max width) keeps local literals like
 the rest of the chat surface.
 
-Required Project questions appear in Main as one System pointer: the question is primary (`--type-body` semibold), the status and `In <Project>` line are meta ink (the owner reads them to act), the recorded answer is a second body line. Settled pointers show both the recorded option (including the first) and the comment, or a comment-only answer; the option and the comment are bounded separately, a cut is visibly labelled, and the complete original stays one click away. The pointer and the quiz header share the lifecycle wording above. Actions say `Answer question` while the card still takes one, `View answer` after an answer, and `View question` otherwise (a replaced or unreadable question still opens). The form remains in Project. An explicit click reveals that exact question without toggling the room closed or moving the viewport on background updates.
+**Project question row.** Every Project question appears in Main as one row, and its size follows the owner's attention. In every settled or passed state it is one line in the project chip's own language (the `--project` tints, the Project name in project ink with `↗`): status as dot + text in meta ink, then the one primary thing at `--type-body` semibold, which is the recorded answer or, for a question the task passed, the assumption it continues under (`Unanswered · continuing with:`), then the question as context, the Project and the time. The answer shows both the recorded option (including the first) and the comment, or a comment-only answer; the option and the comment are bounded separately, a cut is visibly labelled, and it wraps rather than being cut to the line. The question is cut to the line with an ellipsis, and a long status sentence yields the same way; the complete original stays one click away. A narrow column makes it two lines: status and answer, then question, Project and time. The whole line is one control (`bindContentButton`: one tab stop, the shared ring drawn inside, Enter and Space, text stays selectable) that reveals that exact question without toggling the room closed or moving the viewport on background updates. Only while the task actually waits does the row grow into a card: the project chip as its head with `Waiting for your answer`, the whole question through the chat markdown pipeline, the option labels as buttons with the `recommended` badge, and one `Details and own answer` action. Main takes a ready option in one touch; the owner's own words, the option details and the stake stay in the Project form. When the wait ends — an answer, a timeout, ordinary owner input, a newer question — the card folds back into its line, and focus follows from a removed button to the line. No timers, no grouping: the view is a pure function of the question's recorded facts, so history, reconnect and a second device paint the same thing, and consecutive rows sit closer by adjacency alone. The row and the quiz header share the lifecycle wording above.
 
-System-pointer, Project-lifecycle and routing actions all use the shared `createSystemMessageActions` composition. It owns token-based space above and below the controls, wrapping and clearance for the existing button focus ring; action buttons never sit in a clipped/nowrap text line. This is a row composition, not a new card framework or a global button-margin rule.
+Project-lifecycle and routing actions, and the waiting card's `Details and own answer`, use the shared `createSystemMessageActions` composition. It owns token-based space above and below the controls, wrapping and clearance for the existing button focus ring; action buttons never sit in a clipped/nowrap text line. This is a row composition, not a new card framework or a global button-margin rule.
 
 History with no current execution or known outcome keeps its expandable content under `Outcome unavailable`, without a task chip, typing or Stop. Before complete live-source reconciliation, it is `Activity unconfirmed`. Positive current activity restores only its proven controls. A delivery warning may coexist with a preserved task-acceptance PASS. Model metadata says `Last solve response`, naming the initial request only when the route changed.
 
@@ -705,7 +744,7 @@ instead, and let the status text carry the claim.
 
 ## 7. Onboarding density
 
-Accounts is the common connection surface for subscriptions and API keys.
+Accounts is the common connection surface for subscriptions and API keys. Open sign-in link hands off to the current desktop, browser or Telegram host while retaining the wizard; Copy is separate. An unavailable host opener reports a retryable failure, and a supported copy fallback says that it copied rather than claiming an open.
 Models and Agents edit assignments; adding a connection updates available
 choices without replacing an owner's assignments. A model role uses one compact
 Source / Model / Account row. The account is a property of that role: Auto
@@ -756,10 +795,24 @@ not previously selected starts without another source's pin.
 The wizard has five steps: Accounts, Models, Review, Budget, Summary. Agent
 connection is inside Accounts; Codex is the recommended connection for starting
 without an API key. Other existing agent connections describe their actual agent
-capability. Review & start computes the skipped model and reviewer steps before
-showing Summary. Summary names the assignments the one atomic Finish saves,
-including deep self-review. Reviewers remain editable with the same controls as
-Settings. A subscription-only Budget step leads with quota/reset facts and keeps
+capability. Connected reports sign-in, independently of the model-source and
+suggestion reads. Accounts names pending, failed or partial reads and offers a
+contextual Retry that preserves the current fields. A known model source allows
+Continue and manual model entry even when its inventory or automatic suggestions
+cannot be read; an unknown source explains why Continue is unavailable. New
+subscription-only installs clear only untouched shipped API suggestions without
+access, requiring Main while Light can inherit it and Fallback can stay empty.
+Stored or edited values remain intact.
+
+Review & start computes the skipped model and reviewer steps before showing
+Summary. After a failed automatic setup, an explicit recovery action prepares
+all reviewers on the selected Main model, including its account and processing
+choice. This is disclosed as one model for every review, not model diversity.
+The resulting Summary is shown before a separate Start saves it; subsequent
+manual edits remain authoritative. Completion without the automatic preset
+leaves later configuration to Settings. Summary names exactly the assignments
+the one atomic Finish saves, including deep self-review. Reviewers remain
+editable with the same controls as Settings. A subscription-only Budget step leads with quota/reset facts and keeps
 optional API spending fields collapsed. "No API key" never claims unlimited free
 work or that paid provider credits were enabled.
 
@@ -792,9 +845,8 @@ has migrated. Migrated today:
   Dashboard → Updates tab (status card, one action row, collapsed Recovery
   with a single restore list), and chat (typography, foreground and status
   colour; component geometry keeps its local literals per the viewport
-  reserve contract, and the glass surface tints — frosted header/composer
-  backgrounds, bubble gradients and their border tints — remain local
-  literals with no token equivalents yet)
+  reserve contract, while the shared palette channels keep translucent glass
+  surfaces coherent across themes)
 - the global `.muted`, `.form-section h3` and shared `.ui-status` tone rules
 
 The remaining page-specific typography in skills, marketplace, widgets, logs

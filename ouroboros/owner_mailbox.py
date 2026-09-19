@@ -27,6 +27,10 @@ TASK_MESSAGE_PROVENANCES = frozenset({
     "ancestor_task", "peer_via_ancestor", "system", "descendant_task",
     PROVENANCE_INDEPENDENT_TASK,
 })
+# These messages wake the mind but do not enter its owner's directive corpus.
+CONTEXT_ONLY_TASK_PROVENANCES = frozenset({
+    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK,
+})
 KIND_FINALIZE_NOW = "finalize_now"
 # Owner "hurry" control (HQ1, 2026-08-15): a task-local typed acceleration
 # directive — NEVER owner dialogue and NEVER revoked after drain (restart
@@ -232,6 +236,7 @@ def write_task_message(
     provenance: str = "ancestor_task",
     relayed_from_task_id: str = "",
     msg_id: Optional[str] = None,
+    review_feedback: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an addressed task-tree message without forging owner provenance."""
 
@@ -249,6 +254,8 @@ def write_task_message(
     }
     if relayed_from_task_id:
         entry["relayed_from_task_id"] = str(relayed_from_task_id)
+    if provenance == "system" and isinstance(review_feedback, dict):
+        entry["review_feedback"] = dict(review_feedback)
     try:
         return bool(append_jsonl(path, entry))
     except Exception:
@@ -646,6 +653,8 @@ def drain_owner_entries(
                     drained["_owner_attempt_key"] = attempt_key
                 if kind == KIND_TASK_MESSAGE:
                     drained["provenance"] = str(entry.get("provenance") or "ancestor_task")
+                    if drained["provenance"] == "system" and isinstance(entry.get("review_feedback"), dict):
+                        drained["review_feedback"] = dict(entry["review_feedback"])
                     drained["source_task_id"] = str(entry.get("source_task_id") or "")
                     drained["relayed_from_task_id"] = str(entry.get("relayed_from_task_id") or "")
                 entries.append(drained)

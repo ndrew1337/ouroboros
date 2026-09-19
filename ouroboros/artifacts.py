@@ -39,10 +39,12 @@ def text_source_range_projection(
     if start_char is None and end_char is None:
         projection["range_required"] = True
         return projection, "source_range_required"
-    if type(start_char) is not int or type(end_char) is not int:
-        return None, "source_range_invalid"
-    if start_char < 0 or end_char <= start_char or end_char > len(text):
-        return None, "source_range_invalid"
+    if (type(start_char) is not int or type(end_char) is not int
+            or start_char < 0 or end_char <= start_char or end_char > len(text)):
+        # Still no text, but the caller learns the length it must fit a range into:
+        # a bare "invalid" was retried blind (and read as "unavailable").
+        projection["requested_range"] = [start_char, end_char]
+        return projection, "source_range_invalid"
     part = text[start_char:end_char]
     projection.update(start_char=start_char, end_char=end_char, text=part,
                       text_chars=len(part), text_sha256=sha256(part.encode("utf-8")).hexdigest())
@@ -898,15 +900,21 @@ def _matching_projection(drive_root: Any, call: Dict[str, Any]) -> Dict[str, Any
     return payload
 
 
+# sanitize_tool_args_for_log's transport markers — the ONE list. The reflection
+# pointer's cut detection reads the same names, so a marker shape added there is
+# never missed here (and the colons keep a literal value like "_truncated" out).
+SANITIZER_OMISSION_MARKERS = (
+    "<TRUNCATED:", '"_depth_limit":', '"_truncated":', '"_repr":', '"_error":',
+)
+
+
 def materialize_tool_args_source(drive_root: Any, call: Dict[str, Any]) -> tuple[Any, bool, Dict[str, Any]]:
     """Recover logging-sanitizer omissions from the existing redacted call blob."""
     args = call.get("args")
     rendered = json.dumps(args, ensure_ascii=False, default=str)
     # These are sanitize_tool_args_for_log's transport markers, not a judgment
     # about the command's meaning. Legacy rows without them retain their view.
-    if not any(marker in rendered for marker in (
-        "<TRUNCATED:", '"_depth_limit":', '"_truncated":', '"_repr":', '"_error":',
-    )):
+    if not any(marker in rendered for marker in SANITIZER_OMISSION_MARKERS):
         return args, True, {}
     trace = call.get("trace_ref") if isinstance(call.get("trace_ref"), dict) else {}
     ref = trace.get("redacted_projection_ref") or {}

@@ -10,6 +10,7 @@ from typing import List
 from ouroboros import knowledge as knowledge_store
 from ouroboros.knowledge import INDEX_FILE, OVERVIEW_TOPIC
 from ouroboros.knowledge import sanitize_topic as _sanitize_topic
+from ouroboros.tools.arg_feedback import ignored_argument_note
 from ouroboros.tools.registry import ToolEntry, ToolContext
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
 from ouroboros.utils import append_jsonl, utc_now_iso
@@ -49,22 +50,39 @@ def _address(ctx: ToolContext, topic: str, scope: str = "") -> knowledge_store.K
 
 def _source_view(note: knowledge_store.KnowledgeNote, start_char: int | None = None,
                  end_char: int | None = None) -> tuple[str, dict]:
+    """One exact character range of the note; a bound that asks for nothing is not an error.
+
+    A missing bound is the note's own edge, ``(0, 0)`` selects nothing and reads the
+    whole note, and an ``end_char`` past the end is lowered to it (like ``read_file``).
+    Each is said in the header; the returned range is always the range delivered.
+    """
     ref = note.source_ref()
     text = note.text
-    if start_char is None and end_char is None:
-        start_char, end_char = 0, len(text)
-    if (type(start_char) is not int or type(end_char) is not int
-            or not 0 <= start_char <= end_char <= len(text)):
-        raise ValueError("Knowledge source range must satisfy 0 <= start_char <= end_char <= complete_chars")
-    ref.update(start_char=start_char, end_char=end_char, complete_chars=len(text))
-    body = text[start_char:end_char]
+    total = len(text)
+    if any(bound is not None and type(bound) is not int for bound in (start_char, end_char)):
+        raise ValueError(f"Knowledge source range start_char={start_char!r}, end_char={end_char!r} "
+                         f"must be integers; this note has complete_chars={total}")
+    start, end = (0 if start_char is None else start_char), (total if end_char is None else end_char)
+    notes = []
+    if (start, end) == (0, 0) and total:
+        notes.append(ignored_argument_note("end_char", 0, "a 0..0 range selects nothing; returned the whole note"))
+        end = total
+    elif end > total:
+        notes.append(ignored_argument_note("end_char", end, f"the note ends at {total}; returned {start}..{total}"))
+        end = total
+    if not 0 <= start <= end:
+        raise ValueError(f"Knowledge source range start_char={start_char!r}, end_char={end_char!r} is outside "
+                         f"this note: complete_chars={total}; use 0 <= start_char <= end_char")
+    ref.update(start_char=start, end_char=end, complete_chars=total)
+    body = text[start:end]
     header = "[Knowledge source] " + json.dumps(ref, ensure_ascii=False, sort_keys=True) + "\n"
+    header += "".join(f"[Range note] {item}\n" for item in notes)
     if note.parse_error:
         header += "[Metadata unavailable; the complete original Markdown follows.]\n"
     header += "\n"
     return header + body, {
         "knowledge_source": ref, "knowledge_body_start": len(header),
-        "knowledge_body_chars": len(body), "knowledge_source_complete": start_char == 0 and end_char == len(text),
+        "knowledge_body_chars": len(body), "knowledge_source_complete": start == 0 and end == total,
     }
 
 
@@ -181,8 +199,8 @@ def get_tools() -> List[ToolEntry]:
             "name": "knowledge_read",
             "description": "Read a complete knowledge note with its canonical address and exact source revision. Follow Markdown links relative to the note's source. Read current understanding before revising it.",
             "parameters": {"type": "object", "properties": {"topic": topic, "scope": scope,
-                "start_char": {"type": "integer", "description": "Optional half-open character range start in the exact complete note. Supply both bounds to read a large source in parts."},
-                "end_char": {"type": "integer", "description": "Exclusive range end; complete_chars and revision are returned with every view. Omit both bounds for the full note."}}, "required": ["topic"]},
+                "start_char": {"type": "integer", "description": "Optional half-open character range start in the exact complete note (omitted = 0). Use ranges to read a large source in parts."},
+                "end_char": {"type": "integer", "description": "Exclusive range end (omitted = the end; a value past the end is lowered to it); complete_chars and revision are returned with every view. Omit both bounds, or pass 0 and 0, for the full note."}}, "required": ["topic"]},
         }, _knowledge_read),
         ToolEntry("knowledge_write", {
             "name": "knowledge_write",
@@ -191,7 +209,7 @@ def get_tools() -> List[ToolEntry]:
                 "topic": topic, "scope": scope,
                 "content": {"type": "string", "description": "Markdown, optionally with YAML frontmatter. Write understanding and its sources/uncertainty in your own words; no summary is generated from the body."},
                 "mode": {"type": "string", "enum": ["overwrite", "append"], "description": "overwrite (default) replaces the body; append adds to the current source. Missing notes are created."},
-                "expected_revision": {"type": "string", "description": "Source revision returned by knowledge_read. Required when overwriting an existing note; drift returns the newer source without replacing it."},
+                "expected_revision": {"type": "string", "description": "Source revision returned by knowledge_read. Omit or pass an empty string to create a missing note; an empty string never replaces an existing note. Required when overwriting an existing note; drift returns the newer source without replacing it."},
             }, "required": ["topic", "content"]},
         }, _knowledge_write),
         ToolEntry("knowledge_list", {

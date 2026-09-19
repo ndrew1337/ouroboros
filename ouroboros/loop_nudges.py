@@ -120,20 +120,48 @@ def _force_plan_disclosure(
     return plan_review_disclosure(decision, forced_reason)
 
 
-def _build_recent_tool_trace(messages: List[Dict[str, Any]], window: int = 15) -> str:
-    """Build a compact recent-tool trace for the self-check prompt."""
+def _build_recent_tool_trace(
+    messages: List[Dict[str, Any]], window: int = 15, llm_trace: Optional[Dict[str, Any]] = None,
+) -> str:
+    """Build a compact recent-tool trace for the self-check prompt.
+
+    Each call carries its recorded outcome, and a failed one the first line of what the
+    tool answered: a list of calls alone asks "are you repeating yourself?" without the
+    one fact that says why. Facts only — what they mean stays with the model.
+
+    Built from ``llm_trace.tool_calls`` whenever it exists, so name, arguments and outcome
+    all come from ONE record. Joining the visible ``messages`` to the trace by call id
+    cannot be made sound: providers reuse ids (GigaChat answers ``call_0`` every round, the
+    local parser ``call_local_<i>``) and compaction removes whole units from anywhere — a
+    capsule replaces a prefix, ``_select_units`` leaves a zero-reclaim or memo-negative unit
+    in place, an authored view keeps an arbitrary set — so a surviving call took an evicted
+    namesake's error. Keying by id did that, and so did matching (id, tool) whenever both
+    calls were the SAME tool. Without a trace the messages still render, carrying no outcome
+    at all rather than a borrowed one.
+    """
+    from ouroboros.reflection import _trace_call_errored  # the ONE reading of "this call went wrong"
+
+    def _summary(name: str, args: Any) -> str:
+        if isinstance(args, dict):
+            args = json.dumps(args, sort_keys=True)
+        args_str = str(args or "")
+        return f"{name}({args_str[:80]})" if len(args_str) > 80 else f"{name}({args_str})"
+
+    rows = [row for row in ((llm_trace or {}).get("tool_calls") or []) if isinstance(row, dict)]
     all_calls: List[str] = []
-    for msg in messages:
-        if msg.get("role") == "assistant" and msg.get("tool_calls"):
-            for tc in msg["tool_calls"]:
-                fn = tc.get("function", {})
-                name = fn.get("name", "")
-                args = fn.get("arguments", "")
-                if isinstance(args, dict):
-                    args = json.dumps(args, sort_keys=True)
-                args_str = str(args)
-                summary = f"{name}({args_str[:80]})" if len(args_str) > 80 else f"{name}({args_str})"
-                all_calls.append(summary)
+    for row in rows:
+        status = str(row.get("status") or ("error" if row.get("is_error") else "ok"))
+        note = f" [{status}]"
+        if _trace_call_errored(row):
+            head = str(row.get("result") or "").strip().splitlines()[:1]
+            note += f" ← {head[0][:200]}" if head else ""
+        all_calls.append(_summary(str(row.get("tool") or ""), row.get("args")) + note)
+    if not rows:
+        for msg in messages:
+            if msg.get("role") == "assistant" and msg.get("tool_calls"):
+                for tc in msg["tool_calls"]:
+                    fn = tc.get("function", {})
+                    all_calls.append(_summary(fn.get("name", ""), fn.get("arguments", "")))
     recent = all_calls[-window:] if all_calls else []
     if not recent:
         return ""
@@ -151,6 +179,7 @@ def _maybe_inject_self_check(
     task_id: str = "",
     drive_logs: Optional[pathlib.Path] = None,
     cost_ceiling: Optional["task_pacing.CostCeiling"] = None,
+    llm_trace: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Inject a normal user-turn self-check and emit one checkpoint event."""
     REMINDER_INTERVAL = 15
@@ -185,7 +214,7 @@ def _maybe_inject_self_check(
         tree_cap = float(raw_cap) if raw_cap is not None else None
         tree_line = f"{rendered}\n"
 
-    tool_trace = _build_recent_tool_trace(messages)
+    tool_trace = _build_recent_tool_trace(messages, llm_trace=llm_trace)
 
     reminder = (
         f"[CHECKPOINT {checkpoint_num} — round {round_idx}/{max_rounds}]\n"
@@ -383,6 +412,7 @@ def _inject_round_checkpoints(
     drive_logs: Optional[pathlib.Path],
     budget_remaining_usd: Optional[float] = None,
     cost_ceiling: Optional["task_pacing.CostCeiling"] = None,
+    llm_trace: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Inject the per-round self-check and the time-budget / intrinsic-pacing
     milestone AFTER owner messages, so the checkpoint is the LLM-call tail (a
@@ -391,7 +421,7 @@ def _inject_round_checkpoints(
     checkpoint = _maybe_inject_self_check(
         round_idx, max_rounds, messages, accumulated_usage, emit_progress,
         event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
-        cost_ceiling=cost_ceiling,
+        cost_ceiling=cost_ceiling, llm_trace=llm_trace,
     )
     time_budget = _maybe_inject_time_budget_milestone(
         messages, tools, event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,

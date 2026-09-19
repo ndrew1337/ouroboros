@@ -404,7 +404,7 @@ def get_tools() -> List[ToolEntry]:
                 "include_completion_source": {"type": "boolean", "default": False,
                                               "description": "Read the full stored completion observations for this task, including returns omitted from the summary. Omit bounds for source length/hash, then request explicit character ranges."},
                 "source_start_char": {"type": "integer", "description": "Inclusive character offset for the requested canonical source range."},
-                "source_end_char": {"type": "integer", "description": "Exclusive character offset for the requested canonical source range."},
+                "source_end_char": {"type": "integer", "description": "Exclusive character offset for the requested canonical source range. A range outside the source returns no text: the answer names complete_chars and the range received, and is an argument error."},
             }},
         }, _get_task_result),
         ToolEntry("wait_task", {

@@ -107,8 +107,9 @@ def test_git_catalog_schema_bytes_and_handler_owners_are_stable():
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode()
+    # Informed Advisory commit aliases plus explicit local vcs_diff base/head.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "729fdf1425126168c7408e431611f70ddd11139fa1c4161628fbcec7a27bf8ec"
+        "93c0f6fced87cf33dc7a46395367f8315cb1ba7760d738489960dffd0084949a"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

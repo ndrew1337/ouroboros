@@ -122,7 +122,12 @@ means — `directory_strategy="direct"` with no `scope_paths` on a shape that ca
 serve the argument, or `workspace_root` naming the Ouroboros repository itself —
 takes the omitted path, disclosed in the result; only a value that genuinely asks
 for something is refused there, typed, at the earliest layer holding the authority
-to judge it, with the repair named.
+to judge it, with the repair named. Models fill every key of a tool schema, so an
+optional argument's empty or mode-irrelevant form (`max_wait_minutes` on a quiz that
+does not wait, `0` with `""`, a range end past a knowledge note, a zone beside an
+offset-carrying instant) is that same omitted path, and a refusal that only restates its rule is
+retried unchanged: it names the field, the value received and the repair in ONE
+reply (house helpers for both sentences: `tools/arg_feedback`).
 
 A producer that knows its call failed publishes that fact typed
 (`tool_result._publish_tool_result`, or a first-line `⚠️ IDENTIFIER` the legacy
@@ -139,8 +144,9 @@ tool's name (ARCHITECTURE §6 "Delegated subagents").
 Enforcement: CHECKLISTS item 13(b) scores the prompt-edit discipline; the
 recoverable-failure boundary is review-only; `tests/test_typed_tool_refusals.py`
 is the shrink-only source lint over returned literals in `ouroboros/tools/`,
-flagging identifier-less heads, and its per-file allowlist IS that residual's
-disclosure. A same-file swap is invisible to the count; a marker-shaped refusal
+flagging identifier-less heads (and, growth-only, interpolated `⚠️ {code}` heads,
+which the adapter types only by luck of the runtime value), and its per-file
+allowlist IS that residual's disclosure. A same-file swap is invisible to the count; a marker-shaped refusal
 the adapter buckets as a warning is a separate, larger residual owned by the
 adapter vocabulary; a failure text travelling through a variable, tuple or helper
 is outside the lint's reach and pinned by the producer's own tests.

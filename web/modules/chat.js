@@ -309,7 +309,7 @@ export function createChatInstance({
         showToast,
         fetchDetail: fetchTaskDetailStrict,
         onDomWrite: withStableViewport,
-        isMain,
+        isMain, chatId,
         insertMessageNode,
     });
 
@@ -597,7 +597,7 @@ export function createChatInstance({
             hydrateDirectActivities(activities, snapshotRequestedAt,
                 data.active_chat_activities_complete === true && data.supervisor_ready === true);
             for (const activity of activities) {
-                if (activity.required_question) chatDecision.appendQuestionPointer(activity.required_question);
+                if (activity.required_question) chatDecision.appendActivityQuestion(activity.required_question, snapshotRequestedAt);
                 if (Number(activity.chat_id ?? 1) === chatId) modelWaits.observe(activity.activity_id, activity);
             }
         }
@@ -698,9 +698,9 @@ export function createChatInstance({
     function enhanceMountedMarkdown(root) {
         return enhanceChatMarkdown(root, {
             onDomWrite: _remoteActivityDepth > 0 ? withRemoteActivity : withStableViewport,
+            onThemeDomWrite: withStableViewport,
         });
     }
-
     const {
         renderLiveCardTimeline,
         appendTimelineItem,
@@ -1727,9 +1727,13 @@ export function createChatInstance({
         // timeline); a child's title is its lineage identity; a block without work
         // (open attention, a bare non-Done ending) carries no title; otherwise the
         // activity headline.
+        // A Failed outcome reported during the finalizing hold keeps the title slot: the chip says
+        // only "Finalizing…" then, so narration must not be the one thing that hides the failure.
+        if (shouldPromote && !record.finished && taskPresentation(summary.phase).headline === 'Failed') record.failedHeadline = headline;
         const title = record.suggestedName || (record.isSubagent ? childTitle(record)
             : !blockHasWork(record) ? ''
-                : (record.finished ? record.lastHumanHeadline || 'Task activity' : activeHeadline));
+                : (record.finished ? record.lastHumanHeadline || 'Task activity'
+                    : record.failedHeadline || record.lastHumanHeadline || activeHeadline));
         if (record.titleEl.textContent !== title) record.titleEl.textContent = title;
         // The collapsed line is a compact projection; the full activity stays in the
         // expanded timeline. Every card, a child's included, takes activity only from

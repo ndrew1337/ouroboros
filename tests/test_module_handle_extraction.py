@@ -164,7 +164,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "write_text",
     })),
     "ouroboros/tools/git_review_cycle.py": ("ouroboros/tools/git.py", "_git", frozenset({
-        "IDENTICAL_DIFF_BLOCK_REASON", "_DOC_ONLY_EXTENSIONS", "_acquire_git_lock",
+        "_DOC_ONLY_EXTENSIONS", "_acquire_git_lock",
         "_advisory_and_tests_gate", "_aggregate_review_verdict",
         "_authorized_managed_update_resolver", "_check_overlapping_review_attempt",
         "_current_runtime_mode", "_ensure_gitignore", "_finalize_blocked_review",
@@ -283,7 +283,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     })),
     "ouroboros/loop_acceptance.py": ("ouroboros/loop.py", "_loop", frozenset({
         "_append_or_merge_user_message", "_end_task_acceptance_fence",
-        "_set_acceptance_decision", "_task_acceptance_eligible", "get_task_review_mode",
+        "_set_acceptance_decision", "_task_acceptance_eligible", "get_task_review_mode", "get_review_enforcement",
     })),
     "ouroboros/loop_acceptance_review.py": ("ouroboros/loop.py", "_loop", frozenset({
         "_append_or_merge_user_message", "_arm_delivery_control", "_begin_task_acceptance_fence",
@@ -461,6 +461,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_emit_checkpoint_event", "_finalize_forced_services",
         "_forced_fallback_result", "_forced_final_answer",
         "_handle_forced_finalization", "_last_assistant_text", "_owner_marked_content",
+        "_measure_main_context_view",
         "_provider_unavailable_result", "_record_owner_directive",
         "_soft_land_exhausted_ceiling", "_task_deadline_epoch", "compact_tool_history_llm",
         "provider_no_call_source", "utc_now",

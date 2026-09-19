@@ -10,8 +10,7 @@ import re
 from typing import Any, Callable, Dict, List, Optional
 
 from ouroboros.cost_projection import (
-    COST_ALIAS_PAIRS,
-    COST_OPENNESS_FIELDS,
+    COST_ALIAS_PAIRS, COST_OPENNESS_FIELDS,
     normalize_task_result_cost_planes,
 )
 from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
@@ -59,15 +58,14 @@ def effective_task_acceptance_review_cycles(
     profile: Dict[str, Any], *,
     required_blocking: bool = False,
 ) -> Optional[int]:
-    """Project paid panels from the existing improvement-pass semantics."""
+    """Paid capacity is independent of the author's last response opportunity.
 
-    from ouroboros.task_pacing import effective_max_improvement_passes
+    Explicit task-local pass profiles retain their established p+1 paid ceiling.
+    """
+    from ouroboros.review_cycles import review_max_cycles
 
-    passes = effective_max_improvement_passes(
-        profile,
-        required_blocking=required_blocking,
-    )
-    return None if passes is None else max(1, int(passes) + 1)
+    passes = profile.get("max_improvement_passes")
+    return review_max_cycles() if passes is None else max(1, int(passes) + 1)
 
 
 def _root_task_acceptance_review_cap(
@@ -1015,11 +1013,7 @@ def legacy_plan_review_projection(value: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _validated_plan_review_state(value: Any) -> Dict[str, Any]:
-    """Return a private, bounded, shape-checked copy of the host-owned planning state.
-
-    v2 records are validated; a v1 record (``schema_version: 1``) is wrapped read-only:
-    the returned v2 state carries it under ``legacy_v1`` and its projection under
-    ``legacy_v1_projection`` — nothing is migrated, nothing is auto-closed."""
+    """Validate bounded v2 state; wrap v1 read-only without migrating authority."""
     if value in (None, {}):
         return _empty_plan_review_state()
     if not isinstance(value, dict):
@@ -1069,12 +1063,18 @@ def _validated_plan_review_state(value: Any) -> Dict[str, Any]:
     if not isinstance(attempt, dict):
         raise ValueError("PLAN_REVIEW_STATE_INVALID: current_attempt must be an object")
     if attempt:
-        if set(attempt) != {"fingerprint", "status", "reason"}:
+        if set(attempt) - {"fingerprint", "status", "reason", "author_subject"} or not {"fingerprint", "status", "reason"} <= set(attempt):
             raise ValueError("PLAN_REVIEW_STATE_INVALID: current_attempt shape is invalid")
         if not _PLAN_REVIEW_HASH_RE.fullmatch(str(attempt.get("fingerprint") or "")):
             raise ValueError("PLAN_REVIEW_STATE_INVALID: current attempt fingerprint is invalid")
         if str(attempt.get("status") or "") not in _PLAN_REVIEW_ATTEMPT_STATUSES:
             raise ValueError("PLAN_REVIEW_STATE_INVALID: current attempt status is invalid")
+        if "author_subject" in attempt:
+            subject = attempt["author_subject"]
+            if (not isinstance(subject, dict) or not isinstance(subject.get("source_ref"), dict)
+                    or not _PLAN_REVIEW_HASH_RE.fullmatch(str(subject.get("review_fingerprint") or ""))
+                    or validate_author_disposition(subject.get("author_disposition"), subject_hash=attempt["fingerprint"]) is None):
+                raise ValueError("PLAN_REVIEW_STATE_INVALID: current author subject is invalid")
         if len(str(attempt.get("reason") or "")) > _PLAN_REVIEW_REASON_MAX_CHARS:
             raise ValueError("PLAN_REVIEW_STATE_INVALID: current attempt reason is too large")
     if len(json.dumps(copied, ensure_ascii=False, default=str).encode("utf-8")) > _PLAN_REVIEW_STATE_MAX_BYTES:
@@ -1108,25 +1108,20 @@ def plan_review_wave(state: Dict[str, Any], fingerprint: str) -> Optional[Dict[s
 
 
 def current_plan_review_wave(state: Any) -> Optional[Dict[str, Any]]:
-    """The wave the gate projects: the ``current_attempt`` fingerprint's wave, else the
-    latest recorded wave (private copy)."""
+    """Copy the current fingerprint's wave; only an absent fingerprint selects the latest."""
     if not isinstance(state, dict):
         return None
     attempt = state.get("current_attempt") if isinstance(state.get("current_attempt"), dict) else {}
     fingerprint = str(attempt.get("fingerprint") or "")
-    wave = plan_review_wave(state, fingerprint) if fingerprint else None
-    if wave is None:
-        waves = state.get("waves") if isinstance(state.get("waves"), list) else []
-        wave = copy.deepcopy(waves[-1]) if waves and not fingerprint else None
-    return wave
+    if fingerprint:
+        return plan_review_wave(state, fingerprint)
+    waves = state.get("waves") if isinstance(state.get("waves"), list) else []
+    return copy.deepcopy(waves[-1]) if waves else None
 
 
 def _legacy_projection_of(state: Any) -> Dict[str, Any]:
-    if not isinstance(state, dict):
-        return {}
-    if state.get("schema_version") == 1:
-        return legacy_plan_review_projection(state)
-    projection = state.get("legacy_v1_projection")
+    state = state if isinstance(state, dict) else {}
+    projection = legacy_plan_review_projection(state) if state.get("schema_version") == 1 else state.get("legacy_v1_projection")
     return projection if isinstance(projection, dict) else {}
 
 
@@ -1138,19 +1133,16 @@ def plan_review_gate_projection(
 ) -> Dict[str, Any]:
     """Project finalization permission without changing the durable review facts.
 
-    The current-attempt pointer prevents an older closed wave authorizing new
-    work. In ordinary Blocking, open/unavailable/pending/legacy-open reviews hold
-    finalization; spent cycles (D27), unreachable quorum (B2b) or a hard rail
-    release it for an honest blocked outcome. Advisory releases an open review.
-    Cyber retains judgment even with missing evidence: allow never implies closed
-    or PASS. Accepts v2 state, a v1 wrapper or raw v1 as a read-only projection.
+    Current-attempt identity prevents stale closure. Blocking holds open reviews;
+    spent cycles, unreachable quorum and hard rails permit honest blocked exits.
+    Advisory/Cyber allow is not closure or PASS. Accepts v2 and raw/wrapped v1.
     """
     policy = "blocking" if str(enforcement or "").lower() == "blocking" else "advisory"
     control: Dict[str, Any] = {}
     attempted = False
+    attempt = state.get("current_attempt") if isinstance(state, dict) and isinstance(state.get("current_attempt"), dict) else {}
     if isinstance(state, dict):
         legacy = _legacy_projection_of(state)
-        attempt = state.get("current_attempt") if isinstance(state.get("current_attempt"), dict) else {}
         wave = current_plan_review_wave(state) if state.get("schema_version") != 1 else None
         if wave is not None or (attempt and state.get("schema_version") != 1):
             attempted = True
@@ -1162,18 +1154,16 @@ def plan_review_gate_projection(
                 control = {"status": "rail_degraded", "reason": str(attempt.get("reason") or ""),
                            "outcome": outcome}
             elif wave is not None:
+                # B2b typed fact: a wave whose own rows prove no re-dispatch can meet
+                # quorum (structurally dead lanes) carries its earliest recorded reset.
                 control = {
-                    "status": "cycles_exhausted" if wave.get("cycles_exhausted") else "open",
+                    "status": "cycles_exhausted" if wave.get("cycles_exhausted") or (attempt.get("status") == "cycles_exhausted" and not wave.get("custody_pending")) else "open",
                     "outcome": outcome, "closed": False,
                     "fingerprint": str(wave.get("request_fingerprint") or ""),
                     "reviewer_slots_degraded": outcome == "DEGRADED", "custody_pending": bool(wave.get("custody_pending")),
+                    **({"quorum_unreachable": True, "earliest_reset": str(wave.get("earliest_reset") or "")}
+                       if wave.get("quorum_unreachable") else {}),
                 }
-                if wave.get("quorum_unreachable"):
-                    # B2b typed fact: the wave's own rows prove the quorum cannot be
-                    # met by any re-dispatch (structurally dead lanes), with the
-                    # earliest recorded reset when one was named.
-                    control["quorum_unreachable"] = True
-                    control["earliest_reset"] = str(wave.get("earliest_reset") or "")
             else:
                 control = {"status": str(attempt.get("status") or "open"),
                            "reason": str(attempt.get("reason") or "")}
@@ -1198,6 +1188,20 @@ def plan_review_gate_projection(
     else:
         control = {"status": "invalid"}
 
+    subject = attempt.get("author_subject") or {}
+    author = validate_author_disposition(subject.get("author_disposition"), subject_hash=str(attempt.get("fingerprint") or ""))
+    if author and attempt.get("reason") in {"author_current_plan", "author_stop"}:
+        # Follow historical criticism only here, never in current_plan_review_wave: its
+        # closed_plan_review_wave consumer binds CURRENT acceptance authority. EVIDENCE
+        # into a GAP only: it never moves this attempt's lifecycle or outcome (§6 why).
+        critic = plan_review_wave(state, str(subject.get("review_fingerprint") or ""))
+        if critic is not None and not control.get("outcome"):
+            outcome = str(critic.get("aggregate") or "")
+            control.update(outcome=outcome, historical_critic=True,
+                           custody_pending=bool(critic.get("custody_pending")),
+                           reviewer_slots_degraded=outcome == "DEGRADED")
+    if author and author.get("action") == "stop":
+        control.update(status="author_stopped", reason="author_stop", closed=False)
     status = str(control.get("status") or "unavailable")
     closed = bool(control.get("closed"))
     from ouroboros.tools.review_helpers import review_enforcement_blocks
@@ -1205,6 +1209,8 @@ def plan_review_gate_projection(
     cyber = not review_enforcement_blocks("blocking")
     if status == "closed" and closed:
         gate_status, allow = "closed", True
+    elif status == "author_stopped":
+        gate_status, allow = "author_stopped", True
     elif cyber:
         gate_status, allow = "advisory_open", True
     elif hard_rail or status == "rail_degraded":
@@ -1233,7 +1239,9 @@ def plan_review_gate_projection(
         "allow": allow,
         "attempted": attempted,
         "outcome": str(control.get("outcome") or ""),
+        "historical_critic": bool(control.get("historical_critic")),  # whose verdict: label it, never this plan's own
         "closed": closed,
+        "review_capacity_reason": "review_cycles_exhausted" if attempt.get("status") == "cycles_exhausted" else "",
         "reviewer_slots_degraded": bool(control.get("reviewer_slots_degraded")),
         "custody_pending": bool(control.get("custody_pending")),  # reviewers still working: read before aggregate
         "quorum_unreachable": bool(control.get("quorum_unreachable")),
@@ -1242,6 +1250,7 @@ def plan_review_gate_projection(
         "cycles_paid": int((state or {}).get("cycles_paid") or 0) if isinstance(state, dict) else 0,
         "legacy_v1": bool(control.get("legacy_v1")),
         "source": "durable_state",
+        "author_action": str(author.get("action") or "") if author else "",
     }
 
 
@@ -1253,10 +1262,9 @@ def closed_plan_review_wave(state: Any) -> Optional[Dict[str, Any]]:
     so ``effective_acceptance_claims``' v1 fallback still binds those claims."""
     if not isinstance(state, dict):
         return None
-    if state.get("schema_version") != 1:
-        wave = current_plan_review_wave(state)
-        if wave is not None:
-            return wave if bool(wave.get("closed")) else None
+    wave = current_plan_review_wave(state) if state.get("schema_version") != 1 else None
+    if wave is not None:
+        return wave if bool(wave.get("closed")) else None
     legacy = _legacy_projection_of(state)
     if legacy.get("status") == "closed":
         return {"legacy_v1": True, "request_fingerprint": legacy["fingerprint"],
@@ -1272,6 +1280,7 @@ def record_plan_review_attempt(
     fingerprint: str,
     status: str = "open",
     reason: str = "",
+    author_subject: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Select one canonical plan fingerprint as current (open | unavailable | rail_degraded)."""
     if not _PLAN_REVIEW_HASH_RE.fullmatch(str(fingerprint or "")):
@@ -1285,6 +1294,8 @@ def record_plan_review_attempt(
             "status": status,
             "reason": str(reason or "")[:_PLAN_REVIEW_REASON_MAX_CHARS],
         }
+        if author_subject is not None:
+            state["current_attempt"]["author_subject"] = copy.deepcopy(author_subject)
         return state
 
     return _update_plan_review_state(results_drive_root, task_id, _record)
@@ -1442,20 +1453,18 @@ def record_plan_review_wave(
     *,
     need_evidence_seen: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
-    """Append one reviewed v2 wave, make it current, pay its cycle, bound the history.
+    """Retain a reviewed wave and charge only physical dispatch, including failed panels.
 
-    ``wave["paid"]`` decides whether ``cycles_paid`` advances — the engine sets it iff
-    at least one reviewer slot was physically dispatched (B2: a dispatched DEGRADED
-    panel pays; only a nothing-dispatched wave of typed $0 skip rows stays unpaid);
-    ``need_evidence_seen`` replaces the task-level locator memory; the first v2
-    wave of a task mints ``series_id`` (a fresh series supersedes any open v1 record).
-    Older waves compact to summaries beyond ``_PLAN_REVIEW_FULL_WAVES``; entries beyond
-    ``_PLAN_REVIEW_MAX_WAVES`` are dropped with ``waves_omitted`` counting them (S2)."""
+    Free collection preserves a separately selected author plan. Existing paid
+    cycles, full-wave history and exact source handles remain the authority.
+    """
     fingerprint = str(wave.get("request_fingerprint") or "")
     if not _PLAN_REVIEW_HASH_RE.fullmatch(fingerprint):
         raise ValueError("PLAN_REVIEW_STATE_INVALID: wave fingerprint is invalid")
 
     def _record(state: Dict[str, Any]) -> Dict[str, Any]:
+        selected = state.get("current_attempt") or {}
+        retained_author = (selected.get("author_subject") or {}).get("review_fingerprint") == fingerprint
         previous = [w for w in state.get("waves") or [] if str(w.get("request_fingerprint") or "") == fingerprint]
         # D2, deliberately NARROWED by B2 (explicit wave-record authority change): only an
         # UNPAID wave — one in which NOTHING was physically dispatched (typed $0 skip rows
@@ -1478,7 +1487,7 @@ def record_plan_review_wave(
                         w["quorum_unreachable"] = True
                         w["structurally_dead_slots"] = list(wave.get("structurally_dead_slots") or [])
                         w["earliest_reset"] = str(wave.get("earliest_reset") or "")
-            state["current_attempt"] = {"fingerprint": fingerprint, "status": "open", "reason": ""}
+            state["current_attempt"] = selected if retained_author else {"fingerprint": fingerprint, "status": "open", "reason": ""}
             if need_evidence_seen is not None:
                 state["need_evidence_seen"] = sorted({str(s) for s in need_evidence_seen if str(s)})
             return state
@@ -1514,7 +1523,7 @@ def record_plan_review_wave(
         # I-02: size-fitting (older-wave compaction, then the last-resort text cut) runs for
         # EVERY writer in `_update_plan_review_state` → `_fit_plan_review_state`.
         state["waves"] = waves
-        state["current_attempt"] = {"fingerprint": fingerprint, "status": "open", "reason": ""}
+        state["current_attempt"] = selected if retained_author else {"fingerprint": fingerprint, "status": "open", "reason": ""}
         return state
 
     state = _update_plan_review_state(results_drive_root, task_id, _record)

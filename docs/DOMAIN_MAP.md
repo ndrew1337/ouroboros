@@ -11,10 +11,10 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D01 | Agent core & main loop | 33 | 0 |
 | D02 | LLM client, routing & providers | 37 | 0 |
 | D03 | Context assembly, fit & compaction | 11 | 0 |
-| D04 | Tool execution: registry, access & typed results | 20 | 0 |
+| D04 | Tool execution: registry, access & typed results | 21 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 28 | 0 |
 | D06 | Review stack | 67 | 0 |
-| D07 | Delegation, subagents & Claudexor | 50 | 0 |
+| D07 | Delegation, subagents & Claudexor | 51 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 46 | 0 |
 | D09 | Cancellation, owner control & process custody | 13 | 0 |
 | D10 | Git, update & release machinery | 28 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 14 | 0 |
 | D19 | Frozen contracts (ABI) | 10 | 0 |
 | D20 | Presence | 10 | 0 |
-| **total** | | **552** | **0** |
+| **total** | | **554** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **103**
+- lazy-only cross-domain pairs: **102**
   - D01->D08
   - D01->D10
   - D01->D11
@@ -90,7 +90,6 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D05->D06
   - D05->D07
   - D05->D14
-  - D05->D20
   - D06->D03
   - D06->D05
   - D06->D08
@@ -280,6 +279,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/tool_capabilities.py`
 - `ouroboros/tool_policy.py`
 - `ouroboros/tools/__init__.py`
+- `ouroboros/tools/arg_feedback.py`
 - `ouroboros/tools/extension_dispatch.py`
 - `ouroboros/tools/process_facts.py`
 - `ouroboros/tools/registry.py`
@@ -425,6 +425,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/nanny_pacing.py`
 - `ouroboros/subagent_bootstrap.py`
 - `ouroboros/subagent_dispatch_notes.py`
+- `ouroboros/subagent_history.py`
 - `ouroboros/subagent_messages.py`
 - `ouroboros/subagent_route_health.py`
 - `ouroboros/subagent_runtime.py`

@@ -276,11 +276,22 @@ def test_schedule_followup_requires_exactly_one_valid_trigger(tmp_path):
     assert _followup(ctx, cron="hourly").startswith("ERROR: FOLLOWUP_CRON_INVALID")
     bad_zone = _followup(ctx, cron="0 9 * * *", timezone="Mars/Olympus")
     assert bad_zone.startswith("ERROR: FOLLOWUP_TIMEZONE_INVALID")
-    run_at_zone = _followup(ctx, timezone="Europe/Moscow")
-    assert run_at_zone.startswith("ERROR: FOLLOWUP_TIMEZONE_WITH_RUN_AT")
     from supervisor.queue import list_scheduled_tasks
 
     assert list_scheduled_tasks(tmp_path / "data")["tasks"] == []
+    # A zone beside an absolute one-shot instant asks for nothing (models fill every
+    # schema key): the follow-up is scheduled, the receipt says the zone was ignored,
+    # and the ignored zone is not stored with the record.
+    run_at_zone = _followup(ctx, timezone="Europe/Moscow")
+    assert run_at_zone.startswith("FOLLOWUP_SCHEDULED")
+    assert "timezone='Europe/Moscow' ignored: it applies only to recurring cron follow-ups" in run_at_zone
+    [stored] = list_scheduled_tasks(tmp_path / "data")["tasks"]
+    assert stored["trigger"]["type"] == "once" and not stored.get("timezone")
+    # A zone beside a run_at WITHOUT an offset is not a no-op: the naive time would be read
+    # as UTC, hours off. Still refused, and the refusal names the repair.
+    naive = _followup(ctx, run_at="2030-01-01T09:00:00", timezone="Europe/Moscow")
+    assert naive.startswith("ERROR: FOLLOWUP_TIMEZONE_WITH_RUN_AT") and "+03:00" in naive
+    assert len(list_scheduled_tasks(tmp_path / "data")["tasks"]) == 1
 
 
 def test_schedule_followup_cap_refusal_is_typed_and_disclosed(tmp_path):

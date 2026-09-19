@@ -325,6 +325,10 @@ def write_knowledge_note(
             current = read_knowledge_note(address)
         except FileNotFoundError:
             current = None
+        # Blank is a create-only expectation, checked under the same source lock.
+        # Never turn it into an unconditional overwrite/append of an existing note.
+        if current is None and expected_revision == "":
+            expected_revision = None
         revision = current.revision if current else None
         if current is not None and mode == "overwrite" and expected_revision is None:
             return KnowledgeWriteResult(False, "revision_required", current, revision)
