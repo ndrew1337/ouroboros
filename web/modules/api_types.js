@@ -281,6 +281,8 @@
  * @property {string=} wait_ended_at
  * @property {string=} question
  * @property {string[]=} options
+ * @property {string[]=} option_details
+ * @property {string=} stake
  * @property {string=} assumption
  * @property {number=} recommended_index
  * @property {number=} answered_index
@@ -1474,7 +1476,7 @@ export const MAX_QUIZ_OPTIONS = 6;
 // REFUSES a longer comment (it is delivered verbatim, never truncated), so
 // the card must not offer to send one.
 export const MAX_DECISION_COMMENT = 2000;
-export const GATEWAY_CONTRACT_VERSION = '7.2.0';
+export const GATEWAY_CONTRACT_VERSION = '7.2.1';
 
 /**
  * @typedef {Object} ChatHistoryPosition

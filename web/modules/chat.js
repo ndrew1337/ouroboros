@@ -132,6 +132,7 @@ import {
     renderCollapsedActivity,
     renderLiveCardMeta as renderCardMeta,
     ensureLiveActionsEl,
+    ownLiveActionsEl,
 } from './chat_activity.js';
 
 export {
@@ -311,6 +312,10 @@ export function createChatInstance({
         onDomWrite: withStableViewport,
         isMain, chatId,
         insertMessageNode,
+        // A settled Main question mirror leaves through the ordinary retirement path.
+        removeMessageNode: (node) => withStableViewport(() => { releaseMessageNode(node); return true; },
+            { excludeAnchorNode: node }),
+        focusAfterRemoval: () => input?.focus?.({ preventScroll: true }),
     });
 
     async function loadUiPreferences() {
@@ -851,7 +856,7 @@ export function createChatInstance({
         const taskId = taskKey(record.groupId);
         const projectId = projectIdFromTask(taskId);
         record.root.dataset.projectCreating = '1';
-        const actions = record.turnProjectBtn?.parentElement || record.root.querySelector('.chat-live-actions');
+        const actions = record.turnProjectBtn?.parentElement || ownLiveActionsEl(record);
         if (actions) {
             withStableViewport(() => {
                 actions.innerHTML = '<button type="button" class="btn btn-xs btn-default" disabled>Creating project…</button>';
@@ -889,8 +894,10 @@ export function createChatInstance({
     // (the one binding fact the /api/state sweep in app.js reads too); the title
     // writers apply the same work predicate.
     function syncBlockChrome(record) {
-        if (record.isSubagent || record.root.dataset.projectCreated === '1') return;
-        const work = blockHasWork(record);
+        if (record.root.dataset.projectCreated === '1') return;
+        // A child is never a convertible unit (it inherits its root's Project by
+        // lineage) and its title is its role: both root writers skip it.
+        const work = !record.isSubagent && blockHasWork(record);
         // The first row of work lands after the title writers ran for its frame:
         // an empty title takes the placeholder here, the writers own it from then on.
         if (work && !record.titleEl.textContent) {
@@ -1494,6 +1501,9 @@ export function createChatInstance({
         if (promoted) {
             record.root.classList.add('subagent');
             record.root.dataset.subagent = '1';
+            // A frame that outran its lineage minted this shell root-shaped:
+            // the conversion a root earned is re-derived from the child's facts.
+            syncBlockChrome(record);
         }
         if (record.root.dataset.parentTaskId !== parentId) record.root.dataset.parentTaskId = parentId;
         if (record.root.dataset.subagentRole !== record.subagentRole) {
@@ -1901,6 +1911,11 @@ export function createChatInstance({
         };
         if (['parentId', 'role', 'model'].every((k) => next[k] === prev[k])) return;
         subagentChildParents.set(childId, next);
+        // Lineage reclassifies a root-shaped shell the moment it is learned,
+        // whatever the frame that carries it goes on to render.
+        if (next.parentId && liveCardRecords.get(childId)?.isSubagent === false) {
+            ensureLiveCardVisible(getSubagentCardRecord(childId, next.parentId, next.role));
+        }
         for (const sid of subagentChildParents.keys()) {
             const rec = liveCardRecords.get(sid);
             // Write only on change: a rewrite would destroy a selection being copied.
@@ -2417,7 +2432,7 @@ export function createChatInstance({
                         pendingHistoryUpserts.set(row.history_id, row); return false;
                     }
                     pendingHistoryUpserts.delete(row.history_id);
-                    chatMedia.release(old); chatDecision.releaseViews(old); destroyChatMarkdown(old); old.remove();
+                    releaseMessageNode(old);
                     return true;
                 });
                 // Retire only local echoes this source snapshot confirms.
@@ -3343,6 +3358,11 @@ export function createChatInstance({
             && [record.summaryButtonEl, record.reviewsHostEl].some(node => historyNodeIsProtected(node, messagesDiv)));
     }
 
+    // One retirement path for a message node: its media, decision views and markdown go with it.
+    function releaseMessageNode(node) {
+        chatMedia.release(node); chatDecision.releaseViews(node); destroyChatMarkdown(node); node.remove();
+    }
+
     function releaseHistoryIds(ids) {
         if (!(ids.size || ids.length)) return;
         const retained = retainedHistoryIds();
@@ -3361,11 +3381,8 @@ export function createChatInstance({
             }
             pendingHistoryEvictions.delete(id);
             for (const node of nodes) {
-                chatMedia.release(node);
-                chatDecision.releaseViews(node);
-                destroyChatMarkdown(node);
                 const wrapper = node.closest('.chat-bubble');
-                node.remove();
+                releaseMessageNode(node);
                 if (wrapper && wrapper !== node && !wrapper.querySelector('.chat-gallery-item, .chat-file-item, .chat-quiz-card')) {
                     chatMedia.release(wrapper); wrapper.remove();
                 }

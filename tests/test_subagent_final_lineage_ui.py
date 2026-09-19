@@ -47,6 +47,8 @@ def test_ui_smoke_final_only_child_stays_inside_child_card(direct_server_with_da
                 child.wait_for(state="visible", timeout=30_000)
                 assert child.get_attribute("data-parent-task-id") == "parent-final-only"
                 assert child.get_attribute("data-finished") == "1"
+                # A child is never a convertible unit: only its root offers conversion.
+                assert child.locator("[data-turn-into-project]").count() == 0
                 # The final text lives INSIDE the child card: in its (collapsed-hidden)
                 # activity node, and on screen once the child is expanded.
                 assert sentinel in child.locator(":scope > [data-live-summary-button] [data-live-activity]").text_content()

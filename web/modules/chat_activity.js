@@ -1236,11 +1236,18 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
 }
 
 // Only host-attested cancelable queue roots receive this control.
+// A card's OWN actions row: a nested child card carries a row of its own, and a
+// descendant lookup would hand a root without one its child's.
+export function ownLiveActionsEl(record) {
+    return [...(record?.root?.children || [])]
+        .find((node) => node.classList?.contains('chat-live-actions')) || null;
+}
+
 export function ensureLiveActionsEl(record) {
     if (!record?.root
         || record.root.dataset.projectCreated === '1'
         || record.root.dataset.projectCreating === '1') return null;
-    let actions = record.root.querySelector('.chat-live-actions');
+    let actions = ownLiveActionsEl(record);
     if (!actions) {
         actions = document.createElement('div');
         actions.className = 'chat-live-actions';
