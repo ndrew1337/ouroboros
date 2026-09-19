@@ -1356,7 +1356,7 @@ def test_attestation_waiting_on_a_failing_sibling_start_signals_custody(tmp_path
     ],
 )
 def test_heal_removes_a_running_residual_only_with_full_startup_attestation(tmp_path, case, removed):
-    """Owner decision A: the healer gains exactly the authority of the immediate
+    """The healer gains exactly the authority of the immediate
     failed-start cleanup; anything less proven, an in-flight start included,
     stays latched with a receipt."""
     config = _config(tmp_path, provider_probe=False)
