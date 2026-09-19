@@ -1350,13 +1350,15 @@ def test_attestation_waiting_on_a_failing_sibling_start_signals_custody(tmp_path
         ("network", False),
         ("image", False),
         ("gateway_registered", False),
+        ("starting", False),
         ("rm_fails", False),
         ("rm_leaves_object", False),
     ],
 )
 def test_heal_removes_a_running_residual_only_with_full_startup_attestation(tmp_path, case, removed):
     """Owner decision A: the healer gains exactly the authority of the immediate
-    failed-start cleanup; anything less proven stays latched with a receipt."""
+    failed-start cleanup; anything less proven, an in-flight start included,
+    stays latched with a receipt."""
     config = _config(tmp_path, provider_probe=False)
     docker = _FakeDockerDaemon(config)
     executor = CyberGymExecutor(dataclasses_replace(config, command_runner=docker))
@@ -1374,8 +1376,8 @@ def test_heal_removes_a_running_residual_only_with_full_startup_attestation(tmp_
         image="sha256:" + "9" * 64 if case == "image" else "",
         network_id="foreign-network" if case == "network" else "network-id",
     )
-    if case == "gateway_registered":
-        executor._gateway_attempts["gateway-1"] = {"workspace_name": name}
+    executor._gateway_attempts = {"g1": {"workspace_name": name}} if case == "gateway_registered" else {}
+    executor._workspace_starting = {name: 1} if case == "starting" else {}
     docker.rm_mode = {"rm_fails": "fail", "rm_leaves_object": "persist"}.get(case, "remove")
     executor._unresolved_workspace_custody[name] = "run timed out; name inspect failed"
 

@@ -489,7 +489,9 @@ removal stays latched.  Each pass writes a per-name receipt
 with fresh attempt identities; the released attempt keeps the workspace
 tree it had already generated, because ``workspaces/`` is durable
 append-only run evidence, so each requeue adds one more extracted
-``src-vul/`` tree to the run root's footprint.  A contiguous five-minute
+``src-vul/`` tree to the run root's footprint.  As on the gateway rail, every
+custody pause, failed probe, resume, and timeout is appended to
+``dispatch_events.jsonl`` in the run root.  A contiguous five-minute
 custody pause — a logical budget distinct from Docker timeouts, gateway
 transport retry, the task deadline, finalization grace, and the campaign
 budget — drains in-flight attempts, keeps the unresolved resources under

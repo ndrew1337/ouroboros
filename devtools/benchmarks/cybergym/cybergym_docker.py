@@ -1079,12 +1079,19 @@ class _DockerRuntimeMixin:
             return False, f"{status or 'unknown'} container ownership is unproven"
         if status == "running":
             with self._registry_condition:
-                held = container_name in self._terminal_uncommitted_workspaces or any(
-                    isinstance(entry, Mapping) and entry.get("workspace_name") == container_name
-                    for entry in tuple(self._gateway_attempts.values())
+                # Fenced by the same three custody facts as
+                # `_cleanup_owned_resources` and `_attest_runtime`, not by
+                # `_workspace`'s latch-drop ordering alone.
+                held = (
+                    container_name in self._terminal_uncommitted_workspaces
+                    or container_name in self._workspace_starting
+                    or any(
+                        isinstance(entry, Mapping) and entry.get("workspace_name") == container_name
+                        for entry in tuple(self._gateway_attempts.values())
+                    )
                 )
             if held:
-                return False, "running container is held by a gateway attempt"
+                return False, "running container is held by a live attempt"
             agent_id = container_name.removeprefix("cybergym-workspace-")
             bound, missing = self._workspace_attestation(observed, container_name, agent_id)
             if bound is None:
