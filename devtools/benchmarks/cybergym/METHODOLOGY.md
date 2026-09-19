@@ -486,10 +486,14 @@ campaign/role/agent labels, network, image) and is held by no gateway attempt
 is cleared; anything unreadable, foreign, partially proven, or failing
 removal stays latched.  Each pass writes a per-name receipt
 ``workspaces/<name>.startup_custody.json``.  A clean heal resumes admission
-with fresh attempt identities.  A contiguous five-minute custody pause — a
-logical budget distinct from Docker timeouts, gateway transport retry, the
-task deadline, finalization grace, and the campaign budget — drains in-flight
-attempts, keeps the unresolved resources under ``custody_pending.json``,
+with fresh attempt identities; the released attempt keeps the workspace
+tree it had already generated, because ``workspaces/`` is durable
+append-only run evidence, so each requeue adds one more extracted
+``src-vul/`` tree to the run root's footprint.  A contiguous five-minute
+custody pause — a logical budget distinct from Docker timeouts, gateway
+transport retry, the task deadline, finalization grace, and the campaign
+budget — drains in-flight attempts, keeps the unresolved resources under
+``custody_pending.json``,
 names the row-free ids under ``extra.workspace_custody.remaining_task_ids``,
 and finalizes ``workspace_custody_timeout`` with exit code 2; a later
 append-only campaign runs those ids.  When stops coincide, the custody stop
