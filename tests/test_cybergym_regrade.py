@@ -10,6 +10,7 @@ from devtools.benchmarks.cybergym.cybergym_regrade import (
     select_latest_regrade_candidates,
     write_regrade_inventory,
 )
+from tests.test_cybergym_executor import _requires_posix_mount_paths
 
 MODEL = "deepseek/deepseek-v4-flash-0731"
 
@@ -221,6 +222,7 @@ def test_execute_regrade_records_executor_failures_without_stopping(tmp_path):
     assert {row["error_type"] for row in rows} == {"RuntimeError"}
 
 
+@_requires_posix_mount_paths
 def test_execute_regrade_records_a_workspace_custody_pause_as_its_error_row(tmp_path, monkeypatch):
     """Regrade has no dispatch gate: a sibling's unresolved start is one typed
     error row by design, never a verifier result; a later regrade root reruns it."""

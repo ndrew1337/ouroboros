@@ -1394,14 +1394,14 @@ def test_heal_removes_a_running_residual_only_with_full_startup_attestation(tmp_
 
 
 def test_concurrent_receipts_on_one_path_both_replace(tmp_path, monkeypatch):
-    """Two lanes publishing one receipt shared a single staging file: the first
-    ``os.replace`` consumed it and the second raised ``FileNotFoundError``.  The
-    barrier holds both writers at their replace, so they meet every time."""
+    """Two lanes writing one receipt meet at their first replace (a Windows sharing
+    retry passes through); a shared staging file made the second one fail."""
     target = tmp_path / "workspaces" / "cybergym-workspace-race.startup_custody.json"
-    real_replace, at_replace, errors = os.replace, threading.Barrier(2, timeout=10), []
+    real_replace, at_replace, errors, met = os.replace, threading.Barrier(2, timeout=10), [], set()
 
     def barriered(src, dst, *args, **kwargs):
-        if pathlib.Path(dst) == target:
+        if pathlib.Path(dst) == target and threading.get_ident() not in met:
+            met.add(threading.get_ident())
             at_replace.wait()
         return real_replace(src, dst, *args, **kwargs)
 

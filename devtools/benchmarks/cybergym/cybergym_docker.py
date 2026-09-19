@@ -22,12 +22,12 @@ import re
 import shlex
 import subprocess
 import tempfile
-import threading
 import time
 import urllib.parse
-import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
+
+from ouroboros.utils import atomic_write_json
 
 from devtools.benchmarks.cybergym.cybergym_adapter import (
     OFFICIAL_MODEL,
@@ -480,25 +480,10 @@ def _initialize_generated_workspace_git(
 
 
 def _write_json(path: pathlib.Path, value: Mapping[str, Any]) -> None:
-    """Publish JSON through a per-writer temporary and one atomic replace.
-
-    A PID-only temporary let two lanes writing one receipt (concurrent healer
-    passes over the same latched name) share a single staging file: the first
-    ``os.replace`` consumed it and the second raised ``FileNotFoundError``.
-    Pid, thread id and a random suffix — the atomic signature of
-    ``ouroboros.utils`` — keep staging unique per writer, ``write_text`` closes
-    the file before the replace (Windows cannot rename an open handle), the
-    replace stays atomic for readers, and a failed write removes the temporary
-    that unique names would otherwise strand.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}")
-    try:
-        tmp.write_text(json.dumps(dict(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        os.replace(tmp, path)
-    except BaseException:
-        tmp.unlink(missing_ok=True)
-        raise
+    """Publish a JSON receipt through the engine's atomic writer: a per-writer
+    temporary removed on failure, one atomic replace, and the bounded Windows
+    sharing-violation retry that concurrent healer receipts need."""
+    atomic_write_json(path, dict(value), trailing_newline=True)
 
 
 def _install_workspace_backend_alias(workspace_root: pathlib.Path) -> pathlib.Path:
