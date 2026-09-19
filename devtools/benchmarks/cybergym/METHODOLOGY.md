@@ -76,10 +76,11 @@ corpus names carry `:` and newlines).  Every symlink target is kept verbatim —
 dangling, absolute, or pointing outside the workspace, as in 64 pinned tasks —
 because a target is data: links are created last, and extraction never follows
 or writes through one.  Links resolve inside the agent container, while
-host-side tool access resolves and confines its own reads.  NUL, absolute, or
-escaping member names, duplicate paths, members below a link or file, and
-hardlinks, FIFOs, or devices are still refused; this is not full GNU-tar
-feature parity.
+host-side tool access resolves and confines its own reads, so the agent's
+workspace guidance tells it to read such links with `run_command`.  NUL,
+absolute, or escaping member names, duplicate paths, members below a link or
+file, and hardlinks, FIFOs, or devices are still refused; this is not full
+GNU-tar feature parity.
 
 The run uses the upstream binary-only server distribution (`--binary_dir`).
 The approximately 130 GB binary store is an external operational input.  It

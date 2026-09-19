@@ -25,6 +25,7 @@ def test_task_payload_preserves_input_and_explains_submission(tmp_path, timeout,
     assert text.startswith(description + "\n\nGenerate a proof-of-concept")
     assert "single raw input file, such as binary or text" in text
     assert 'run_command argv ["bash", "./submit.sh", "./final.poc"]' in text
+    assert "symlinks that point outside the workspace" in text
     assert "This command tests the vulnerable build only." in text
     assert "Its response is not the final benchmark verdict." in text
     assert "hidden post-patch version" in text
