@@ -22,8 +22,10 @@ import re
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.parse
+import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol
 
@@ -478,10 +480,25 @@ def _initialize_generated_workspace_git(
 
 
 def _write_json(path: pathlib.Path, value: Mapping[str, Any]) -> None:
+    """Publish JSON through a per-writer temporary and one atomic replace.
+
+    A PID-only temporary let two lanes writing one receipt (concurrent healer
+    passes over the same latched name) share a single staging file: the first
+    ``os.replace`` consumed it and the second raised ``FileNotFoundError``.
+    Pid, thread id and a random suffix — the atomic signature of
+    ``ouroboros.utils`` — keep staging unique per writer, ``write_text`` closes
+    the file before the replace (Windows cannot rename an open handle), the
+    replace stays atomic for readers, and a failed write removes the temporary
+    that unique names would otherwise strand.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".tmp.{os.getpid()}")
-    tmp.write_text(json.dumps(dict(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    os.replace(tmp, path)
+    tmp = path.with_name(f"{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}")
+    try:
+        tmp.write_text(json.dumps(dict(value), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _install_workspace_backend_alias(workspace_root: pathlib.Path) -> pathlib.Path:
@@ -1001,29 +1018,43 @@ class _DockerRuntimeMixin:
         attempt of this process holds it, i.e. exactly the authority of the
         immediate failed-start cleanup.  Anything unreadable, foreign,
         partially proven, gateway-held, or whose removal or absence
-        postcondition failed stays latched.  Every pass records one durable
-        per-name receipt.  Docker runs outside the registry lock, and removal
-        is idempotent across concurrent lanes.
+        postcondition failed stays latched.
+
+        A dispatch probe and every ``_workspace`` lane reach this healer at
+        once, so passes are serialized per executor: two of them over one name
+        would remove the same container twice and land a stale ``retained``
+        receipt after the newer ``resolved`` one.  The healer lock is always
+        taken before the registry lock and never under it, and Docker runs
+        under the healer lock but never under the registry lock, so lanes that
+        are not healing keep starting in parallel.  The durable
+        per-name receipt is why a latch may be dropped, so it is written first;
+        a failed receipt keeps the name latched for the next pass — whose
+        removal and absence are both idempotent — rather than resuming
+        admission on an observation nobody recorded.
         """
-        with self._registry_condition:
-            pending = sorted(self._unresolved_workspace_custody)
-        for container_name in pending:
-            resolved, observation = self._heal_workspace_name(container_name)
-            if resolved:
-                with self._registry_condition:
-                    self._task_containers.pop(container_name, None)
-                    self._workspace_observations.pop(container_name, None)
-                    self._unresolved_workspace_custody.pop(container_name, None)
-            _write_json(
-                self.config.run_root / "workspaces" / f"{container_name}.startup_custody.json",
-                {
-                    "schema": "ouroboros.benchmark.cybergym.workspace_startup_custody.v1",
-                    "container_name": container_name,
-                    "status": "resolved" if resolved else "retained",
-                    "observation": observation,
-                    "ts_unix": time.time(),
-                },
-            )
+        with self._workspace_healer_lock:
+            with self._registry_condition:
+                pending = sorted(self._unresolved_workspace_custody)
+            for container_name in pending:
+                resolved, observation = self._heal_workspace_name(container_name)
+                try:
+                    _write_json(
+                        self.config.run_root / "workspaces" / f"{container_name}.startup_custody.json",
+                        {
+                            "schema": "ouroboros.benchmark.cybergym.workspace_startup_custody.v1",
+                            "container_name": container_name,
+                            "status": "resolved" if resolved else "retained",
+                            "observation": observation,
+                            "ts_unix": time.time(),
+                        },
+                    )
+                except Exception:  # noqa: BLE001 - an unwritten receipt keeps the latch
+                    continue
+                if resolved:
+                    with self._registry_condition:
+                        self._task_containers.pop(container_name, None)
+                        self._workspace_observations.pop(container_name, None)
+                        self._unresolved_workspace_custody.pop(container_name, None)
 
     def _heal_workspace_name(self, container_name: str) -> tuple[bool, str]:
         """Decide one latched name for the healer: ``(resolved, observation)``."""

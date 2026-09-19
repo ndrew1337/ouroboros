@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import pathlib
 import threading
 
 import pytest
 
+from devtools.benchmarks.cybergym import cybergym_docker as docker_module
 from devtools.benchmarks.cybergym import cybergym_executor as executor_module
 from devtools.benchmarks.cybergym.cybergym_adapter import (
     BudgetLedger,
@@ -1387,3 +1389,110 @@ def test_heal_removes_a_running_residual_only_with_full_startup_attestation(tmp_
     )
     assert (receipt["container_name"], receipt["status"]) == (name, "resolved" if removed else "retained")
     assert receipt["observation"]
+
+
+def test_concurrent_receipts_on_one_path_both_replace(tmp_path, monkeypatch):
+    """Two lanes publishing one receipt shared a single staging file: the first
+    ``os.replace`` consumed it and the second raised ``FileNotFoundError``.  The
+    barrier holds both writers at their replace, so they meet every time."""
+    target = tmp_path / "workspaces" / "cybergym-workspace-race.startup_custody.json"
+    real_replace, at_replace, errors = os.replace, threading.Barrier(2, timeout=10), []
+
+    def barriered(src, dst, *args, **kwargs):
+        if pathlib.Path(dst) == target:
+            at_replace.wait()
+        return real_replace(src, dst, *args, **kwargs)
+
+    def write(status):
+        try:
+            docker_module._write_json(target, {"status": status})  # noqa: SLF001 - receipt seam
+        except BaseException as exc:  # noqa: BLE001 - asserted below
+            errors.append(exc)
+
+    monkeypatch.setattr(os, "replace", barriered)
+    writers = [threading.Thread(target=write, args=(status,)) for status in ("resolved", "retained")]
+    for writer in writers:
+        writer.start()
+    for writer in writers:
+        writer.join(15)
+
+    assert errors == []
+    assert json.loads(target.read_text(encoding="utf-8"))["status"] in {"resolved", "retained"}
+    assert [item.name for item in target.parent.iterdir()] == [target.name]
+
+
+def test_concurrent_healer_passes_are_serialized_per_executor(tmp_path, monkeypatch):
+    """A dispatch probe and a ``_workspace`` lane can heal at the same moment.
+    Two passes over one latched name would remove the same container twice and
+    land a stale ``retained`` receipt after the newer ``resolved`` one, so one
+    body runs at a time and the second pass sees the first's cleared latch."""
+    config = _config(tmp_path, provider_probe=False)
+    executor = CyberGymExecutor(config)
+    name = "cybergym-workspace-race"
+    executor._unresolved_workspace_custody[name] = "run timed out; name inspect failed"
+    guard, inside, release = threading.Lock(), threading.Event(), threading.Event()
+    depth, peak, seen, errors = 0, 0, [], []
+
+    def observed(container_name):
+        nonlocal depth, peak
+        with guard:
+            depth += 1
+            peak = max(peak, depth)
+            seen.append(container_name)
+            first = len(seen) == 1
+        if first:
+            inside.set()
+            release.wait(10)
+        with guard:
+            depth -= 1
+        return True, "absent"
+
+    def heal():
+        try:
+            executor._heal_unresolved_workspace_custody()  # noqa: SLF001 - heal seam
+        except BaseException as exc:  # noqa: BLE001 - asserted below
+            errors.append(exc)
+
+    monkeypatch.setattr(executor, "_heal_workspace_name", observed)
+    passes = [threading.Thread(target=heal), threading.Thread(target=heal)]
+    passes[0].start()
+    assert inside.wait(10), "the first healer pass never entered its body"
+    passes[1].start()
+    passes[1].join(0.2)
+    release.set()
+    for healer in passes:
+        healer.join(15)
+
+    assert (peak, seen, errors) == (1, [name], [])
+    assert executor._unresolved_workspace_custody == {}
+
+
+def test_resolved_custody_clears_only_after_its_receipt_is_written(tmp_path, monkeypatch):
+    """The promised receipt is the reason the latch may be dropped.  Clearing
+    first let a failed ``_write_json`` leave the next probe an empty latch and no
+    durable observation, so admission resumed on a promise nobody kept."""
+    config = _config(tmp_path, provider_probe=False)
+    executor = CyberGymExecutor(config)
+    name, reason = "cybergym-workspace-absent", "run timed out; name inspect failed"
+    executor._unresolved_workspace_custody[name] = reason
+    executor._task_containers[name] = "a" * 64
+    monkeypatch.setattr(executor, "_inspect_optional", lambda _kind, _target: None)
+    receipt = config.run_root / "workspaces" / f"{name}.startup_custody.json"
+    real_write, attempts = docker_module._write_json, []
+
+    def flaky(path, value):
+        attempts.append(path)
+        if len(attempts) == 1:
+            raise OSError("No space left on device")
+        real_write(path, value)
+
+    monkeypatch.setattr(docker_module, "_write_json", flaky)
+    executor._heal_unresolved_workspace_custody()  # noqa: SLF001 - heal seam
+
+    assert (executor._unresolved_workspace_custody, receipt.exists()) == ({name: reason}, False)
+    assert executor._task_containers == {name: "a" * 64}
+
+    executor._heal_unresolved_workspace_custody()  # noqa: SLF001 - heal seam
+
+    assert (executor._unresolved_workspace_custody, executor._task_containers) == ({}, {})
+    assert json.loads(receipt.read_text(encoding="utf-8"))["status"] == "resolved"

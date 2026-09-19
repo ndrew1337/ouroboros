@@ -804,6 +804,10 @@ class CyberGymExecutor(_DockerRuntimeMixin, _LifecycleMixin, _ReconcileMixin, _C
         self._registry_condition = threading.Condition(self._registry_lock)
         self._workspace_starting: dict[str, int] = {}
         self._unresolved_workspace_custody: dict[str, str] = {}
+        # One healer pass at a time: a dispatch probe and every _workspace lane
+        # can enter it at once.  Taken before the registry lock and never under
+        # it, so a pass serializes healers without blocking parallel starts.
+        self._workspace_healer_lock = threading.Lock()
         # Gateway ids are registered before the admission POST and retained
         # until a settled status is observed.  This is the custody boundary:
         # a transport error after the server accepted a task must not let
