@@ -144,10 +144,13 @@ def test_wait_episode_exhausted_on_a_round_holding_a_repeat_record_takes_the_unk
         assert trace["forced_finalization"]["source"] == "provider_outcome_unknown_no_resend"
         assert usage[TRANSPORT_DEATHS_KEY]["count"] == 1
         assert "1 earlier physical attempt(s) of the last dispatched round" in result
-        assert "unresolved at their upper bound" in result
+        assert "any recorded bound is retained" in result
         assert "Retry when connectivity returns" not in result
         assert "Inspect the preserved facts before starting another run." in result
-        assert result.endswith(loop_transport.provider_recovery_hint(usage))
+        # #869: the unknown terminal ends with the no-resend fence AND the money
+        # uncertainty: no bound is invented when the attempt has none.
+        assert result.endswith(
+            loop_transport._unknown_terminal_recovery_hint(usage) + loop_transport.UNKNOWN_ATTEMPT_COST_NOTE)
     else:
         assert trace["forced_finalization"]["source"] == "transport_unavailable_no_resend"
         assert TRANSPORT_DEATHS_KEY not in usage
@@ -198,7 +201,7 @@ def test_deadline_refused_redial_still_names_the_class_the_repeat_was_released_w
     assert usage[TRANSPORT_DEATHS_KEY]["count"] == 1
     assert trace["forced_finalization"]["source"] == "provider_outcome_unknown_no_resend"
     assert usage["execution_status"] == "infra_failed" and usage["reason_code"] == "provider_unavailable"
-    assert "waited and redialed" in result  # the wait wording is still there
+    assert "provider wait" in result and "redialed" not in result
     assert "the repeat failed as transport_unavailable" in result
     assert "deadline_exhausted" not in result
 
@@ -391,7 +394,7 @@ def test_round_record_outranks_a_wait_cause_that_holds_an_overflow_kind(tmp_path
     assert trace["forced_finalization"]["source"] == "provider_outcome_unknown_no_resend"
     assert usage["execution_status"] == "infra_failed"
     assert usage["reason_code"] == "provider_unavailable"
-    assert "the task waited and redialed" in text
+    assert "The task spent" in text and "provider wait" in text
     assert "1 earlier physical attempt(s) of the last dispatched round" in text
     assert "the repeat failed as transport_unavailable" in text
     assert "context exceeded" not in text

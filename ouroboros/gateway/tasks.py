@@ -105,6 +105,10 @@ _RESERVED_METADATA_KEYS = frozenset({
     "executor_ref",
     "workspace_executor",
     "project_id",
+    # The owner door's stamp (read as ``run_origin.owner_ingress`` by the corpus
+    # label and the routing issuer) belongs to owner routing, never to a caller.
+    "origin_message_ref",
+    "origin_suppressed",
 })
 
 
@@ -944,7 +948,11 @@ def api_task_artifact(request: Request):
                 return Response(artifact_store.read_task_result_source_bytes(drive_root, result, name, source), media_type="application/json")
             except (OSError, ValueError, RuntimeError):
                 return json_error("task source is unavailable or does not match its recorded identity", 404)
-        artifact = registered if registered and registered.get("immutable") else _artifact_by_name(result, name) or registered
+        artifact = registered if registered and registered.get("immutable") else next(
+            (row for row in result.get("artifacts") or []
+             if isinstance(row, dict)
+             and str(row.get("name") or pathlib.Path(str(row.get("path") or "")).name) == name),
+            None) or registered
         if artifact is None:
             return json_error("artifact not found", 404, task_id=task_id, artifact=name)
         base = task_artifacts_dir(drive_root, task_id).resolve(strict=False)
@@ -1352,7 +1360,19 @@ async def api_task_cancel(request: Request) -> JSONResponse:
 
 
 async def api_task_resume(request: Request) -> JSONResponse:
-    """Resume only a replay-safe task paused before its first model dispatch."""
+    """Explicit owner Resume of a budget-paused task.
+
+    A replay-safe zero-dispatch row is released; an exact mid-run continuation
+    (#1196) receives ONE single-use grant and continues under the same task id.
+    Every refusal is typed: money still exhausted, a live cancel intent, a
+    passed deadline, an exhausted finite lifetime, a root that is itself still
+    paused, or a missing/unreadable checkpoint all leave the task paused. A row
+    HELD beside its pause (an unrestorable source at restart, an unwritten
+    revocation, an acceptance fence at restore) is granted by the same call once
+    its durable authority validates again; a fence-lifted zero-dispatch sibling
+    is released by this same call as an explicit selection. A paused direct
+    owner-chat turn is resumed here too, under its own task id.
+    """
     try:
         task_id = validate_task_id(request.path_params.get("task_id"))
     except ValueError as exc:
@@ -1368,6 +1388,19 @@ async def api_task_resume(request: Request) -> JSONResponse:
     error = str(result.get("error") or "resume_refused")
     status = 409 if error in {
         "task_not_budget_paused", "replay_unsafe", "root_budget_fence_missing",
+        # exact-continuation refusals (#1196): the task stays paused
+        "budget_still_exhausted", "root_hard_cap_exhausted", "cancel_intent_active",
+        "deadline_passed", "lifetime_exhausted", "root_still_paused", "resume_already_granted",
+        "restart_no_resume", "pause_record_missing", "pause_source_unreadable",
+        "pause_record_unreadable", "grant_not_recorded", "snapshot_not_persisted",
+        "monetary_authority_unavailable", "cancellation_authority_unavailable", "task_terminal",
+        # holds and root-grant refusals (#1196, owner Q9): the row stays paused/held
+        "root_resume_grant_missing", "root_resume_generation_stale", "root_replay_unsafe",
+        "root_accounting_unavailable", "root_accounting_degraded", "external_custody_unreadable",
+        "accounting_unavailable", "resume_grant_revocation_unwritten",
+        # fresh custody at grant (#1196, owner Q8): a delegated run not proven
+        # terminal keeps the task paused; a marker/attempt drift is typed too
+        "external_runs_unsettled", "pause_attempt_mismatch",
     } else 404
     return json_error(error, status, task_id=task_id, **({"action": result["action"]} if result.get("action") else {}))
 
@@ -1493,13 +1526,6 @@ def _render_attachment_lines(attachments: Any) -> str:
             f"{script_hint} [status=staged, ordinal={ordinal}]"
         )
     return "\n".join(lines)
-
-
-def _artifact_by_name(result: Dict[str, Any], name: str) -> Optional[Dict[str, Any]]:
-    for artifact in result.get("artifacts") or []:
-        if isinstance(artifact, dict) and str(artifact.get("name") or pathlib.Path(str(artifact.get("path") or "")).name) == name:
-            return artifact
-    return None
 
 
 def _queue_snapshot(drive_root: pathlib.Path) -> Dict[str, Any]:

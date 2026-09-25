@@ -714,6 +714,37 @@ def last_assistant_text(messages: List[Dict[str, Any]]) -> str:
     return ""
 
 
+# Unknown outcome alone establishes neither a receipt nor a numeric bound.
+UNKNOWN_ATTEMPT_COST_NOTE = (
+    " This does not establish the attempt's cost; any recorded estimate or "
+    "upper bound is not a settled receipt."
+)
+
+
+def _unknown_wait_note(unknown: bool, waited_sec: float, interactive: bool) -> str:
+    """The REAL wait this unknown terminal spent, on the rails that never said it.
+
+    The transport-wait branch below states its own wait in the sentence. The
+    no-call rails (``provider_no_call_source`` -> ``provider_outcome_unknown_no_resend``)
+    reach the generic terminal instead, which named neither the wait nor the
+    fence, so an owner whose turn had waited minutes read a bare "no usable
+    response". Zero stays silent rather than claiming a wait that never ran.
+    """
+    if not unknown or waited_sec <= 0:
+        return ""
+    subject = "This turn" if interactive else "The task"
+    return f" {subject} spent {waited_sec / 60.0:.1f} min in the provider wait; that wait did not confirm the attempt's outcome."
+
+
+def _unknown_terminal_recovery_hint(usage: Dict[str, Any]) -> str:
+    # Wording only, confined to unknown terminals. Stop/Wrap up keep their
+    # existing byte-for-byte control sentence and recovery hint.
+    return provider_recovery_hint(usage).replace(
+        "the dead ones stay unresolved at their upper bound",
+        "the dead ones stay unresolved; any recorded bound is retained",
+    )
+
+
 def provider_terminal_fallback_text(
     accumulated_usage: Dict[str, Any],
     *,
@@ -754,6 +785,14 @@ def provider_terminal_fallback_text(
             "Any files written so far are preserved in the workspace."
         )
     if is_transport_wait:
+        if unknown:
+            # A wait duration does not prove a redial, nor a numeric price bound.
+            return (
+                "⚠️ The dispatched attempt has no confirmed provider outcome."
+                f"{_unknown_wait_note(True, waited_sec, interactive)}"
+                " Inspect the preserved facts before starting another run."
+                f"{_unknown_terminal_recovery_hint(accumulated_usage)}{UNKNOWN_ATTEMPT_COST_NOTE}"
+            )
         advice = ("Inspect the preserved facts before starting another run." if unknown
                   else "Retry when connectivity returns.")
         if interactive and waited_sec > 0:
@@ -779,25 +818,21 @@ def provider_terminal_fallback_text(
                 "time to wait; the task ended as a provider outage, not completed. Any files "
                 f"written so far are preserved in the workspace. {advice}"
             )
-        if unknown:
-            # The episode redialed a granted transport-death repeat that never left the
-            # host: an earlier attempt of the round is still unresolved at its upper
-            # bound, and the owner text says both facts (the wait and the fence). The
-            # class the repeat was released with is on the record, and the hint reads it
-            # there — never the sticky kind, which by the time the window closes names a
-            # LATER free redial's refusal (``deadline_exhausted``).
-            text += provider_recovery_hint(accumulated_usage)
         return text
     if is_deadline_exhausted:
         text = "⚠️ The owner deadline ended primary model work; any files written so far are preserved."
         if unknown:
-            text += provider_recovery_hint(accumulated_usage)
+            text += _unknown_terminal_recovery_hint(accumulated_usage) + UNKNOWN_ATTEMPT_COST_NOTE
         return text
     return (
         "⚠️ The model provider returned no usable response."
-        f"{provider_failure_hint(accumulated_usage)}{provider_recovery_hint(accumulated_usage)} "
+        f"{_unknown_wait_note(unknown, waited_sec, interactive)}"
+        f"{provider_failure_hint(accumulated_usage)}"
+        f"{_unknown_terminal_recovery_hint(accumulated_usage) if unknown else provider_recovery_hint(accumulated_usage)}"
+        f"{UNKNOWN_ATTEMPT_COST_NOTE if unknown else ''} "
         "Any files written so far are preserved in the workspace."
     )
+
 
 
 def provider_failure_hint(accumulated_usage: Dict[str, Any]) -> str:

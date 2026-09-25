@@ -30,13 +30,24 @@ def _tool_ctx(tmp_path, *, generation=None, delivery=None, task_id="turn-1", met
         types.SimpleNamespace(_owner_message_generation=generation)
         if generation is not None else None
     )
+    task_metadata = dict(metadata or {})
+    if task_metadata.get("client_message_id") and "origin_message_ref" not in task_metadata:
+        # The direct turn the owner door stamped: the one shape that speaks as an
+        # owner turn (a client id alone never does).
+        from ouroboros.project_dialogue import build_owner_message_ref
+
+        task_metadata["origin_message_ref"] = build_owner_message_ref(
+            chat_id=1, client_message_id=task_metadata["client_message_id"],
+            ts="2026-09-24T00:00:00+00:00", text=str(task_metadata.get("origin_message_text") or ""),
+        )
     return types.SimpleNamespace(
         pending_events=[],
         event_queue=None,
         current_chat_id=1,
         drive_root=tmp_path,
         task_id=task_id,
-        task_metadata=dict(metadata or {}),
+        is_direct_chat=True,
+        task_metadata=task_metadata,
         owner_message_admission_agent=agent,
         last_owner_delivery=dict(delivery) if delivery is not None else None,
     )

@@ -301,13 +301,14 @@ def _directory_direct_artifacts(
     from ouroboros.headless_status import ARTIFACT_STATUS_READY
     from ouroboros.workspace_patch_capture import _acting_constraint_from_task, _preflight_head_from_task
     from ouroboros.utils import atomic_write_json, utc_now_iso
+    from ouroboros.workspace_admission import has_git_metadata
 
     root = root.resolve(strict=False)
     constraint = _acting_constraint_from_task(task)
     surface = str((task.get("task_constraint") or {}).get("surface") or "")
     if (not root.is_dir() or surface in {"self_worktree", "genesis"}
             or (constraint and constraint.base_sha) or _preflight_head_from_task(task)
-            or any((p / ".git").exists() or (p / ".git").is_symlink() for p in (root, *root.parents))):
+            or has_git_metadata(root)):
         return None
     from ouroboros.artifacts import (
         collect_task_artifact_records, merge_artifact_records, artifact_record, registered_task_artifact,
@@ -347,13 +348,13 @@ def capture_known_workspace_outputs(ctx, workspace_root, paths, *, source_tool, 
     """
     from ouroboros.artifacts import copy_file_to_task_artifacts, task_id_for_artifacts
     from ouroboros.tools.tool_resolution import active_repo_dir_for, system_repo_dir_for
+    from ouroboros.workspace_admission import has_git_metadata
 
     root = Path(workspace_root).resolve(strict=False)
     if (not root.is_dir() or task_id_for_artifacts(ctx) == "interactive"
             or root == system_repo_dir_for(ctx).resolve(strict=False)
             or root != active_repo_dir_for(ctx).resolve(strict=False)
-            or any((parent / ".git").exists() or (parent / ".git").is_symlink()
-                   for parent in (root, *root.parents))):
+            or has_git_metadata(root)):
         return ""
     captured, unavailable, removed = [], [], []
     for relative in dict.fromkeys(paths):

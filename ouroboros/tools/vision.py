@@ -184,12 +184,12 @@ def _vision_query_with_timeout(client: Any, *, model_role: str = "vision",
 
 
 def _vision_execution_window() -> float:
-    from ouroboros.config import get_task_abs_ceiling_sec
+    from ouroboros.config import get_task_abs_ceiling_sec, operation_window_sec
 
     context = current_model_wait()
     remaining = context.execution_window_remaining() if context else None
-    # An owner without an absolute clock still bounds this individual image.
-    return float(get_task_abs_ceiling_sec()) if remaining is None else remaining
+    # An owner (or task) without an absolute clock still bounds this individual image.
+    return operation_window_sec(get_task_abs_ceiling_sec()) if remaining is None else remaining
 
 
 def _vision_tool_timeout(ctx: Any, tool_args: dict | None) -> float:
@@ -215,16 +215,6 @@ def _path_is_under(path: "pathlib.Path", root: "pathlib.Path") -> bool:
         return True
     except ValueError:
         return False
-
-
-def _detect_image_mime_for_vlm(raw: bytes) -> str:
-    """Return MIME type string or empty string if not a recognised image."""
-    for magic, mime in _IMAGE_MAGIC:
-        if raw[:len(magic)] == magic:
-            return mime
-    if raw[:4] == _IMAGE_WEBP_MAGIC[0] and raw[8:12] == _IMAGE_WEBP_MAGIC[1]:
-        return "image/webp"
-    return ""
 
 
 def _downscale_image_for_vlm(raw: bytes, mime: str) -> Tuple[bytes, str]:
@@ -593,8 +583,10 @@ def _load_local_image_payload(ctx: ToolContext, file_path: str) -> Tuple[Optiona
         raw = fp.read_bytes()
     except Exception as e:
         return None, _refuse(ctx, f"⚠️ Failed to read image file: {e}")
-    # Fail closed: only recognized image bytes may be used.
-    mime = _detect_image_mime_for_vlm(raw)
+    # Fail closed: only recognized image bytes (by magic number) may be used.
+    mime = next((kind for magic, kind in _IMAGE_MAGIC if raw[:len(magic)] == magic), "")
+    if not mime and raw[:4] == _IMAGE_WEBP_MAGIC[0] and raw[8:12] == _IMAGE_WEBP_MAGIC[1]:
+        mime = "image/webp"
     if not mime:
         return None, _refuse(ctx, (
             "⚠️ File does not appear to be a supported image (PNG/JPEG/GIF/WEBP). "

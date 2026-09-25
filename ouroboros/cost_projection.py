@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Literal, Mapping, Optional, TypedDict
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,10 @@ COST_ALIAS_PAIRS = (
 # "not final" with nothing on it explaining what was still open). Adding a new
 # marker means adding it here, once.
 COST_OPENNESS_FIELDS = (
+    # #498: the optional scoped carrier below — the facts that EXPLAIN an amount,
+    # bound to the scope whose rows produced it, so a card never pairs a root-tree
+    # number with own-scope openness (or a parent's zero with a child's unknown).
+    "cost_presentation",
     "cost_accounting_status",
     "cost_accounting_error",
     "cost_final",
@@ -90,6 +94,80 @@ def honest_accounted_amount(source: Optional[Mapping[str, Any]]) -> Optional[flo
     return amount
 
 
+# The two scopes an amount can describe. A carrier states its own, because the
+# same record holds both and only its producer knows which rows it summed.
+COST_SCOPE_OWN = "own"
+COST_SCOPE_ROOT_TREE = "root_tree"
+
+
+class CostPresentation(TypedDict):
+    """The optional wire carrier and its producer share this closed shape.
+
+    Amount and row-state facts belong to one bucket. Null at the enclosing
+    field means that ledger evidence was unavailable, not measured zero.
+    """
+
+    scope: Literal["own", "root_tree"]
+    tracked_amount: Optional[float]
+    has_unpriced: bool
+    tracked_final: bool
+    accounting_open: bool
+    has_rows: bool
+
+
+def build_cost_presentation(
+    summary: Optional[Mapping[str, Any]], *, scope: str,
+) -> Optional[CostPresentation]:
+    """The money facts a card needs, from ONE ledger summary bucket (#498).
+
+    The amount and the facts that explain it have to travel together. A card that
+    read the tracked subtotal from the subtree and the unknown-price markers from
+    the task showed a parent's honest ``$0.00`` over a child whose price nobody
+    knew. So this carrier is built once, by the producer that actually summed the
+    rows, and states which scope those rows belong to.
+
+    * ``tracked_amount`` — the accounted subtotal, or ``None``. A zero survives
+      only on PRICED evidence (``priced_rows``): an empty ledger and a ledger of
+      exclusively unpriced rows both add up to 0.0 and neither is a measured zero.
+      The count is what makes that exact, so the subtotal is read straight from
+      the bucket here rather than through :func:`honest_accounted_amount`, whose
+      bound-and-unknown heuristic is the count-free approximation of this same
+      question (it discards a real priced zero that shares a scope with an
+      unpriced row — the MIXED zero this carrier can now state honestly).
+    * ``has_unpriced`` — some row in this scope has no price at all, so the
+      tracked amount is only a subtotal; it may itself include open bounds.
+    * ``tracked_final`` — the tracked amount is exact. Estimates, retained
+      reservation bounds and ledger-integrity gaps all leave it False.
+    * ``accounting_open`` — more can still arrive for this scope.
+    * ``has_rows`` — this scope has any accountable row at all; without one there
+      is nothing to say, not a free result.
+
+    ``None`` when the summary is missing entirely (an unreadable ledger already
+    says so through ``cost_accounting_status``).
+    """
+    if not isinstance(summary, Mapping) or scope not in {COST_SCOPE_OWN, COST_SCOPE_ROOT_TREE}:
+        return None
+    try:
+        priced = max(0, int(summary.get("priced_rows") or 0))
+        unpriced = max(0, int(summary.get("unknown_unmetered") or 0))
+        # Absence on a legacy bucket proves neither closed nor exact.
+        tracked_nonfinal = int(summary["tracked_nonfinal_rows"])
+        open_rows = int(summary["accounting_open_rows"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    amount = _as_amount(summary.get("accounted_usd")) if priced else None
+    integrity_gap = bool(summary.get("integrity_degraded"))
+    open_accounting = open_rows > 0 or integrity_gap
+    return {
+        "scope": str(scope),
+        "tracked_amount": round(amount, 6) if amount is not None else None,
+        "has_unpriced": unpriced > 0,
+        "tracked_final": amount is not None and tracked_nonfinal == 0 and not integrity_gap,
+        "accounting_open": open_accounting,
+        "has_rows": bool(priced or unpriced),
+    }
+
+
 def resolve_cost_pair(source: Optional[Mapping[str, Any]], new: str, old: str) -> tuple[bool, Any]:
     """``(present, raw_value)`` for one alias pair under the ONE precedence rule.
 
@@ -108,6 +186,36 @@ def resolve_cost_pair(source: Optional[Mapping[str, Any]], new: str, old: str) -
     if new in src:
         return True, src[new]
     return False, None
+
+
+def with_task_cost_presentation(projection: Mapping[str, Any], task: Mapping[str, Any],
+                                drive_root: Any) -> Dict[str, Any]:
+    """Attach a root bucket without altering any existing monetary field.
+
+    A root's first terminal frame can precede the supervisor's subtree refresh.
+    It must already explain the tree, including roots that skip synthesis. A
+    failed tree read is explicit null, never the previously computed own cost.
+    """
+    from ouroboros.task_results import resolve_task_lineage
+
+    tid = str(task.get("id") or task.get("task_id") or "")
+    lineage = resolve_task_lineage(tid, metadata=task.get("metadata"), **{
+        key: task.get(key) for key in ("root_task_id", "parent_task_id", "delegation_role",
+                                      "original_task_id", "timeout_retry_from")
+    })
+    if not lineage["is_root_task"]:
+        return dict(projection)
+    carrier = None
+    if projection.get("cost_accounting_status") == "available":
+        try:
+            from ouroboros.usage_accounting import usage_breakdown
+
+            bucket = usage_breakdown(pathlib.Path(task.get("budget_drive_root") or drive_root),
+                                     root_task_id=str(lineage["root_task_id"] or tid))
+            carrier = build_cost_presentation(bucket, scope=COST_SCOPE_ROOT_TREE)
+        except Exception:
+            log.warning("Root cost presentation unavailable for %s", tid, exc_info=True)
+    return {**projection, "cost_presentation": carrier}
 
 
 def honest_cost_pair_amount(
@@ -247,6 +355,8 @@ def live_root_cost_projection(
             "unknown_unmetered": unknown,
             "non_final_rows": int(usage.get("non_final_rows") or 0),
             "ledger_integrity_degraded": bool(usage.get("integrity_degraded")),
+            # Built from THIS bucket, so the amount and its explanation are one fact.
+            "cost_presentation": build_cost_presentation(usage, scope=COST_SCOPE_ROOT_TREE),
         }
     except Exception:
         log.debug("Root heartbeat cost unavailable for %s", task_id, exc_info=True)
@@ -305,6 +415,10 @@ def cost_display(source: Optional[Mapping[str, Any]], *, decimals: int = 2) -> s
 __all__ = [
     "COST_ALIAS_PAIRS",
     "COST_OPENNESS_FIELDS",
+    "COST_SCOPE_OWN",
+    "COST_SCOPE_ROOT_TREE",
+    "CostPresentation",
+    "build_cost_presentation",
     "carry_cost_meta",
     "cost_display",
     "cost_projection",
@@ -314,4 +428,5 @@ __all__ = [
     "normalize_task_result_cost_planes",
     "resolve_cost_pair",
     "with_cost_aliases",
+    "with_task_cost_presentation",
 ]

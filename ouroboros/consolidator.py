@@ -10,7 +10,6 @@ from ouroboros import room_consolidation
 from ouroboros.utils import (
     append_jsonl,
     atomic_write_json,
-    read_json_dict,
     replace_atomic,
     utc_now_iso,
     read_text,
@@ -388,6 +387,10 @@ def _run_block_consolidation(
             return total_usage
         for nominated_block, _entries in pending_knowledge:
             nominated_block["knowledge_source_ref"] = ref
+        if knowledge_context is not None:
+            from ouroboros.memory_nomination_receipts import prepare
+            pending_ids = prepare(meta, source_id, pending_knowledge)
+            atomic_write_json(meta_path, meta)  # Debt precedes block and note publication.
 
     existing_blocks = _load_blocks(blocks_path)
     all_blocks = existing_blocks + new_blocks
@@ -435,21 +438,11 @@ def _run_block_consolidation(
                     "source_ref": block["knowledge_source_ref"], "outcomes": block["knowledge_writes"],
                 })
         if pending_knowledge:
-            # Nominations were durable before mutation. Outcome facts belong to
-            # the same blocks, so a failed write is available to later learning.
             _write_locked_json(blocks_path, all_blocks)
-            # Era compression later replaces these blocks with one object carrying no
-            # knowledge_writes, so this batch receipt lives in meta, not in a scan of
-            # dialogue_blocks.json. A fully published batch clears it; a run with no
-            # nominations at all leaves the older receipt standing.
-            # Count what was NOMINATED, not only what produced an outcome: an entry
-            # the writer skipped as malformed was not published either.
-            nominated = sum(len(entries) for _block, entries in pending_knowledge)
-            failed = nominated - sum(1 for outcome in published if outcome["ok"])
-            meta.pop("last_unpublished_nominations", None)
-            if failed > 0:
-                meta["last_unpublished_nominations"] = {"entry_id": ref["entry_id"],
-                                                        "failed": failed, "total": nominated}
+            from ouroboros.memory_nomination_receipts import settle
+            settle(meta, pending_ids, published)
+            # Legacy batch-only receipts remain open: no positional evidence can
+            # prove which old entry a later successful nomination resolved.
 
     _advance_cursor(meta, segments, segment_sigs, segment_entries, last_offset + processed)
     if not run_failed:  # An advance by a run that recorded no failure retires a stale error.
@@ -1019,8 +1012,17 @@ def maintain_memory_pressure(memory: Any, llm_client: Any, context: Any, *,
         identity_ref = retain_memory_source(context, "maintenance_identity", memory.identity_path().read_bytes())
         identity += "\nExact identity source, available through read_file; no identity rewrite is authorized here:\n" + json.dumps(identity_ref)
     if chat.exists() or blocks.exists():
-        usage = consolidate(chat, blocks, meta, llm_client, identity, knowledge_context=context,
-                            force_tail=True, compact_chronicle=True, pressure_fits=fits)
+        from ouroboros.memory_nomination_receipts import DialogueMetaUnreadable
+
+        try:
+            usage = consolidate(chat, blocks, meta, llm_client, identity, knowledge_context=context,
+                                force_tail=True, compact_chronicle=True, pressure_fits=fits)
+        except DialogueMetaUnreadable as exc:
+            # A damaged existing cursor is neither empty nor permission to rewrite
+            # memory. Keep the original context available to Main, with a typed
+            # maintenance gap instead of aborting its first round.
+            usage = {"_consolidation_errors": [{"kind": "dialogue_meta_unreadable",
+                                                "message": str(exc)}]}
         if usage is not None:
             usages.append(usage)
         actions.append({"owner": "dialogue_consolidation", "usage": usage})
@@ -1237,7 +1239,9 @@ def _advance_cursor(
 
 
 def _load_meta(path: pathlib.Path) -> Dict[str, Any]:
-    return read_json_dict(path) or {}
+    from ouroboros.memory_nomination_receipts import load_meta
+
+    return load_meta(path)
 
 
 from ouroboros.utils import jsonl_generation_signature as _chat_log_signature
@@ -1452,9 +1456,11 @@ def _write_knowledge_entries(
     outcomes = []
     for entry in entries:
         if not isinstance(entry, dict):
+            outcomes.append({"topic": "", "ok": False, "reason": "malformed_nomination"})
             continue
         topic, content = entry.get("topic"), entry.get("content")
         if not isinstance(content, str) or not content.strip():
+            outcomes.append({"topic": topic, "ok": False, "reason": "empty_nomination"})
             continue
         try:
             topic = sanitize_topic(topic)

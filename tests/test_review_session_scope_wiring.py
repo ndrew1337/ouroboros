@@ -729,7 +729,7 @@ DIFF_MARKER = "UNIQUE_DIFF_BODY_MARKER"
 BRIEF_TASK_ID = "scope-brief-task"
 
 
-def _staged_subject(tmp_path, *, payload_chars=0):
+def _staged_subject(tmp_path, *, payload_chars=0, newline="\n"):
     """A real repository with a staged change of a chosen size."""
     repo = tmp_path / "subject"
     repo.mkdir()
@@ -737,19 +737,22 @@ def _staged_subject(tmp_path, *, payload_chars=0):
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     _git(repo, "config", "commit.gpgsign", "false")
-    (repo / ".gitignore").write_text(".review-drive/\n", encoding="utf-8")
-    (repo / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8")
+    # The `newline` parameter is the subject's EOL: pin Git so a host-level
+    # autocrlf cannot silently turn the CRLF case back into the LF case.
+    _git(repo, "config", "core.autocrlf", "false")
+    (repo / ".gitignore").write_text(".review-drive/\n", encoding="utf-8", newline=newline)
+    (repo / "alpha.py").write_text("def alpha():\n    return 1\n", encoding="utf-8", newline=newline)
     (repo / "beta.py").write_text("import alpha\n\n\ndef beta():\n    return alpha.alpha()\n",
-                                  encoding="utf-8")
+                                  encoding="utf-8", newline=newline)
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     (repo / "alpha.py").write_text(
-        f"def alpha():\n    return 2  # {DIFF_MARKER}\n", encoding="utf-8")
+        f"def alpha():\n    return 2  # {DIFF_MARKER}\n", encoding="utf-8", newline=newline)
     # A touched prompt is owed in full, so the required-source manifest is real.
     (repo / "prompts").mkdir(exist_ok=True)
-    (repo / "prompts" / "SYSTEM.md").write_text("You are the runtime prompt.\n", encoding="utf-8")
+    (repo / "prompts" / "SYSTEM.md").write_text("You are the runtime prompt.\n", encoding="utf-8", newline=newline)
     payload = "".join(f"PAYLOAD_LINE_{index:08d}\n" for index in range(payload_chars // 21))
-    (repo / "gamma.py").write_text(f"gamma = 1\n{payload}", encoding="utf-8")
+    (repo / "gamma.py").write_text(f"gamma = 1\n{payload}", encoding="utf-8", newline=newline)
     _git(repo, "add", "-A")
     return repo
 
@@ -847,7 +850,8 @@ def test_a_staged_diff_that_fits_the_first_send_is_inlined(tmp_path):
 
 
 @pytest.mark.parametrize("delegated", [False, True], ids=["native", "session"])
-def test_a_staged_diff_above_the_first_send_is_paged_as_one_exact_source(tmp_path, delegated):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_a_staged_diff_above_the_first_send_is_paged_as_one_exact_source(tmp_path, delegated, newline):
     """A diff too large for the first send is not refused and not truncated: it
     is stored ONCE, byte-exactly, at an address the row's own reader reaches —
     the task artifact store for a native episode, the review's git-ignored
@@ -860,7 +864,7 @@ def test_a_staged_diff_above_the_first_send_is_paged_as_one_exact_source(tmp_pat
     from ouroboros.tools.scope_required_sources import required_sources_ref, source_text_identity
     from ouroboros.tools.registry import ToolContext
 
-    repo = _staged_subject(tmp_path, payload_chars=900_000)
+    repo = _staged_subject(tmp_path, payload_chars=900_000, newline=newline)
     drive = tmp_path / "data"
     drive.mkdir()
     expected = capture_staged_diff(repo)
@@ -899,7 +903,7 @@ def test_a_staged_diff_above_the_first_send_is_paged_as_one_exact_source(tmp_pat
 
         relative = source["session_relative_path"]
         assert relative in task
-        assert (repo / relative).read_text(encoding="utf-8") == expected
+        assert (repo / relative).read_bytes().decode("utf-8") == expected
         assert diff_row["root"] == "session_root" and diff_row["path"] == relative
         coverage = fold_session_coverage([], rows, resolve_file=session_source_reader(str(repo)))
     else:
@@ -913,7 +917,7 @@ def test_a_staged_diff_above_the_first_send_is_paged_as_one_exact_source(tmp_pat
             _inspection_ctx=ctx, _tool_receipts=[]))
     assert coverage["status"] == "incomplete"
     assert next(row for row in coverage["sources"] if row["path"] == diff_row["path"])["missing_ranges"] == [
-        [0, len(expected)]]
+        [0, source_text_identity(expected.encode())["complete_chars"]]]
 
 
 @pytest.mark.parametrize("delegated", [False, True], ids=["native", "session"])

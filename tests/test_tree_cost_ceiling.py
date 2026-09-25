@@ -579,7 +579,7 @@ class TestGlobalOnlyTreeAccounting:
 
         monkeypatch.setattr(
             usage_accounting, "refresh_root_accounting",
-            lambda drive_root, root_task_id, max_age_sec: {"accounted_usd": 7.5, "root": root_task_id},
+            lambda drive_root, root_task_id, max_age_sec, strict=False: {"accounted_usd": 7.5, "root": root_task_id},
         )
         with usage_accounting.usage_scope(usage_accounting.UsageScope(
             drive_root=tmp_path, task_id="child", root_task_id="root1", global_limit_usd=100.0,

@@ -103,7 +103,16 @@ def test_effective_max_rounds_sources(tmp_path, monkeypatch):
     assert rcb._effective_max_rounds(sp) == {"value": 77, "source": "env"}
 
     monkeypatch.delenv("OUROBOROS_MAX_ROUNDS", raising=False)
-    assert rcb._effective_max_rounds(tmp_path / "missing.json") == {"value": 200, "source": "default"}
+    # A document without the key keeps the runtime's legacy finite default ...
+    assert rcb._effective_max_rounds(sp) == {"value": 200, "source": "legacy_document_default"}
+    # ... while no document at all is the runtime's shipped "unlimited": never a number.
+    assert rcb._effective_max_rounds(tmp_path / "missing.json") == {
+        "value": None, "source": "default", "unbounded": True}
+    sp.write_text(json.dumps({"OUROBOROS_MAX_ROUNDS": "unlimited"}), encoding="utf-8")
+    assert rcb._effective_max_rounds(sp) == {
+        "value": None, "source": "settings", "unbounded": True, "raw": "unlimited"}
+    sp.write_text("{not json", encoding="utf-8")
+    assert rcb._effective_max_rounds(sp) == {"value": None, "source": "settings_unreadable"}
 
 
 def test_budget_counters_from_child_drive_tools_jsonl(tmp_path):
@@ -1983,6 +1992,12 @@ def test_a_step_claim_the_server_cannot_honor_is_refused_before_the_vm_boots():
         rcb._refuse_uncapped_step_claim(tiny)
     # An unenforced run is never refused (it simply is not comparable).
     rcb._refuse_uncapped_step_claim(rcb._step_budget(_ns(), {"value": 999, "source": "default"}))
+    # An unlimited or unprovable server cap is not a cap of zero: a declared budget
+    # over it is refused instead of certified (the former `int(value or 0)` passed it).
+    for server in ({"value": None, "source": "default", "unbounded": True},
+                   {"value": None, "source": "settings_unreadable"}):
+        with pytest.raises(SystemExit, match="not a finite proven bound"):
+            rcb._refuse_uncapped_step_claim(rcb._step_budget(_ns(max_steps=100), server))
 
 
 def test_audit_reads_policy_turns_not_physical_calls():

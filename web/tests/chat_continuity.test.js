@@ -165,9 +165,17 @@ test('durable detail terminality is narrow and outcome labels stay unchanged', (
             assert.equal(isTerminalTaskDetail(record), false, `${status}/${post_task_synthesis}`);
             assert.equal(taskDoneIsTerminal(record), false);
             assert.equal(summarizeChatLiveEvent(record).terminal, false);
-            const headline = status === 'failed' ? 'Failed' : 'Working';
-            assert.equal(summarizeChatLiveEvent(record).headline, headline);
-            assert.equal(summarizeLogEvent(record).headline, headline);
+            // #1110: an unfinished frame paints Working, and the KNOWN outcome
+            // rides beside it as its own fact — the card states it in the chip
+            // with `Finalizing…` next to it, instead of the whole frame having
+            // to claim `Failed` before the run is terminal.
+            assert.equal(summarizeChatLiveEvent(record).headline, 'Working');
+            assert.equal(summarizeChatLiveEvent(record).observedOutcome,
+                status === 'failed' ? 'error' : 'done');
+            // Logs is an event ledger, not a card chip: its row keeps the
+            // outcome word this frame carries.
+            assert.equal(summarizeLogEvent(record).headline,
+                status === 'failed' ? 'Failed' : 'Working');
         }
     }
     assert.equal(isTerminalTaskDetail({

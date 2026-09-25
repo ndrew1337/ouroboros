@@ -3,7 +3,8 @@
 Owns the streamed `workspace.patch` and `workspace_patch.json` pair — patch
 baseline resolution (including the unborn-HEAD empty-tree case and the acting
 subagent `base_sha` binding), the bounded git process helpers the capture runs
-on, the declared-scratch and untracked eligibility filtering, the moved-HEAD
+on, the declared-scratch and untracked eligibility filtering (git's binary
+verdict for a whole inventory in one process), the moved-HEAD
 tripwire for a private self worktree, and the empty manifest a failed
 finalization falls back to. The static eligibility rules live in
 ``workspace_patch_rules``; the task-drive, child-result and artifact
@@ -16,6 +17,7 @@ import json
 import os
 import pathlib
 import re
+import stat
 import subprocess
 import tempfile
 import threading
@@ -136,6 +138,10 @@ def write_workspace_patch_artifacts(
     except Exception:
         scratch_sha_by_rel = {}
         scratch_sha_by_abs = {}
+    # git's binary verdict for the whole inventory in one process (two when empty
+    # files need their attribute verdict; #1241); the loop below keeps its per-file
+    # order and reads the verdict instead of spawning ``git diff --numstat`` per file.
+    binary_verdicts = untracked_binary_verdicts(root, binary_verdict_candidates(root, untracked), warnings=diagnostics)
     for rel in untracked:
         _want_sha = scratch_sha_by_rel.get(rel) or scratch_sha_by_abs.get(os.path.normcase(str((root / rel).resolve(strict=False))))
         if _want_sha:
@@ -154,7 +160,8 @@ def write_workspace_patch_artifacts(
         if reason:
             excluded.append({"path": rel, "reason": reason})
             continue
-        blob_reason = _untracked_blob_exclude_reason(root, rel, file_outputs=file_output_paths, warnings=diagnostics)
+        blob_reason = _untracked_blob_exclude_reason(
+            root, rel, file_outputs=file_output_paths, warnings=diagnostics, binary_verdicts=binary_verdicts)
         if blob_reason:
             excluded.append({"path": rel, "reason": blob_reason})
             continue
@@ -657,13 +664,18 @@ def pem_capture_refusal(root: pathlib.Path, rel: str, *, warnings=None) -> str:
     return reason
 
 
-def _untracked_blob_exclude_reason(root: pathlib.Path, rel: str, *, file_outputs: Optional[List[str]] = None, warnings=None) -> str:
+def _untracked_blob_exclude_reason(root: pathlib.Path, rel: str, *, file_outputs: Optional[List[str]] = None,
+                                   warnings=None, binary_verdicts: Optional[Dict[str, bool]] = None) -> str:
     """Reason to drop an untracked file from the workspace patch when it is a
     build/runtime BINARY, exceeds the per-file size cap, or carries a PEM
     private-key header in its head bytes. Keeps real-usage patches
     source-shaped without losing data (the file stays in the workspace
     and is recorded under ``untracked_excluded``). On any git/stat failure the
-    file is INCLUDED (conservative — the main binary diff still applies)."""
+    file is INCLUDED (conservative — the main binary diff still applies).
+
+    ``binary_verdicts`` is one :func:`untracked_binary_verdicts` batch over the whole
+    inventory; ``None`` keeps git's per-file ``--numstat`` verdict (one subprocess per
+    file) for a caller that did not batch."""
 
     try:
         size = (root / rel).lstat().st_size
@@ -675,21 +687,127 @@ def _untracked_blob_exclude_reason(root: pathlib.Path, rel: str, *, file_outputs
         if file_outputs is not None:
             file_outputs.append(rel)
         return f"untracked file exceeds size cap ({size}B > {_PATCH_MAX_UNTRACKED_FILE_BYTES}B)"
-    numstat = _git_stdout(
-        ["git", "diff", "--no-index", "--numstat", "--no-ext-diff", "--no-color", "--", os.devnull, rel],
-        root,
-        allow_rc={0, 1},
-        errors=None,
-    )
-    first = numstat.strip().splitlines()[0] if numstat.strip() else ""
-    if first.startswith("-\t-"):
+    if binary_verdicts is None:
+        numstat = _git_stdout(
+            ["git", "diff", "--no-index", "--numstat", "--no-ext-diff", "--no-color", "--", os.devnull, rel],
+            root,
+            allow_rc={0, 1},
+            errors=None,
+        )
+        first = numstat.strip().splitlines()[0] if numstat.strip() else ""
+        binary = first.startswith("-\t-")
+    else:
+        binary = bool(binary_verdicts.get(rel, False))
+    if binary:
         if file_outputs is not None:
             file_outputs.append(rel)
         return "binary file"
     return ""
 
 
-def untracked_capture_veto_reason(root: pathlib.Path, rel: str, *, file_outputs: Optional[List[str]] = None, warnings=None) -> str:
+def binary_verdict_candidates(root: pathlib.Path, rels: Sequence[str]) -> List[str]:
+    """The untracked paths that still need git's binary verdict.
+
+    The per-file predicate decides the dotenv policy, the name rules, the PEM head
+    and the size cap BEFORE it ever asks git; the batch keeps that order, so a
+    vetoed or oversized file is never handed to git — its clean filters and
+    encodings run only over files that may become Git inputs, exactly as before."""
+    from ouroboros.config import get_runtime_mode
+    from ouroboros.runtime_mode_policy import mode_has_unrestricted_agency
+
+    unrestricted = mode_has_unrestricted_agency(get_runtime_mode())
+    out: List[str] = []
+    for rel in rels:
+        if not rel or _sensitive_untracked_reason(rel) or _patch_exclude_reason(rel):
+            continue
+        try:
+            info = os.lstat(root / rel)
+        except OSError:
+            continue
+        if not stat.S_ISREG(info.st_mode):
+            continue
+        if not unrestricted and pem_private_key_reason(root, rel):  # PEM before the size cap, as the predicate orders them
+            continue
+        if info.st_size > _PATCH_MAX_UNTRACKED_FILE_BYTES:
+            continue
+        out.append(rel)
+    return out
+
+
+def untracked_binary_verdicts(root: pathlib.Path, rels: Sequence[str], *, warnings=None) -> Optional[Dict[str, bool]]:
+    """git's own binary verdict for every path in ``rels`` from ONE ``git diff``.
+
+    Every REGULAR file is staged as the empty blob into a scratch index
+    (``update-index --index-info`` touches no file and writes no content object), and
+    one index-versus-worktree ``git diff --numstat -z`` then runs exactly the machinery
+    a per-file ``git diff --no-index --numstat`` ran — attributes, diff drivers, clean
+    filters and working-tree encodings included — so the answer is git's, not a
+    re-implementation (parity probed on git 2.53 for 19 path classes). ``-\\t-`` is
+    binary; a text file and a file that vanished meanwhile (``0\\t0``) are text, exactly
+    as the per-file verdict reads them. A path the diff OMITS is identical to the staged
+    blob — an empty file — which git still classifies by attribute (an empty ``*.dat``
+    under ``-diff`` is binary): those are asked once more, staged as a one-byte blob, so
+    the empty-file set costs a second process, never one per file. Symlinks and other
+    non-regular paths are text (git diffs the link text). One inventory of tens of
+    thousands of files therefore costs one or two processes (#1241). ``None`` — the
+    "did not batch" signal — when git cannot answer, after an advisory warning: the
+    callers keep the per-file verdict (the same answer, one process per file), never a
+    new refusal."""
+    regular: List[str] = []
+    for rel in rels:
+        try:
+            if rel and stat.S_ISREG(os.lstat(root / rel).st_mode):
+                regular.append(rel)
+        except OSError:
+            continue
+    if not regular:
+        return {}
+    env = dict(os.environ)
+    scratch = ""
+
+    def _git(*args: str, data: bytes = b"") -> bytes:
+        return subprocess.run(["git", *args], cwd=str(root), capture_output=True, input=data,
+                              env=env, timeout=300, check=True).stdout
+
+    def _diff_against(staged: bytes, paths: List[str]) -> Dict[str, bool]:
+        """One index-versus-worktree diff with every path staged as ``staged``: the
+        verdict of each path that produced a row (absent = identical to ``staged``)."""
+        blob = _git("hash-object", "-w", "--stdin", data=staged).strip()
+        _git("read-tree", "--empty")
+        _git("update-index", "-z", "--index-info",
+             data=b"".join(b"100644 " + blob + b"\t" + os.fsencode(rel) + b"\0" for rel in paths))
+        seen: Dict[str, bool] = {}
+        for row in _git("diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-color").split(b"\0"):
+            added, sep, rest = row.partition(b"\t")
+            deleted, sep2, path = rest.partition(b"\t")
+            if sep and sep2:
+                seen[os.fsdecode(path)] = added == b"-" and deleted == b"-"
+        return seen
+
+    try:
+        fd, scratch = tempfile.mkstemp(prefix="ouroboros-binary-verdict-", suffix=".index")
+        os.close(fd)
+        env["GIT_INDEX_FILE"] = scratch
+        verdicts = _diff_against(b"", regular)
+        omitted = [rel for rel in regular if rel not in verdicts]
+        if omitted:  # empty files: a second batch, staged as a one-byte blob
+            verdicts.update(_diff_against(b"\n", omitted))
+    except Exception as exc:
+        if warnings is not None:
+            warnings.append({"reason": "binary_verdict_batch_unavailable", "advisory": True,
+                             "detail": f"{type(exc).__name__}: {exc}"[:300]})
+        return None
+    finally:
+        if scratch:
+            try:
+                os.unlink(scratch)
+            except OSError:
+                pass
+    return {rel: verdicts.get(rel, False) for rel in regular}
+
+
+def untracked_capture_veto_reason(root: pathlib.Path, rel: str, *, file_outputs: Optional[List[str]] = None,
+                                  warnings=None, binary_verdicts: Optional[Dict[str, bool]] = None) -> str:
     """Classify an untracked file for Git, file-reference transfer, or exclusion.
 
     The delegated-run baseline snapshot
@@ -703,6 +821,8 @@ def untracked_capture_veto_reason(root: pathlib.Path, rel: str, *, file_outputs:
     Returns the human-readable patch exclusion reason, or "" for a Git input.
     ``file_outputs`` receives eligible binary/large files which use file
     artifacts rather than Git blobs; credential/junk exclusions never enter it.
+    ``binary_verdicts`` comes from one :func:`untracked_binary_verdicts` batch over
+    the whole inventory (``None`` = per-file git verdict, see the blob check).
     """
     reason = _sensitive_untracked_reason(rel)
     if reason:
@@ -710,7 +830,8 @@ def untracked_capture_veto_reason(root: pathlib.Path, rel: str, *, file_outputs:
     reason = _patch_exclude_reason(rel)
     if reason:
         return reason
-    return _untracked_blob_exclude_reason(root, rel, file_outputs=file_outputs, warnings=warnings)
+    return _untracked_blob_exclude_reason(root, rel, file_outputs=file_outputs, warnings=warnings,
+                                          binary_verdicts=binary_verdicts)
 
 
 def _preflight_head_from_task(task: Dict[str, Any]) -> str:

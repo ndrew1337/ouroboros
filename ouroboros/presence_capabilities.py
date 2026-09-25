@@ -906,7 +906,7 @@ def resolve_presence_profile_state(
     profile: PresenceProfile,
     state: PresenceState,
     *,
-    global_max_rounds: int,
+    global_max_rounds: int | None,  # None = no task round limit; the inline cap stays finite
 ) -> PresenceProfileResolution:
     """Resolve structural mappings without claiming live target readiness."""
     if not isinstance(profile, PresenceProfile):

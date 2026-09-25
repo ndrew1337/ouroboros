@@ -162,5 +162,6 @@ def test_unread_correction_failure_remains_visible_after_dialogue_publication(tm
     assert stored["knowledge_writes"][0]["reason"] == "revision_required"
     state = json.loads(meta.read_text(encoding="utf-8"))
     assert state["last_consolidated_offset"] == 100
-    assert state["last_unpublished_nominations"]["failed"] == 1
+    assert len(state["pending_knowledge_nominations"]) == 1
+    assert state["pending_knowledge_nominations"][0]["reason"] == "revision_required"
     assert k.read_knowledge_note(address).raw == original.raw

@@ -658,6 +658,13 @@ def window_payload(
         "max_seconds": max_seconds,
         "waiting_on_user": waiting_on_user,
     }
+    if waiting_on_user:
+        # The re-wait of a question the model already saw rides the same flat route
+        # fact as the immediate waiting payload (whose note carries the cost clause;
+        # this payload is measured into a budget its own note already reserves).
+        from ouroboros.delegate_interactions import SAME_SESSION_CONTINUATION
+
+        payload["continuation"] = SAME_SESSION_CONTINUATION["continuation"]
     if not seen.advances:
         payload["reason"] = "non_terminal_and_no_new_session_events_within_wait_window"
         # A run PAUSED on its own question is not "stuck" (owner 7=A / F13): the

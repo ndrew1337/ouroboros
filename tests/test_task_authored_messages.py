@@ -42,10 +42,20 @@ def _pooled_root_ctx(tmp_path, *, task_id="swarm-root", chat_id=1, metadata=None
 
 
 def _owner_turn_ctx(tmp_path, *, client_message_id="cm-1"):
+    """A direct turn the owner door stamped (``origin_message_ref``): the one shape
+    that speaks as an owner turn; a client id alone never does."""
     return types.SimpleNamespace(
         pending_events=[], event_queue=None, current_chat_id=1, drive_root=tmp_path,
         task_id="turn-1", is_direct_chat=True, last_owner_delivery=None,
-        task_metadata={"client_message_id": client_message_id, "origin_message_text": _OWNER_ORIGIN},
+        task_metadata={"client_message_id": client_message_id, "origin_message_text": _OWNER_ORIGIN,
+                       "origin_message_ref": {"chat_id": 1, "client_message_id": client_message_id}},
+    )
+
+
+def _owner_started_receiver():
+    """The receiving root was started by the owner: its first text keeps the owner label."""
+    return types.SimpleNamespace(
+        task_attempt=1, task_metadata={"origin_message_ref": {"chat_id": 42, "client_message_id": "t-target-origin"}},
     )
 
 
@@ -121,9 +131,13 @@ def _queue_root(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("drained_owner", [None, "owner-followup", ""], ids=["standalone", "owner-id", "legacy-no-id"])
 @pytest.mark.parametrize("project_sender", [False, True])
+@pytest.mark.parametrize("root_shape", ["headless", "promoted"])
 def test_a_pooled_root_steer_is_written_as_its_own_words_and_supersedes_nothing(
-    tmp_path, target_lane, drained_owner, project_sender,
+    tmp_path, target_lane, drained_owner, project_sender, root_shape,
 ):
+    """``promoted`` is the common geometry: the root inherited the owner door's stamp
+    and client id from the message that promoted it (ancestry, by value) but is not
+    a direct turn, so it still speaks as a task; ``headless`` carries no stamp at all."""
     import supervisor.queue as queue_mod
     from ouroboros.loop_messages import _initialize_owner_directives, owner_source_sha256
     from ouroboros.loop_round_limits import _drain_incoming_messages
@@ -140,7 +154,11 @@ def test_a_pooled_root_steer_is_written_as_its_own_words_and_supersedes_nothing(
         acks=acks, notices=notices,
     )
     chat_id = create_project(tmp_path, "source", name="Source")["chat_id"] if project_sender else 1
-    ctx = _wire(_pooled_root_ctx(tmp_path, chat_id=chat_id), supervisor, emitted)
+    inherited = {
+        "client_message_id": "cm-origin",
+        "origin_message_ref": {"chat_id": 1, "client_message_id": "cm-origin", "ts": "t", "text_sha256": "x" * 64},
+    } if root_shape == "promoted" else {}
+    ctx = _wire(_pooled_root_ctx(tmp_path, chat_id=chat_id, metadata=inherited), supervisor, emitted)
     if drained_owner is not None:
         _drain_owner_followup(tmp_path, ctx, client_message_id=drained_owner)
 
@@ -178,7 +196,7 @@ def test_a_pooled_root_steer_is_written_as_its_own_words_and_supersedes_nothing(
     # The RECEIVER drains it as context: rendered under its own prefix, the owner
     # corpus untouched (so owner_source_sha256 cannot supersede a reviewed answer),
     # no owner delivery stamped, the row acknowledged, the injected event typed.
-    receiver = types.SimpleNamespace(task_attempt=1)
+    receiver = _owner_started_receiver()
     messages = [{"role": "user", "content": "Initial requirement verbatim"}]
     _initialize_owner_directives(receiver, messages)
     corpus_before = owner_source_sha256(receiver)
@@ -199,8 +217,8 @@ def test_a_pooled_root_steer_is_written_as_its_own_words_and_supersedes_nothing(
 
 # --- (b) an owner turn keeps today's exact path -------------------------------
 
-@pytest.mark.parametrize("direct", [False, True], ids=["stamped", "direct"])
-def test_an_owner_turn_from_main_still_steers_with_owner_text_and_bumps_the_generation(tmp_path, direct):
+@pytest.mark.parametrize("stamp", ["logged-ref", "suppressed-log"])
+def test_an_owner_turn_from_main_still_steers_with_owner_text_and_bumps_the_generation(tmp_path, stamp):
     import supervisor.queue as queue_mod
     from ouroboros.loop_messages import _initialize_owner_directives, owner_source_sha256
     from ouroboros.loop_round_limits import _drain_incoming_messages
@@ -215,7 +233,9 @@ def test_an_owner_turn_from_main_still_steers_with_owner_text_and_bumps_the_gene
         acks=acks, notices=notices,
     )
     ctx = _wire(_owner_turn_ctx(tmp_path), supervisor, emitted)
-    ctx.is_direct_chat = direct
+    if stamp == "suppressed-log":  # a never-logged owner message: the door's designed absence of a ref
+        del ctx.task_metadata["origin_message_ref"]
+        ctx.task_metadata["origin_suppressed"] = True
 
     out = _steer_task(ctx, "t-target", "model paraphrase")
 
@@ -230,7 +250,7 @@ def test_an_owner_turn_from_main_still_steers_with_owner_text_and_bumps_the_gene
     assert notices == []
     assert _events(tmp_path, "task_message_routed") == []
 
-    receiver = types.SimpleNamespace(task_attempt=1)
+    receiver = _owner_started_receiver()
     messages = [{"role": "user", "content": "Initial requirement verbatim"}]
     _initialize_owner_directives(receiver, messages)
     corpus_before = owner_source_sha256(receiver)
@@ -386,8 +406,8 @@ def test_a_project_root_messages_another_projects_root_twice_in_order(tmp_path):
     assert notices == []
 
 
-@pytest.mark.parametrize("direct", [False, True], ids=["stamped", "direct"])
-def test_an_owner_turn_in_a_project_room_still_gets_the_room_veto(tmp_path, direct):
+@pytest.mark.parametrize("stamp", ["logged-ref", "suppressed-log"])
+def test_an_owner_turn_in_a_project_room_still_gets_the_room_veto(tmp_path, stamp):
     """Today's veto for owner turns, computed from the registry lane: a Project
     room turn cannot steer another room's root; Main can (it sees the manifest)."""
     from ouroboros.owner_mailbox import drain_owner_entries
@@ -402,7 +422,9 @@ def test_an_owner_turn_in_a_project_room_still_gets_the_room_veto(tmp_path, dire
         running={"t-b": {"task": {"id": "t-b", "chat_id": room_b["chat_id"], "project_id": "proj-b"}}},
     )
     ctx = _wire(_owner_turn_ctx(tmp_path), supervisor, emitted)
-    ctx.is_direct_chat = direct
+    if stamp == "suppressed-log":
+        del ctx.task_metadata["origin_message_ref"]
+        ctx.task_metadata["origin_suppressed"] = True
     ctx.current_chat_id = room_a["chat_id"]
 
     out = _steer_task(ctx, "t-b", "cross-room owner words")

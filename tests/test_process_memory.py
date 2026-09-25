@@ -387,8 +387,8 @@ class TestHelperFunctions:
         assert result is None
         assert captured["cost_usd"] is None
 
-    def test_generate_reflection_uses_nontrivial_prompt_for_clean_trace(self):
-        """generate_reflection picks the non-error prompt for a clean, high-round trace."""
+    def test_generate_reflection_frames_a_clean_trace_in_the_one_prompt(self):
+        """A clean, high-round trace is framed by the one prompt: no asserted non-triviality, no interrogation."""
         from ouroboros.reflection import generate_reflection
 
         captured = {}
@@ -413,15 +413,16 @@ class TestHelperFunctions:
         )
 
         prompt = captured["prompt"]
-        # Non-error prompt markers must be present
-        assert "high round count or high cost" in prompt, "Expected nontrivial prompt framing"
-        assert "Where was the friction?" in prompt, "Expected friction question"
-        # Error-only prompt text must NOT appear
-        assert "The task had errors" not in prompt, "Error-only prompt must not be used for clean trace"
+        # One open frame for every run: no asserted "non-trivial" premise, no interrogation,
+        # and no error-only wording for a clean trace — the facts carry the difference.
+        assert "No lesson and no change are valid conclusions." in prompt
+        assert "high round count or high cost" not in prompt and "What was the goal?" not in prompt
+        assert "The task had errors" not in prompt, "a clean trace carries no error framing"
+        assert "(no error details captured)" in prompt
         assert entry["reflection"] == "Friction was in repeated advisory runs."
 
-    def test_generate_reflection_uses_error_prompt_for_error_trace(self):
-        """generate_reflection picks the error prompt when trace contains blocking markers."""
+    def test_generate_reflection_frames_an_error_trace_in_the_one_prompt(self):
+        """A trace with blocking markers is framed by the same one prompt, root cause first."""
         from ouroboros.reflection import generate_reflection
 
         captured = {}
@@ -446,7 +447,10 @@ class TestHelperFunctions:
             usage_dict={"rounds": 5, "cost": 1.0},
         )
         prompt = captured["prompt"]
-        assert "The task had errors or blocking events" in prompt
+        # The same frame as a clean run; the blocked call is a fact under Error details.
+        assert "No lesson and no change are valid conclusions." in prompt
+        assert "REVIEW_BLOCKED: tests_affected" in prompt and "(no error details captured)" not in prompt
+        assert "The task had errors or blocking events" not in prompt
         assert "high round count or high cost" not in prompt
 
     def test_generate_reflection_includes_review_evidence(self):
@@ -895,8 +899,9 @@ def test_a_failed_child_alone_triggers_the_roots_reflection(tmp_path, monkeypatc
     assert entry is not None, "a failed child is the root's own error evidence"
     assert entry["child_failure_classes"] == ["failed"]
     assert "reflection" in calls[0]
-    assert "The task had errors or blocking events." in prompts[0]
+    # The child's failure is the root's own error fact; the frame does not change.
     assert "Child failure classes: failed" in prompts[0]
+    assert "No lesson and no change are valid conclusions." in prompts[0]
     assert "completed without hard errors" not in prompts[0]
     # The register was admitted on that child class, on the canonical drive.
     assert "pattern_register_update" in calls, "the register was admitted on the child class"
@@ -907,7 +912,7 @@ def test_a_failed_child_alone_triggers_the_roots_reflection(tmp_path, monkeypatc
 
     entry = _run("root-long-cancel", "cancelled", {"execution": {"status": "cancelled"}}, rounds=20)
     assert entry is not None and entry["child_failure_classes"] == []
-    assert "completed without hard errors" in prompts[0]
+    assert "Child failure classes" not in prompts[0] and "(no error details captured)" in prompts[0]
     assert "pattern_register_update" not in calls
 
 

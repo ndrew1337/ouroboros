@@ -384,6 +384,18 @@ def compact_review_projection(review_runs: Any) -> Dict[str, Any]:
     return {"panels": panels}
 
 
+def _applied_source_unchanged(run: Dict[str, Any], raw: bytes) -> bool:
+    """Does this panel's stored applied source already hold exactly ``raw``?
+
+    The write-once source handle names its bytes by digest, so equality here is
+    proof that nothing in the panel's record moved since its last publication.
+    A panel whose stored source is unavailable cannot prove that and is
+    published again (one more attempt at the store, never a new identity).
+    """
+    ref = run.get("applied_source_ref")
+    return isinstance(ref, dict) and str(ref.get("sha256") or "") == hashlib.sha256(raw).hexdigest()
+
+
 def publish_acceptance_checkpoint(
     ctx: Any, llm_trace: Dict[str, Any], *, task_id: str = "",
     drive_root: Any = None, chat_id: Any = None,
@@ -408,19 +420,44 @@ def publish_acceptance_checkpoint(
     meta = getattr(ctx, "task_metadata", {})
     meta = meta if isinstance(meta, dict) else {}
     root = meta.get("budget_drive_root") or getattr(ctx, "budget_drive_root", None) or drive_root or getattr(ctx, "drive_root", None)
-    if not runs or not task_id or not root:
+    # A LOCAL preparation failure produces no panel at all, and that absence is
+    # exactly what the owner could not see (#1224). The incident rides the same
+    # projection the panels do, so live delivery, history and a reconnect read
+    # one fact with one identity.
+    from ouroboros.acceptance_preparation import TASK_ONLY_ORIGINS, current_incident, incident_projection
+
+    # The incident's diagnostic detail is host text, so it is redacted exactly
+    # like every other published section before it leaves for an owner surface.
+    incident = _sub().redact_projection(incident_projection(current_incident(llm_trace))).value
+    if (not runs and not incident) or not task_id or not root:
         return
     revision = int(llm_trace.get("_acceptance_publication_revision") or 0) + 1
     llm_trace["_acceptance_publication_revision"] = revision
     snapshots = copy.deepcopy(llm_trace.get("review_runs") or [])
+    # A task-only decision (the host's own local preparation or processing
+    # failure) is no panel's applied reviewer decision: it rewrites no prior
+    # panel's custody and grants a never-published LIVE producer none. A panel
+    # whose OWN record moved since its last publication — a pending producer
+    # that settled, a late-settlement note — is a genuine producer update and is
+    # published under the next revision, and so is a settled (or custody-lost)
+    # record that was never published at all: a missing publication stamp alone
+    # never suppresses a real verdict. An unchanged record stays bound to the
+    # revision and stored source it already has (its digest proves it unchanged).
+    from ouroboros.loop_acceptance_review import acceptance_run_pending
+
+    task_only = (llm_trace.get("acceptance_decision") or {}).get("origin") in TASK_ONLY_ORIGINS
     for index, run in enumerate(snapshots):
         if not isinstance(run, dict) or run.get("authority") != "host_root" or not isinstance(run.get("request"), dict) or run["request"].get("surface") != "task_acceptance":
+            continue
+        if task_only and "publication_revision" not in run and acceptance_run_pending(run):
             continue
         run.setdefault("panel_id", f"panel_{index + 1}")
         run.setdefault("panel_index", index)
         source = {key: value for key, value in run.items()
                   if key not in {"applied_source_ref", "applied_source_status", "publication_revision"}}
         raw = json.dumps(_sub().redact_projection(source).value, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        if task_only and _applied_source_unchanged(run, raw):
+            continue
         run.pop("applied_source_ref", None)
         run["applied_source_status"] = "unavailable"
         try:
@@ -442,6 +479,15 @@ def publish_acceptance_checkpoint(
             if "applied_source_ref" not in run:
                 current.pop("applied_source_ref", None)
     projection = compact_review_projection(snapshots)
+    # The snapshot carries its own ordering stamp, so the read-side merge can
+    # order the incident's presence and resolution — including a snapshot with
+    # no panel at all — exactly as it orders each panel's publications.
+    projection["publication_revision"] = revision
+    attempt = getattr(ctx, "task_attempt", None)
+    if type(attempt) is int:
+        projection["task_attempt"] = attempt
+    if incident:
+        projection["acceptance_incident"] = incident
     try:
         result = write_task_result(
             root, task_id, "running", review_projection=projection,
@@ -468,6 +514,8 @@ def acceptance_decision_projection(acceptance_decision: Dict[str, Any], subject_
     }
     if acceptance_decision.get("enforcement"):
         out["enforcement"] = str(acceptance_decision["enforcement"])
+    if acceptance_decision.get("origin"):
+        out["origin"] = str(acceptance_decision["origin"])
     if acceptance_decision.get("author_action"):
         out["author_action"] = acceptance_decision["author_action"]
     if isinstance(acceptance_decision.get("review_capacity"), dict):
@@ -475,6 +523,11 @@ def acceptance_decision_projection(acceptance_decision: Dict[str, Any], subject_
     if acceptance_decision.get("reason") in {"author_finish", "author_stop"} or acceptance_decision.get("author_action") == "stop":
         from ouroboros.review_records import validate_author_disposition
 
+        from ouroboros.acceptance_preparation import LOCAL_PREPARATION_ORIGIN
+
+        if acceptance_decision.get("origin") == LOCAL_PREPARATION_ORIGIN:
+            incident = acceptance_decision.get("acceptance_incident") or {}
+            subject_hash = f"{incident.get('incident_id')}:attempt-{incident.get('attempts')}"
         record = validate_author_disposition(acceptance_decision.get("author_disposition"), subject_hash=subject_hash)
         if isinstance(record, dict):
             out["author_disposition"] = dict(record)
@@ -487,4 +540,86 @@ def acceptance_decision_projection(acceptance_decision: Dict[str, Any], subject_
         out["dissent_noted"] = True
     if acceptance_decision.get("open_obligations"):
         out["open_obligations"] = [str(x) for x in acceptance_decision.get("open_obligations") or []][:10]
+    # The host's own local acceptance-preparation failure: stable incident
+    # identity and the REAL host attempt count, so the card can state the fact
+    # without a reviewer ever having run (#1224).
+    if isinstance(acceptance_decision.get("acceptance_incident"), dict) and acceptance_decision["acceptance_incident"]:
+        from ouroboros.observability import redact_projection
+
+        out["acceptance_incident"] = redact_projection(
+            dict(acceptance_decision["acceptance_incident"])).value
     return out
+
+
+def _stamp_order(item: Any) -> tuple:
+    """``(task_attempt, publication_revision)`` of one stamped row or snapshot;
+    ``(0, 0)`` for one that carries no publication stamp."""
+    if not isinstance(item, dict) or type(item.get("publication_revision")) is not int:
+        return (0, 0)
+    return (item.get("task_attempt") if type(item.get("task_attempt")) is int else 0, item["publication_revision"])
+
+
+def _publication_order(projection: Dict[str, Any]) -> tuple:
+    """The newest host publication a snapshot carries: its own stamp (every
+    checkpoint carries one, a panel-less incident snapshot included) or, for an
+    older snapshot without one, the newest of its panels. ``(0, 0)`` is a
+    legacy snapshot with no ordering at all."""
+    rows = projection.get("panels") if isinstance(projection.get("panels"), list) else []
+    return max([_stamp_order(projection), *(_stamp_order(row) for row in rows)])
+
+
+def merge_review_projection(previous: Any, incoming: Any) -> Any:
+    """Keep newer host publication facts when a delayed task snapshot arrives.
+
+    This is read-side custody, never review authority. Attempt identity comes
+    from the task; publication_revision only orders snapshots of the SAME
+    panel. Supersession cannot be reversed by a stale or replayed projection.
+    The local preparation incident follows the same ordering: a delayed
+    snapshot or replica can neither erase a newer warning nor resurrect an
+    incident that a newer publication resolved, whichever order the two arrive in.
+    """
+    if not isinstance(previous, dict) or not isinstance(incoming, dict):
+        return incoming
+    old_rows, new_rows = previous.get("panels"), incoming.get("panels")
+    if not isinstance(old_rows, list) or not isinstance(new_rows, list):
+        return incoming
+    previous_order, incoming_order = _publication_order(previous), _publication_order(incoming)
+    if previous_order == incoming_order == (0, 0):
+        return incoming  # unchanged legacy merge semantics
+    def rank(value: Dict[str, Any]) -> tuple:
+        return (bool(value.get("superseded")),
+                value.get("publication_revision") if type(value.get("publication_revision")) is int else 0)
+
+    merged: Dict[tuple, Dict[str, Any]] = {}
+    for index, row in enumerate(old_rows + new_rows):
+        if not isinstance(row, dict):
+            continue
+        key = (str(row.get("surface") or ""), str(row.get("task_attempt") or ""),
+               str(row.get("panel_id") or f"legacy:{index}"), row.get("panel_index"))
+        prior = merged.get(key)
+        if prior is None or rank(row) > rank(prior):
+            merged[key] = copy.deepcopy(row)
+    rows = list(merged.values())
+    rows.sort(key=lambda row: (
+        row.get("task_attempt") if type(row.get("task_attempt")) is int else 0,
+        row.get("panel_index") if type(row.get("panel_index")) is int else 0,
+    ))
+    merged = {**previous, **incoming, "panels": rows}
+    # The local preparation incident is a fact of the NEWEST publication, not
+    # read-side custody: that snapshot's presence or absence of it stands, and
+    # a newer snapshot that carries none says the trace holds none.
+    newest = previous if incoming_order < previous_order else incoming
+    if "acceptance_incident" in newest:
+        merged["acceptance_incident"] = copy.deepcopy(newest["acceptance_incident"])
+    else:
+        merged.pop("acceptance_incident", None)
+    # The merged snapshot keeps the newer of the two stamps it was built from,
+    # and only while that stamp still names its newest publication: when a
+    # panel is newer than both stamps, the next checkpoint stamps again.
+    stamped = max((previous, incoming), key=_stamp_order)
+    for key in ("publication_revision", "task_attempt"):
+        if _stamp_order(stamped) >= max(previous_order, incoming_order) and type(stamped.get(key)) is int:
+            merged[key] = stamped[key]
+        else:
+            merged.pop(key, None)
+    return merged

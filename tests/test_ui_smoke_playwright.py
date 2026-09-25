@@ -13,17 +13,29 @@ from collections import deque
 
 import pytest
 
+from tests.candidate_checkout import (
+    assert_served_candidate as _assert_served_candidate,
+    candidate_checkout, require_candidate_interpreter, verify_checkout,
+)
+from ouroboros.test_environment import isolated_environment
 from tests.fixtures_mock_llm import MockLLMServer
-from tests.ui_chat_viewport_smoke import _CAPTURE_TEST_SOCKET, _emit_ws_frame
+from tests.ui_chat_viewport_smoke import (
+    _CAPTURE_TEST_SOCKET, _OBSERVE_STATE_READS, _emit_ws_frame, _wait_socket_open_quiescent,
+)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(__file__))
 
 
-def _fixture_python() -> str:
+def _fixture_interpreter() -> str:
     """Use the real Windows interpreter, bypassing the venv PID redirector."""
     if os.name == "nt":
         return str(getattr(sys, "_base_executable", sys.executable))
     return sys.executable
+
+
+def _fixture_python() -> str:
+    """Launch target; Settings may wrap it."""
+    return _fixture_interpreter()
 
 
 def _open_review_checkpoint(card, *, open_card=True):
@@ -239,44 +251,37 @@ def _run_docker_ui_assertions(url: str) -> None:
 def direct_server_with_data(tmp_path):
     if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
         pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1 to run browser UI smoke")
-    with MockLLMServer() as llm:
+    checkout = tmp_path / "repo"
+    # Static/VERSION sentinels prove each boot's origin.
+    with candidate_checkout(pathlib.Path(REPO_ROOT), checkout, origin_proof=True) as candidate, \
+            MockLLMServer() as llm:
         port = _free_port()
         data_dir = tmp_path / "data"
         data_dir.mkdir(parents=True)
-        model = "openai-compatible::mock-model"
-        (data_dir / "settings.json").write_text(
-            json.dumps(
-                {
-                    "OPENAI_COMPATIBLE_API_KEY": "ui-smoke-key",
-                    "OPENAI_COMPATIBLE_BASE_URL": llm.base_url,
-                    "OUROBOROS_MODEL": model,
-                    "OUROBOROS_MODEL_HEAVY": model,
-                    "OUROBOROS_MODEL_LIGHT": model,
-                    "OUROBOROS_MODEL_FALLBACKS": model,
-                    # Every smoke case is single-task or deterministic log replay;
-                    # a ten-process default pool adds only process churn and makes
-                    # sequential browser history fetches flaky on shared hosts.
-                    "OUROBOROS_MAX_WORKERS": 1,
-                    "OUROBOROS_RUNTIME_MODE": "light",
-                }
-            ),
-            encoding="utf-8",
+        settings = dict.fromkeys(
+            ("OUROBOROS_MODEL", "OUROBOROS_MODEL_LIGHT", "OUROBOROS_MODEL_FALLBACKS"),
+            "openai-compatible::mock-model",
         )
-        env = {
-            **os.environ,
-            "OUROBOROS_APP_ROOT": str(tmp_path),
-            "OUROBOROS_DATA_DIR": str(data_dir),
-            "OUROBOROS_SETTINGS_PATH": str(data_dir / "settings.json"),
-            "OUROBOROS_REPO_DIR": REPO_ROOT,
+        settings.update(
+            OPENAI_COMPATIBLE_API_KEY="ui-smoke-key", OPENAI_COMPATIBLE_BASE_URL=llm.base_url,
+            # Single-task cases and deterministic replay need only one worker;
+            # extra workers churn processes and make shared-host history flaky.
+            OUROBOROS_MAX_WORKERS=1, OUROBOROS_RUNTIME_MODE="light",
+        )
+        (data_dir / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+        env = isolated_environment(tmp_path, checkout)
+        env.update({
             "OUROBOROS_SERVER_HOST": "127.0.0.1",
             "OUROBOROS_SERVER_PORT": str(port),
-            "OUROBOROS_HOST_SERVICE_PORT": str(port + 1),
+            "OUROBOROS_HOST_SERVICE_PORT": str(_free_port()),
             "OUROBOROS_NETWORK_PASSWORD": "ui-smoke-password",
-        }
+        })
         if os.name == "nt":
             site = pathlib.Path(sys.executable).resolve().parent.parent / "Lib" / "site-packages"
             if site.is_dir():
                 env["PYTHONPATH"] = os.pathsep.join([str(site), env.get("PYTHONPATH", "")])
+        # Probe the actual child, not the parent venv.
+        require_candidate_interpreter(_fixture_interpreter(), env, checkout)
         url = f"http://127.0.0.1:{port}"
         active_proc = active_container = None
 
@@ -292,35 +297,41 @@ def direct_server_with_data(tmp_path):
                     try:
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
-                        pass  # The container below also owns surviving descendants.
+                        pass  # Reap descendants below.
             finally:
                 try:
-                    # Parent exit never proves the entire incarnation is gone.
+                    # Parent exit alone is insufficient.
                     error = container.reap()
                 finally:
                     container.close()
                 if error:
                     if proc is not None:
-                        proc.poll()  # Collect an exited parent without masking the reap failure.
+                        proc.poll()  # Preserve the reap failure.
                     raise RuntimeError(f"UI fixture process cleanup failed: {error}")
                 if proc is not None:
                     proc.wait(timeout=5)
+            # Only proven teardown releases the copy.
+            candidate.release()
 
         def start_server() -> None:
             nonlocal active_proc, active_container
             from ouroboros.process_containment import ProcessContainer
 
-            # Reap consumes the token/Job: every restart needs fresh containment.
+            # Reap consumes custody: restart needs a new container.
+            verify_checkout(checkout, candidate)
             active_container = ProcessContainer()
+            # Pin before spawn.
+            candidate.hold()
             active_proc = active_container.spawn(
                 [_fixture_python(), "server.py"],
-                cwd=REPO_ROOT,
+                cwd=checkout,
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
             _wait_health(url)
             _wait_supervisor_ready(url)
+            _assert_served_candidate(url, checkout, data_dir, active_proc.pid, candidate)
 
         def restart_server() -> None:
             stop_server()
@@ -330,8 +341,11 @@ def direct_server_with_data(tmp_path):
             start_server()
             yield {
                 "url": url, "data_dir": data_dir, "restart_server": restart_server,
-                # A seed that must survive into the next boot (queue snapshot, state files) has to
-                # land while no server runs: the main loop persists its own snapshot every tick.
+                "repo_dir": checkout, "candidate_identity": candidate.identity,
+                # Static and Python origin proof.
+                "candidate_sentinel": candidate.sentinel_bytes,
+                "candidate_version": candidate.version_text,
+                # Seed only while stopped: live ticks overwrite snapshots.
                 "stop_server": stop_server, "start_server": start_server,
             }
         finally:
@@ -962,12 +976,9 @@ def test_ui_smoke_collapsed_activity_line_named_vs_unnamed(
                         has_touch=mobile,
                     )
                     page = context.new_page()
-                    page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
+                    page.add_init_script(f"({_CAPTURE_TEST_SOCKET})();({_OBSERVE_STATE_READS})()")
                     page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                    page.wait_for_function(
-                        "() => window.__testSockets?.some(socket => socket.readyState === WebSocket.OPEN)",
-                        timeout=30_000,
-                    )
+                    _wait_socket_open_quiescent(page)  # the frames below live on the test socket only
                     named = page.locator('.chat-live-card[data-task-id="named-act"]')
                     named.wait_for(state="attached", timeout=30_000)
                     unnamed = page.locator('.chat-live-card[data-task-id="unnamed-act"]')
@@ -1206,6 +1217,13 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                 )
                 mounted_anchor.wait_for(state="attached", timeout=30_000)
                 assert mounted_anchor.is_visible()
+                # Establish build: unknown SHA deliberately reloads.
+                page.wait_for_function(
+                    "() => typeof window.__ouroWs?._lastSha === 'string'"
+                    " && window.__ouroWs._lastSha.length > 0",
+                    timeout=30_000,
+                )
+                page.evaluate("() => { window.__chronologyDocument = {}; }")
 
                 t1 = {
                     "ts": "2025-07-18T10:00:01+00:00",
@@ -1223,22 +1241,10 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                     "format": "markdown",
                 }
                 disconnected_summary = {
+                    **anchor_summary,
                     "ts": "2025-07-18T10:00:02.500000+00:00",
-                    "direction": "system",
-                    "type": "task_summary",
-                    "system_type": "task_summary",
                     "task_id": "chronology-disconnected",
-                    "chat_id": 1,
                     "text": "Disconnected summary-only card.",
-                    "tool_calls": 1,
-                    "rounds": 2,
-                    "outcome_axes": {
-                        "lifecycle": {"status": "completed"},
-                        "execution": {"status": "ok"},
-                        "objective": {"status": "pass"},
-                        "review": {"status": "pass"},
-                        "artifacts": {"status": "ready"},
-                    },
                 }
                 t4 = {
                     "ts": "2025-07-18T10:00:04+00:00",
@@ -1360,6 +1366,7 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                         };
                     }"""
                 )
+                assert page.evaluate("() => Boolean(window.__chronologyDocument)")
                 assert abs(scroll_after["anchorTop"] - scroll_before["anchorTop"]) <= 6
                 page.locator("#chat-messages").evaluate("(messages) => { messages.scrollTop = 0; }")
                 page.screenshot(
@@ -1392,6 +1399,7 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                 )
 
                 page.goto(f"{url}/?_ouro_reason=sha-change", wait_until="domcontentloaded", timeout=30_000)
+                assert page.evaluate("() => typeof window.__chronologyDocument === 'undefined'")
                 page.get_by_text("Restart complete").wait_for(state="visible", timeout=30_000)
                 first = page.locator(".chat-bubble", has_text="First historical message.").first
                 first.wait_for(state="attached", timeout=30_000)

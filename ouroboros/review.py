@@ -24,8 +24,12 @@ MAX_FUNCTION_LINES = 300
 # Owner decision 2026-08-21: keep this only as a high-water alarm with ample
 # product headroom; module and per-function ratchets remain the primary gates.
 # Raised 2026-09-18 from 9500 after the count reached 9499 and the alarm had
-# turned into a hard gate.
-MAX_TOTAL_FUNCTIONS = 10000
+# turned into a hard gate. Raised 2026-09-24 from 10000 to 10500 (owner-approved
+# ≤10%, #1196): the budget-pause/exact-Resume lifecycle landed at 10027 after its
+# own single-caller inlines and an upstream base that grew ~42 functions in one
+# day; the remaining delta is decomposition, not duplication, so buying the gap
+# by merging load-bearing steps would read worse.
+MAX_TOTAL_FUNCTIONS = 10500
 
 SIZE_RATCHET_MANIFEST_PATH = "ouroboros/size_ratchet_manifest.py"
 

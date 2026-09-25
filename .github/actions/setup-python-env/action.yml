@@ -7,6 +7,11 @@ inputs:
     required: false
     default: test
 
+  install-project:
+    description: Install the checkout as an editable package (false for exact candidate browser tests).
+    required: false
+    default: 'true'
+
 runs:
   using: composite
   steps:
@@ -22,9 +27,11 @@ runs:
     - name: Sync locked dependencies
       shell: bash
       run: |
+        PROJECT_ARGS=()
+        if [[ "${{ inputs.install-project }}" == false ]]; then PROJECT_ARGS+=(--no-install-project); fi
         case "${{ inputs.profile }}" in
-          test) uv sync --locked --extra browser --group dev ;;
-          build) uv sync --locked --extra browser --extra desktop --extra build --group dev ;;
+          test) uv sync --locked --extra browser --group dev "${PROJECT_ARGS[@]}" ;;
+          build) uv sync --locked --extra browser --extra desktop --extra build --group dev "${PROJECT_ARGS[@]}" ;;
           *) echo "Unknown Python dependency profile: ${{ inputs.profile }}" >&2; exit 2 ;;
         esac
         python -m pip --version

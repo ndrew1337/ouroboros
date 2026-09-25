@@ -278,6 +278,109 @@ def recover_confirmed_dead_worker(job: dict) -> None:
                 _respawn_after_reap(queue, _pool(), job["worker_id"], expected_worker=w)
 
 
+def _complete_exact_budget_pause_after_death(job: dict, root: pathlib.Path, task: dict,
+                                             task_id: str, attempt: int) -> tuple[bool, bool]:
+    """Worker death DURING durable budget pausing: finish the park, retry nothing.
+
+    Returns ``(parked, fenced)`` from ONE read of the durable pause row:
+    ``parked`` when the SAME task id was returned to its exact pause here, and
+    ``fenced`` when pause/consumption evidence for THIS attempt (a live pause,
+    a resumed row, a consumed grant — a ``pausing`` row without a source yet
+    included) forbids the ordinary crash retry. Fail-closed: an UNREADABLE
+    record cannot authorize a retry either.
+
+    The pause row and its source were written before the worker unwound; the
+    dead process took every local producer with it, so the durable rows are
+    the complete view and the SAME task id returns to PENDING under its exact
+    continuation (#1196). This is non-admission of the crash-retry path for
+    exactly this window — a checkpointed task must never be replayed — not a
+    general crash recovery: any other crash keeps its ordinary custody path.
+
+    A worker that died holding an UNCONSUMED Resume grant belongs to the same
+    window (#1196, F4): the grant was minted but nothing consumed it — the loop
+    writes ``consumed_at`` before any new effect, and a refused continuation
+    load (a source that went unreadable, a grant a newer writer superseded)
+    kills the worker exactly here. The saved pause is not lost to a terminal
+    crash: the grant this dead process can no longer consume is revoked under
+    its own identity and the SAME task id is parked back on its exact pause for
+    the owner to Resume again. A CONSUMED grant is never reopened — that task
+    ran on, and its death takes terminal crash custody without ordinary retry.
+    """
+    from ouroboros.budget_pause import (
+        LIVE_PAUSE_STATES, STATE_RESUME_GRANTED, STATE_RESUMED, budget_pause_row,
+    )
+    from supervisor.events_budget import install_exact_budget_pause
+
+    result_root = pathlib.Path(task.get("budget_drive_root") or root)
+    try:
+        row = budget_pause_row(result_root, task_id)
+    except Exception:
+        return False, True
+    state = str(row.get("state") or "") if row else ""
+    grant = row.get("grant") if isinstance(row.get("grant"), dict) else {}
+    fenced = bool(row and (state in LIVE_PAUSE_STATES or state == STATE_RESUMED or grant.get("consumed_at"))
+                  and int(row.get("task_attempt") or 0) == int(attempt))
+    if not (fenced and state in LIVE_PAUSE_STATES and row.get("source_ref")):
+        return False, fenced
+    source = "worker_death_during_pausing"
+    with _queue_lock:
+        if not _dead_job_is_current(job):
+            return False, fenced
+        if state == STATE_RESUME_GRANTED:
+            if grant.get("consumed_at"):
+                return False, fenced  # the loop consumed it and ran on: ordinary custody
+            from supervisor.budget_resume import revoke_exact_budget_resume
+            from supervisor.events_budget import BUDGET_HOLD_KEY
+            from ouroboros.budget_pause import exact_pause_marker
+
+            task.setdefault("_budget_pause_resume", {
+                "pause_id": row.get("pause_id"), "grant_id": grant.get("grant_id"),
+                "pause": exact_pause_marker(row, default_root=str(task.get("root_task_id") or task_id)),
+            })
+            if not revoke_exact_budget_resume(task, "worker_death_before_consumption"):
+                if task.get("_budget_pause_consumed"):
+                    return False, fenced  # a concurrent consumption keeps crash custody, never re-arms
+                # Revocation failure is a nonterminal hold, never a crash retry
+                # or terminal. Preserve exact source and grant identity even if
+                # neither the result store nor the snapshot is writable.
+                held = dict(task)
+                held.setdefault("_budget_pause", exact_pause_marker(row, default_root=task_id))
+                hold = held.get(BUDGET_HOLD_KEY)
+                if not isinstance(hold, dict):
+                    from supervisor.events_budget import HOLD_REVOCATION_UNWRITTEN, hold_budget_row
+
+                    hold = hold_budget_row(held, reason=HOLD_REVOCATION_UNWRITTEN,
+                                          extra={"pause_id": row.get("pause_id"), "grant_id": grant.get("grant_id")})
+                _pool().RUNNING.pop(task_id, None)
+                if not any(item.get("id") == task_id for item in _pool().PENDING):
+                    _pool().PENDING.append(held)
+                from supervisor import queue
+
+                queue.sort_pending()
+                hold["snapshot_persisted"] = False
+                try:
+                    hold["snapshot_persisted"] = bool(queue.persist_queue_snapshot(reason="dead_worker_budget_hold"))
+                except Exception:
+                    log.error("Budget hold snapshot failed for %s", task_id, exc_info=True)
+                log.warning("Dead worker %s retained in nonterminal hold; snapshot persisted=%s",
+                            task_id, hold["snapshot_persisted"])
+                return True, fenced
+            running = _pool().RUNNING.get(task_id)
+            if isinstance(running, dict) and isinstance(running.get("task"), dict):
+                running["task"].pop("_budget_pause_resume", None)
+            source = "worker_death_before_grant_consumed"
+    try:
+        install_exact_budget_pause(_pool(), task_id, {"pause_id": row.get("pause_id")},
+                                   source=source)
+    except Exception:
+        log.error("Exact budget pause of %s could not be completed after worker death; "
+                  "leaving the row for the next reconciliation", task_id, exc_info=True)
+        from supervisor.task_reaper import TerminalFileRecoveryPending
+
+        raise TerminalFileRecoveryPending("exact budget pause parking remains pending")
+    return True, fenced
+
+
 def _recover_crashed_task_without_terminal(job: dict, queue: Any) -> None:
     """The previous crash outcome/retry policy, running on the existing reaper."""
     from supervisor.worker_owner_wait import has_owner_wait_checkpoint
@@ -301,8 +404,14 @@ def _recover_crashed_task_without_terminal(job: dict, queue: Any) -> None:
         0,
     )
     attempt = int(task.get("_attempt") or 1)
+    # A `pausing` row without a checkpoint yet (death during the drain), or an
+    # UNREADABLE pause record, fences the ordinary retry exactly like an
+    # owner-wait checkpoint: completed work is never replayed (#1196).
+    parked, budget_pausing = _complete_exact_budget_pause_after_death(job, root, task, task_id, attempt)
+    if parked:
+        return
     replay_unsafe = (not getattr(w, "active_capacity", True)
-                     or has_owner_wait_checkpoint(meta, attempt))
+                     or has_owner_wait_checkpoint(meta, attempt) or budget_pausing)
     # Reconstruct cost/rounds from durable llm_usage for any
     # abnormal-termination rollup below (worker died pre-finalize,
     # so the event would otherwise carry zeros).
@@ -315,7 +424,14 @@ def _recover_crashed_task_without_terminal(job: dict, queue: Any) -> None:
     if (is_crash_signal or attempt > _pool().QUEUE_MAX_RETRIES
           or replay_unsafe):
         deep = task_type == "deep_self_review"
-        if replay_unsafe:
+        if budget_pausing:
+            result_text = (
+                "Worker process died with budget-continuation evidence. The checkpoint was "
+                "incomplete, unreadable, or already consumed. Completed actions were not retried; "
+                "no exact continuation is available for this attempt."
+            )
+            reason_code = "worker_crash_budget_pausing"
+        elif replay_unsafe:
             result_text = (
                 "Worker process died after an owner-wait checkpoint. The continuation "
                 "source is retained; completed actions were not retried."

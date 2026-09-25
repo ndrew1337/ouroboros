@@ -56,6 +56,11 @@ def full_loop(tmp_path, monkeypatch):
     monkeypatch.setattr(review_substrate, "triad_delivery_slots", lambda **_kw: slots)
     registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
     registry._ctx.repo_dir.mkdir()
+    # Acceptance now distinguishes an unreadable repository from a clean one.
+    import subprocess
+    for args in (["init"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                           "commit", "--allow-empty", "-m", "fixture baseline"]):
+        subprocess.run(["git", *args], cwd=registry._ctx.repo_dir, check=True, capture_output=True)
     ctx = registry._ctx
     task_id = "async-loop-root"
     _seed_acceptance_root(ctx.drive_root, task_id, ctx)
@@ -941,6 +946,10 @@ def test_cyber_final_response_never_waits_for_or_obeys_critic_veto(full_loop, mo
     result, _usage, trace = f.run()
     assert result == ANSWER
     assert trace["acceptance_decision"]["status"] == "finalized_unaccepted"
+    if failure == "evidence_unavailable":
+        assert trace["acceptance_decision"]["reason"] == "acceptance_preparation_failed"
+        assert not trace.get("review_runs") and not f.waits
+        return  # local preparation is not a synthetic DEGRADED critic
     assert trace["acceptance_decision"]["reason"] == "author_finish"
     assert trace["acceptance_decision"]["author_disposition"]["source"] == "author_final_response"
     assert not f.waits

@@ -149,6 +149,7 @@ test('model waits use the existing current-attempt rule and questions end on the
 });
 
 test('budget-paused work is a stationary wait, not a queue', () => { const s=summarizeProjectActivities([activity({phase:'budget_paused'})]); assert.equal(s.state,'waiting'); assert.equal(s.motion,false); assert.equal(s.label,'Paused'); });
+test('budget-pausing work (#1196) is stationary and never a false terminal or motion', () => { const s=summarizeProjectActivities([activity({phase:'budget_pausing'})]); assert.equal(s.state,'waiting'); assert.equal(s.motion,false); assert.equal(s.label,'Pausing'); });
 
 test('model wait rows pass the same admission as the chat card: malformed waits cannot stop motion', () => {
     // Missing wait_id/revision/reason: the card would drop this row, so must the sidebar.

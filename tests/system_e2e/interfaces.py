@@ -42,6 +42,19 @@ _NOT_LANDED = (
 FAKE_HANG_MARKER = "[FAKE:HANG]"       # the run never reaches a terminal state
 FAKE_REFUSE_MARKER = "[FAKE:REFUSE]"   # the start POST is refused 400, typed
 FAKE_ASK_MARKER = "[FAKE:ASK]"         # the run asks ONE question and waits for the answer
+# Serial addressed turns over ONE physical run: the run asks FAKE_TURN_QUESTIONS
+# sequential questions (each a NEW interactionId, each stating an INTERIM position
+# that is not its final), pauses on each until answered, and its terminal output
+# echoes every received ``freeText`` VERBATIM with its sha256 — the retained-bytes
+# proof that an addressed original relayed through delegate_answer reached the
+# same session unchanged. Other runs keep their text, so [FAKE:ASK] is unaffected.
+FAKE_TURN_MARKER = "[FAKE:TURN]"
+FAKE_TURN_QUESTIONS = 2
+# The codex-shaped twin: no mid-run channel, the run ENDS needing input
+# (``summary.outcomeFacts.reason == "input_required"``), so the next turn can only
+# be a NEW physical run — never a resumed session.
+FAKE_INPUT_REQUIRED_MARKER = "[FAKE:INPUT_REQUIRED]"
+FAKE_INPUT_REQUIRED_INPUTS = ["the other participants' originals"]
 # The mutating marker: the run EDITS the workspace its start body was given, exactly
 # as a real harness would, and records the applied containment facts of its attempt.
 # Nothing else in the fake changes for it — a mutating run is an ordinary run whose
@@ -81,6 +94,29 @@ def _fake_pending_interaction(run_id: str, harness_id: str) -> Dict[str, Any]:
         # None = "waits until answered": the honest scripting for a scenario
         # that WILL answer (a non-null timeout would promise an engine-side
         # benign decline this fake never performs).
+        "timeoutAt": None,
+    }
+
+
+def _fake_turn_interaction(run_id: str, harness_id: str, ordinal: int) -> Dict[str, Any]:
+    """Question ``ordinal`` of a [FAKE:TURN] run: a free-text question (no options)
+    whose text is an interim position, never a final."""
+    return {
+        "interactionId": f"turn-{run_id[:8]}-{ordinal}",
+        "runId": run_id,
+        "attemptId": "a01",
+        "harnessId": harness_id,
+        "sourceTool": "AskUserQuestion",
+        "questions": [{
+            "id": "q1",
+            "question": (f"INTERIM (not final) position {ordinal} of {FAKE_TURN_QUESTIONS}: "
+                         "I hold this until the next addressed original arrives. "
+                         "Relay it verbatim as free_text."),
+            "header": f"Turn {ordinal}",
+            "options": [],
+            "multi_select": False,
+        }],
+        "requestedAt": "2026-09-01T00:00:00Z",
         "timeoutAt": None,
     }
 
@@ -312,6 +348,11 @@ class FakeClaudexorDaemon:
                 run["answers"].append({"interaction_id": iid, "answers": rows})
                 run["pending"] = [row for row in run["pending"]
                                   if str(row.get("interactionId")) != iid]
+                if run["turn"] and run["turn"] < FAKE_TURN_QUESTIONS:
+                    # The next addressed turn of the SAME run: a NEW interaction id,
+                    # state still running — the session was resumed, not restarted.
+                    run["turn"] += 1
+                    run["pending"] = [_fake_turn_interaction(run["id"], self.harness_id, run["turn"])]
                 return 200, {"accepted": True, "status": "delivered"}
             if method == "POST" and len(parts) == 4 and parts[3] == "control":
                 control = body.get("control") if isinstance(body.get("control"), dict) else {}
@@ -370,7 +411,11 @@ class FakeClaudexorDaemon:
             "access": str(body.get("access") or ""),
             "run_dir": run_dir, "body": body, "cancel_reason": "",
             "pending": ([_fake_pending_interaction(rid, self.harness_id)]
-                        if FAKE_ASK_MARKER in prompt else []),
+                        if FAKE_ASK_MARKER in prompt else
+                        [_fake_turn_interaction(rid, self.harness_id, 1)]
+                        if FAKE_TURN_MARKER in prompt else []),
+            "turn": 1 if FAKE_TURN_MARKER in prompt else 0,
+            "input_required": FAKE_INPUT_REQUIRED_MARKER in prompt,
             "answers": [], "workspace_written": [],
         }
         if FAKE_MUTATE_MARKER in prompt:
@@ -433,7 +478,7 @@ class FakeClaudexorDaemon:
         # A run with a pending interaction WAITS (state stays running) until
         # the answer verb clears it; the very next poll then flips terminal.
         if run["state"] == "running" and not run["hang"] and not run["pending"]:
-            run["state"] = "succeeded"
+            run["state"] = "failed" if run.get("input_required") else "succeeded"
         state = run["state"]
         terminal = state in ("succeeded", "cancelled", "failed")
         summary: Dict[str, Any] = {
@@ -449,6 +494,9 @@ class FakeClaudexorDaemon:
             "summary": summary,
             "pendingInteractions": [json.loads(json.dumps(row)) for row in run["pending"]],
         }
+        if terminal and run.get("input_required"):
+            summary["outcomeFacts"] = {"reason": "input_required",
+                                       "work_state": {"required_inputs": list(FAKE_INPUT_REQUIRED_INPUTS)}}
         if terminal:
             if run["run_dir"]:
                 final = pathlib.Path(run["run_dir"]) / "final"
@@ -467,6 +515,16 @@ class FakeClaudexorDaemon:
                 "authRoute": {"profileId": self.applied_profile},
             })
             text = f"FAKE_RUN_RESULT {run['id']}: assignment complete."
+            if run.get("turn"):
+                text = f"FINAL: FAKE_RUN_RESULT {run['id']} after {len(run['answers'])} addressed turn(s).\n" + "".join(
+                    "RELAYED[%d] sha256=%s\n%s\n" % (
+                        index, hashlib.sha256(str(free or "").encode("utf-8")).hexdigest(), free or "")
+                    for index, free in enumerate(
+                        (str((row["answers"][0] or {}).get("freeText") or "") if row["answers"] else ""
+                         for row in run["answers"]), 1))
+            elif run.get("input_required"):
+                text = (f"INTERIM (not final): FAKE_RUN_RESULT {run['id']} ended needing input: "
+                        + "; ".join(FAKE_INPUT_REQUIRED_INPUTS))
             detail["outcomeBanner"] = state
             detail["finalSummary"] = "Fake delegated run finished."
             detail["primaryOutput"] = {

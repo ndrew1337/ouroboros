@@ -11,7 +11,11 @@ from ouroboros.gateway.routing_decision import (
     handle_routing_decision,
     parse_routing_decision_id,
 )
-from ouroboros.project_dialogue import append_chat_annotation, chat_annotation_receipt
+from ouroboros.project_dialogue import (
+    append_chat_annotation,
+    build_owner_message_ref,
+    chat_annotation_receipt,
+)
 
 OPTIONS = [
     {"action": "steer_task", "task_id": "t-live", "label": "Fix CI"},
@@ -265,8 +269,10 @@ def test_route_to_project_candidates_reorder_is_host_validated(tmp_path, monkeyp
         {"action": "new_task_in_project", "project_id": "p1", "label": "New in P1"},
     ]
     ctx = types.SimpleNamespace(
-        current_chat_id=1, drive_root=tmp_path,
+        current_chat_id=1, drive_root=tmp_path, is_direct_chat=True,
         task_metadata={"client_message_id": "cm-1",
+                       "origin_message_ref": build_owner_message_ref(
+                           chat_id=1, client_message_id="cm-1", ts="2026-09-24T00:00:00+00:00", text="route me"),
                        "routing_contract": {"manual_options": manual}},
     )
     text = control._route_to_project(

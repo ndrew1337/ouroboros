@@ -107,7 +107,7 @@ def test_actual_main_captures_source_after_binding(applied_host, tmp_path, monke
     monkeypatch.setattr(server, "get_network_auth_startup_warning", lambda _host: "")
     monkeypatch.setattr(server, "validate_network_auth_configuration", lambda _host: "")
     monkeypatch.setattr(server, "_event_loop", None)
-    monkeypatch.setattr(server.uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(server, "_SignalStopServer", FakeServer)  # the main() server seam (#1142)
     server._restart_requested.clear()
     try:
         assert server.main() == 0

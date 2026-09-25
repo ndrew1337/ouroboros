@@ -319,6 +319,8 @@ def acceptance_substrate_facts(ctx: Any, task_id: str) -> Dict[str, Any]:
     refusal = getattr(ctx, "_configured_startup_refusal", None)
     if isinstance(refusal, dict):
         out["startup_refused"] = str(refusal.get("reason") or "")
+        if refusal.get("detail"):
+            out["startup_refused_detail"] = str(refusal.get("detail"))
     return out
 
 

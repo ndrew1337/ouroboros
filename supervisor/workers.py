@@ -554,15 +554,22 @@ def _reject_promoted_after_attachment_stage(
 def _apply_presence_promotion_authority(
     evt: dict, task: dict, *, objective: str, expected_output: str,
 ) -> list[dict] | dict:
-    """Preserve inherited Presence authority while rebinding the new root."""
+    """Preserve inherited Presence authority while rebinding the new root.
 
-    presence = evt.get("presence") if isinstance(evt.get("presence"), dict) else None
-    if not presence:
-        return []
-    task["_presence_origin"] = True
-    task["source"] = "presence_promote"
-    task.setdefault("metadata", {})["presence"] = dict(presence)
+    A speaker's promote makes the root answer its conversation; a delegated
+    descendant's carries only the binding it acts for, so its root is that
+    binding's related work under the same ceiling and never a speaker.
+    """
+    from ouroboros.dialogue_provenance import presence_root_carrier
+
     contract = evt.get("task_contract") if isinstance(evt.get("task_contract"), dict) else {}
+    carrier = presence_root_carrier(evt, task_contract=contract)
+    if not carrier:
+        return []
+    if "presence" in carrier:
+        task["_presence_origin"] = True
+    task["source"] = "presence_promote"
+    task.setdefault("metadata", {}).update(carrier)
     inherited_manifest = [
         dict(row) for row in (contract.get("attachment_manifest") or [])
         if isinstance(row, dict)
@@ -573,6 +580,9 @@ def _apply_presence_promotion_authority(
         "objective": objective,
         "expected_output": expected_output,
         "attachment_manifest": [],
+        # The new root owns its objective: a delegated promoter's claims are not its premise.
+        "acceptance_claims": [],
+        "success_criteria": [],
     })
     promoted_contract.pop("lineage", None)
     promoted_contract.pop("attachment_manifest_ref", None)
@@ -1170,6 +1180,7 @@ def kill_workers(
 ) -> bool:
     global _WORKER_POOL_DISABLED_REASON
     from supervisor import queue
+    from supervisor.queue_snapshot import _exact_pause_row
     with _queue_lock:
         if disable_reason:
             _WORKER_POOL_DISABLED_REASON = str(disable_reason)
@@ -1207,6 +1218,12 @@ def kill_workers(
         orphaned_ids = []
         drained_ids = []
         terminalization_retry_ids = []
+        # #1196: an exact mid-run budget pause survives the physical epoch. Its
+        # PENDING carrier and its durable ``paused`` row are left exactly as they
+        # are — never cancelled here, never ``pending_parent_interrupted`` — so the
+        # next boot's ``restore_pending_from_snapshot`` re-validates the durable
+        # authority and parks the same task id again (or holds it, typed).
+        retained_paused_ids = []
         cleanup_ok = True
         try:
             done_status = terminal_status or "failed"
@@ -1350,6 +1367,10 @@ def kill_workers(
                     if str(task.get("id") or "") in preserve_running:
                         kept.append(task)
                         continue
+                    if _exact_pause_row(task):
+                        retained_paused_ids.append(str(task.get("id") or ""))
+                        kept.append(task)
+                        continue
                     parent_id = str(task.get("parent_task_id") or "")
                     root_id = str(task.get("root_task_id") or "")
                     if parent_id and (parent_id in running_task_ids or root_id in interrupted_roots):
@@ -1384,6 +1405,10 @@ def kill_workers(
                         else:
                             PENDING.append(task)
                         continue
+                    if _exact_pause_row(task):
+                        retained_paused_ids.append(tid)
+                        PENDING.append(task)
+                        continue
                     if _settle_killed_pending(
                         task,
                         reason=result_reason,
@@ -1401,7 +1426,7 @@ def kill_workers(
                             status=done_status,
                             trigger="pending_pool_kill",
                         ))
-            if orphaned_ids or drained_ids or terminalization_retry_ids:
+            if orphaned_ids or drained_ids or terminalization_retry_ids or retained_paused_ids:
                 append_jsonl(
                     DRIVE_ROOT / "logs" / "supervisor.jsonl",
                     {
@@ -1410,6 +1435,7 @@ def kill_workers(
                         "orphaned_running": orphaned_ids,
                         "drained_pending": drained_ids,
                         "terminalization_retry": terminalization_retry_ids,
+                        **({"retained_budget_paused": retained_paused_ids} if retained_paused_ids else {}),
                     },
                 )
         except Exception:

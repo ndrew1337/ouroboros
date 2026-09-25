@@ -248,19 +248,24 @@ def sweep_owner_stop_hold(q: Any, task_id: str, intent: Dict[str, Any], *, now: 
 
 def _task_hard_bound_reached(q: Any, task_id: str, *, now: float) -> bool:
     """Mirror the queue's two hard time axes without introducing a new SSOT."""
+    from ouroboros.model_wait import execution_elapsed_seconds
+
     try:
         with q._queue_lock:
             meta = q.RUNNING.get(task_id) if isinstance(q.RUNNING, dict) else None
             if not isinstance(meta, dict):
                 return False
             task = meta.get("task") if isinstance(meta.get("task"), dict) else {}
-            started_at = float(meta.get("started_at") or 0.0)
+            # The SAME clock the queue's timeout rail reads: wall time minus the
+            # quota union minus the separate budget-paused interval (#1196).
+            clock = {key: meta.get(key) for key in
+                     ("started_at", "model_wait_quota_clock", "budget_paused_sec")}
         deadline_ts = float(q._task_deadline_ts(task) or 0.0)
         if deadline_ts and now >= deadline_ts:
             return True
-        if started_at > 0:
-            absolute_ceiling = float(q.get_task_abs_ceiling_sec())
-            return max(0.0, now - started_at) >= absolute_ceiling
+        absolute_ceiling = q.get_task_abs_ceiling_sec()  # None = no lifetime bound
+        if float(clock.get("started_at") or 0.0) > 0 and absolute_ceiling is not None:
+            return execution_elapsed_seconds(clock, now) >= float(absolute_ceiling)
         return False
     except Exception:
         # Unreadable hard-bound authority is not permission to extend a task.

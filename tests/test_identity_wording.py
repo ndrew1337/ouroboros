@@ -76,7 +76,9 @@ def test_system_prompt_carries_outcome_honesty_and_capability_acquisition():
     text = (pathlib.Path(__file__).parent.parent / "prompts" / "SYSTEM.md").read_text(encoding="utf-8")
     assert "### Outcome honesty" in text
     # Whitespace-normalized: the doctrine sentence is line-wrapped in the file.
-    assert "the only real failure mode" in " ".join(text.split())
+    normalized = " ".join(text.split())
+    assert "I do not abandon an owed answer" in normalized
+    assert "Presence observation may deliberately end silently without leaving accepted work unfinished" in normalized
     assert "blocked_with_evidence" not in text
     assert "best_effort" not in text
     # Whitespace-normalized: a line-wrapped "FINAL\nANSWER" must not slip past.

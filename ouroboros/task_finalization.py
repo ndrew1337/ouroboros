@@ -161,7 +161,9 @@ def stamp_root_final_phase(
     managed roots keep their task_done conclusion untouched.
     """
     if post_task_open:
-        send_event.setdefault("progress_meta", {})["task_phase"] = "finalizing"
+        send_event.setdefault("progress_meta", {}).update(
+            task_phase="finalizing", task_terminal_status=terminal_status,
+        )
     elif task.get("_is_direct_chat"):
         send_event.setdefault("progress_meta", {})["task_terminal_status"] = terminal_status
 

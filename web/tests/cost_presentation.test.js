@@ -8,7 +8,7 @@ import {
     taskCostMeta,
     taskCostProjection,
 } from '../modules/chat.js';
-import { renderLiveCardMeta } from '../modules/chat_activity.js';
+import { costPresentationMeta, renderLiveCardMeta } from '../modules/chat_activity.js';
 import { costBucketPresentation, costDashboardPresentation } from '../modules/costs.js';
 import { summarizeLogEvent } from '../modules/log_events.js';
 import {
@@ -109,13 +109,13 @@ test('unknown zero-dollar accounting stays pending instead of becoming free', ()
         cost_final: false,
         cost_with_children_partial: true,
         unknown_unmetered: 1,
-    }), ['cost pending']);
+    }), ['Cost unknown']);
     assert.deepEqual(taskCostMeta({
         cost_usd: 0,
         cost_accounting_status: 'available',
         cost_final: false,
         unknown_unmetered: 1,
-    }), ['cost pending']);
+    }), ['Cost unknown']);
 });
 
 test('a bare per-round cost_usd delta is NOT task cost (v6.82 P1)', () => {
@@ -385,4 +385,144 @@ test('llm round rows show money from BOTH the honest backfill name and the live 
         cost_usd: 0.9, accounted_upper_bound_usd: 0.1,
     });
     assert.ok(diverged.meta.includes('$0.9000'), JSON.stringify(diverged.meta));
+});
+
+test('#498 the scoped carrier answers the whole money question from one bucket', () => {
+    const carrier = (over = {}) => ({
+        scope: 'own', tracked_amount: 1.2, has_unpriced: false,
+        tracked_final: true, accounting_open: false, has_rows: true, ...over,
+    });
+    // A proven zero: priced rows evidenced it and the accounting is closed.
+    assert.deepEqual(costPresentationMeta(carrier({ tracked_amount: 0 })), ['$0.00']);
+    // An open subtotal is a ceiling, not a receipt.
+    assert.deepEqual(costPresentationMeta(carrier({ tracked_final: false, accounting_open: true })),
+        ['up to $1.20']);
+    // An estimated $0.00 is open, so it never reads as a settled free result.
+    assert.deepEqual(costPresentationMeta(carrier({ tracked_amount: 0, tracked_final: false, accounting_open: true })),
+        ['up to $0.00']);
+    // Nothing priced anything: an empty ledger and an all-unpriced one both say unknown.
+    assert.deepEqual(costPresentationMeta(carrier({ tracked_amount: null, tracked_final: false, accounting_open: true })),
+        ['Cost unknown']);
+    assert.deepEqual(costPresentationMeta(carrier({
+        tracked_amount: null, has_unpriced: true, tracked_final: false, accounting_open: true,
+    })), ['Cost unknown']);
+    // Mixed: the tracked number is a subtotal, and the reason is stated in WORDS
+    // beside it rather than hidden in a tooltip.
+    assert.deepEqual(costPresentationMeta(carrier({ has_unpriced: true })),
+        ['Tracked: $1.20', 'some steps have no price']);
+    assert.deepEqual(costPresentationMeta(carrier({ tracked_amount: 0, has_unpriced: true })),
+        ['Tracked: $0.00', 'some steps have no price']);
+    // No accountable row at all is not a free result and not a money line.
+    assert.deepEqual(costPresentationMeta(carrier({ has_rows: false, tracked_amount: null })), []);
+    // No carrier at all defers to the legacy derivation.
+    assert.equal(costPresentationMeta(undefined), null);
+    assert.equal(costPresentationMeta(null), null);
+});
+
+test('#498 a card with a carrier uses it; legacy frames keep the old derivation', () => {
+    // The root's carrier describes the SUBTREE, so a null subtree amount stays
+    // unknown instead of falling back to the root's own (often zero) number.
+    assert.deepEqual(taskCostMeta({
+        cost_accounting_status: 'available',
+        accounted_upper_bound_usd: 0,
+        cost_final: true,
+        cost_presentation: {
+            scope: 'root_tree', tracked_amount: null, has_unpriced: true,
+            tracked_final: false, accounting_open: true, has_rows: true,
+        },
+    }), ['Cost unknown']);
+    // An unreadable ledger still outranks the carrier.
+    assert.deepEqual(taskCostMeta({
+        cost_accounting_status: 'unavailable', cost_presentation: null,
+    }), ['cost unavailable']);
+    // A carrier alone is task-scope accounting evidence.
+    assert.deepEqual(taskCostMeta({
+        cost_presentation: {
+            scope: 'own', tracked_amount: 4.25, has_unpriced: false,
+            tracked_final: true, accounting_open: false, has_rows: true,
+        },
+    }), ['$4.25']);
+    // Legacy frames (no carrier) keep their existing, deliberately conservative reading.
+    assert.deepEqual(taskCostMeta({
+        cost_usd: 4.25, cost_accounting_status: 'available', cost_final: true,
+    }), ['$4.25']);
+    // A late receipt just changes the carrier — nothing is sticky in the projection.
+    const open = taskCostProjection({
+        cost_presentation: {
+            scope: 'own', tracked_amount: 1.2, has_unpriced: false,
+            tracked_final: false, accounting_open: true, has_rows: true,
+        },
+    }, '2026-07-29T00:00:00Z');
+    const settled = taskCostProjection({
+        cost_presentation: {
+            scope: 'own', tracked_amount: 1.35, has_unpriced: false,
+            tracked_final: true, accounting_open: false, has_rows: true,
+        },
+    }, '2026-07-29T00:01:00Z');
+    assert.equal(open.final, false);
+    assert.equal(settled.final, true);
+    assert.deepEqual(mergeStickyCostMeta(open, settled).meta, ['$1.35']);
+    assert.deepEqual(mergeStickyCostMeta(settled, open).meta, ['$1.35']);
+});
+
+test('#498 mixed exact subtotal is not sticky final while prices are unknown', () => {
+    const frame = (amount, final, open = false) => ({ cost_presentation: {
+        scope: 'root_tree', tracked_amount: amount, tracked_final: final,
+        accounting_open: open, has_unpriced: true, has_rows: true,
+    } });
+    const exactSubtotal = taskCostProjection(frame(0, true), '2026-09-23T00:00:00Z');
+    const lateEstimatedPrice = taskCostProjection(frame(1.2, false, true), '2026-09-23T00:01:00Z');
+    assert.equal(exactSubtotal.final, false);
+    assert.deepEqual(mergeStickyCostMeta(exactSubtotal, lateEstimatedPrice).meta,
+        ['Tracked: up to $1.20', 'some steps have no price']);
+    assert.deepEqual(mergeStickyCostMeta(lateEstimatedPrice, exactSubtotal).meta,
+        ['Tracked: up to $1.20', 'some steps have no price']);
+    const ownZero = taskCostProjection({ cost_presentation: {
+        scope: 'own', tracked_amount: 0, tracked_final: true,
+        accounting_open: false, has_unpriced: false, has_rows: true,
+    } }, '2026-09-23T00:02:00Z');
+    assert.deepEqual(mergeStickyCostMeta(lateEstimatedPrice, ownZero).meta, lateEstimatedPrice.meta);
+});
+
+test('#498 legacy null tree is never replaced by own zero; empty damaged ledger stays unknown', () => {
+    assert.deepEqual(taskCostMeta({ accounted_upper_bound_usd_with_children: null,
+        accounted_upper_bound_usd: 0, cost_final: true }), ['Cost unknown']);
+    assert.deepEqual(costPresentationMeta({ scope: 'root_tree', tracked_amount: null,
+        has_rows: false, has_unpriced: false, tracked_final: false, accounting_open: true }), ['Cost unknown']);
+});
+
+test('#498 exact live subtotal cannot freeze a still-running root heartbeat', () => {
+    const exact = taskCostProjection({ cost_final: false, cost_with_children_partial: true,
+        cost_presentation: { scope: 'root_tree', tracked_amount: 0, tracked_final: true,
+            accounting_open: false, has_unpriced: false, has_rows: true } }, '2026-09-23T00:00:00Z');
+    const next = taskCostProjection({ cost_final: false, cost_presentation: {
+        scope: 'root_tree', tracked_amount: 0.3, tracked_final: false,
+        accounting_open: true, has_unpriced: true, has_rows: true } }, '2026-09-23T00:01:00Z');
+    assert.equal(exact.final, false);
+    assert.deepEqual(mergeStickyCostMeta(exact, next).meta, ['Tracked: up to $0.30', 'some steps have no price']);
+    // A null carrier beside a readable ledger is an UNKNOWN amount (owner
+    // vocabulary), never the unreadable-ledger phrase.
+    assert.deepEqual(taskCostMeta({ accounted_upper_bound_usd: 0, cost_final: true,
+        cost_presentation: null }), ['Cost unknown']);
+});
+
+test('#498 legacy unknown price never becomes sticky-final', () => {
+    const previous = taskCostProjection({ cost_final: true, accounted_upper_bound_usd: null,
+        unknown_unmetered: 1 }, '2026-09-23T00:00:00Z');
+    assert.equal(previous.final, false);
+    const receipt = taskCostProjection({ cost_final: false, accounted_upper_bound_usd: 0.35 },
+        '2026-09-23T00:01:00Z');
+    assert.deepEqual(mergeStickyCostMeta(previous, receipt).meta, ['up to $0.35']);
+});
+
+
+test('unknown legacy descendant rollup cannot retain a narrower own zero', () => {
+    const own = taskCostProjection({cost_final:true, cost_presentation:{scope:'own', tracked_amount:0,
+        tracked_final:true, accounting_open:false, has_rows:true, has_unpriced:false}}, '2026-09-24T00:00:00Z');
+    const rollup = taskCostProjection({cost_presentation:null, accounted_upper_bound_usd_with_children:null}, '2026-09-24T00:01:00Z');
+    assert.deepEqual(mergeStickyCostMeta(own, rollup).meta, ['Cost unknown']);
+    assert.deepEqual(mergeStickyCostMeta(rollup, own).meta, ['Cost unknown']);
+    // The unreadable-ledger phrase is reserved for the status flag.
+    assert.deepEqual(taskCostMeta({ cost_accounting_status: 'unavailable', cost_presentation: null }),
+        ['cost unavailable']);
 });

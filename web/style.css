@@ -2014,6 +2014,16 @@ body.resizing-panels { user-select: none; }
     min-height: 1.35em;
 }
 
+/* The secondary status fact beside the outcome chip (a running finalization).
+   Neutral by rule: the outcome owns the status colour, this only says the task
+   has not let go yet, so it stays a quiet sentence rather than a second chip. */
+.chat-live-phase-secondary {
+    color: var(--text-meta);
+    font-size: var(--type-meta);
+    line-height: var(--line-meta);
+    white-space: nowrap;
+}
+
 .chat-live-meta-text {
     display: inline-flex;
     align-items: center;
@@ -2029,6 +2039,13 @@ body.resizing-panels { user-select: none; }
     margin-inline-start: auto;
     align-self: baseline;
     white-space: nowrap;
+}
+
+.chat-live-review-summary[data-warning="1"] {
+    color: var(--status-warn-fg);
+    white-space: normal;
+    overflow-wrap: anywhere;
+    max-width: 100%;
 }
 
 [data-live-reviews-host] > .chat-live-reviews {
@@ -6854,7 +6871,9 @@ textarea.chat-input {
 .chat-live-executor-chip {
     font-size: var(--type-meta);
     padding: 0 6px;
-    margin-right: 6px;
+    /* No trailing margin: the meta line now carries a real ' \00b7 ' text part
+       between the chip and the next fact, so this boundary is spaced by the
+       same flex gap as every other one. */
     vertical-align: middle;
     opacity: 0.85;
 }

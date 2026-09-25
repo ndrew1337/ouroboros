@@ -73,9 +73,15 @@ class HistoricalAudit:
             if self._stopped.is_set():
                 self._record(data_root, "stopped")
                 return
+            from ouroboros.process_containment import CONTAINMENT_ENV_PREFIX
             env = {key: os.environ[key] for key in (
                 "PATH", "HOME", "USERPROFILE", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL",
             ) if key in os.environ}
+            # Containment membership is an env token every descendant inherits:
+            # a child that drops it is invisible to the container reap that a
+            # test fixture (or Panic) relies on to prove this data root quiet.
+            env.update({key: value for key, value in os.environ.items()
+                        if key.startswith(CONTAINMENT_ENV_PREFIX)})
             env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONPATH=str(repo_dir),
                        OUROBOROS_DATA_DIR=str(data_root), OUROBOROS_REPO_DIR=str(repo_dir),
                        OUROBOROS_SETTINGS_PATH=str(SETTINGS_PATH))

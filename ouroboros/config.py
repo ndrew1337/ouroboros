@@ -27,10 +27,8 @@ from ouroboros.provider_models import compute_direct_review_models_fallback, fal
 from ouroboros.secret_masking import strip_masked_secrets
 from ouroboros.runtime_mode_policy import runtime_mode_at_least
 from ouroboros.settings_defaults import (
-    CLAUDEXOR_STARTUP_WAIT_SEC,  # noqa: F401
-    CLAUDEXOR_STARTUP_POLL_SEC,  # noqa: F401
-    CLAUDEXOR_ADMISSION_WAIT_SEC,  # noqa: F401
-    CLAUDEXOR_ADMISSION_POLL_SEC,  # noqa: F401
+    CLAUDEXOR_STARTUP_WAIT_SEC, CLAUDEXOR_STARTUP_POLL_SEC,  # noqa: F401
+    CLAUDEXOR_ADMISSION_WAIT_SEC, CLAUDEXOR_ADMISSION_POLL_SEC,  # noqa: F401
     ENDPOINT_AUTHORED_SETTINGS,  # noqa: F401
     FINALIZATION_GRACE_DEFAULT_SEC,  # noqa: F401
     OPENROUTER_DEFAULTS,  # noqa: F401
@@ -48,8 +46,8 @@ from ouroboros.settings_defaults import (
     settings_env_keys,  # noqa: F401
 )
 from ouroboros.settings_scales import (
-    EFFORT_SCALE,  # noqa: F401
-    PROMPT_CACHE_TTL_SCALE,  # noqa: F401
+    EFFORT_SCALE, OPTIONAL_BOUND_LEGACY, UNLIMITED,  # noqa: F401
+    PROMPT_CACHE_TTL_SCALE, defaults_for_settings_document, optional_bound_value,  # noqa: F401
     VALID_RUNTIME_MODES,  # noqa: F401
     VALID_SAFETY_MODES,  # noqa: F401
     _RUNTIME_MODE_RANK,  # noqa: F401
@@ -97,8 +95,9 @@ from ouroboros.runtime_limits import (
     EXTERNAL_PLATFORM_UPDATE_TIMEOUT_SEC, WORKER_SPAWN_GRACE_SEC,  # noqa: F401
     WORKER_READY_WINDOW_SEC,  # noqa: F401
     WORKER_READY_MAX_ATTEMPTS, WORKER_READY_CEILING_SEC,  # noqa: F401
+    SUPERVISOR_EVENT_BATCH_MAX_EVENTS, SUPERVISOR_EVENT_BATCH_MAX_SEC, BUDGET_PROJECTION_RETRY_SEC,  # noqa: F401
     EXTENSION_STREAM_CHUNK_BYTES,  # noqa: F401
-    EXTENSION_CHILD_CLEANUP_GRACE_SEC,  # noqa: F401
+    EXTENSION_CHILD_CLEANUP_GRACE_SEC, LAUNCHER_STOP_GRACE_SEC, SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SEC,  # noqa: F401
     NESTED_SETTLEMENT_MARGIN_SEC,  # noqa: F401
     NETWORK_WAIT_NOTE_INTERVAL_SEC,  # noqa: F401
     NETWORK_WAIT_BACKOFF_START_SEC,  # noqa: F401
@@ -113,9 +112,8 @@ from ouroboros.runtime_limits import (
     CLAUDEXOR_OPERATOR_STOP_TIMEOUT_SEC,  # noqa: F401
     CLAUDEXOR_STOP_EXIT_WAIT_SEC,  # noqa: F401
     DELEGATE_WAIT_CEILING_SEC,  # noqa: F401
-    DELEGATE_WAIT_WINDOW_MAX_SEC,  # noqa: F401
-    MAX_ACTIVE_SUBAGENTS_HARD_CAP,  # noqa: F401
-    MAX_SUBAGENT_DEPTH_HARD_CAP,  # noqa: F401
+    DELEGATE_WAIT_WINDOW_MAX_SEC, OPERATION_WINDOW_FALLBACK_SEC,  # noqa: F401
+    MAX_ACTIVE_SUBAGENTS_HARD_CAP, MAX_SUBAGENT_DEPTH_HARD_CAP,  # noqa: F401
     WAKE_DEFAULT_SEC, USAGE_LEDGER_FOLD_MIN_AGE_SEC,  # noqa: F401
     _bounded_positive_int_setting,  # noqa: F401
     _clamped_number_setting,  # noqa: F401
@@ -148,7 +146,7 @@ from ouroboros.runtime_limits import (
     get_safety_max_tokens,  # noqa: F401
     get_search_code_wall_sec,  # noqa: F401
     get_supervisor_liveness_deadline_sec,  # noqa: F401
-    get_task_abs_ceiling_sec,  # noqa: F401
+    get_task_abs_ceiling_sec, get_max_rounds, operation_window_sec,  # noqa: F401
     get_task_idle_timeout_sec,  # noqa: F401
     get_vision_caption_timeout_sec,  # noqa: F401
     get_update_letter_timeout_sec,  # noqa: F401
@@ -682,6 +680,8 @@ def _coerce_setting_value(key: str, value):
         return normalize_update_channel(value)
     if key == "OUROBOROS_CONTEXT_MODE":
         return normalize_context_mode(value)
+    if key in OPTIONAL_BOUND_LEGACY:  # document spelling: "unlimited" or a positive int; a typo is finite
+        return UNLIMITED if (bound := optional_bound_value(key, value)) is None else bound
     # Trim so whitespace-only config is not treated as a configured skills repo.
     if key == "OUROBOROS_SKILLS_REPO_PATH":
         return str(value or "").strip()
@@ -708,19 +708,6 @@ def _coerce_setting_value(key: str, value):
 def verify_settings_integrity() -> str | None:
     """Verify the strict child pin, returning the observed digest when present."""
     return _settings_integrity.verify_settings_integrity(SETTINGS_PATH)
-
-
-def _seed_review_cycles_from_legacy_passes(loaded: dict) -> None:
-    """Migrate the retired acceptance-pass key into ``OUROBOROS_REVIEW_MAX_CYCLES`` (cycles =
-    passes + 1) at LOAD: a runtime "is it customized?" test cannot tell a deliberate "2" from
-    an untouched default, and left acceptance on the legacy number."""
-    legacy = loaded.pop("OUROBOROS_ACCEPTANCE_MAX_IMPROVEMENT_PASSES", None)
-    try:
-        passes = int(str(legacy).strip()) if legacy is not None else 1
-    except (TypeError, ValueError):
-        return
-    if passes != 1 and "OUROBOROS_REVIEW_MAX_CYCLES" not in loaded:  # 1 = shipped legacy default
-        loaded["OUROBOROS_REVIEW_MAX_CYCLES"] = str(max(0, passes) + 1)
 
 
 log = logging.getLogger(__name__)
@@ -777,7 +764,17 @@ def normalize_settings_raw(raw: dict) -> dict:
             loaded["OUROBOROS_GC_RETENTION_DAYS"] = seed
     for _legacy in LEGACY_RETENTION_KEYS:
         loaded.pop(_legacy, None)
-    _seed_review_cycles_from_legacy_passes(loaded)
+    # Migrate the retired acceptance-pass key into ``OUROBOROS_REVIEW_MAX_CYCLES``
+    # (cycles = passes + 1) at LOAD: a runtime "is it customized?" test cannot tell
+    # a deliberate "2" from an untouched default, and left acceptance on the
+    # legacy number. A malformed legacy value seeds nothing.
+    _legacy_passes = loaded.pop("OUROBOROS_ACCEPTANCE_MAX_IMPROVEMENT_PASSES", None)
+    try:
+        _passes = int(str(_legacy_passes).strip()) if _legacy_passes is not None else 1
+    except (TypeError, ValueError):
+        _passes = 1  # 1 = shipped legacy default: nothing to seed
+    if _passes != 1 and "OUROBOROS_REVIEW_MAX_CYCLES" not in loaded:
+        loaded["OUROBOROS_REVIEW_MAX_CYCLES"] = str(max(0, _passes) + 1)
     dropped = tuple(key for key in RETIRED_SETTING_KEYS if key in loaded)
     for _retired in RETIRED_SETTING_KEYS:
         loaded.pop(_retired, None)
@@ -843,7 +840,8 @@ def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
             guard_live_write=_guard_live_settings_write,
         )
         loaded = normalize_settings_raw(raw)
-    settings = dict(SETTINGS_DEFAULTS)
+    # An existing (even unreadable) document keeps the optional bounds it ran under.
+    settings = defaults_for_settings_document(raw is not None or SETTINGS_PATH.exists())
     settings.update(loaded)
     for key in SETTINGS_DEFAULTS:
         raw_env = os.environ.get(key)
@@ -852,7 +850,7 @@ def load_settings_lock_held(*, _settings_lock_held: bool = True) -> dict:
         if key == "OUROBOROS_RETURN_REASONING" and raw_env == "":
             settings[key] = ""
             continue
-        if raw_env == "":
+        if raw_env == "" and key not in OPTIONAL_BOUND_LEGACY:
             continue
         if key in loaded and settings.get(key) not in {None, ""}:
             continue

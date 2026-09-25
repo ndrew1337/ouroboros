@@ -71,9 +71,12 @@ def resolve_presence_runtime(
     defaults: PresenceRuntimeDefaults | None,
     overrides: PresenceRuntimeOverrides | None,
     *,
-    global_max_rounds: int,
+    global_max_rounds: int | None,
 ) -> ResolvedPresenceRuntime:
-    """Resolve owner override, reviewed default, then built-in fallback."""
+    """Resolve owner override, reviewed default, then built-in fallback.
+
+    The inline cap stays finite: ``global_max_rounds`` (the task round limit) only
+    narrows it, and ``None`` — no global limit — leaves the reviewed/owner value."""
 
     if defaults is None:
         defaults = _BUILTIN_DEFAULTS
@@ -85,12 +88,13 @@ def resolve_presence_runtime(
     elif not isinstance(overrides, PresenceRuntimeOverrides):
         raise PresenceRuntimeError("invalid_overrides", "overrides")
 
-    maximum = _validate_positive_int(global_max_rounds, field="global_max_rounds")
+    maximum = (None if global_max_rounds is None
+               else _validate_positive_int(global_max_rounds, field="global_max_rounds"))
     model_slot = overrides.model_slot or defaults.model_slot
     requested_rounds = (
         overrides.inline_max_rounds if overrides.inline_max_rounds is not None else defaults.inline_max_rounds
     )
-    effective_rounds = min(requested_rounds, maximum)
+    effective_rounds = requested_rounds if maximum is None else min(requested_rounds, maximum)
     return ResolvedPresenceRuntime(
         model_slot=model_slot,
         requested_inline_max_rounds=requested_rounds,

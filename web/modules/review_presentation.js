@@ -1,3 +1,5 @@
+import { acceptanceGroupWithIncident, acceptanceIncidentFromTaskDetail } from './acceptance_incident_presentation.js';
+export { acceptanceIncidentFromTaskDetail } from './acceptance_incident_presentation.js';
 import { setInertCardPresentation } from './task_phase_chip.js';
 import { escapeHtmlAttr, sinceLocalTime } from './utils.js';
 import { taskSourceDownloadUrl } from './api_client.js';
@@ -843,7 +845,10 @@ export function taskAcceptanceGroupFromTaskDetail(detail, ownerTaskId = '') {
     const projection = detail?.review_projection;
     const panels = (Array.isArray(projection?.panels) ? projection.panels : [])
         .filter((panel) => text(panel?.surface) === 'task_acceptance');
-    if (!owner || !panels.length) return null;
+    const incident = acceptanceIncidentFromTaskDetail(detail);
+    // A local preparation failure produces NO panel: the group has to exist on
+    // the incident alone, or the owner sees nothing at all.
+    if (!owner || (!panels.length && !incident)) return null;
     const acceptanceDecision = detail?.outcome_axes?.review?.acceptance_decision
         || detail?.review_status?.acceptance_decision;
     const decisionAuthor = acceptanceDecision?.author_disposition;
@@ -897,26 +902,7 @@ export function taskAcceptanceGroupFromTaskDetail(detail, ownerTaskId = '') {
                 authorDispositionText(panel.author_disposition), 'Cost unavailable'].filter(Boolean).join('\n'),
         };
     });
-    const latest = attempts.at(-1);
-    return {
-        id: `task_acceptance:${owner}`,
-        surface: 'task_acceptance',
-        label: 'Task acceptance',
-        subject: '',
-        presentationOwnerTaskId: owner,
-        subjectTaskId: owner,
-        initiatorTaskId: owner,
-        state: latest?.state === 'running' ? 'running' : 'terminal',
-        progress: text(latest?.progress),
-        tone: latest?.tone || statusTone('terminal', latest?.verdict),
-        verdict: text(latest?.verdict),
-        summary: text(latest?.summary),
-        authorDecisionText,
-        activeCount: latest?.state === 'running' ? 1 : 0,
-        attemptCount: attempts.length,
-        countIsAuthoritative: true,
-        attempts,
-    };
+    return acceptanceGroupWithIncident({ owner, attempts, incident, authorDecisionText, statusTone });
 }
 
 export function reviewGroupsFromTaskDetail(detail, ownerTaskId = '') {
@@ -1498,6 +1484,9 @@ export function createReviewPresentationController({
         summary.textContent = groupCount
             ? `Reviews ${groupCount}${activeCount ? ` · ${activeCount} active` : ''}`
             : (failedEmpty ? 'Reviews' : '');
+        const warnings = [...groups.values()].map(group => text(group.warning)).filter(Boolean);
+        summary.dataset.warning = warnings.length ? '1' : '0';
+        if (warnings.length) summary.textContent += ' · Acceptance unavailable: evidence preparation failed; no new reviewers.';
         const reconciled = reconcileReviewMarkup(host, renderReviewsSection(groups, state));
         const active = host?.ownerDocument?.activeElement;
         if (!reconciled || !active || !host.contains?.(active)) restoreFocus(focused);

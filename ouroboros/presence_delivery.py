@@ -151,13 +151,14 @@ class PresenceDeliveryRecorder:
                     raise PresenceDeliveryConflict("presence delivery identity already has different facts")
                 return {"ok": True, "recorded": True, "duplicate": True}
 
+            from ouroboros.presence_bindings import conversation_key as presence_conversation_key
             from ouroboros.presence_runner import _stable_numeric_id
             from supervisor.message_bus import log_chat
 
             task_id, provenance = _verified_task(self.data_dir, skill, payload["origin"])
-            conversation_key = ":".join(payload[key] for key in (
-                "provider", "account_id", "conversation_id",
-            )) + ":" + (payload["thread_id"] or "0")
+            conversation_key = presence_conversation_key(*(payload[key] for key in (
+                "provider", "account_id", "conversation_id", "thread_id",
+            )))
             delivery = {
                 "schema_version": DELIVERY_VERSION, "skill": skill,
                 **{key: payload[key] for key in ("delivery_id", "part_id", "state")},

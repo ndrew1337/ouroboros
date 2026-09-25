@@ -465,6 +465,22 @@ def expose_acceptance_feedback(trace: Dict[str, Any], messages: list, task_id: s
             if not isinstance(source, dict) or source.get("task_id") != task_id:
                 continue
             outcome = trace.get("acceptance_review_outcome") or {}
+            # A local acceptance-preparation incident is identified by its own id
+            # AND attempt, not by a review binding it never had (the pre-binding
+            # hash is empty): a request that carried attempt 1 exposes nothing
+            # about a later attempt of the same incident.
+            incident_id = str(source.get("outcome_incident_id") or "")
+            if incident_id:
+                attempt = int(source.get("outcome_incident_attempt") or 0)
+                if (incident_id == str(outcome.get("incident_id") or "")
+                        and attempt == int(outcome.get("incident_attempt") or 0)):
+                    outcome["feedback_delivered"] = True
+                    record = trace.get("acceptance_preparation")
+                    if (isinstance(record, dict) and str(record.get("incident_id") or "") == incident_id
+                            and int(record.get("attempts") or 0) == attempt):
+                        record["feedback_delivered"] = True
+                        record["exposed_attempt"] = attempt
+                continue
             if source.get("outcome_binding_hash") and source["outcome_binding_hash"] == outcome.get("binding_hash"):
                 outcome["feedback_delivered"] = True
                 continue

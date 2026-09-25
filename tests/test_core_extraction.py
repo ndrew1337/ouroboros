@@ -118,9 +118,13 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # batch share one wait, ended by the first incoming message; 935 -> 932 bytes. Rolled
     # again for owner decision 7A: the read_file description states that an absolute path
     # with no root selects the permitted root holding it (one sentence replaced, 103 -> 100
-    # bytes). Diffing the whole catalog base to head shows exactly those edits and nothing else.
+    # bytes). Rolled again for serial addressed turns: the forward_to_worker description
+    # names its peer addressees (your own parent or a sibling, delivered as a message from a
+    # peer task naming the relation; relay refused there), the 8000-char body bound and the
+    # await_messages companion (395 -> 698 bytes); the `message` parameter description states
+    # the bound. Diffing the whole catalog base to head shows exactly those edits and nothing else.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "7eeb884ea869707df9e7660083bd62b83a1fcffa3a748d9ccf696562a8c9b1dc"
+        "7195a7459f276f4bdf8758864b079218f518ae446613cc8351967692f31472cd"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

@@ -24,6 +24,10 @@ _LEAVES = (settings_defaults, settings_scales, model_slots, review_model_routes,
 # the historical extraction's facade and need not add compatibility re-exports.
 _ADDED_OWNERS = {
     "WORKER_READY_CEILING_SEC": runtime_limits,
+    # The supervisor loop's bounded events pass and the budget-projection retry interval.
+    "SUPERVISOR_EVENT_BATCH_MAX_EVENTS": runtime_limits,
+    "SUPERVISOR_EVENT_BATCH_MAX_SEC": runtime_limits,
+    "BUDGET_PROJECTION_RETRY_SEC": runtime_limits,
     # The two bounds of the usage ledger's display (stale-while-revalidate) read path.
     "USAGE_DISPLAY_LOCK_TIMEOUT_SEC": runtime_limits,
     "USAGE_DISPLAY_REVALIDATE_AFTER_SEC": runtime_limits,
@@ -69,6 +73,19 @@ _ADDED_OWNERS = {
     # The pooled worker's short acceptance-fence ack wait (one wait, one re-send, then a typed unknown).
     "ACCEPTANCE_FENCE_ACK_WAIT_SEC": runtime_limits,
     "get_acceptance_fence_ack_wait_sec": runtime_limits,
+    # #1196 optional bounds: the shared positive-or-unlimited vocabulary (also the review-cycle
+    # cap's), the legacy finite values of documents that predate it, and their readers.
+    "UNLIMITED": settings_scales,
+    "UNLIMITED_ALIASES": settings_scales,
+    "parse_positive_or_unlimited": settings_scales,
+    "OPTIONAL_BOUND_LEGACY": settings_scales,
+    "_WARNED_OPTIONAL_BOUNDS": settings_scales,
+    "optional_bound_value": settings_scales,
+    "defaults_for_settings_document": settings_scales,
+    "_optional_bound_setting": runtime_limits,
+    "get_max_rounds": runtime_limits,
+    "OPERATION_WINDOW_FALLBACK_SEC": runtime_limits,
+    "operation_window_sec": runtime_limits,
 }
 
 _MOVED_OWNERS = {
@@ -77,6 +94,8 @@ _MOVED_OWNERS = {
     "WORKER_READY_MAX_ATTEMPTS": runtime_limits,
     "EXTENSION_STREAM_CHUNK_BYTES": runtime_limits,
     "EXTENSION_CHILD_CLEANUP_GRACE_SEC": runtime_limits,
+    "LAUNCHER_STOP_GRACE_SEC": runtime_limits,
+    "SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SEC": runtime_limits,
     "NESTED_SETTLEMENT_MARGIN_SEC": runtime_limits,
     "NETWORK_WAIT_NOTE_INTERVAL_SEC": runtime_limits,
     "NETWORK_WAIT_BACKOFF_START_SEC": runtime_limits,

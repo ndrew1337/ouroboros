@@ -52,7 +52,7 @@ def test_both_real_are_stated_in_one_line_separated_by_a_middle_dot() -> None:
         delegated_runs_unreconciled=["run-a1", "run-b2"],
         outcome_axes={"execution": {"status": "failed", "reason_code": "provider_unavailable"}},
     )
-    assert _completion_verdict(both, {}) == f"provider_unavailable · {CUSTODY_SENTENCE}"
+    assert _completion_verdict(both, {}) == f"The model provider stopped answering, so the task could not finish · {CUSTODY_SENTENCE}"
 
 
 def test_a_healed_debt_with_no_execution_cause_states_nothing() -> None:
@@ -74,8 +74,8 @@ def test_the_debt_may_arrive_on_the_event_instead_of_the_result() -> None:
 
 
 def test_every_other_reason_code_passes_through_untouched() -> None:
-    plain = {"status": "failed", "reason_code": "provider_unavailable"}
-    assert _completion_verdict(plain, {}) == "provider_unavailable."
+    plain = {"status": "failed", "reason_code": "mystery_rail_code"}
+    assert _completion_verdict(plain, {}) == "mystery_rail_code."
     assert _completion_verdict({"status": "completed"}, {}) == ""
 
 
@@ -116,7 +116,7 @@ def test_a_healed_debt_is_never_resurrected_by_its_own_frozen_warning() -> None:
     railed = _row(outcome_axes=custody_debt_axes(
         {"execution": {"status": "failed", "reason_code": "provider_unavailable"}}),
         delegated_runs_unreconciled=[])
-    assert _completion_verdict(railed, {}) == "provider_unavailable."
+    assert _completion_verdict(railed, {}) == "The model provider stopped answering, so the task could not finish."
 
 
 _DEFERRED_BESIDE_PLAN = {
@@ -207,7 +207,7 @@ def test_a_held_task_never_says_the_work_went_on(source, reason, sentence) -> No
     other = {"status": "failed", "reason_code": "provider_unavailable",
              "outcome_axes": {"execution": {"status": "failed", "reason_code": "provider_unavailable"},
                               "objective": {"status": "fail", "source": "task_acceptance_review"}}}
-    assert _completion_verdict(other, {}) == "provider_unavailable."
+    assert _completion_verdict(other, {}) == "The model provider stopped answering, so the task could not finish."
 
 
 def test_the_event_and_the_row_render_one_reason_line_over_the_shared_fixture() -> None:

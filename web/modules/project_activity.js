@@ -8,7 +8,9 @@ import { activeModelWaits, mergeModelWaits } from './model_wait.js';
 import { waitFacts } from './question_presentation.js';
 
 const WORKING_PHASES = new Set(['thinking', 'working', 'finalizing']);
-const QUEUED_PHASES = new Set(['queued', 'budget_paused']);
+// budget_pausing: the task is still RUNNING but writing its exact pause record
+// (#1196) — a stationary transition, never motion and never a queue.
+const QUEUED_PHASES = new Set(['queued', 'budget_paused', 'budget_pausing']);
 
 function activityId(row) {
     return String(row?.activity_id || '').trim();
@@ -56,6 +58,7 @@ function phaseLabel(phase) {
     if (phase === 'finalizing') return 'Finalizing';
     if (phase === 'queued') return 'Queued';
     if (phase === 'budget_paused') return 'Paused';
+    if (phase === 'budget_pausing') return 'Pausing';
     return '';
 }
 
@@ -91,14 +94,14 @@ export function summarizeProjectActivities(rows = []) {
     const phaseParts = [];
     // Keep the strongest/most useful phase first while preserving a mixed
     // direct+managed fact when a project has both kinds of active turn.
-    for (const phase of ['working', 'thinking', 'finalizing', 'queued', 'budget_paused']) {
+    for (const phase of ['working', 'thinking', 'finalizing', 'queued', 'budget_pausing', 'budget_paused']) {
         if (phases.has(phase)) phaseParts.push(phaseLabel(phase));
     }
     if (unknown) phaseParts.push('Activity status unavailable');
     const parts = [...phaseParts, ...waits];
-    const waiting = waits.size > 0 || phases.has('budget_paused');
+    const waiting = waits.size > 0 || phases.has('budget_paused') || phases.has('budget_pausing');
     const state = motion ? 'working' : waiting ? 'waiting'
-        : phaseParts.some((part) => part === 'Queued' || part === 'Paused') ? 'queued'
+        : phaseParts.some((part) => part === 'Queued' || part === 'Paused' || part === 'Pausing') ? 'queued'
             : phaseParts.length ? 'unknown' : 'idle';
     return {
         state,

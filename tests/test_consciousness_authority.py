@@ -310,17 +310,22 @@ def test_routing_issuer_keeps_wake_relays_task_authored_and_explicit_owner_ingre
     wake = types.SimpleNamespace(task_id="wake-1", is_direct_chat=True, last_owner_delivery=None,
                                  task_metadata=dict(_wake_task("act")["metadata"]))
     assert _routing_issuer(wake) == {"kind": ISSUER_TASK, "task_id": "wake-1", "root_task_id": "wake-1"}
+    # An owner turn is the direct turn the owner door stamped; a bare direct context is not one.
     owner = types.SimpleNamespace(task_id="turn-1", is_direct_chat=True, last_owner_delivery=None,
-                                  task_metadata={})
+                                  task_metadata={"origin_message_ref": {"chat_id": 1, "client_message_id": "cm-1"}})
     assert _routing_issuer(owner) == {"kind": ISSUER_OWNER_TURN}
+    bare = types.SimpleNamespace(task_id="turn-2", is_direct_chat=True, last_owner_delivery=None, task_metadata={})
+    assert _routing_issuer(bare) == {"kind": ISSUER_TASK, "task_id": "turn-2", "root_task_id": "turn-2"}
     # Draining real owner dialogue provides receipt identity, never authorship.
     relaying = types.SimpleNamespace(task_id="c-root", is_direct_chat=False,
                                      last_owner_delivery={"client_message_id": "cm-9", "text": "go"},
                                      task_metadata={"initiator": "consciousness"})
     assert _routing_issuer(relaying) == {"kind": ISSUER_TASK, "task_id": "c-root", "root_task_id": "c-root"}
-    stamped = types.SimpleNamespace(task_id="c-root", is_direct_chat=True, last_owner_delivery=None,
-                                    task_metadata={"initiator": "consciousness", "client_message_id": "cm-2"})
-    assert _routing_issuer(stamped) == {"kind": ISSUER_OWNER_TURN}
+    # A client id is not the door's stamp: a wake (or a Presence event, whose client id is the
+    # provider's event id) keeps speaking as a task.
+    client_id_only = types.SimpleNamespace(task_id="c-root", is_direct_chat=True, last_owner_delivery=None,
+                                           task_metadata={"initiator": "consciousness", "client_message_id": "cm-2"})
+    assert _routing_issuer(client_id_only) == {"kind": ISSUER_TASK, "task_id": "c-root", "root_task_id": "c-root"}
 
 
 def test_steer_from_a_wake_is_written_as_an_independent_task_message(tmp_path, monkeypatch):
@@ -935,22 +940,33 @@ def test_a_wake_starts_fresh_work_with_no_predecessor_and_needs_no_manifest(tmp_
     assert "predecessor_task_id" not in promoted.pending_events[0]
 
 
-def test_a_wake_without_the_manifest_still_refuses_an_unaddressable_predecessor(tmp_path):
-    """The typed refusal is unchanged; only the facts the wake is given are new."""
+def test_a_wake_without_the_manifest_continues_a_settled_root_and_still_refuses_a_live_one(tmp_path):
+    """The door judges the root, not the facts a wake was handed: with no manifest at all
+    a wake continues a settled root on both verbs (the pointer is rebuilt from the durable
+    result and equals the one the manifest would have shown), while a live root keeps its
+    typed refusal toward steer_task and emits nothing."""
     from ouroboros.projects_registry import create_project
     from ouroboros.tools.control_routing import _promote_chat_to_task, _route_to_project
 
     create_project(tmp_path, "racer", name="Racer")
-    _addressable_result(tmp_path)
+    preview = _addressable_result(tmp_path)
 
     routed = _wake_routing_ctx(tmp_path)
     out = _route_to_project(routed, "racer", "Continue the racer", predecessor_task_id="racer-old")
-    assert out.startswith("⚠️ AUTHORITY_SOURCE_UNAVAILABLE (route_to_project)")
-    assert "not an addressable result in the host routing manifest" in out
-    assert routed.pending_events == []
+    assert out.startswith("⚠️ ROUTE_UNCONFIRMED"), out
+    [route_evt] = routed.pending_events
+    assert route_evt["predecessor_authority_source"] == preview["authority_source"]
 
     promoted = _wake_routing_ctx(tmp_path)
-    refused = _promote_chat_to_task(promoted, "Finish the racer", workspace="none",
-                                    predecessor_task_id="racer-old")
-    assert refused.startswith("⚠️ AUTHORITY_SOURCE_UNAVAILABLE (promote_chat_to_task)")
-    assert promoted.pending_events == []
+    _promote_chat_to_task(promoted, "Finish the racer", workspace="none", predecessor_task_id="racer-old")
+    [promote_evt] = promoted.pending_events
+    assert promote_evt["predecessor_task_id"] == "racer-old"
+    assert promote_evt["initiator"] == "consciousness"
+
+    (tmp_path / "task_results" / "racer-live.json").write_text(json.dumps({
+        "_schema_version": 1, "task_id": "racer-live", "status": "running", "project_id": "racer",
+    }), encoding="utf-8")
+    refused = _wake_routing_ctx(tmp_path)
+    out = _route_to_project(refused, "racer", "Continue the racer", predecessor_task_id="racer-live")
+    assert out.startswith("⚠️ AUTHORITY_SOURCE_UNAVAILABLE (route_to_project)") and "steer_task" in out
+    assert refused.pending_events == []

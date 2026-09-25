@@ -151,6 +151,7 @@ def test_blocked_session_bootstrap_terminals_unrun_with_alternatives(monkeypatch
         "reason": "subscription_window_exhausted",
         "reset_at": "2030-01-01T00:00:00Z",
         "requested": "harness",
+        "detail": "",  # a blocked route carries no producer sentence; a refused provision does (#1241)
     }
     availability = task["subagent_availability"]
     assert {key: availability[key] for key in (
@@ -404,3 +405,61 @@ def test_precustody_refusals_leave_a_durable_start_blocked_row(tmp_path):
     assert "configured_work_order_unavailable" in out.text
     reasons = [row["reason"] for row in _rows(tmp_path)]
     assert reasons[-1] == "configured_work_order_unavailable"
+
+
+def test_a_budget_continuation_never_pre_starts_the_leaf_again_and_hydrates_custody(monkeypatch, tmp_path):
+    """#1196 review finding 1: a configured ``agent_session`` nanny that paused
+    AFTER its leaf settled and its patch was disposed used to reach
+    ``_pre_start_leaf`` again on Resume (no crash handoff, no unsettled custody),
+    minting a second invocation with the original canonical assignment before
+    the grant was consumed or the transcript restored. A same-ID budget
+    continuation now bypasses the physical start, hydrates the durable custody
+    facts onto the actor bootstrap and leaves any replacement to the model."""
+    import ouroboros.delegate_evidence as evidence_mod
+    import ouroboros.subagent_runtime as runtime
+    from ouroboros.subagent_bootstrap import bootstrap_before_context
+
+    starts = []
+    monkeypatch.setattr(runtime, "exact_start", lambda _ctx, prompt, _spec: (
+        starts.append(prompt) or _fail("delegate_start", "start_probe", "probe")))
+    monkeypatch.setattr(evidence_mod, "task_execution_evidence", lambda _root, _tid: {
+        "delegated_runs_started": 1, "delegated_runs_settled": 1, "delegated_runs_succeeded": 1})
+    snapshot = _snapshot(_settings(_session_row()), "session-builder")
+    dispatch = SimpleNamespace(
+        executor="harness", blocked=False,
+        executor_resolution=SimpleNamespace(route=SimpleNamespace(route_id="codex")),
+    )
+
+    def _ctx():
+        return SimpleNamespace(task_id="child-resumed", drive_root=tmp_path,
+                               budget_drive_root=str(tmp_path), task_metadata={})
+
+    task = {"id": "child-resumed", "configured_subagent": snapshot,
+            "task_contract": {"objective": "Build"},
+            "_budget_pause_resume": {"pause_id": "p1", "grant_id": "g1", "grant_generation": 1}}
+    ctx = _ctx()
+    receipt = json.loads(bootstrap_before_context(ctx, task, dispatch))
+    assert starts == []  # no second physical invocation
+    assert receipt["status"] == "configured_session_budget_continuation"
+    assert receipt["continuation"] == {
+        "delegated_runs_started": 1, "physical_start": "not_repeated", "custody_read": "ok"}
+    bootstrap = ctx._configured_actor_bootstrap
+    assert bootstrap["physical_started"] is True and bootstrap["exact_start_pending"] is False
+    assert ctx._nanny_physical_activity_seed is True  # nanny economics see the adopted run
+    assert not hasattr(ctx, "_configured_startup_refusal")  # never an unrun $0 terminal
+
+    # Unreadable custody may hide a prior run: still no start, typed UNKNOWN fence.
+    def _boom(_root, _tid):
+        raise OSError("custody log unreadable")
+    monkeypatch.setattr(evidence_mod, "task_execution_evidence", _boom)
+    ctx_unknown = _ctx()
+    receipt_unknown = json.loads(bootstrap_before_context(ctx_unknown, task, dispatch))
+    assert starts == [] and receipt_unknown["continuation"]["custody_read"] == "failed"
+    unknown = ctx_unknown._configured_actor_bootstrap
+    assert unknown["zero_run_evidence_status"] == "unknown" and unknown["exact_start_pending"] is False
+    assert unknown["physical_started"] is False
+
+    # Control: the same task WITHOUT the continuation handoff pre-starts the exact leaf.
+    task.pop("_budget_pause_resume")
+    bootstrap_before_context(_ctx(), task, dispatch)
+    assert len(starts) == 1 and "Build" in starts[0]

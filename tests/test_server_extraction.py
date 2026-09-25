@@ -33,6 +33,8 @@ _MOVED_OWNERS = {
     "_owner_restart_requested": server_process,
     "_request_restart_exit": server_process,
     "_restart_requested": server_process,
+    "_SignalStopServer": server_process,
+    "_embedded_uvicorn_server": server_process,
     "_active_direct_roots": server_routing_context,
     "_addressable_root_tasks": server_routing_context,
     "_chat_running_tasks": server_routing_context,
@@ -201,6 +203,8 @@ def test_server_extraction_size_bounds_have_meaningful_headroom():
     # dispatch, the process state those three need, AND (on this tree) the
     # deferred restart transaction plus post-cutoff upstream drift, so the
     # bound includes the restart transaction state owned by the composition root.
-    assert counts["server"] <= 1700
+    # 1700 -> 1730 (issue #1142): the exit latch guards on revival/admission and the
+    # latch-checking thread body stay with the loop they protect.
+    assert counts["server"] <= 1730
     assert counts["ouroboros.server_routing_context"] <= 1000
     assert counts["ouroboros.server_owner_routing"] <= 1000

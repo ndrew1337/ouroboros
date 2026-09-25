@@ -240,7 +240,9 @@ def _produced_refusals(tmp_path, monkeypatch):
             control_events, "_wait_for_routing_annotation", lambda *_a, _r=receipt, **_k: dict(_r),
         )
         produced[key] = _route_to_project(
-            _tool_ctx(tmp_path, metadata={"client_message_id": "cm-1"}),
+            _tool_ctx(tmp_path, is_direct_chat=True, metadata={
+                "client_message_id": "cm-1", "origin_message_ref": _origin_ref("cm-1"),
+            }),
             project_id="", message="somewhere", predecessor_task_id="",
         )
     return produced

@@ -132,7 +132,13 @@ def test_leading_trajectory_omission_from_packet_producer_cannot_resolve_clean(t
     from ouroboros.review_substrate import task_acceptance_is_clean
     from ouroboros.tools.registry import ToolContext
 
-    ctx = ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id="task-traj")
+    import subprocess
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init"], ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+                           "commit", "--allow-empty", "-m", "fixture baseline"]):
+        subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    ctx = ToolContext(repo_dir=repo, drive_root=tmp_path, task_id="task-traj")
     packet = build_task_acceptance_evidence(
         ctx, drive_root=tmp_path, task_id="task-traj",
         llm_trace={"tool_calls": [

@@ -1,0 +1,33 @@
+# Browser proof for the code that actually landed on the shared branch.
+#
+# Two pull requests can each be green against the same base and still break the
+# interface once merged sequentially; only the merged commit proves otherwise.
+# This trigger therefore carries NO path filter — a Makefile-, `Ouroboros.spec`-
+# or requirements-only push reaches the lane too, and `ci.yml` keeps its narrower
+# path filter for every other job. The documentation-only skip is decided inside
+# the shared lane from the event diff, not here.
+#
+# No schedule and no new cron: this is a push event only. Manual runs and the
+# existing `v*` tag checks stay in ci.yml, which calls the same reusable job.
+# A red run here reports the branch state; it does not block merges by itself.
+name: UI browser (ouroboros push)
+
+on:
+  push:
+    branches: [ouroboros]
+
+permissions:
+  contents: read
+
+# Deliberately NO concurrency group. Each run skips browsers only when ITS OWN
+# `before..sha` range is documentation-only, so a later docs-only push cannot
+# vouch for an earlier code push. Cancelling in-progress runs — or replacing a
+# pending one, which a group does even without `cancel-in-progress` — would let
+# that docs-only tip end green while the code it follows was never exercised.
+# Every push keeps its own complete lane; overlapping runs cost runner time only.
+
+jobs:
+  ui-smoke:
+    uses: ./.github/workflows/ui-browser.yml
+    permissions:
+      contents: read

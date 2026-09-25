@@ -165,10 +165,10 @@ def test_api_window_skip_is_the_existing_typed_skip_status(tmp_path, monkeypatch
                 ["git", "config", "user.email", "t@t"],
                 ["git", "config", "user.name", "t"]):
         subprocess.run(cmd, cwd=repo, check=True, capture_output=True)
-    (repo / "README.md").write_text("hello\n", encoding="utf-8")
+    (repo / "README.md").write_text("hello\n", encoding="utf-8", newline="\n")
     subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True)
     subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True, capture_output=True)
-    (repo / "README.md").write_text("hello\nchanged\n", encoding="utf-8")
+    (repo / "README.md").write_text("hello\nchanged\n", encoding="utf-8", newline="\n")
     ctx = _ctx(tmp_path)
     payload = json.loads(advisory._handle_advisory_pre_review(
         ctx, commit_message="m", skip_tests=True,
@@ -490,7 +490,7 @@ def test_native_advisory_episode_bound_is_derived_from_the_advisory_models_windo
 
     monkeypatch.setattr(llm_mod, "LLMClient", lambda *a, **k: _Chat())
     ctx = _ctx(tmp_path)
-    (ctx.repo_dir / "a.txt").write_text("x\n", encoding="utf-8")
+    (ctx.repo_dir / "a.txt").write_text("x\n", encoding="utf-8", newline="\n")
     slot = SimpleNamespace(effort="low", subagent_id="")
     result, model = advisory._run_advisory_native(
         "Review the worktree.", ctx.repo_dir, ctx, slot, "openai/adv-window")
@@ -542,7 +542,7 @@ def test_native_prompt_names_the_touched_reading_and_the_bound_the_episode_appli
     monkeypatch.setattr(llm_mod, "LLMClient", lambda *a, **k: chat)
     ctx = _ctx(tmp_path)
     _write_governance_docs(ctx.repo_dir)
-    (ctx.repo_dir / "touched.py").write_text("x = 1\n" * 20_000, encoding="utf-8")
+    (ctx.repo_dir / "touched.py").write_text("x = 1\n" * 20_000, encoding="utf-8", newline="\n")
     prompt = advisory._build_advisory_prompt(
         ctx.repo_dir, "commit msg", resolved_paths=["touched.py"],
         prompt_context={"diff": "DIFF-SENTINEL", "changed_files": "M touched.py"},
@@ -593,10 +593,10 @@ def test_native_prompt_and_facts_carry_the_typed_code_when_the_reading_does_not_
     # The defect's shape: a one-line change inside a module whose BODY dwarfs
     # the diff, so only the required reading is large.
     body = "const line = 1;\n" * 40_000
-    (ctx.repo_dir / "big.js").write_text(body, encoding="utf-8")
+    (ctx.repo_dir / "big.js").write_text(body, encoding="utf-8", newline="\n")
     _git(ctx.repo_dir, "add", "-A")
     _git(ctx.repo_dir, "commit", "-qm", "base")
-    (ctx.repo_dir / "big.js").write_text(body + "const tail = 2;\n", encoding="utf-8")
+    (ctx.repo_dir / "big.js").write_text(body + "const tail = 2;\n", encoding="utf-8", newline="\n")
     _git(ctx.repo_dir, "add", "-A")
     corpus = advisory._mandatory_read_corpus_chars(ctx.repo_dir, ["big.js"])
     assert corpus > 500_000
@@ -659,7 +659,7 @@ def test_local_advisory_model_previews_the_bound_on_its_own_local_window(tmp_pat
     monkeypatch.setattr(llm_mod, "LLMClient", lambda *a, **k: chat)
     ctx = _ctx(tmp_path)
     _write_governance_docs(ctx.repo_dir)
-    (ctx.repo_dir / "big.js").write_text("const line = 1;\n" * 40_000, encoding="utf-8")
+    (ctx.repo_dir / "big.js").write_text("const line = 1;\n" * 40_000, encoding="utf-8", newline="\n")
     prompt = advisory._build_advisory_prompt(
         ctx.repo_dir, "commit msg", resolved_paths=["big.js"],
         prompt_context={"diff": "DIFF-SENTINEL", "changed_files": "M big.js",
@@ -751,11 +751,11 @@ def _carrier_repo(tmp_path):
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "t@t")
     _git(repo, "config", "user.name", "t")
-    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
-    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.0"), encoding="utf-8")
+    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8", newline="\n")
+    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.0"), encoding="utf-8", newline="\n")
     (repo / "pyproject.toml").write_text(
-        '[project]\nname = "ouroboros"\nversion = "1.0.0"\n', encoding="utf-8")
-    (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+        '[project]\nname = "ouroboros"\nversion = "1.0.0"\n', encoding="utf-8", newline="\n")
+    (repo / "app.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "base")
     return repo
@@ -781,12 +781,12 @@ def test_advisory_manifest_cuts_span_only_carriers_on_the_live_tree_pair(tmp_pat
     touched path is an ordinary row. No body is inlined on either side, the
     governance pointers are untouched, and the note precedes the diff."""
     repo = _carrier_repo(tmp_path)
-    (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8")
-    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.1"), encoding="utf-8")
+    (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8", newline="\n")
+    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.1"), encoding="utf-8", newline="\n")
     _git(repo, "add", "VERSION", "uv.lock")  # staged, span-only
     (repo / "pyproject.toml").write_text(  # UNSTAGED, and outside its span
         '[project]\nname = "ouroboros"\nversion = "1.0.1"\ndependencies = ["httpx"]\n',
-        encoding="utf-8")
+        encoding="utf-8", newline="\n")
     (repo / "app.py").write_bytes(b"x = 2\n")
     porcelain = _git(repo, "status", "--porcelain")
 
@@ -823,11 +823,11 @@ def test_advisory_manifest_keeps_a_carrier_whose_worktree_edit_leaves_its_span(t
     from ouroboros.tools import preflight_review_prompt as prompt_mod
 
     repo = _carrier_repo(tmp_path)
-    (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8")
-    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.1"), encoding="utf-8")
+    (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8", newline="\n")
+    (repo / "uv.lock").write_text(_UV_LOCK.format(v="1.0.1"), encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
     (repo / "uv.lock").write_text(
-        _UV_LOCK.format(v="1.0.1").replace("0.27.0", "0.28.0"), encoding="utf-8")
+        _UV_LOCK.format(v="1.0.1").replace("0.27.0", "0.28.0"), encoding="utf-8", newline="\n")
 
     manifest = prompt_mod._advisory_touched_manifest(
         repo, None, _git(repo, "status", "--porcelain"))
@@ -836,7 +836,7 @@ def test_advisory_manifest_keeps_a_carrier_whose_worktree_edit_leaves_its_span(t
     assert "0.28.0" not in manifest
 
     _git(repo, "reset", "-q", "HEAD", "VERSION")
-    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+    (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8", newline="\n")
     manifest = prompt_mod._advisory_touched_manifest(
         repo, None, _git(repo, "status", "--porcelain"))
     assert "carrier-cut" not in manifest and "PACK EXCLUSION NOTE" not in manifest

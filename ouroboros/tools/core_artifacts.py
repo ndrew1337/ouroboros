@@ -387,7 +387,10 @@ def _validate_wait_bound(max_wait_minutes: Any, *, wait_for_answer: bool) -> Opt
         )
     from ouroboros.config import get_task_abs_ceiling_sec
 
-    ceiling_minutes = max(1, int(get_task_abs_ceiling_sec()) // 60)
+    ceiling_sec = get_task_abs_ceiling_sec()
+    if ceiling_sec is None:  # no task lifetime: any positive bound is within it
+        return int(max_wait_minutes)
+    ceiling_minutes = max(1, int(ceiling_sec) // 60)
     if max_wait_minutes > ceiling_minutes:
         raise QuizValidationError(
             "QUIZ_WAIT_BOUND_INVALID",

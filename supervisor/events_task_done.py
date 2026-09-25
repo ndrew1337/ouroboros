@@ -57,17 +57,34 @@ log = logging.getLogger(__name__)
 _DEGRADED_TERMINAL_REASONS = frozenset({"configured_actor_incomplete", "configured_actor_unknown"})
 
 
-def _finished_with_warnings(task_done_event: Dict[str, Any]) -> bool:
-    """True when a `completed` lifecycle carries a degraded execution axis.
+def _finished_with_warnings(
+    task_done_event: Dict[str, Any], result: Dict[str, Any] | None = None,
+) -> bool:
+    """True when a `completed` lifecycle actually ended with warnings.
 
     The chat line used to take its icon and verb from the lifecycle alone, so a
     child that never ran its leaf still read as "✅ … completed" while the web
-    card, computing severity from these same axes, showed a warning. One terminal,
-    one story — for the EXECUTION axis: this mirrors only that axis of
-    `web/modules/log_events.js` `taskOutcomeSeverity`, whose objective and review
-    axes are not read here, so a child degraded on those axes alone still reads
-    as a clean completion in chat.
+    card showed a warning. Mirroring only the EXECUTION axis fixed half of that
+    (#1087): a child degraded on its objective, its review or its artifacts — the
+    other axes the card folds — still read as a clean completion. The shared
+    normalized projection (`project_dialogue.outcome_phase`, the host twin of
+    `taskOutcomeSeverity` that web/tests/fixtures/outcome_phase_parity.json pins)
+    answers the whole question instead, over the result AND the event.
+
+    PRECEDENCE IS THE CALLER'S: this only says "warnings", never which lifecycle
+    word the row uses — a cancelled or failed child keeps its own status display.
+    The axis/reason fallbacks below stay for a frame the shared projection cannot
+    settle (an open post-task checkpoint reads as still working, not as an
+    outcome), so a degraded frame never silently loses its warning.
     """
+    from ouroboros.project_dialogue import outcome_phase
+
+    record = result if isinstance(result, dict) else {}
+    phase = outcome_phase(record, task_done_event)
+    if phase == "warn":
+        return True
+    if phase in {"error", "cancelled"}:
+        return False
     axes = task_done_event.get("outcome_axes")
     execution = axes.get("execution") if isinstance(axes, dict) else None
     if isinstance(execution, dict) and str(execution.get("status") or "") == EXECUTION_DEGRADED:
@@ -75,12 +92,38 @@ def _finished_with_warnings(task_done_event: Dict[str, Any]) -> bool:
     return str(task_done_event.get("reason_code") or "") in _DEGRADED_TERMINAL_REASONS
 
 
+def _completed_lifecycle_display(
+    task_done_event: Dict[str, Any], result: Dict[str, Any] | None = None,
+) -> tuple[str, str] | None:
+    """Icon and verb for a `completed` lifecycle whose OUTCOME is not clean.
+
+    #1087: the card and Telegram fold the axes into one phase; the chat line
+    must speak the same word. A completed lifecycle can still end `error` (a
+    failed review, objective or artifacts), and `_finished_with_warnings`
+    deliberately answers False for that phase — so answering only "warnings"
+    let such a child read "✅ … completed". Returns None for a clean outcome.
+    Lifecycle-keyed fields (`subagent_event`, progress_meta `status`) are never
+    touched: only what the human line SAYS follows the phase.
+    """
+    from ouroboros.project_dialogue import outcome_phase
+
+    record = result if isinstance(result, dict) else {}
+    phase = outcome_phase(record, task_done_event)
+    if phase == "error":
+        return "❌", "finished with a failed outcome"
+    if _finished_with_warnings(task_done_event, record):
+        return "⚠️", "finished with warnings"
+    return None
+
+
 def _authoritative_terminal_cost(
     task_id: str, task: Dict[str, Any], result: Dict[str, Any], evt: Dict[str, Any], drive_root: pathlib.Path,
     *, breakdown: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Project terminal cost; the optional breakdown belongs to drive_root only."""
-    from ouroboros.cost_projection import honest_accounted_amount
+    from ouroboros.cost_projection import (
+        COST_SCOPE_ROOT_TREE, build_cost_presentation, honest_accounted_amount,
+    )
     from supervisor.state import reconstruct_task_cost
 
     authority_root = pathlib.Path(task.get("budget_drive_root") or drive_root)
@@ -143,6 +186,7 @@ def _authoritative_terminal_cost(
                 # non-final purely by a child's open row reported a cause of 0, a flag
                 # no reader could reconstruct.
                 "non_final_rows": int(subtree.get("non_final_rows") or 0),
+                "cost_presentation": build_cost_presentation(subtree, scope=COST_SCOPE_ROOT_TREE),
             })
         except Exception:
             log.error("Root subtree cost authority unavailable for %s", task_id, exc_info=True)
@@ -152,6 +196,7 @@ def _authoritative_terminal_cost(
                 "accounted_upper_bound_usd": None,
                 "accounted_upper_bound_usd_with_children": None,
                 "cost_with_children_partial": True,
+                "cost_presentation": None,
             })
     elif not is_root:
         from ouroboros.cost_projection import resolve_cost_pair
@@ -159,9 +204,20 @@ def _authoritative_terminal_cost(
         present, rollup = resolve_cost_pair(
             result, "accounted_upper_bound_usd_with_children", "cost_usd_with_children")
         if not present:
-            _, rollup = resolve_cost_pair(
+            present, rollup = resolve_cost_pair(
                 evt, "accounted_upper_bound_usd_with_children", "cost_usd_with_children")
-        projection["accounted_upper_bound_usd_with_children"] = rollup
+        if present:
+            projection["accounted_upper_bound_usd_with_children"] = rollup
+            # A child pipeline mirrors its OWN bound into the rollup key (it never
+            # walks descendants), so for a leaf that mirror carries no second
+            # scope and the own facts stand. A child that ran descendants, or a
+            # rollup that differs from the own bound, is a subtree without
+            # same-scope row facts: an own carrier must not replace it.
+            swarm = result.get("swarm_efficiency")
+            fanned_out = isinstance(swarm, dict) and int(swarm.get("subagent_count") or 0) > 0
+            own_bound = projection.get("accounted_upper_bound_usd")
+            if fanned_out or (rollup is not None and rollup != own_bound):
+                projection["cost_presentation"] = None
         projection["cost_with_children_partial"] = bool(
             result.get("cost_with_children_partial", evt.get("cost_with_children_partial", True))
         )
@@ -290,10 +346,8 @@ def _finish_task_done_dispatch(
 ) -> None:
     """Notify lineage, release queue state, and preserve terminal compatibility."""
 
-    from ouroboros.project_dialogue import (
-        append_terminal_task_projection,
-        enqueue_project_completion_summary,
-    )
+    from ouroboros.post_task_checkpoint import settle_terminal_projection
+    from ouroboros.project_dialogue import append_terminal_task_projection
 
     # This seam is shared by the normal task_done path AND the lifecycle-fault
     # resolver, so open owner-quiz/hurry projections settle on EVERY dispatched
@@ -310,8 +364,15 @@ def _finish_task_done_dispatch(
         ctx.DRIVE_ROOT, str(task_id or ""), task, final_task_result, task_done_event,
     )
 
-    enqueue_project_completion_summary(
-        ctx.DRIVE_ROOT, evt, str(task_id or ""), task, final_task_result, task_done_event,
+    # #1154: ONE continuation owns both halves of a root's owed terminal
+    # projection — the canonical Project row and Main's single mirror. It defers
+    # while post-task synthesis is still open, so the early answer stays in the
+    # Project thread and Main hears once, after the run has really finished; the
+    # post-task callback re-enters the same continuation. A run that owes nothing
+    # (a child, or a root already settled) returns immediately.
+    settle_terminal_projection(
+        ctx.DRIVE_ROOT, str(task_id or ""), task=task,
+        event={**(evt if isinstance(evt, dict) else {}), **task_done_event},
     )
 
     if task_id and str(task.get("delegation_role") or "") == "subagent":
@@ -344,10 +405,12 @@ def _finish_task_done_dispatch(
                 STATUS_INTERRUPTED: ("⏹️", STATUS_INTERRUPTED, STATUS_INTERRUPTED),
             }.get(status, ("ℹ️", status or "done", status or "finished"))
             icon, subagent_event, verb = status_display
-            if status == STATUS_COMPLETED and _finished_with_warnings(task_done_event):
+            if status == STATUS_COMPLETED:
                 # Icon and verb only: `subagent_event` and progress_meta `status`
                 # stay the lifecycle values every card and Telegram consumer keys on.
-                icon, verb = "⚠️", "finished with warnings"
+                display = _completed_lifecycle_display(task_done_event, effective_result)
+                if display:
+                    icon, verb = display
             result_text = str(effective_result.get("result") or "")
             trace_text = str(effective_result.get("trace_summary") or "")
             constraint = effective_result.get("task_constraint")
@@ -380,6 +443,8 @@ def _finish_task_done_dispatch(
                 "reserved_usd": _cost_meta.get("reserved_usd"),
                 "unresolved_upper_bound_usd": _cost_meta.get("unresolved_upper_bound_usd"),
                 "ledger_integrity_degraded": _cost_meta.get("ledger_integrity_degraded"),
+                # #498: the scoped carrier travels with the amount it explains.
+                "cost_presentation": _cost_meta.get("cost_presentation"),
                 "cost_accounting_error": _cost_meta.get("cost_accounting_error"),
                 "cost_accounting_status": str(
                     task_done_event.get("cost_accounting_status") or "unavailable"

@@ -290,4 +290,6 @@ def test_repeated_exposed_host_failure_does_not_pump_author_rounds(tmp_path, mon
     assert len(trace["review_runs"]) == run_count
     assert trace["acceptance_decision"]["reason"] == "review_degraded"
     failures = [run for run in trace["review_runs"] if run.get("aggregate_signal") == "DEGRADED"]
-    assert len(failures) == 1 and "persistent host application failure" in failures[0]["degraded_reasons"][0]
+    assert failures == []  # Host failure stays beside the real PASS, not a fake panel.
+    assert "persistent host application failure" in trace["review_decision"]["host_failure"]["detail"]
+    assert trace["acceptance_decision"]["origin"] == "host_acceptance_processing"

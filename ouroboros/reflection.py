@@ -71,32 +71,23 @@ def _trace_call_reported_failure(tc: Dict[str, Any]) -> bool:
     return _trace_call_errored(tc) or str(tc.get("post_commit_tests") or "") == "failed"
 
 
-_REFLECTION_PROMPT_ERROR = """\
-You are performing a post-task experience review for Ouroboros, a self-modifying AI agent.
-The task had errors or blocking events. Write a concise 150-250 word reflection covering:
-
-1. What was the goal?
-2. What specific errors/blocks occurred?
-3. What was the root cause (if identifiable)?
-4. What should be done differently next time?
-
-Be concrete — cite specific file names, tool names, error messages. No platitudes.
-If structured review evidence exists, incorporate the critical/advisory findings and
-open obligations into the root-cause analysis. Mention them individually with their
-severity and item/tag identity rather than collapsing them into a generic "review failed".\
-"""
-
-_REFLECTION_PROMPT_NONTRIVIAL = """\
-You are performing a post-task experience review for Ouroboros, a self-modifying AI agent.
-The task was non-trivial (high round count or high cost) but completed without hard errors.
-Write a concise 150-250 word reflection covering:
-
-1. What was the goal?
-2. What took the most rounds/cost? Where was the friction?
-3. Were there weak assumptions, unnecessary detours, or suboptimal tool choices?
-4. What would make a similar task cheaper or faster next time?
-
-Be concrete — cite specific file names, tool names, decision points. No platitudes.\
+# One open review for every run that reflects. The host states facts (origin, trace,
+# errors, review evidence, cost, sealed outcome) and asks no leading questions: the
+# two former templates opened with "What was the goal?" and one asserted "non-trivial
+# (high round count or high cost)" for runs the workspace trigger admitted, which
+# taught the model to find a shortfall in a colleague's message it had rightly left
+# unanswered (BIBLE P1/P5/P13).
+_REFLECTION_PROMPT_HEAD = """\
+Review this finished run from its recorded inputs, execution and sealed outcome. Origin
+facts describe provenance; by themselves they establish neither owner authority, consent
+nor accepted requirements. Judge what work, if any, was requested and accepted, and whether the
+recorded outcome was appropriate: silence or an empty reply can be right when nothing needed
+saying and wrong when you were asked and could help. Distinguish your own choices from host or
+provider termination, and preparation from delivery. Explain the causes of errors or blocks
+as far as the evidence shows, and each review finding or open obligation with its severity and
+item/tag identity; read an owner question and its answer together. Note costly assumptions,
+detours or tool choices and useful changes for a similar run. Cite concrete evidence and name
+missing evidence instead of guessing. No lesson and no change are valid conclusions.\
 """
 
 # Shared tail with {format} fields.
@@ -147,7 +138,7 @@ Rules for candidates:
 - Tool arguments in logs may show `<TRUNCATED:key:Nch:sha=...>` placeholders.
   That is logging metadata, not the value passed to the tool.
 
-## Task goal
+{task_inputs}## Initial text of this run
 
 {goal}
 
@@ -155,7 +146,6 @@ Rules for candidates:
 
 {trace_summary}
 
-{task_inputs}
 ## Tool usage profile
 
 {tool_usage}
@@ -181,8 +171,7 @@ I am losing. A concrete forward-looking fix can be a kind=capability_idea backlo
 MEMORY_ACTIONS_JSON and BACKLOG_CANDIDATES_JSON lines.
 """
 
-_REFLECTION_PROMPT_ERROR_FULL = _REFLECTION_PROMPT_ERROR + _REFLECTION_PROMPT_TAIL
-_REFLECTION_PROMPT_NONTRIVIAL_FULL = _REFLECTION_PROMPT_NONTRIVIAL + _REFLECTION_PROMPT_TAIL
+_REFLECTION_PROMPT = _REFLECTION_PROMPT_HEAD + _REFLECTION_PROMPT_TAIL
 
 
 def should_generate_reflection(
@@ -218,13 +207,6 @@ def should_generate_reflection(
             return True
 
     return False
-
-
-def _synthesis_effort() -> str:
-    """Post-task synthesis thinks at the owner's Task / Chat level (settings SSOT), never a literal."""
-    from ouroboros.settings_scales import resolve_effort
-
-    return resolve_effort("task")
 
 
 def _collect_error_details(llm_trace: Dict[str, Any], cap: int = 3000) -> str:
@@ -397,14 +379,26 @@ def _validate_memory_actions(raw: Any, task_id: str) -> List[Dict[str, Any]]:
     return out
 
 def task_inputs_prompt_section(review_evidence: Any) -> str:
-    """Render the same frozen task facts for summary and reflection, in full."""
+    """Render the same frozen task facts for summary and reflection, in full.
+
+    ``run_origin`` is the first key: the reader learns who started the run and
+    whether the owner door stamped it before it reads the first text, whose corpus
+    label (``initial_user`` / ``initial_text``) states only that stamp — never what
+    work was accepted, which the task contract and the recorded owner decisions say."""
     inputs = review_evidence.get("task_inputs") if isinstance(review_evidence, dict) else None
     if not isinstance(inputs, dict):
-        return "## Owner decisions and verification receipts\nTask-local input was not retained; absence is not evidence of missing approval or verification.\n\n"
+        return "## Run origin and recorded task inputs\nTask-local input was not retained; absence is not evidence of missing approval or verification.\n\n"
     return (
-        "## Owner decisions and verification receipts\n"
-        "These are recorded task inputs, separate from the critic's verdict. Preserve source attribution: "
-        "relayed peer proposals are not owner instructions. Interpret the owner's exact question and answer together. "
+        "## Run origin and recorded task inputs\n"
+        "`run_origin` is host-recorded provenance. `initial_user` marks a run the owner door stamped, by the "
+        "owner's own message or by the stamp a promoted root inherits (its text may then be a model-written "
+        "objective); `initial_text` marks a first text recorded without that stamp. Neither label decides "
+        "what work was accepted: the task contract and the recorded owner decisions do. Where `run_origin` is "
+        "absent, or shows no owner ingress beside an `initial_user` row (a run resumed across an upgrade), the "
+        "label is the recorder's older default and the origin is the host's record. These are recorded task "
+        "inputs, separate from "
+        "the critic's verdict. Preserve source attribution: relayed peer proposals are not owner instructions. "
+        "Interpret an owner question and its answer together. "
         "A recorded returncode of 0 is positive evidence, not a missing value. Use the shared verification "
         "summary for reconciliation; a later unrelated pass does not resolve another check's failure. "
         "An empty or unavailable section does not prove that no approval or check existed.\n"
@@ -521,10 +515,9 @@ def generate_reflection(
 
     if child_failure_classes and not (error_count or markers):
         error_details = "Child failure classes: " + ", ".join(child_failure_classes)
-    if error_count or markers or child_failure_classes:
-        prompt_template = _REFLECTION_PROMPT_ERROR_FULL
-    else:
-        prompt_template = _REFLECTION_PROMPT_NONTRIVIAL_FULL
+    # One frame for every run: an error-bearing and a clean run differ in the facts
+    # below (error details, markers, child classes), never in the question asked.
+    prompt_template = _REFLECTION_PROMPT
 
     if knowledge_context is None:
         from ouroboros.config import DATA_DIR
@@ -550,6 +543,7 @@ def generate_reflection(
 
     try:
         from ouroboros.consolidator import KnowledgeReadContext, KNOWLEDGE_MAINTENANCE_PROMPT, _call_consolidation_llm
+        from ouroboros.settings_scales import resolve_effort
 
         knowledge = KnowledgeReadContext(knowledge_context, "task_reflection")
         from ouroboros.consolidator import retain_memory_source
@@ -557,7 +551,7 @@ def generate_reflection(
         source_ref = retain_memory_source(knowledge_context, "task_input_reflection", complete_prompt.encode("utf-8"))
         raw_reflection_text, refl_usage = _call_consolidation_llm(
             llm_client, complete_prompt, "Task reflection", knowledge=knowledge, source_ref=source_ref,
-            reasoning_effort=_synthesis_effort())
+            reasoning_effort=resolve_effort("task"))  # the owner's Task / Chat level: one SSOT, no literal
         raw_reflection_text = raw_reflection_text.strip()
         memory_operation_errors = refl_usage.get("_consolidation_errors") or []
         if not raw_reflection_text and memory_operation_errors:
@@ -625,9 +619,10 @@ def generate_reflection(
         "ts": utc_now_iso(),
         "task_id": task.get("id", ""),
         "task_type": str(task.get("type", "")),
-        # Two goal fields with one owner each: ``goal`` is the bounded DISPLAY
-        # field every log/UI reader has always shown, ``goal_exact`` is the
-        # request as the owner wrote it. A destructive writer (the Pattern
+        # Two fields with one owner each: ``goal`` is the bounded DISPLAY field
+        # every log/UI reader has always shown, ``goal_exact`` is the run's exact
+        # initial text as recorded (whose it was is ``run_origin``'s fact, inside
+        # ``review_evidence.task_inputs``). A destructive writer (the Pattern
         # Register replaces its whole document) must decide from the exact text,
         # not from a 200-char display prefix that can end mid-sentence.
         "goal": goal,
@@ -834,7 +829,8 @@ Rules:
 
 ## New reflection
 
-Task: {goal}
+Run origin: {origin}
+Initial text: {goal}
 Markers: {markers}
 Reflection: {reflection}
 
@@ -869,6 +865,12 @@ def _update_patterns(drive_root: pathlib.Path, entry: Dict[str, Any]) -> None:
         # of the reflection once cut an exculpatory clause mid-word and the
         # register recorded the inverse of what the reflection concluded.
         current_patterns=current,
+        # The run's provenance rides beside its exact initial text: an error class is
+        # a failure, never "who spoke", and the writer must not read a colleague's
+        # or a template's words as the owner's task.
+        origin=json.dumps(
+            ((entry.get("review_evidence") or {}).get("task_inputs") or {}).get("run_origin") or "not recorded",
+            ensure_ascii=False, sort_keys=True),
         goal=str(entry.get("goal_exact") or entry.get("goal") or "?"),
         markers=", ".join(entry.get("key_markers", [])),
         reflection=str(entry.get("reflection") or ""),
@@ -877,6 +879,7 @@ def _update_patterns(drive_root: pathlib.Path, entry: Dict[str, Any]) -> None:
     light_model = get_light_model()
     client = LLMClient()
     from ouroboros.llm_observability import chat_observed
+    from ouroboros.settings_scales import resolve_effort
 
     resp_msg, patterns_usage = chat_observed(
         client,
@@ -886,7 +889,7 @@ def _update_patterns(drive_root: pathlib.Path, entry: Dict[str, Any]) -> None:
         model_role="light",
         messages=[{"role": "user", "content": prompt}],
         model=light_model,
-        reasoning_effort=_synthesis_effort(),
+        reasoning_effort=resolve_effort("task"),  # the owner's Task / Chat level: one SSOT, no literal
         max_tokens=16384,
     )
     # Pattern update also runs outside the tool-event loop.

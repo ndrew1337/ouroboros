@@ -68,6 +68,8 @@ _LARGE_CONTEXT_SECTION_CHARS = LARGE_CONTEXT_SECTION_CHARS
 
 
 def build_user_content(task: Dict[str, Any]) -> Any:
+    from ouroboros.presence_context import frame_presence_user_content
+
     text = task.get("text", "")
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     if metadata.get("force_plan"):
@@ -98,7 +100,7 @@ def build_user_content(task: Dict[str, Any]) -> Any:
     attachment_image_blocks = _build_attachment_image_blocks(task)
 
     if not image_b64 and not attachment_image_blocks:
-        return text or "(empty message)"
+        return frame_presence_user_content(task, text or "(empty message)")
 
     if image_b64:
         # Backward-compat: the legacy single-image path (screenshots, desktop chat
@@ -118,7 +120,7 @@ def build_user_content(task: Dict[str, Any]) -> Any:
     else:
         content = [{"type": "text", "text": text or "(empty message)"}]
     content.extend(attachment_image_blocks)
-    return content
+    return frame_presence_user_content(task, content)
 
 
 def _build_attachment_image_blocks(task: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -859,9 +861,18 @@ def _format_recent_reflections(entries: List[Dict[str, Any]], limit: int = 10) -
 
         lines = [f"### {header}"]
 
+        # A run's first text is not its goal: the recorded origin says whose it was,
+        # and it renders even when the text is empty (empty is not "not recorded").
+        origin = ((entry.get("review_evidence") or {}).get("task_inputs") or {}).get("run_origin")
+        presence = origin.get("presence") if isinstance(origin, dict) and isinstance(origin.get("presence"), dict) else {}
+        lines.append("- Origin: " + (", ".join(
+            [f"owner_ingress={origin.get('owner_ingress')}"]
+            + [f"{key}={origin[key]}" for key in ("task_type", "source", "initiator", "text_author") if origin.get(key)]
+            + [f"{key}={presence[key]}" for key in ("provider", "conversation_id") if presence.get(key)]
+        ) if isinstance(origin, dict) else "not recorded"))
         goal = str(entry.get("goal", "")).strip()
         if goal:
-            lines.append(f"- Goal: {goal}")
+            lines.append(f"- Initial text: {goal}")
 
         markers = [str(m).strip() for m in (entry.get("key_markers") or []) if str(m).strip()]
         if markers:
@@ -1348,6 +1359,8 @@ def _capture_context_core(
         presence_section = build_presence_context_section(
             pathlib.Path(env.drive_root),
             task_metadata.get("presence"),
+            str(task.get("id") or ""),
+            status_root=canonical_root,  # a forked promoted root finds its binding's work canonically
         )
         if presence_section:
             dynamic_parts.append(presence_section)

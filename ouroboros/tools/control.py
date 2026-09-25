@@ -119,9 +119,11 @@ _PROMOTE_CHAT_DESCRIPTION = (
     "task). `project_id` starts the new task in an existing project. If your task "
     "carries a planning obligation (Swarm force_plan) that no plan review has met, the "
     "obligation moves to the new task and your own further work here is unplanned. "
-    "When this new task continues one specific "
-    "completed result shown by the host (the Main manifest or Project last-result "
-    "preview), pass its internal id as `predecessor_task_id`; pass an empty string for fresh work. "
+    "When this new task continues one specific settled result (any settled status; from "
+    "the host manifest, recent_tasks or get_task_result — any project, the "
+    "list is a hint; a helper's result is continued with its root named), pass its internal "
+    "id as `predecessor_task_id`; pass an empty string for fresh work. A live root "
+    "(steer_task instead) or a pending promote is refused. "
     "`workspace_root` points at a working folder. A project-scoped task inherits "
     "the project's working folder as its ACTIVE WORKSPACE by default (its file/"
     "shell/git tools operate there, not on the Ouroboros repo); pass "
@@ -132,9 +134,56 @@ _PROMOTE_CHAT_DESCRIPTION = (
 )
 
 
+_SCHEDULE_SUBAGENT_DESCRIPTION = (
+    "Schedule a live subagent (a child of Ouroboros). Returns task_id for later retrieval. "
+    "DEFAULT is READ-ONLY: the child inspects local repo/data/history plus web/browser and "
+    "returns findings (it cannot write local state, commit, enable tools, or run "
+    "shell/review/runtime/skills). Set write_surface to spawn a MUTATIVE (acting) child that "
+    "writes on the selected surface. You remain the sole committer of the live Ouroboros body. "
+    "self_worktree is an isolated git worktree of THIS repo: apply its workspace.patch with "
+    "integrate_subagent_patch for parallel self-modification / best-of-N. Native children on "
+    "external_workspace write directly to the SHARED external project directory (write_root or "
+    "the parent workspace); integrate_subagent_patch verifies the files already there without reapplying. "
+    "genesis (a from-scratch new project — game/site/app/new Ouroboros — auto-provisioned as a fresh "
+    "empty git repo under the durable projects root; the project directory IS the deliverable, not "
+    "integrated into this repo). "
+    "An installed skill payload under data/ is NOT a write_surface (runtime data is never one, by "
+    "design): mutate it YOURSELF via delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
+    "— a child cannot open a payload delegation — and schedule children only as read-only "
+    "designers/reviewers for that work. "
+    "COOPERATIVE MULTI-BUILDER vs GENESIS: when SEVERAL builder children must contribute to ONE new "
+    "deliverable together, give each write_surface=external_workspace and OMIT write_root — the host "
+    "mints ONE shared git tree the whole subagent tree writes into cooperatively (deeper descendants "
+    "inherit it), and you verify their combined files with integrate_subagent_patch. Use genesis only when EACH child "
+    "should own its OWN standalone durable repo (e.g. best-of-N separate builds). "
+    "Harness-delegated work uses a private snapshot; integrate_delegated_patch handles that separate patch. "
+    "Mutative children cannot commit, enable tools or write cognitive memory. Cyber-effective "
+    "children inherit selected review, skill and runtime tools; explicit task restrictions remain. Nested delegation "
+    "is allowed within configured depth/cap limits — use delegation_intent / may_mutate / "
+    "may_fan_out to tell a child to recurse further, so a 'maximum subagents / grandchildren' "
+    "request propagates structurally instead of collapsing into one flat layer. "
+    "BURST + ABSORB: when several children are INDEPENDENT, emit them in ONE batch (parallel "
+    "schedule_subagent calls in the same round) so they run concurrently, then absorb with "
+    "wait_tasks(any_terminal) — handling whichever finishes first — instead of scheduling and "
+    "blocking on them one at a time with serial wait_task calls — on cache-write-priced "
+    "routes each sibling launched before the first sibling's first response pays its own full "
+    "prefix write, so burst buys latency and spacing buys cash; your call. "
+    "INDEPENDENT VERIFIER: to check a finished deliverable without builder bias, spawn a "
+    "read-only child with memory_mode=empty whose objective carries ONLY the deliverable "
+    "location + the task's acceptance criteria (NOT your own probes/assumptions) and have it "
+    "verify through the task's own interface. "
+    "EXCHANGE OF ADDRESSED TURNS: to make children participants whose position is not "
+    "their whole participation, state the rules in objective/constraints (what is interim, "
+    "whom to address, what ends participation); a native child reaches you or a sibling with "
+    "forward_to_worker and waits with await_messages, and its final answer ends its "
+    "participation; a session (delegate_start) continues in the SAME session through "
+    "delegate_answer when it can ask mid-run, else a later turn is a NEW run. Always retrieve "
+    "the handoff with get_task_result, wait_task, or wait_tasks before relying on its results."
+)
+
+
 def get_tools() -> List[ToolEntry]:
     from ouroboros.config import EFFORT_SCALE
-
     return [
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",
@@ -167,7 +216,7 @@ def get_tools() -> List[ToolEntry]:
                     "workspace_root": {"type": "string", "description": "Optional absolute working-folder path (validated at admission as an ordinary folder or Git worktree root outside the Ouroboros repo/data). Git-specific operations require a Git worktree; ordinary file and process work is supported directly in a validated folder. When omitted for a project-scoped task, the project's registered working_dir is used by default. Leave empty to work in Ouroboros's own repository (the Main default).", "default": ""},
                     "workspace": {"type": "string", "description": "Pass 'none' to opt OUT of the project room's default working folder (a folder-less task in a folder-ful project). Leave empty otherwise.", "default": ""},
                     "source": {"type": "string", "description": "Attach or clone the project's working folder in ONE move: a git URL (https://... or git@host:path — cloned server-side into the projects root; private repos fail typed auth_required) or an existing folder path (validated attach). The folder is registered on the project (provenance + trusted_at) and becomes this task's active workspace. Use for 'help me debug this GitHub repo / this folder' asks.", "default": ""},
-                    "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the completed result id shown by the host routing manifest to continue it."},
+                    "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the id of a settled result (any settled status; any project, the host list is a hint; a helper's result is continued with its root named) to continue it. A live root or a pending promote is refused."},
                 },
                 "required": ["objective", "predecessor_task_id"],
             },
@@ -217,15 +266,15 @@ def get_tools() -> List[ToolEntry]:
                 "CALL THIS TOOL with project_id='' and the owner's message: it emits the typed "
                 "needs_manual_target acknowledgement with host-validated task options and New task "
                 "in Project; prose alone cannot emit that typed choice. For brand-new work that is not yet a project, "
-                "use promote_chat_to_task instead. When continuing one completed result from the "
-                "Main host manifest, pass its internal `predecessor_task_id`; pass an empty string for fresh work. "
-                "Returns a visible routing receipt."
+                "use promote_chat_to_task instead. When continuing one settled result (any project; "
+                "the host list is a hint), pass its internal `predecessor_task_id`; pass an empty "
+                "string for fresh work. Returns a visible routing receipt."
             ),
             "parameters": {"type": "object", "properties": {
                 "project_id": {"type": "string", "default": "", "description": "Target project id (filesystem-clean; see list_projects), or empty to emit typed needs_manual_target."},
                 "message": {"type": "string", "description": "The owner message / work to route into the project."},
                 "reason": {"type": "string", "default": "", "description": "Optional short why-this-project note (provenance)."},
-                "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the completed result id listed by the Main host manifest to continue it."},
+                "predecessor_task_id": {"type": "string", "description": "Required explicit selector: pass an empty string for fresh work, or the id of a settled result (any settled status; any project, the host list is a hint; a helper's result is continued with its root named) to continue it. A live root or a pending promote is refused."},
                 "candidates": {"type": "array", "items": {"type": "string"}, "description": "Optional, ONLY with project_id='': the task/project ids you consider plausible, in preference order. The typed picker shows them first; ids not in the host-built option list are ignored."},
             }, "required": ["message", "predecessor_task_id"]},
         }, _route_to_project),
@@ -240,7 +289,8 @@ def get_tools() -> List[ToolEntry]:
                 "owner's steering text; from a task it is written as a message from THIS task (never "
                 "owner text, no file attachments), and the result says written, not read. The task picks "
                 "it up at its next step. If no running task clearly fits, use promote_chat_to_task "
-                "(new work) or answer inline — never steer a task you are unsure about."
+                "(new work) or answer inline — never steer a task you are unsure about. "
+                "A Presence-bound turn can steer only work in its own binding; the host checks it."
             ),
             "parameters": {"type": "object", "properties": {
                 "task_id": {"type": "string", "description": "Id of the running task to steer (from current_chat.running_tasks)."},
@@ -249,46 +299,7 @@ def get_tools() -> List[ToolEntry]:
         }, _steer_task),
         ToolEntry("schedule_subagent", {
             "name": "schedule_subagent",
-            "description": (
-                "Schedule a live subagent (a child of Ouroboros). Returns task_id for later retrieval. "
-                "DEFAULT is READ-ONLY: the child inspects local repo/data/history plus web/browser and "
-                "returns findings (it cannot write local state, commit, enable tools, or run "
-                "shell/review/runtime/skills). Set write_surface to spawn a MUTATIVE (acting) child that "
-                "writes on the selected surface. You remain the sole committer of the live Ouroboros body. "
-                "self_worktree is an isolated git worktree of THIS repo: apply its workspace.patch with "
-                "integrate_subagent_patch for parallel self-modification / best-of-N. Native children on "
-                "external_workspace write directly to the SHARED external project directory (write_root or "
-                "the parent workspace); integrate_subagent_patch verifies the files already there without reapplying. "
-                "genesis (a from-scratch new project — game/site/app/new Ouroboros — auto-provisioned as a fresh "
-                "empty git repo under the durable projects root; the project directory IS the deliverable, not "
-                "integrated into this repo). "
-                "An installed skill payload under data/ is NOT a write_surface (runtime data is never one, by "
-                "design): mutate it YOURSELF via delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
-                "— a child cannot open a payload delegation — and schedule children only as read-only "
-                "designers/reviewers for that work. "
-                "COOPERATIVE MULTI-BUILDER vs GENESIS: when SEVERAL builder children must contribute to ONE new "
-                "deliverable together, give each write_surface=external_workspace and OMIT write_root — the host "
-                "mints ONE shared git tree the whole subagent tree writes into cooperatively (deeper descendants "
-                "inherit it), and you verify their combined files with integrate_subagent_patch. Use genesis only when EACH child "
-                "should own its OWN standalone durable repo (e.g. best-of-N separate builds). "
-                "Harness-delegated work uses a private snapshot; integrate_delegated_patch handles that separate patch. "
-                "Mutative children cannot commit, enable tools or write cognitive memory. Cyber-effective "
-                "children inherit selected review, skill and runtime tools; explicit task restrictions remain. Nested delegation "
-                "is allowed within configured depth/cap limits — use delegation_intent / may_mutate / "
-                "may_fan_out to tell a child to recurse further, so a 'maximum subagents / grandchildren' "
-                "request propagates structurally instead of collapsing into one flat layer. "
-                "BURST + ABSORB: when several children are INDEPENDENT, emit them in ONE batch (parallel "
-                "schedule_subagent calls in the same round) so they run concurrently, then absorb with "
-                "wait_tasks(any_terminal) — handling whichever finishes first — instead of scheduling and "
-                "blocking on them one at a time with serial wait_task calls — on cache-write-priced "
-                "routes each sibling launched before the first sibling's first response pays its own full "
-                "prefix write, so burst buys latency and spacing buys cash; your call. "
-                "INDEPENDENT VERIFIER: to check a finished deliverable without builder bias, spawn a "
-                "read-only child with memory_mode=empty whose objective carries ONLY the deliverable "
-                "location + the task's acceptance criteria (NOT your own probes/assumptions) and have it "
-                "verify through the task's own interface. Always retrieve "
-                "the handoff with get_task_result, wait_task, or wait_tasks before relying on its results."
-            ),
+            "description": _SCHEDULE_SUBAGENT_DESCRIPTION,
             "parameters": {
                 "type": "object",
                 # DERIVED, not restated: schedule_subagent_properties() is the single source
@@ -405,6 +416,7 @@ def get_tools() -> List[ToolEntry]:
                 "focus_source_sha256": {"type": "string", "default": "", "description": "With include_focus_source: select the retained source by the sha256 the roster row quoted, so a later focus of the same author cannot substitute its evidence."},
                 "source_start_char": {"type": "integer", "description": "Inclusive character offset for the requested canonical source range."},
                 "source_end_char": {"type": "integer", "description": "Exclusive character offset for the requested canonical source range. A range outside the source returns no text: the answer names complete_chars and the range received, and is an argument error."},
+                "presence_scope": {"type": "string", "enum": ["own_binding"], "description": "Presence tasks only: read just independent work started from this Presence binding (any of its conversations) or this task's own tree."},
             }},
         }, _get_task_result),
         ToolEntry("wait_task", {
@@ -431,6 +443,7 @@ def get_tools() -> List[ToolEntry]:
                 "mode": {"type": "string", "enum": ["all_terminal", "any_terminal"], "default": "all_terminal"},
             }},
         }, _wait_for_tasks, timeout_sec=7200),
+        await_messages_entry(),
     ]
 
 
@@ -510,7 +523,9 @@ from ouroboros.tools.control_task_results import (  # noqa: E402, F401 -- intent
     _UNMINTED_WAIT_GRACE_SEC,
     _WAIT_TASK_CLAMP_SEC,
     _WAIT_TASKS_CLAMP_SEC,
+    _await_messages,
     _children_roster_projection,
+    await_messages_entry,
     _count_live_sibling_children,
     _get_task_result,
     _subtask_outcome_summary,

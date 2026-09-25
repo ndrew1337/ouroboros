@@ -83,6 +83,21 @@ def resolve_registration(gateway, scope_root: str, execution_root: str, access: 
     return project_id, owned_project_id, persistent_registration(execution_root, access)
 
 
+# How a run's ``maxSeconds`` was decided (#1196), recorded on the START_REQUESTED
+# and STARTED rows as ``max_seconds_basis``. Only a cap the nanny ASKED for — an
+# explicit finite leaf cap, at most narrowed by the engine's schema bound — makes
+# a later ``wall_clock_exceeded`` a finite-leaf expiry a continuation may follow;
+# a cap the nanny's own deadline or lifetime derived (or narrowed) expiring IS
+# that deadline, and a row that predates the field is unknown, never assumed.
+CAP_BASIS_REQUESTED = "requested"
+CAP_BASIS_REQUESTED_CLAMPED_SCHEMA = "requested_clamped_by_schema"
+CAP_BASIS_REQUESTED_CLAMPED_DEADLINE = "requested_clamped_by_deadline"
+CAP_BASIS_REQUESTED_CLAMPED_LIFETIME = "requested_clamped_by_lifetime"
+CAP_BASIS_DEADLINE_DERIVED = "deadline_derived"
+CAP_BASIS_LIFETIME_DERIVED = "lifetime_derived"
+CAP_BASIS_OPERATION_WINDOW = "operation_window"
+FINITE_LEAF_CAP_BASES = frozenset({CAP_BASIS_REQUESTED, CAP_BASIS_REQUESTED_CLAMPED_SCHEMA})
+
 # The STARTED row's string facts as ``(RunCustody attribute, row key)`` pairs —
 # one table shared by the replay and the ``record_started`` emit.
 STARTED_STR_FIELDS: Tuple[Tuple[str, str], ...] = tuple(
@@ -94,6 +109,9 @@ STARTED_STR_FIELDS: Tuple[Tuple[str, str], ...] = tuple(
         "authority_source", "access", "mode", "isolation",
         "selected_subagent_id", "config_fingerprint", "work_order_fingerprint",
         "work_order_coverage", "authority_fingerprint",
+        # #1196: the prior run this start explicitly continues (a confirmed
+        # wall-clock expiry), "" for every ordinary start.
+        "continuation_of",
     )
 )
 # None means an old row omitted the choice; '' is a captured default choice.

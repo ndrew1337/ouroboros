@@ -3,6 +3,7 @@ import { apiFetch } from './api_client.js';
 import { setInlineStatus } from './ui_helpers.js';
 export const MODEL_CATALOG_TIMEOUT_MS = 25000;
 let catalogRefreshSeq = 0;
+const buttonRefreshes = new WeakMap();
 
 // Account login/status is the authority for subscription model discovery. Keep
 // one small signature of the confirmed account facts so a newly settled login
@@ -194,6 +195,7 @@ export async function refreshModelCatalog({ button } = {}) {
     const statusEl = document.getElementById('settings-model-catalog-status');
     setCatalogStatus(statusEl, 'Refreshing model catalog...', 'muted');
     if (button) {
+        buttonRefreshes.set(button, refreshSeq);
         button.disabled = true;
         button.setAttribute('aria-busy', 'true');
     }
@@ -241,7 +243,9 @@ export async function refreshModelCatalog({ button } = {}) {
         return { items: [], errors: [{ provider_id: 'catalog', error: String(message) }] };
     } finally {
         clearTimeout(timeoutId);
-        if (button && refreshSeq === catalogRefreshSeq) {
+        // Global freshness governs data, not a particular button's busy lease.
+        if (button && buttonRefreshes.get(button) === refreshSeq) {
+            buttonRefreshes.delete(button);
             button.disabled = false;
             button.removeAttribute('aria-busy');
         }

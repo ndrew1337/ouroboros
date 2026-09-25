@@ -127,6 +127,31 @@ def quota_waited_seconds(meta: dict, now: float) -> float:
     return max(0.0, elapsed) + (max(0.0, now - observed) if clock.get("active") is True else 0.0)
 
 
+def budget_paused_seconds(meta: dict) -> float:
+    """The ONE budget-paused carrier (#1196), read from a RUNNING row, a resume
+    handoff or a pause row alike: wall time a task spent PAUSED, which is not
+    execution and is NOT part of the quota union (that clock stays its own)."""
+    try:
+        paused = float(meta.get("budget_paused_sec") or meta.get("paused_duration_sec") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, paused) if math.isfinite(paused) else 0.0
+
+
+def execution_elapsed_seconds(meta: dict, now: float) -> float:
+    """Execution time of one task: wall clock minus the quota-wait union minus
+    the separate budget-paused interval. ``started_at`` is never moved, so every
+    finite-lifetime consumer (supervisor timeouts, owner stop, the exact-pause
+    grant, the live wait controls) subtracts the same two carriers."""
+    try:
+        started = float(meta.get("started_at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+    if started <= 0 or not math.isfinite(started):
+        return 0.0
+    return max(0.0, now - started - quota_waited_seconds(meta, now) - budget_paused_seconds(meta))
+
+
 _CURRENT: contextvars.ContextVar[TaskModelWait | None] = contextvars.ContextVar(
     "ouroboros_model_wait", default=None)
 _REPREPARE: contextvars.ContextVar[dict[str, Callable] | None] = contextvars.ContextVar(
@@ -246,6 +271,11 @@ class TaskModelWait:
         self.waits: dict[str, dict] = {}
         self.clocks: dict[str, _QuotaClock] = {"": _QuotaClock()}
         self.started_monotonic = time.monotonic()
+        # The SAME budget-paused carrier the queue puts on the RUNNING row
+        # (#1196): a resumed task's finite lifetime excludes the paused wall
+        # time while its original start stays where it was.
+        self.budget_paused_sec = budget_paused_seconds(
+            task.get("_budget_pause_resume") if isinstance(task.get("_budget_pause_resume"), dict) else {})
         self.revision = 0
         self.auto_continue: dict[str, bool] = {}
         self.seen_controls: set[str] = set()
@@ -270,12 +300,22 @@ class TaskModelWait:
                 key: {k: copy.deepcopy(v) for k, v in row.items() if not k.startswith("_")}
                 for key, row in self.waits.items()}}
 
+    def executed_seconds(self, *, now: float | None = None) -> float:
+        """Live execution time: elapsed minus the quota union minus budget pause."""
+        stamp = time.monotonic() if now is None else now
+        return max(0.0, stamp - self.started_monotonic
+                   - self.paused_seconds(now=stamp) - self.budget_paused_sec)
+
     def execution_window_remaining(self) -> float | None:
-        """A custom live owner supplies its own clock; None invents no deadline."""
+        """A custom live owner supplies its own clock and a task without an absolute
+        lifetime has none; None invents no deadline, and 0.0 means the window is spent."""
         if self.owner_control is not None:
             return None
         from ouroboros.config import get_task_abs_ceiling_sec
-        return max(0.0, get_task_abs_ceiling_sec() - (time.monotonic() - self.started_monotonic - self.paused_seconds()))
+        ceiling = get_task_abs_ceiling_sec()
+        if ceiling is None:
+            return None
+        return max(0.0, ceiling - self.executed_seconds())
 
     def quota_clock_snapshot(self) -> dict:
         """The same task-wide clock fact for live publication and continuation."""
@@ -285,14 +325,29 @@ class TaskModelWait:
                     "observed_at": time.time(), "active": bool(clock.active)}
 
     def continuation_state(self) -> dict:
-        """Keep completed-call choices and accrued quota time, never live waiters."""
+        """Keep completed-call choices, accrued quota time and the paused carrier.
+
+        The budget-paused interval (#1196) rides EVERY same-ID continuation, not
+        only a budget one: a task that was paused and later parks in an owner
+        wait must resume on the same execution clock, or its planned restart
+        would count the paused wall time as execution and shrink the finite
+        lifetime it already spent (F5). Live waiters are never carried.
+        """
         with self.lock:
             return {"overrides": copy.deepcopy(self.overrides),
                     "auto_continue": dict(self.auto_continue),
+                    "budget_paused_sec": self.budget_paused_sec,
                     "quota_clock": {**self.quota_clock_snapshot(), "active": False}}
 
-    def restore_continuation(self, saved: dict, *, started_at: float | None) -> None:
-        """Rebind one fresh task owner before Runtime context or new model work."""
+    def restore_continuation(self, saved: dict, *, started_at: float | None,
+                             budget_paused_sec: float | None = None) -> None:
+        """Rebind one fresh task owner before Runtime context or new model work.
+
+        ``started_at`` is the ORIGINAL start, so the restored wall clock also
+        spans any budget pause; ``budget_paused_sec`` carries that interval
+        separately (#1196) and is subtracted by every finite-lifetime read.
+        ``None`` keeps whatever the task row already supplied.
+        """
         with self.lock:
             self.overrides = copy.deepcopy(saved.get("overrides") or {})
             self.auto_continue = dict(saved.get("auto_continue") or {})
@@ -300,6 +355,14 @@ class TaskModelWait:
             self.revision = int(clock.get("revision") or 0)
             elapsed = quota_waited_seconds({"model_wait_quota_clock": clock}, time.time())
             self.clocks = {"": _QuotaClock(elapsed=elapsed)}
+            if budget_paused_sec is None:
+                # The carrier the serializer saved: an owner-wait continuation of
+                # a task that had been budget-paused keeps the SAME paused
+                # interval across its planned restart (#1196, F5).
+                budget_paused_sec = saved.get("budget_paused_sec")
+            if budget_paused_sec is not None:
+                self.budget_paused_sec = budget_paused_seconds(
+                    {"budget_paused_sec": budget_paused_sec})
             if started_at:
                 self.started_monotonic = time.monotonic() - max(0.0, time.time() - float(started_at))
 
@@ -368,8 +431,8 @@ class TaskModelWait:
             return "execution_deadline"
         if self.owner_control is not None:
             return self.owner_control()
-        elapsed = time.monotonic() - self.started_monotonic - self.paused_seconds()
-        if elapsed >= get_task_abs_ceiling_sec():
+        ceiling = get_task_abs_ceiling_sec()  # None = unlimited; 0 = exhausted, never unlimited
+        if ceiling is not None and self.executed_seconds() >= ceiling:
             return "absolute_ceiling"
         # The loop owns delivery. A private seen copy leaves that ownership
         # intact and excludes an already-drained or superseded stop control.

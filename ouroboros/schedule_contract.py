@@ -20,6 +20,10 @@ RESERVED_TEMPLATE_FIELDS = frozenset({
     # rejects the key loudly; _task_from_schedule filters it from records
     # persisted before this rule.
     "client_surface",
+    # The owner door's stamp (``run_origin.owner_ingress``) is minted by owner
+    # routing for one accepted turn; a machine-fired template never carries it.
+    "origin_message_ref",
+    "origin_suppressed",
 })
 
 

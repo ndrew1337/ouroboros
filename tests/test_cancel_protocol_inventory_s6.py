@@ -76,7 +76,14 @@ TERMINAL_WRITERS = {
     ('ouroboros/mutation_attribution.py::capture_mutation_baseline', 'status'): 'dynamic',
     ('ouroboros/mutation_attribution.py::record_terminal_mutation_candidates', 'status'): 'dynamic',
     ('ouroboros/post_task_checkpoint.py::set_root_post_task_checkpoint', 'str(existing.get("status") or task.get("status") or STATUS_COMPLETED)'): 'terminal',
-    ('ouroboros/project_dialogue.py::_append_terminal_task_projection', 'status'): 'dynamic',
+    # #1154: the compare-and-clear of a settled terminal-projection obligation.
+    # It preserves the record's CURRENT status inside the projector and publishes
+    # no lifecycle transition of its own; the status argument is only the
+    # primitive's required placeholder.
+    ('ouroboros/terminal_projection.py::_prepare', 'stored["status"]'): 'dynamic',
+    ('ouroboros/terminal_projection.py::_append_project', 'stored["status"]'): 'dynamic',
+    ('ouroboros/terminal_projection.py::append_terminal_projection', 'status'): 'dynamic',
+    ('ouroboros/terminal_projection.py::clear_terminal_projection_obligation', 'str(expected.get("status") or "completed")'): 'terminal',
     ('ouroboros/project_naming.py::spawn_turn_namer._work', 'status'): 'dynamic',
     ('ouroboros/project_dialogue.py::persist_continuation_narrative', 'requested_status'): 'dynamic',
     # The locked field projector preserves the existing status, including a
@@ -100,6 +107,7 @@ TERMINAL_WRITERS = {
     # current terminal status; it cannot publish a lifecycle transition.
     ('supervisor/events_task_done.py::_refresh_terminal_task_cost', 'current["status"]'): 'dynamic',
     ('supervisor/queue_snapshot.py::restore_pending_from_snapshot', 'STATUS_CANCELLED'): 'terminal',
+    ('supervisor/queue_snapshot.py::_refuse_restore_invalid_fences', 'STATUS_CANCELLED'): 'terminal',
     ('supervisor/task_admission.py::record_scheduled_admission', 'STATUS_FAILED'): 'terminal',
     ('supervisor/task_admission.py::terminalize_invalid_depth_restore', 'STATUS_FAILED'): 'terminal',
     ('supervisor/task_lifecycle.py::_finish_captured_pending', 'STATUS_CANCELLED'): 'terminal',
@@ -139,6 +147,9 @@ NO_DELIVERABLE_LANES = {
         'dropped before assignment; the salvage receipt belongs to custody',
     'supervisor/queue_snapshot.py::restore_pending_from_snapshot':
         'restore-time reconciliation of a task cancelled while the server was down',
+    'supervisor/queue_snapshot.py::_refuse_restore_invalid_fences':
+        'the invalid-acceptance-fence refusal moved out of restore_pending_from_snapshot (#1196): '
+        'ordinary rows keep the pre-existing fail-closed cancel, exact budget pauses are held instead',
     'supervisor/events_task_done.py::_finish_task_done_dispatch':
         'lifecycle fault: the durable row, not a message, is the disclosure',
     'supervisor/events_task_done.py::_resolve_lifecycle_fault':

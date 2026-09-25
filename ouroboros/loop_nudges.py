@@ -170,7 +170,7 @@ def _build_recent_tool_trace(
 
 def _maybe_inject_self_check(
     round_idx: int,
-    max_rounds: int,
+    max_rounds: Optional[int],
     messages: List[Dict[str, Any]],
     accumulated_usage: Dict[str, Any],
     emit_progress: Callable[[str], None],
@@ -181,9 +181,11 @@ def _maybe_inject_self_check(
     cost_ceiling: Optional["task_pacing.CostCeiling"] = None,
     llm_trace: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Inject a normal user-turn self-check and emit one checkpoint event."""
+    """Inject a normal user-turn self-check and emit one checkpoint event. Without a round
+    limit (``max_rounds is None``) it names the rounds used and no invented remainder."""
     REMINDER_INTERVAL = 15
-    if round_idx <= 1 or round_idx % REMINDER_INTERVAL != 0 or round_idx >= max_rounds:
+    if (round_idx <= 1 or round_idx % REMINDER_INTERVAL != 0
+            or (max_rounds is not None and round_idx >= max_rounds)):
         return False
     # Non-incrementing round re-entries (e.g. free redials): one self-check per round.
     if accumulated_usage.get("_self_check_round") == round_idx:
@@ -216,10 +218,13 @@ def _maybe_inject_self_check(
 
     tool_trace = _build_recent_tool_trace(messages, llm_trace=llm_trace)
 
+    round_text, remaining_text = f"round {round_idx}", ""
+    if max_rounds is not None:
+        round_text += f"/{max_rounds}"
+        remaining_text = f" | Rounds remaining: {max_rounds - round_idx}"
     reminder = (
-        f"[CHECKPOINT {checkpoint_num} — round {round_idx}/{max_rounds}]\n"
-        f"Context: ~{ctx_tokens} tokens | Cost so far: {cost_text} | "
-        f"Rounds remaining: {max_rounds - round_idx}\n"
+        f"[CHECKPOINT {checkpoint_num} — {round_text}]\n"
+        f"Context: ~{ctx_tokens} tokens | Cost so far: {cost_text}{remaining_text}\n"
         f"{tree_line}"
     )
     if tool_trace:
@@ -402,7 +407,7 @@ def _maybe_inject_nanny_economics_reminder(
 def _inject_round_checkpoints(
     *,
     round_idx: int,
-    max_rounds: int,
+    max_rounds: Optional[int],
     messages: List[Dict[str, Any]],
     accumulated_usage: Dict[str, Any],
     emit_progress: Callable[[str], None],

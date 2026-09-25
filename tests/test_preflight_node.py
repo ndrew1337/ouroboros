@@ -311,6 +311,8 @@ def test_node_containment_unknown_remains_a_hard_block(tmp_path, monkeypatch):
     assert result["returncode"] == 0
     assert "PREFLIGHT_CONTAINMENT_FAILED" in result["error"]
     assert "could not be enumerated" in result["error"]
+    # The runner keys tree retention on this field, not on the rendered text.
+    assert result["reap_error"] == "the live process table could not be enumerated"
 
 
 # ── Orchestration: the gate runs the lane on the CANDIDATE tree ───────

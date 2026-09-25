@@ -265,7 +265,7 @@ test('a real debt beside a real execution cause is one card line', () => {
         reason_code: 'delegated_custody_unreconciled',
         delegated_runs_unreconciled: ['run-a1', 'run-b2'],
         outcome_axes: { execution: { status: 'failed', reason_code: 'provider_unavailable' } },
-    }), 'provider_unavailable · Some delegated work was never reconciled.');
+    }), 'The model provider stopped answering, so the task could not finish · Some delegated work was never reconciled.');
 });
 
 // A LIVE task_done event carries the row's own debt list too
@@ -288,7 +288,7 @@ test('a record carrying no debt list states nothing about the debt', () => {
         status: 'failed',
         reason_code: 'delegated_custody_unreconciled',
         outcome_axes: { execution: { status: 'failed', reason_code: 'provider_unavailable' } },
-    }), 'provider_unavailable');
+    }), 'The model provider stopped answering, so the task could not finish');
     assert.equal(taskReasonDetail({
         status: 'completed',
         reason_code: 'delegated_custody_unreconciled',

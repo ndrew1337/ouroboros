@@ -68,22 +68,22 @@ def _download_refs(version):
 
 
 def _write_carriers(repo, version, *, history=("7.0.0", "6.104.0"), intro="Intro line.\n"):
-    (repo / "VERSION").write_text(f"{version}\n")
+    (repo / "VERSION").write_text(f"{version}\n", newline="\n")
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "ouroboros"\n'
         f'version = "{version}"\n'
-        'description = "self-modifying agent"\n'
+        'description = "self-modifying agent"\n', newline="\n"
     )
     (repo / "web").mkdir(exist_ok=True)
     (repo / "web" / "package.json").write_text(
         '{\n  "name": "ouroboros-web",\n'
         f'  "version": "{version}",\n'
-        '  "private": true\n}\n'
+        '  "private": true\n}\n', newline="\n"
     )
     (repo / "web" / "modules").mkdir(exist_ok=True)
     (repo / "web" / "modules" / "api_types.js").write_text(
         f"export const GATEWAY_CONTRACT_VERSION = '{version}';\n"
-        "export const OTHER = 1;\n"
+        "export const OTHER = 1;\n", newline="\n"
     )
     (repo / "README.md").write_text(
         "# Ouroboros\n\n"
@@ -94,7 +94,7 @@ def _write_carriers(repo, version, *, history=("7.0.0", "6.104.0"), intro="Intro
         "|---------|------|-------------|\n"
         + _history_rows(*history)
         + "\n"
-        + _download_refs(version)
+        + _download_refs(version), newline="\n"
     )
     (repo / "docs").mkdir(exist_ok=True)
     # encoding pinned: the header carries an em dash, and Windows' locale codec
@@ -102,12 +102,12 @@ def _write_carriers(repo, version, *, history=("7.0.0", "6.104.0"), intro="Intro
     # resolver cannot decode — the file then stays a conflict instead of clean.
     (repo / "docs" / "ARCHITECTURE.md").write_text(
         f"# Ouroboros v{version} — Architecture & Reference\n\nArchitecture body.\n",
-        encoding="utf-8",
+        encoding="utf-8", newline="\n"
     )
     (repo / "uv.lock").write_text(
         'version = 1\n\n[[package]]\nname = "ouroboros"\n'
         f'version = "{version}"\nsource = {{ editable = "." }}\n\n'
-        '[[package]]\nname = "httpx"\nversion = "0.27.0"\n'
+        '[[package]]\nname = "httpx"\nversion = "0.27.0"\n', newline="\n"
     )
 
 
@@ -119,8 +119,8 @@ def _init_carrier_repo(tmp_path):
     _git(repo, "config", "user.email", "t@example.com")
     _git(repo, "config", "user.name", "t")
     _git(repo, "config", "commit.gpgsign", "false")
-    (repo / "BIBLE.md").write_text("constitution\n")
-    (repo / "a.txt").write_text("base\n")
+    (repo / "BIBLE.md").write_text("constitution\n", newline="\n")
+    (repo / "a.txt").write_text("base\n", newline="\n")
     _write_carriers(repo, "7.0.0")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "v7.0.0 baseline")
@@ -218,14 +218,14 @@ def test_non_carrier_conflict_in_the_same_file_stays_a_conflict(tmp_path, monkey
         text = (r / "pyproject.toml").read_text()
         (r / "pyproject.toml").write_text(
             text.replace('description = "self-modifying agent"',
-                         'description = "official rewrite"')
+                         'description = "official rewrite"'), newline="\n"
         )
 
     def local_description(r):
         text = (r / "pyproject.toml").read_text()
         (r / "pyproject.toml").write_text(
             text.replace('description = "self-modifying agent"',
-                         'description = "local rewrite"')
+                         'description = "local rewrite"'), newline="\n"
         )
 
     _official_bump(repo, head, "7.0.1", extra=official_description)
@@ -249,7 +249,7 @@ def test_malformed_anchor_degrades_to_assisted(tmp_path, monkeypatch):
     repo, head = _init_carrier_repo(tmp_path)
     _official_bump(repo, head, "7.0.1")
     _local_bump(repo, "7.1.0")
-    (repo / "VERSION").write_text("not-a-version\n")  # anchor destroyed locally
+    (repo / "VERSION").write_text("not-a-version\n", newline="\n")  # anchor destroyed locally
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "malformed local VERSION")
     _point_at(monkeypatch, tmp_path, repo, head)
@@ -266,7 +266,7 @@ def test_duplicate_anchor_degrades_to_assisted(tmp_path, monkeypatch):
     _official_bump(repo, head, "7.0.1")
     _local_bump(repo, "7.1.0")
     text = (repo / "pyproject.toml").read_text()
-    (repo / "pyproject.toml").write_text(text + 'version = "9.9.9"\n')  # second anchor
+    (repo / "pyproject.toml").write_text(text + 'version = "9.9.9"\n', newline="\n")  # second anchor
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "duplicate local version anchor")
     _point_at(monkeypatch, tmp_path, repo, head)
@@ -289,7 +289,7 @@ def test_base_re_merge_resolves_carrier_conflicts_before_write_tree(tmp_path, mo
     repo, head = _init_carrier_repo(tmp_path)
     _official_bump(repo, head, "7.0.1")
     _local_bump(repo, "7.1.0")
-    (repo / "dirty.txt").write_text("uncommitted owner work\n")
+    (repo / "dirty.txt").write_text("uncommitted owner work\n", newline="\n")
     _point_at(monkeypatch, tmp_path, repo, head)
 
     plan = update_merge.plan_managed_update_merge(fetch=False, build=True)
@@ -318,10 +318,10 @@ def test_live_materializer_resolves_carrier_conflicts_for_the_assisted_lane(tmp_
     repo, head = _init_carrier_repo(tmp_path)
 
     def official_code(r):
-        (r / "a.txt").write_text("official code change\n")
+        (r / "a.txt").write_text("official code change\n", newline="\n")
 
     def local_code(r):
-        (r / "a.txt").write_text("local code change\n")
+        (r / "a.txt").write_text("local code change\n", newline="\n")
 
     _official_bump(repo, head, "7.0.1", extra=official_code)
     _local_bump(repo, "7.1.0", extra=local_code)
@@ -551,23 +551,23 @@ def test_carrier_postcondition_names_a_web_package_lock_the_sync_cannot_fix(tmp_
     does not recognise (no "name" key ahead of its version) keeps the fork
     version; the projection must report the desync naming the lockfile."""
     repo, head = tua._init_repo(tmp_path)
-    (repo / "VERSION").write_text("1.0.0\n")
+    (repo / "VERSION").write_text("1.0.0\n", newline="\n")
     (repo / "web").mkdir()
-    (repo / "web" / "package.json").write_text('{\n  "version": "1.0.0"\n}\n')
+    (repo / "web" / "package.json").write_text('{\n  "version": "1.0.0"\n}\n', newline="\n")
     (repo / "web" / "package-lock.json").write_text(
         '{\n  "name": "ouroboros-web",\n  "version": "1.0.0",\n  "lockfileVersion": 3,\n'
-        '  "packages": {\n    "": {\n      "version": "1.0.0"\n    }\n  }\n}\n'
+        '  "packages": {\n    "": {\n      "version": "1.0.0"\n    }\n  }\n}\n', newline="\n"
     )
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "carrier base")
     _git(repo, "checkout", "-q", "-b", "remote-sim")
-    (repo / "VERSION").write_text("2.0.0\n")
-    (repo / "official.txt").write_text("official\n")
+    (repo / "VERSION").write_text("2.0.0\n", newline="\n")
+    (repo / "official.txt").write_text("official\n", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "official release")
     target = _git(repo, "rev-parse", "HEAD").stdout.strip()
     _git(repo, "checkout", "-q", head)
-    (repo / "VERSION").write_text("1.5.0\n")
+    (repo / "VERSION").write_text("1.5.0\n", newline="\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "fork release")
     _point_at(monkeypatch, tmp_path, repo, head)

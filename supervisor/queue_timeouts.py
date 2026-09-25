@@ -16,7 +16,8 @@ import uuid
 from typing import Any, Dict
 
 from supervisor.cognitive_operations import _active_operation_progressing
-from supervisor.task_model_wait import model_waiting, quota_waited_seconds
+from ouroboros.model_wait import execution_elapsed_seconds
+from supervisor.task_model_wait import model_waiting
 from supervisor.task_reaper import (
     resolve_grace_episode_for_spared_task as _resolve_grace_episode_for_spared_task,
 )
@@ -168,7 +169,7 @@ def _has_live_descendant(task_id: str) -> bool:
 def _has_pending_descendant(task_id: str) -> bool:
     """True if any PENDING (queued, not yet assigned) task is a descendant of task_id. A
     parent whose children are merely WAITING for worker capacity (saturation / project lease)
-    is not idle/stuck — keep it alive (bounded by the absolute ceiling) so it can integrate
+    is not idle/stuck — keep it alive (bounded by Stop, deadline, budget and any absolute ceiling) so it can integrate
     them once they run, instead of killing it and orphaning the queued subtree."""
     if not task_id:
         return False
@@ -203,7 +204,9 @@ def _enforce_task_timeouts_locked(
         if started_at <= 0:
             continue
         last_hb = float(meta.get("last_heartbeat_at") or started_at)
-        runtime_sec = max(0.0, now - started_at - quota_waited_seconds(meta, now))
+        # Execution time = wall clock minus quota waits minus the SEPARATE
+        # budget-paused interval (#1196); started_at itself is never moved.
+        runtime_sec = execution_elapsed_seconds(meta, now)
         hb_lag_sec = max(0.0, now - last_hb)
         hb_stale = hb_lag_sec >= _queue().HEARTBEAT_STALE_SEC
         _wid = meta.get("worker_id")
@@ -226,7 +229,7 @@ def _enforce_task_timeouts_locked(
         # ceilings still apply independently.
         if task_type == "deep_self_review":
             idle_timeout = max(idle_timeout, 3600.0)
-        abs_ceiling = float(_queue().get_task_abs_ceiling_sec())
+        abs_ceiling = _queue().get_task_abs_ceiling_sec()  # None = no lifetime bound
         last_progress_at = float(meta.get("last_progress_at") or started_at)
         idle_sec = max(0.0, now - last_progress_at)
         subtree_progressing = _queue()._subtree_progressing(task_id, now, idle_timeout)
@@ -245,7 +248,7 @@ def _enforce_task_timeouts_locked(
                        or llm_call_in_flight
                        or model_waiting(meta) or waiting_on_owner
                        or _active_operation_progressing(meta, now))
-        ceiling_reached = runtime_sec >= abs_ceiling
+        ceiling_reached = abs_ceiling is not None and runtime_sec >= float(abs_ceiling)
 
         if (
             str(task_id) in owner_stop_held

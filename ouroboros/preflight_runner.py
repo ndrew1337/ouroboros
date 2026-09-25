@@ -19,7 +19,6 @@ from typing import NamedTuple, Optional, Sequence
 # candidate's web/tests/*.test.js — see ouroboros/preflight_node.py. Imported
 # by name so tests/operators can stub `preflight_runner.run_node_tests`.
 from ouroboros.preflight_node import run_node_tests
-from ouroboros.settings_defaults import settings_env_keys
 
 
 DEFAULT_PYTEST_ARGS = ["tests/", "-q", "--tb=line", "--no-header"]
@@ -574,55 +573,15 @@ def _observed_worker_ids(temp_root: pathlib.Path) -> set:
         return set()
 
 
-def _preflight_env(temp_root: pathlib.Path, repo_worktree: pathlib.Path) -> dict:
-    env = dict(os.environ)
-    # The candidate suite must not inherit live runtime behaviour or credentials.
-    # A disposable data/settings/repo triple is injected below; every other
-    # OUROBOROS_* value is owner/runtime state, not test wiring. Keeping those
-    # values made a supposedly hermetic preflight depend on the operator's live
-    # safety/review/mode settings and could also expose prefixed secrets to a
-    # self-written test.
-    secret_suffixes = ("_API_KEY", "_TOKEN", "_PASSWORD", "_CREDENTIALS", "_SECRET")
-    # Every key config.apply_settings_to_env projects from settings.json is the
-    # same owner state under a name the prefix/suffix rules miss (provider base
-    # URLs, USE_LOCAL_*, LOCAL_MODEL_*, MCP_*, GITHUB_REPO, TOTAL_BUDGET): the
-    # suite routes on OPENAI_COMPATIBLE_BASE_URL alone. Derived, not hand-listed.
-    projected = frozenset(settings_env_keys())
-    for key in list(env):
-        if (
-            key.startswith("OUROBOROS_")
-            or key.endswith(secret_suffixes)
-            or key in projected
-            or key.startswith("GH_")
-            # Externally supplied pytest/xdist controls are dropped WHOLESALE
-            # rather than by name, because every one of them can weaken the pass
-            # while the argv still reads like a full parallel run:
-            # PYTEST_XDIST_AUTO_NUM_WORKERS decides what `-n auto` resolves to,
-            # PYTEST_ADDOPTS can append `-p no:xdist` or its own `-m`,
-            # PYTEST_PLUGINS / PYTEST_DISABLE_PLUGIN_AUTOLOAD decide whether the
-            # verified plugins load at all, and PYTEST_XDIST_WORKER /
-            # PYTEST_XDIST_TESTRUNUID / PYTEST_CURRENT_TEST leak the OUTER run's
-            # identity into the nested one. A green pass under any of those is
-            # indistinguishable from a green pass under the real gate.
-            or key.startswith("PYTEST_")
-        ):
-            env.pop(key, None)
+def _preflight_env(temp_root: pathlib.Path, repo_worktree: pathlib.Path, *, create=True) -> dict:
+    from ouroboros.test_environment import isolated_environment
+
     temp_root = pathlib.Path(temp_root).resolve(strict=False)
-    repo_worktree = pathlib.Path(repo_worktree).resolve(strict=False)
-    data_dir = (temp_root / "data").resolve(strict=False)
-    env["OUROBOROS_DATA_DIR"] = str(data_dir)
-    env["OUROBOROS_SETTINGS_PATH"] = str(data_dir / "settings.json")
-    env["OUROBOROS_REPO_DIR"] = str(repo_worktree)
-    env["PYTHONPYCACHEPREFIX"] = str((temp_root / "pycache").resolve(strict=False))
-    # Keep pytest's numbered-directory cleanup out of other runs' temp trees.
-    env["PYTEST_DEBUG_TEMPROOT"] = str(temp_root)
+    env = isolated_environment(temp_root, repo_worktree, create=create)
     # PREPENDED, so `-p ouroboros_preflight_probe` resolves to the gate's own
     # worker-count plugin and not to anything the candidate tree or the
     # operator's PYTHONPATH happens to shadow it with.
-    inherited_path = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = str(_probe_dir(temp_root)) + (
-        os.pathsep + inherited_path if inherited_path else ""
-    )
+    env["PYTHONPATH"] = str(_probe_dir(temp_root))
     # Re-injected AFTER the scrub, so `-n auto` resolves to a count this process
     # chose rather than one the operator environment happened to carry. Inert for
     # the serial/legacy passes, which pass no `-n` at all.
@@ -1195,6 +1154,48 @@ def _install_source_index_tree(
     )
 
 
+def _with_retention_notice(verdict: str, unproven: str, worktree: pathlib.Path, max_output: int) -> str:
+    """Name the kept tree (``worktree.parent``) right after the verdict's header.
+
+    Ahead of any bounded body, which is what yields when the budget is tight —
+    the priority ``_diagnosis`` keeps — and never past ``max_output``."""
+    if not unproven:
+        return verdict
+    header, _, rest = verdict.partition("\n")
+    notice = (
+        f"RETAINED (not deleted): {worktree.parent}, with the git worktree registration of "
+        f"{worktree}, because processes of this run were not proven gone; remove both "
+        f"(`git worktree remove --force {worktree}`) only once they are."
+    )
+    return "\n".join(part for part in (header, notice, rest) if part)[:max_output]
+
+
+def _release_hermetic_tree(repo, temp_root, worktree, worktree_added: bool, unproven: str) -> None:
+    """Delete the disposable tree, unless a contained lane left its teardown unproven.
+
+    ``unproven`` is armed before each contained lane starts and cleared only by
+    that lane's own proven reap, so a lane that RAISED keeps the tree exactly
+    like one whose container reported a live or undeterminable leftover: a
+    surviving process never loses the worktree it runs in, and the source
+    repository keeps the registration for whoever proves those processes gone.
+    The marker is the enclosing layers' retention protocol; this decision does
+    not depend on the marker write succeeding."""
+    if unproven:
+        from ouroboros.test_environment import retain_tree
+
+        retain_tree(temp_root, f"hermetic preflight: {unproven}")
+        return
+    if worktree_added:
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree)],
+            cwd=str(repo),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    shutil.rmtree(temp_root, ignore_errors=True)
+
+
 def run_hermetic_pytest(
     repo_dir: pathlib.Path | str,
     *,
@@ -1291,6 +1292,7 @@ def run_hermetic_pytest(
     temp_root = pathlib.Path(temp_root_path).resolve(strict=False)
     worktree = temp_root / "repo"
     worktree_added = False
+    unproven_teardown = ""
     try:
         # The probe is written BEFORE the specs are built, and the nonce name it
         # returns is what the parallel pass loads. Building the specs first and
@@ -1374,9 +1376,11 @@ def run_hermetic_pytest(
             log_preflight_test_proof(ctx, previous_proof, reused=True, phase=phase)
             return None
         started = time.monotonic()
+        unproven_teardown = "the node lane did not return, so its teardown is unconfirmed"
         node_result = run_node_tests(worktree, temp_root, timeout, max_output)
+        unproven_teardown = (node_result or {}).get("reap_error") or ""
         if node_error := (node_result or {}).get("error"):
-            return node_error
+            return _with_retention_notice(node_error, unproven_teardown, worktree, max_output)
         empty_passes = 0
         timings: list[tuple[str, float]] = []
         for spec in passes:
@@ -1392,9 +1396,11 @@ def run_hermetic_pytest(
             # own duration, or a fast serial pass would be blamed for the whole
             # gate's wall-clock after a slow parallel one.
             pass_started = time.monotonic()
+            unproven_teardown = f"the {spec.label} pass did not return, so its teardown is unconfirmed"
             returncode, output, reap_error = _execute_pytest_pass(
                 agent_python, worktree, temp_root, spec.args, remaining
             )
+            unproven_teardown = reap_error
             elapsed = time.monotonic() - pass_started
             timings.append((spec.label, round(elapsed, 1)))
             if reap_error:
@@ -1403,7 +1409,7 @@ def run_hermetic_pytest(
                 # that it cannot tell), and an exit 0 taken on top of that is
                 # exactly the fail-open the container exists to close. It is also
                 # the more urgent report — a live tree outlives this whole run.
-                return _diagnosis(
+                return _with_retention_notice(_diagnosis(
                     "⚠️ PRE_PUSH_TEST_ERROR: PREFLIGHT_CONTAINMENT_FAILED (hard block): "
                     f"the {spec.label} pass ran, but processes it spawned were still "
                     "alive afterwards (or could not be determined to be gone)",
@@ -1418,7 +1424,7 @@ def run_hermetic_pytest(
                     "report names none it states the reason instead — read that line, "
                     "since more than one cause leaves no pid to name.",
                     reap_error, max_output,
-                )
+                ), unproven_teardown, worktree, max_output)
             if returncode is None:
                 return _with_timeout_excerpt(
                     f"⚠️ PRE_PUSH_TEST_ERROR: pytest timed out after {remaining:.0f} seconds "
@@ -1475,18 +1481,11 @@ def run_hermetic_pytest(
                 log_preflight_test_proof(ctx, subject, reused=False, phase=phase, passes=timings)
         return None
     except subprocess.TimeoutExpired:
-        return f"⚠️ PRE_PUSH_TEST_ERROR: pytest timed out after {timeout} seconds"
+        failure = f"⚠️ PRE_PUSH_TEST_ERROR: pytest timed out after {timeout} seconds"
     except FileNotFoundError:
-        return f"⚠️ PRE_PUSH_TEST_ERROR: pytest not available via interpreter: {agent_python}"
+        failure = f"⚠️ PRE_PUSH_TEST_ERROR: pytest not available via interpreter: {agent_python}"
     except Exception as exc:
-        return f"⚠️ PRE_PUSH_TEST_ERROR: hermetic preflight failed: {exc}"
+        failure = f"⚠️ PRE_PUSH_TEST_ERROR: hermetic preflight failed: {exc}"
     finally:
-        if worktree_added:
-            subprocess.run(
-                ["git", "worktree", "remove", "--force", str(worktree)],
-                cwd=str(repo),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        shutil.rmtree(temp_root, ignore_errors=True)
+        _release_hermetic_tree(repo, temp_root, worktree, worktree_added, unproven_teardown)
+    return _with_retention_notice(failure, unproven_teardown, worktree, max_output)

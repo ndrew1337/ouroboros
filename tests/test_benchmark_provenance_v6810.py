@@ -542,6 +542,7 @@ def test_task_result_row_publishes_the_runtime_reason_alongside_the_adapter_stag
 _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
     "history_source_unavailable": (False, "gateway/history_paging.py: readable recent projection with explicit source gap; no task attempt was truncated"),
     "late_answer_not_delivered": (False, "gateway/task_decision.py: a late quiz answer was recorded but its chat delivery failed (503, retry); no task attempt was truncated"),
+    "budget_pausing_no_extraction": (False, "review_verdict_extraction.py: Light verdict extraction refused while the task's exact budget pause is closing dispatch (#1196); the review row stays undispatched and the attempt is paused, not truncated"),
     # -- truncating: the rail stopped the attempt, so reward 0 is not a capability fact ----
     "budget_exhausted": (True, "loop.py:287 per-task USD reservation rail"),
     "round_limit": (True, "loop.py:3128 _handle_round_limit, the round cap"),

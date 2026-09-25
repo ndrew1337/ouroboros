@@ -17,6 +17,15 @@ from hashlib import sha256
 from typing import Any, Dict, List, Optional
 
 from ouroboros import _outcome_receipts
+# The receipt projections below parameterize the reconciliation core and live
+# with it; these historical names stay resolvable through this module.
+from ouroboros._outcome_receipts import (  # explicit re-exports, one statement
+    latest_agent_defined_verification as latest_agent_defined_verification,
+    latest_unreconciled_failed_receipt as latest_unreconciled_failed_receipt,
+    latest_unreconciled_failed_verification as latest_unreconciled_failed_verification,
+    latest_unreconciled_masked_pass as latest_unreconciled_masked_pass,
+    latest_unreconciled_masked_verification as latest_unreconciled_masked_verification,
+)
 # Tool-call trace vocabulary + execution-axis classifier (leaf module). Re-exported
 # here so `from ouroboros.outcomes import _classify_tool_errors/_POLICY_DENIAL_STATUSES/...`
 # keeps resolving for every historical import site.
@@ -161,6 +170,13 @@ REASON_REVIEW_QUORUM_UNREACHABLE = "plan_review_quorum_unreachable"
 # terminalizes BLOCKED exactly like the spent-cap case above: the deliverable was
 # never accepted and no further reviewer round will happen.
 REASON_IDENTICAL_ACCEPTANCE_REFUSED = "identical_acceptance_refused"
+
+# #1223: the host could not assemble the acceptance evidence LOCALLY, before any
+# reviewer existed. It is the host's own failure, not a reviewer verdict and not a
+# reviewer rework request — the objective stays best_effort, the work is retained,
+# and the owner-facing cause says exactly that. `acceptance_preparation` on the
+# decision carries the incident identity and the real host attempt count.
+REASON_ACCEPTANCE_PREPARATION_FAILED = "acceptance_preparation_failed"
 
 # The acceptance-decision reasons whose (finalized_unaccepted, reason) PAIR
 # terminalizes the objective axis BLOCKED. Value-keyed readers of the acceptance
@@ -341,73 +357,6 @@ def should_nudge_verification(
     return not verification_grounding_present(
         llm_trace, drive_root, task_id, receipts=receipts,
     )
-
-
-def latest_unreconciled_failed_receipt(receipts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Pure core: the most recent RED receipt (``status=="fail"``) with NO later genuine
-    grounding receipt for the SAME verification (a passing run-kind check or an observed
-    artifact — see ``_RECEIPT_RED_RECONCILING_STATUSES``; a later ``declared`` does NOT
-    reconcile). Returns the failing receipt, or ``None``. Structural: the typed receipt
-    status decides pass/fail, and identity is ONE typed key: the ``criterion_id`` when
-    present, else the canonical ``check`` text, else the observed ``paths`` set (owner
-    Q28=B, content-ADDRESSING — never a semantic keyword gate). Kind AND value must match,
-    so a green of another check — or one that omits the id — no longer clears a red; a red
-    with NO key at all keeps the older any-later-green rule. Advisory, never a gate.
-    The NEWEST element of the OUTSTANDING SET (``_outcome_receipts.unreconciled_failed``)
-    — never a single latest-pointer, which a newer red would let erase an older still-red
-    one. Shared SSOT by the finalize nudge and the acceptance verification_summary so the
-    reconciliation rule lives in one place."""
-    return _outcome_receipts.latest_unreconciled_failed(receipts, _RECEIPT_RED_RECONCILING_STATUSES)
-
-
-def latest_unreconciled_failed_verification(
-    drive_root: Any, task_id: str,
-    *, receipts: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Disk-backed wrapper of ``latest_unreconciled_failed_receipt`` — reads the task's
-    durable receipts. Feeds the one-shot red-verification finalization nudge: finalizing over
-    your own host-attested red is a self-contradiction (Bible P3/P12), distinct from the
-    receipt_absent case."""
-    rows = receipts if isinstance(receipts, list) else read_verification_receipts(drive_root, task_id)
-    return latest_unreconciled_failed_receipt(rows)
-
-
-def latest_unreconciled_masked_pass(receipts: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Pure core (v6.52.2): the most recent PASS receipt whose check can MASK the real exit code
-    (``check_exit_masking`` flag from the verify sensor — e.g. ``... | tail``, ``|| true``), with
-    NO later CLEAN (non-masked) grounding receipt (a pass/observed whose check is not masked).
-    Returns the masked passing receipt, or ``None``. Identity is the ``criterion_id`` key when
-    the masked receipt carries one, else ANY clean grounding reconciles: its own text
-    identity is the MASKED command, which the remediation necessarily changes, so the red
-    path's check-text rule would be unclearable (``_outcome_receipts._reconciles_masked``).
-    The NEWEST element of the OUTSTANDING SET (``_outcome_receipts.unreconciled_masked``),
-    so a cleanly reconciled newer masked check no longer takes an older one with it.
-    FLAG-driven (typed receipt field); advisory only. Shared SSOT by the finalize nudge and
-    the acceptance verification_summary."""
-    return _outcome_receipts.latest_unreconciled_masked(receipts, _RECEIPT_RED_RECONCILING_STATUSES)
-
-
-def latest_unreconciled_masked_verification(
-    drive_root: Any, task_id: str,
-    *, receipts: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Disk-backed wrapper of ``latest_unreconciled_masked_pass`` — feeds the one-shot ADVISORY
-    masked-check finalization nudge (the agent may still finalize). Distinct from the red nudge:
-    that fires on a RED check; this fires on a green check whose exit code may be laundered."""
-    rows = receipts if isinstance(receipts, list) else read_verification_receipts(drive_root, task_id)
-    return latest_unreconciled_masked_pass(rows)
-
-
-def latest_agent_defined_verification(
-    drive_root: Any, task_id: str,
-    *, receipts: Optional[List[Dict[str, Any]]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Newest verify receipt whose criterion was AGENT-DEFINED without a stated basis
-    (v6.54.4) — feeds the one-shot advisory criterion-provenance nudge: the check
-    passed, but the success criterion was synthesized by the agent, so the agent is
-    asked once to confirm it is equivalent to what the task actually requires."""
-    rows = receipts if isinstance(receipts, list) else read_verification_receipts(drive_root, task_id)
-    return _outcome_receipts.latest_agent_defined(rows)
 
 
 def apply_receipt_absent_flag(
@@ -687,14 +636,16 @@ def _objective_axis(review: Dict[str, Any]) -> Dict[str, Any]:
     from ouroboros.review_records import validate_author_disposition
 
     author = validate_author_disposition(decision.get("author_disposition"))
-    if (_decision_reason == "author_finish" and author and author.get("enforcement") == "advisory"
+    local_failure = (decision.get("acceptance_incident") or {}).get("status") == "failed"
+    if (not local_failure and _decision_reason == "author_finish" and author and author.get("enforcement") == "advisory"
             and author.get("action", "finish") == "finish"):
         return {"status": OBJECTIVE_PASS, "source": "author_acceptance", "review_status": status,
                 "outcome_tier": OUTCOME_TIER_SOLVED, "reason": "author_finish"}
     if (
         str(decision.get("status") or "") == ACCEPTANCE_FINALIZED_UNACCEPTED
         and (_decision_reason in _ACCEPTANCE_BLOCKED_TERMINAL_REASONS
-             or (decision.get("enforcement") == "blocking" and _decision_reason in {"review_degraded", "infra_failure"}))
+             or (decision.get("enforcement") == "blocking" and _decision_reason in {
+                 "review_degraded", "infra_failure", REASON_ACCEPTANCE_PREPARATION_FAILED}))
     ):
         # D27: Required+Blocking acceptance whose shared cap is spent terminalizes
         # BLOCKED, whatever tier the last (failed) review proposed. A-material
@@ -996,6 +947,36 @@ def _loop_usage_snapshot(usage: Dict[str, Any], resource_limit: Dict[str, Any]) 
     }
 
 
+def _host_acceptance_failure_axes(
+    acceptance_decision: Dict[str, Any], llm_trace: Dict[str, Any], objective: Dict[str, Any],
+    execution_status: str, reason_code: str,
+) -> tuple:
+    """Degrade the axes a HOST-side acceptance failure owns, updating `objective` in place.
+
+    Two distinct host failures, neither a critic verdict: processing that failed
+    around real custody, and the LOCAL preparation that never reached a reviewer.
+    Stronger rail/stop/critic classifications and their causes are kept.
+    """
+    if acceptance_decision.get("origin") == "host_acceptance_processing":
+        # Host processing failed around real custody; it is no critic verdict.
+        if execution_status == EXECUTION_OK:
+            execution_status, reason_code = EXECUTION_DEGRADED, "infra_failure"
+        if objective.get("status") in {OBJECTIVE_PASS, OBJECTIVE_NOT_EVALUATED}:
+            objective.update(status=OBJECTIVE_DEGRADED, source="task_acceptance_review",
+                             reason="infra_failure")
+    incident = acceptance_decision.get("acceptance_incident") or _trace_mapping(llm_trace, "acceptance_preparation")
+    if incident.get("status") == "failed" and int(incident.get("attempts") or 0) > 0:
+        # Local preparation is no critic verdict, but cannot produce an ordinary Done.
+        if execution_status == EXECUTION_OK:
+            execution_status = EXECUTION_BEST_EFFORT
+            reason_code = REASON_ACCEPTANCE_PREPARATION_FAILED
+        if objective.get("status") in {OBJECTIVE_PASS, OBJECTIVE_NOT_EVALUATED}:
+            objective.update(status=OBJECTIVE_BEST_EFFORT, source="task_acceptance_preparation",
+                             reason=REASON_ACCEPTANCE_PREPARATION_FAILED,
+                             outcome_tier=OUTCOME_TIER_BEST_EFFORT)
+    return execution_status, reason_code
+
+
 def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[str, Any]) -> Dict[str, Any]:
     """Return a typed LoopOutcome-compatible dict."""
     usage_status = str(usage.get("execution_status") or usage.get("result_status") or "").strip()
@@ -1152,6 +1133,8 @@ def derive_loop_outcome(final_text: str, usage: Dict[str, Any], llm_trace: Dict[
         }
     review = _review_axis(llm_trace)
     objective = _objective_axis(review)
+    execution_status, reason_code = _host_acceptance_failure_axes(
+        acceptance_decision, llm_trace, objective, execution_status, reason_code)
     plan_gate = _trace_mapping(llm_trace, "force_plan_decision")
     _plan_gate_status = str(plan_gate.get("status") or "")
     if _plan_gate_status == "author_stopped" or (str(plan_gate.get("enforcement") or "") == "blocking" and (

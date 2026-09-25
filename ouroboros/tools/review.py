@@ -3,7 +3,7 @@
 import json
 import logging
 import pathlib
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from ouroboros.llm import LLMClient  # noqa: F401 -- facade import surface; leaves read it through the call-time handle
 from ouroboros.utils import (
@@ -109,6 +109,18 @@ def get_tools():
                             "type": "string", "enum": ["finish", "stop"],
                             "description": "Finish the current result under its review policy, or stop honestly with unfinished work. Stop never authorizes a blocked action; include rationale. Omission preserves explicit Advisory finish.",
                         },
+                        "acceptance_retry": {
+                            "type": "object",
+                            "description": "ONE-USE retry of a disclosed local acceptance-preparation failure. Name the incident id the host disclosed and the substantive basis: material_change (the requirements or material evidence really changed), repair_evidence (the cause was repaired for the same material) or owner_retry (the owner explicitly asked). Re-sending the same declaration grants nothing further; a plain re-nomination, a rephrasing or a status question is not a retry.",
+                            "properties": {
+                                "incident_id": {"type": "string"},
+                                "basis": {"type": "string", "enum": ["material_change", "repair_evidence", "owner_retry"]},
+                                "rationale": {"type": "string"},
+                                "owner_source_sha256": {"type": "string", "description": "Current observed owner source for owner_retry or material_change; Main judges whether it requests substantive retry, not status."},
+                                "verification_receipt_index": {"type": "integer", "minimum": 0, "description": "Zero-based existing task verification receipt for repair_evidence or material_change. Host resolves its content identity. Supply this OR owner_source_sha256, and no terminal stance."},
+                            },
+                            "required": ["incident_id", "basis", "rationale"],
+                        },
                         "obligation_dispositions": {
                             "type": "array",
                             "default": [],
@@ -144,6 +156,7 @@ def _handle_task_acceptance_review(
     obligation_dispositions: Optional[list] = None,
     acceptance_subject: Optional[dict] = None,
     author_action: str = "",
+    acceptance_retry: Optional[dict] = None,
 ) -> str:
     from ouroboros.config import get_task_review_mode
     from ouroboros.review_evidence import (
@@ -152,13 +165,16 @@ def _handle_task_acceptance_review(
     )
     from ouroboros.task_results import resolve_task_lineage
 
-    # v6.51.0 idea-2: build the process-aware evidence packet (full contract +
-    # first-class verification_summary + host-collected redacted repo_diff + leak-safe
-    # artifacts + provenance tags). The agent-tool (auto) path has no host-owned turn
-    # trace, so there is no tool_trajectory and include_recent_commit stays False (it
-    # cannot prove a commit happened THIS turn). The agent's own evidence is preserved
-    # under `agent_supplied` (its repo_diff demoted to agent_supplied_repo_diff) — never
-    # promoted to host-fact status; repo_diff is ALWAYS the HOST-collected structural fact.
+    # v6.51.0 idea-2: the child/off path builds the process-aware evidence packet
+    # (full contract + first-class verification_summary + host-collected redacted
+    # repo_diff + leak-safe artifacts + provenance tags) and dispatches its packet
+    # rows itself. The ROOT nomination (auto/required) never builds it: the host
+    # rebuilds the packet at its own fence, so the nomination records only the
+    # author's claims, stance and any explicit retry — which is what lets an
+    # informed finish/stop register even while that builder is broken (#1223).
+    # The agent's own evidence is preserved under `agent_supplied` (its repo_diff
+    # demoted to agent_supplied_repo_diff) — never promoted to host-fact status;
+    # repo_diff is ALWAYS the HOST-collected structural fact.
     legacy_aliases = []
     if str(agent_disposition or "").strip():
         legacy_aliases.append("agent_disposition")
@@ -253,12 +269,37 @@ def _handle_task_acceptance_review(
             agent_decision["obligation_dispositions"] = normalized_ob
         agent_evidence["agent_decision"] = agent_decision
 
-    evidence = build_task_acceptance_evidence(
-        ctx,
-        agent_evidence=agent_evidence,
-        drive_root=pathlib.Path(ctx.drive_root) if getattr(ctx, "drive_root", None) else None,
-        task_id=str(getattr(ctx, "task_id", "") or ""),
-    )
+    # ONE-USE, source-bound retry of a disclosed local preparation failure. It is
+    # a declaration about the HOST's failed assembly, not about the candidate, so
+    # it is normalized here and registered before any evidence is built.
+    retry_declaration: Dict[str, Any] = {}
+    if isinstance(acceptance_retry, dict):
+        from ouroboros.acceptance_preparation import RETRY_BASES, resolve_retry_source
+        from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
+
+        if disposition or author_action:
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+                text="ERROR: TOOL_ARG_ERROR: acceptance_retry conflicts with a terminal author stance. "
+                     "Choose retry, or finish/stop with agent_disposition/author_action, in separate decisions."))
+
+        basis = str(acceptance_retry.get("basis") or "").strip().lower()
+        incident_id = str(acceptance_retry.get("incident_id") or "").strip()
+        retry_rationale = " ".join(str(acceptance_retry.get("rationale") or "").split())
+        if basis not in RETRY_BASES or not incident_id or not retry_rationale:
+            from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+                text="ERROR: TOOL_ARG_ERROR: acceptance_retry requires the disclosed incident_id, "
+                     "a basis of material_change|repair_evidence|owner_retry, and a rationale."))
+        retry_declaration = {"incident_id": incident_id[:120], "basis": basis,
+                             "rationale": retry_rationale[:500],
+                             **{key: acceptance_retry[key] for key in (
+                                 "owner_source_sha256", "verification_receipt_index") if key in acceptance_retry}}
+        try:
+            retry_declaration["source"] = resolve_retry_source(ctx, retry_declaration)
+        except Exception as exc:
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+                text="ERROR: TOOL_ARG_ERROR: retry source unavailable or invalid. "
+                     + (str(exc) if isinstance(exc, ValueError) else "Read the current owner selector or verification receipts.")))
 
     metadata = (
         getattr(ctx, "task_metadata", {})
@@ -277,11 +318,23 @@ def _handle_task_acceptance_review(
     task_id = str(lineage["task_id"])
     is_root_task = bool(lineage["is_root_task"])
     if get_task_review_mode() in {"auto", "required"} and is_root_task:
-        evidence_revision = task_acceptance_evidence_revision(evidence)
+        # The ROOT nomination returns BEFORE any host evidence is built: the
+        # host rebuilds host-attested evidence at the authoritative fence, and
+        # it cannot reconstruct the agent's claims/references from the capped
+        # tool trajectory, so the redacted, bounded agent-supplied section (the
+        # same normalization the host builder applies) rides this existing
+        # trace record. An informed finish/stop and an explicit retry therefore
+        # register whatever state the host's own builder is in (#1223). This is
+        # a recorded nomination, never a reviewer verdict.
+        from ouroboros.review_evidence_sections import accept_agent_supplied_section
+
+        supplied = accept_agent_supplied_section(agent_evidence)
         deferred = {
             "status": "deferred_to_host_acceptance",
             "authoritative": False,
-            "evidence_revision": evidence_revision,
+            # The nomination's own content stamp: the host packet's revision is
+            # the host's to compute at the fence.
+            "evidence_revision": task_acceptance_evidence_revision({"agent_supplied": supplied}),
             "request": {
                 "surface": "task_acceptance",
                 "goal": str(goal or ""),
@@ -289,26 +342,23 @@ def _handle_task_acceptance_review(
                 "checklist": str(checklist or ""),
                 "task_id": task_id,
             },
-            # The host rebuilds host-attested evidence at the authoritative
-            # fence, but it cannot reconstruct the agent's claims/references
-            # from the capped tool trajectory.  Preserve the already redacted,
-            # bounded agent-supplied section in this existing trace record so
-            # the one host panel sees exactly what the cheap root call recorded.
-            "evidence_refs": {
-                "revision": evidence_revision,
-                "sections": sorted(
-                    str(key) for key in evidence if str(key) != "__provenance__"
-                ),
-                "canonical_payload": evidence.get("canonical_payload") or {},
-                "aliases": evidence.get("aliases") or {},
-                "provenance": evidence.get("__provenance__") or {},
-            },
-            "agent_supplied": evidence.get("agent_supplied") or {},
+            "agent_supplied": supplied,
             "acceptance_subject": acceptance_subject,
         }
         if agent_decision:
             deferred["agent_decision"] = agent_decision
+        if retry_declaration:
+            deferred["acceptance_retry"] = retry_declaration
         return json.dumps(deferred, ensure_ascii=False, indent=2, default=str)
+
+    # Child-task and `off`-mode acceptance builds the packet here and dispatches
+    # its packet rows itself; a builder failure propagates as before.
+    evidence = build_task_acceptance_evidence(
+        ctx,
+        agent_evidence=agent_evidence,
+        drive_root=pathlib.Path(ctx.drive_root) if getattr(ctx, "drive_root", None) else None,
+        task_id=str(getattr(ctx, "task_id", "") or ""),
+    )
 
     from ouroboros.review_substrate import (
         ReviewRequest,

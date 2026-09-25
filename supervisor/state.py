@@ -483,6 +483,9 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> bool:
     monetary total: every core-mediated provider attempt has already been
     persisted by the transport wrapper.  This prevents logical usage events,
     retries, and review aggregation from charging the same attempt twice.
+    The persisted projection carries totals only; the per-root map is never written.
+    The ledger read is the writer's slim snapshot (``usage_writer_snapshot``): only what this
+    function persists is rendered; the loop's llm_usage path writes once per turn, direct callers on call.
     """
     def _to_float(v: Any, default: float = 0.0) -> float:
         try:
@@ -518,29 +521,28 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> bool:
     from ouroboros.usage_accounting import (
         UsageLedgerCorrupt,
         ensure_legacy_imported,
-        usage_breakdown,
         usage_projection,
+        usage_writer_snapshot,
     )
 
     # Ledger I/O is deliberately OUTSIDE STATE_LOCK: the lock stays
     # short-lived, and the validated-snapshot marker below preserves the old
     # serialization invariant without holding STATE_LOCK across a long read.
-    # A DISPLAY read (``allow_stale``: this runs on the supervisor loop per ``llm_usage``
-    # event): a lagging snapshot carries its own lower marker, so it never regresses money.
+    # A DISPLAY read (``allow_stale``: this runs on the supervisor loop once per turn with
+    # ``llm_usage`` events): a lagging snapshot carries its own lower marker, so it never regresses money.
     try:
         ensure_legacy_imported(DRIVE_ROOT)
-        breakdown = usage_breakdown(DRIVE_ROOT, allow_stale=True)
+        breakdown = usage_writer_snapshot(DRIVE_ROOT, allow_stale=True)
         total_limit = float(TOTAL_BUDGET_LIMIT or 0.0)
         projection_snapshot = breakdown.pop("_usage_projection", None)
         if total_limit > 0 and isinstance(projection_snapshot, dict):
             from ouroboros._usage_rows import _with_limit
-            roots = projection_snapshot.pop("by_root", None)
+            # Totals only (issue #1002): per-root money is a ledger render nothing reads back from here.
+            projection_snapshot.pop("by_root", None)
             projection = _with_limit(projection_snapshot, total_limit)
-            if roots is not None:
-                projection["by_root"] = roots
         else:
             projection = (
-                usage_projection(DRIVE_ROOT, global_limit_usd=total_limit, allow_stale=True)
+                usage_projection(DRIVE_ROOT, global_limit_usd=total_limit, include_roots=False, allow_stale=True)
                 if total_limit > 0
                 else {key: breakdown.get(key) for key in (
                 "settled_usd", "confirmed_usd", "estimated_usd", "reserved_usd",
@@ -605,11 +607,8 @@ def update_budget_from_usage(usage: Dict[str, Any]) -> bool:
         # is now the ordered ``[compaction_epoch, seq]`` pair.
         st["usage_ledger_high_water_seq"] = list(ledger_high_water_marker)
         previous_check_call = _to_int(st.get("openrouter_last_check_call"), -1)
-        should_check_ground_truth = bool(
-            st["spent_calls"] > 0
-            and st["spent_calls"] % 50 == 0
-            and st["spent_calls"] != previous_check_call
-        )
+        # Every 50th call by CROSSING (a coalesced write may jump 49 -> 51), deduped by the last check.
+        should_check_ground_truth = st["spent_calls"] > 0 and st["spent_calls"] // 50 > max(previous_check_call, 0) // 50
         if should_check_ground_truth:
             st["openrouter_last_check_call"] = st["spent_calls"]
         _save_state_unlocked(st)
@@ -786,10 +785,15 @@ def reconstruct_task_cost(
             "cost_final": True, "reserved_usd": 0.0,
             "unresolved_upper_bound_usd": 0.0, "unknown_unmetered": 0,
             "non_final_rows": 0,
+            # No task was named, so no ledger bucket was summed: there is nothing
+            # for a carrier to explain (#498), and None says exactly that.
+            "cost_presentation": None,
         }
     else:
         try:
-            from ouroboros.cost_projection import honest_accounted_amount
+            from ouroboros.cost_projection import (
+                COST_SCOPE_OWN, build_cost_presentation, honest_accounted_amount,
+            )
             from ouroboros.usage_accounting import ensure_legacy_imported, usage_breakdown
 
             authority_root = pathlib.Path(drive_root) if drive_root is not None else DRIVE_ROOT
@@ -821,12 +825,15 @@ def reconstruct_task_cost(
                 # The disclosed CAUSE of cost_final=false, carried with the flag.
                 "non_final_rows": int(bucket.get("non_final_rows") or 0),
                 "ledger_integrity_degraded": bool(bucket.get("integrity_degraded")),
+                # #498: the same bucket's own explanation of its own amount.
+                "cost_presentation": build_cost_presentation(bucket, scope=COST_SCOPE_OWN),
             }
         except Exception:
             log.error("Failed to reconstruct ledger task cost for %s", task_id, exc_info=True)
             projection = {
                 "cost_accounting_status": "unavailable", "cost_final": False,
                 "cost_accounting_error": "ledger_unavailable",
+                "cost_presentation": None,
                 "accounted_upper_bound_usd": None, "total_rounds": None,
                 "prompt_tokens": None, "completion_tokens": None,
                 "reserved_usd": None, "unresolved_upper_bound_usd": None,

@@ -16,6 +16,8 @@ test('terminal truth wins over stale census and survives offline', () => {
 test('waiting, queued, paused and finalizing stay distinct', () => {
     assert.equal(handoffPhase({ phase: 'queued' }, null).text, 'Queued');
     assert.equal(handoffPhase({ phase: 'budget_paused' }, null).text, 'Paused');
+    assert.equal(handoffPhase({ phase: 'budget_pausing' }, null).text, 'Pausing…');
+    assert.equal(handoffPhase({ phase: 'budget_pausing' }, null).className, 'warn');
     assert.equal(handoffPhase({ phase: 'finalizing' }, null).text, 'Finalizing…');
     assert.equal(handoffPhase({ phase: 'working', required_question: {} }, null).text, 'Waiting');
     assert.equal(handoffPhase(null, { status: 'interrupted' }).text, 'Activity unconfirmed');

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -278,8 +279,20 @@ def knowledge_links(note: KnowledgeNote) -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
-def _write_content(current: KnowledgeNote | None, content: str, mode: str) -> bytes:
+def _write_content(current: KnowledgeNote | None, content: str, mode: str,
+                   old_str: str | None = None) -> bytes:
     proposed = content.encode("utf-8")
+    if mode == "edit":
+        if current is None or current.parse_error:
+            raise ValueError("edit requires an existing readable note")
+        if not isinstance(old_str, str) or not old_str:
+            raise ValueError("edit requires a non-empty old_str")
+        body_start = current.source.body_span.start_byte
+        body = current.raw[body_start:].decode("utf-8")
+        first = body.find(old_str)
+        if first < 0 or body.find(old_str, first + 1) >= 0:
+            raise ValueError("edit old_str must occur exactly once in the note body")
+        return current.raw[:body_start] + body.replace(old_str, content, 1).encode("utf-8")
     if mode == "append" and current is not None:
         return current.raw + (b"\n" if current.raw and not current.raw.endswith(b"\n") else b"") + proposed
     source = parse_markdown_source(proposed, str(current.address.path) if current else "")
@@ -309,15 +322,18 @@ class KnowledgeWriteResult:
     reason: str
     current: KnowledgeNote | None
     previous_revision: str | None = None
+    delta: dict[str, Any] | None = None
 
 
 def write_knowledge_note(
     address: KnowledgeAddress, content: str, mode: str = "overwrite",
-    expected_revision: str | None = None, task_id: str = "",
+    expected_revision: str | None = None, task_id: str = "", old_str: str | None = None,
 ) -> KnowledgeWriteResult:
     """Publish a note against the actual current source, with no inference lock."""
-    if mode not in {"overwrite", "append"} or not isinstance(content, str):
-        raise ValueError("content must be Markdown text; mode must be overwrite or append")
+    if mode not in {"overwrite", "append", "edit"} or not isinstance(content, str):
+        raise ValueError("content must be Markdown text; mode must be overwrite, append or edit")
+    if mode != "edit" and old_str is not None:
+        raise ValueError("old_str is used only with mode=edit")
     with knowledge_write_lock(address.shelf):
         # Re-resolve inside the lock; a changed symlink cannot redirect a write.
         address.path.resolve().relative_to(address.shelf.resolve())
@@ -330,18 +346,35 @@ def write_knowledge_note(
         if current is None and expected_revision == "":
             expected_revision = None
         revision = current.revision if current else None
-        if current is not None and mode == "overwrite" and expected_revision is None:
+        if mode == "edit" and current is None:
+            return KnowledgeWriteResult(False, "edit_source_missing", current, revision)
+        if current is not None and mode in {"overwrite", "edit"} and expected_revision is None:
             return KnowledgeWriteResult(False, "revision_required", current, revision)
         if expected_revision is not None and expected_revision != revision:
             return KnowledgeWriteResult(False, "revision_conflict", current, revision)
         try:
-            raw = _write_content(current, content, mode)
+            raw = _write_content(current, content, mode, old_str)
         except (ValueError, yaml.YAMLError) as exc:
             return KnowledgeWriteResult(False, f"invalid_note: {exc}", current, revision)
         if current is not None and raw == current.raw:
-            return KnowledgeWriteResult(True, "unchanged", current, revision)
+            return KnowledgeWriteResult(True, "unchanged", current, revision,
+                                        {"old_chars": len(current.text), "new_chars": len(current.text),
+                                         "change_chars": 0, "removed_headings": []})
         updated = _note(address, raw)
+        if mode == "edit" and (updated.parse_error or
+                               bool(updated.source.frontmatter_span) != bool(current.source.frontmatter_span) or
+                               updated.raw[:current.source.body_span.start_byte] !=
+                               current.raw[:current.source.body_span.start_byte]):
+            return KnowledgeWriteResult(False, "invalid_note: edit cannot change frontmatter", current, revision)
         old_text = current.text if current else ""
+        before = (Counter((heading.level, heading.title) for heading in current.source.headings)
+                  if current and current.source else Counter())
+        after = (Counter((heading.level, heading.title) for heading in updated.source.headings)
+                 if updated.source else Counter())
+        removed_headings = (sorted("#" * level + " " + title for (level, title) in (before - after).elements())
+                            if (current is None or current.source) and updated.source else None)
+        delta = {"old_chars": len(old_text), "new_chars": len(updated.text),
+                 "change_chars": len(updated.text) - len(old_text), "removed_headings": removed_headings}
         # Capture both complete versions before replacing source bytes, as the
         # Pattern Register already does. A capture is not a commit receipt; a
         # failed publication returns its actual current source, never success.
@@ -349,7 +382,7 @@ def write_knowledge_note(
                    "address": address.as_dict(), "publication": "source_capture",
                    "old_sha256": hashlib.sha256(current.raw).hexdigest() if current and current.raw else "",
                    "new_sha256": updated.revision if raw else "", "old_content": old_text,
-                   "new_content": updated.text, "source_ref": updated.source_ref()}
+                   "new_content": updated.text, "source_ref": updated.source_ref(), "delta": delta}
         if not append_jsonl(address.shelf.parent / "knowledge_history.jsonl", history,
                             ensure_record_boundary=True, require_lock=True):
             return KnowledgeWriteResult(False, "history_unavailable", current, revision)
@@ -362,7 +395,8 @@ def write_knowledge_note(
                 observed = read_knowledge_note(address)
             except (OSError, UnicodeDecodeError):
                 observed = None
-            return KnowledgeWriteResult(False, "publication_incomplete", observed, revision)
+            return KnowledgeWriteResult(False, "publication_incomplete", observed, revision,
+                                        delta if observed is not None and observed.raw == raw else None)
         try:
             append_jsonl(address.shelf.parent / "knowledge_journal.jsonl", {
                 "ts": utc_now_iso(), "task_id": task_id, "topic": address.topic, "mode": mode,
@@ -372,4 +406,4 @@ def write_knowledge_note(
             }, ensure_record_boundary=True)
         except OSError:
             pass  # Size telemetry is not source/history publication authority.
-        return KnowledgeWriteResult(True, "saved", updated, revision)
+        return KnowledgeWriteResult(True, "saved", updated, revision, delta)

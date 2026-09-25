@@ -1,10 +1,14 @@
-"""I7: what a project room may continue, and what stamps its last-result pointer.
+"""What a routing verb may continue, and what stamps a project's last-result pointer.
 
-On 19.09 a room offered exactly ONE predecessor candidate (the project's
-last-result pointer, which a CHILD had overwritten), the model named the
-interrupted root itself and was refused `AUTHORITY_SOURCE_UNAVAILABLE`, and the
-retry without a predecessor minted a duplicate root. The list is a HINT; the
-door is a predicate: same project, a root, a readable result, not live.
+A room once offered exactly ONE predecessor candidate (the project's last-result
+pointer, which a CHILD had overwritten), the model named the interrupted root
+itself and was refused `AUTHORITY_SOURCE_UNAVAILABLE`, and the retry without a
+predecessor minted a duplicate root. Later a coordinator task named the settled
+roots of five other projects, each to be continued inside its own project, and
+was refused seven times because the door compared the predecessor's project with
+the CALLER's room. The list is a HINT; the door is a predicate on the result
+itself: settled and readable - never where the caller sits, where the work lands
+or whether it is a root's or a helper's; those facts are disclosed in the receipt.
 """
 
 from __future__ import annotations
@@ -48,6 +52,30 @@ def _door(ctx, task_id, evt=None):
     from ouroboros.tools.control_routing import _attach_predecessor_authority_from_metadata
 
     return _attach_predecessor_authority_from_metadata(ctx, evt if evt is not None else {}, task_id)
+
+
+def _confirm(monkeypatch, effective_project_id: str = ""):
+    """The admission receipt names where the task actually landed."""
+    monkeypatch.setattr(
+        "ouroboros.tools.control_events._wait_for_promotion_admission",
+        lambda *_a, **_k: {"status": "scheduled", "effective_project_id": effective_project_id},
+    )
+
+
+_TOWER_POINTER = {
+    "kind": "task_result", "task_id": "tower-root", "human_label": "another room's work",
+    "tool": "get_task_result", "arguments": {"task_id": "tower-root", "include_authority": True},
+}
+
+
+def _tower(tmp_path):
+    """A second project with one settled root, exactly the shape the coordinator named."""
+    from ouroboros.projects_registry import create_project
+    from ouroboros.task_results import write_task_result
+
+    create_project(tmp_path, "tower", name="Tower")
+    write_task_result(tmp_path, "tower-root", "completed", project_id="tower",
+                      objective="another room's work", ts="2026-08-10T00:00:01Z")
 
 
 def test_a_root_the_room_manifest_lists_is_still_addressable(tmp_path):
@@ -133,13 +161,15 @@ def test_a_room_root_older_than_the_list_is_addressable_all_the_same(tmp_path, m
     }
 
 
-def test_a_child_result_is_never_the_continuation_and_the_host_stops_offering_it(tmp_path):
-    """A pointer stamped by a child before this release still names a child: the
-    host offers the ROOT instead, and the door refuses the child if the model names
-    it all the same, saying where the work is reachable (I29 stays closed)."""
+def test_a_helpers_result_is_continued_with_its_root_named_and_never_offered(tmp_path, monkeypatch):
+    """A pointer stamped by a child before only roots stamped it still names a child:
+    the host offers the ROOT (the hint stays roots-only, owner decision 6b=A) and heals
+    the pointer, while a helper's result the model names on purpose is continued -
+    the receipt says whose helper it was and where its root is."""
     import server
     from ouroboros.projects_registry import create_project
     from ouroboros.task_results import write_task_result
+    from ouroboros.tools.control_routing import _promote_chat_to_task
     from ouroboros.tools.project_journal import record_project_last_result
 
     project = create_project(tmp_path, "racer", name="Racer")
@@ -159,21 +189,74 @@ def test_a_child_result_is_never_the_continuation_and_the_host_stops_offering_it
             metadata["project_routing_manifest"]["final_results"]] == ["racer-root"]
 
     evt: dict = {}
-    refusal = _door(_room_ctx(tmp_path, metadata), "racer-child", evt)
-    assert "delegated child result" in refusal and "root" in refusal
-    assert evt == {}
-    assert _door(_room_ctx(tmp_path, metadata), "racer-root") == ""
+    assert _door(_room_ctx(tmp_path, metadata), "racer-child", evt) == ""
+    assert evt["predecessor_task_id"] == "racer-child"
+    assert evt["predecessor_facts"] == {"project_id": "racer", "helper": True,
+                                        "root_task_id": "racer-root", "parent_task_id": "racer-root"}
+    root_evt: dict = {}
+    assert _door(_room_ctx(tmp_path, metadata), "racer-root", root_evt) == ""
+    assert root_evt["predecessor_facts"]["helper"] is False  # a root is nobody's helper
+
+    _confirm(monkeypatch, effective_project_id="racer")
+    ctx = _room_ctx(tmp_path, metadata)
+    out = _promote_chat_to_task(ctx, "Continue the helper's work", workspace="none",
+                                predecessor_task_id="racer-child")
+    assert out.startswith("OK: task"), out
+    assert "Note: predecessor racer-child is a delegated helper's result; its root is racer-root." in out
+    assert "belongs to" not in out  # same project: nothing else to disclose
 
 
-def test_another_projects_root_is_not_this_rooms_continuation(tmp_path):
-    import server
+def test_a_helper_predecessor_is_named_on_the_route_verb_and_without_a_root_id(tmp_path, monkeypatch):
+    """The helper note rides both verbs and names what the helper's row knows: its root,
+    else its parent, else that the root is unknown - it never goes silent on a helper
+    whose row carries only the subagent role."""
     from ouroboros.projects_registry import create_project
     from ouroboros.task_results import write_task_result
+    from ouroboros.tools.control_routing import _promote_chat_to_task, _route_to_project
+
+    create_project(tmp_path, "racer", name="Racer")
+    write_task_result(tmp_path, "racer-child", "completed", project_id="racer", objective="helper work",
+                      parent_task_id="racer-root", root_task_id="racer-root", delegation_role="subagent")
+    write_task_result(tmp_path, "racer-nested", "completed", project_id="racer", objective="nested helper",
+                      parent_task_id="racer-child", delegation_role="subagent")
+    write_task_result(tmp_path, "racer-orphan", "completed", project_id="racer", objective="role only",
+                      delegation_role="subagent")
+    _confirm(monkeypatch, effective_project_id="racer")
+
+    routed = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _route_to_project(routed, "racer", "continue the helper's work", predecessor_task_id="racer-child")
+    assert out.startswith("✉️ Routed to project 'Racer' (racer)"), out
+    assert "Note: predecessor racer-child is a delegated helper's result; its root is racer-root." in out
+
+    nested = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _promote_chat_to_task(nested, "Continue the nested helper", workspace="none", predecessor_task_id="racer-nested")
+    assert "Note: predecessor racer-nested is a delegated helper's result; its parent is racer-child." in out
+
+    orphan = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _promote_chat_to_task(orphan, "Continue the role-only helper", workspace="none", predecessor_task_id="racer-orphan")
+    assert "Note: predecessor racer-orphan is a delegated helper's result; its root is unknown." in out
+
+
+def test_a_failed_root_is_a_settled_predecessor(tmp_path):
+    """Settled means completed, failed or cancelled: the coordinator's first refused
+    predecessor had failed at its absolute ceiling and was still the work to continue."""
+    from ouroboros.task_results import write_task_result
+
+    write_task_result(tmp_path, "tower-failed", "failed", project_id="tower",
+                      objective="ran out of ceiling", reason_code="absolute_ceiling")
+    evt: dict = {}
+    assert _door(_room_ctx(tmp_path, {}, project_id="racer"), "tower-failed", evt) == ""
+    assert evt["predecessor_authority_source"]["arguments"] == {"task_id": "tower-failed", "include_authority": True}
+
+def test_another_projects_root_is_continued_from_this_room_and_the_hint_stays_room_local(tmp_path):
+    """The room's manifest lists only its own roots - a hint - while the door judges the
+    root itself: another project's settled root is continued from here with a pointer
+    rebuilt from the durable result, never from a shown row."""
+    import server
+    from ouroboros.projects_registry import create_project
 
     project = create_project(tmp_path, "racer", name="Racer")
-    create_project(tmp_path, "tower", name="Tower")
-    write_task_result(tmp_path, "tower-root", "completed", project_id="tower",
-                      objective="another room's work", ts="2026-08-10T00:00:01Z")
+    _tower(tmp_path)
 
     metadata = server._decision_turn_metadata(
         _host_ctx(tmp_path), int(project["chat_id"]), "room-4", {"project_id": "racer"},
@@ -181,9 +264,112 @@ def test_another_projects_root_is_not_this_rooms_continuation(tmp_path):
     assert metadata["project_routing_manifest"]["final_results"] == []
 
     evt: dict = {}
-    refusal = _door(_room_ctx(tmp_path, metadata), "tower-root", evt)
-    assert "not an addressable result in the host routing manifest" in refusal
-    assert evt == {}
+    assert _door(_room_ctx(tmp_path, metadata), "tower-root", evt) == ""
+    assert evt["predecessor_task_id"] == "tower-root"
+    assert evt["predecessor_authority_source"] == _TOWER_POINTER
+    assert evt["predecessor_facts"] == {"project_id": "tower", "helper": False, "root_task_id": "", "parent_task_id": ""}
+
+
+def test_a_pooled_task_continues_another_rooms_root_into_that_room_in_one_hop(tmp_path, monkeypatch):
+    """The coordinator shape: a pooled task carries no host manifest at all (its metadata is
+    the client surface and its own contract), sits in one room, and names a settled root
+    of another project as the predecessor of work it sends INTO that project. Both verbs
+    schedule it in one hop, the event carries the rebuilt pointer and nothing else new,
+    and a landing in the predecessor's own project has nothing to disclose."""
+    from ouroboros.projects_registry import create_project
+    from ouroboros.tools.control_routing import _promote_chat_to_task, _route_to_project
+
+    create_project(tmp_path, "coord", name="Coordination")
+    _tower(tmp_path)
+    metadata = {"client_surface": {"channel": "web"}, "task_contract": {"objective": "coordinate"}}
+    _confirm(monkeypatch, effective_project_id="tower")
+
+    promoted = _room_ctx(tmp_path, metadata, project_id="coord")
+    out = _promote_chat_to_task(promoted, "Continue the tower work", project_id="tower",
+                                workspace="none", predecessor_task_id="tower-root")
+    assert out.startswith("OK: task"), out
+    assert "belongs to" not in out
+    [evt] = promoted.pending_events
+    assert evt["project_id"] == "tower"
+    assert evt["predecessor_task_id"] == "tower-root"
+    assert evt["predecessor_authority_source"] == _TOWER_POINTER
+    assert "predecessor_facts" not in evt
+
+    routed = _room_ctx(tmp_path, metadata, project_id="coord")
+    out = _route_to_project(routed, "tower", "continue the tower work", predecessor_task_id="tower-root")
+    assert out.startswith("✉️ Routed to project 'Tower' (tower)"), out
+    assert "belongs to" not in out
+    [evt] = routed.pending_events
+    assert evt["predecessor_task_id"] == "tower-root"
+    assert evt["predecessor_authority_source"] == _TOWER_POINTER
+    assert "predecessor_facts" not in evt
+
+
+def test_a_landing_outside_the_predecessors_project_is_disclosed_once(tmp_path, monkeypatch):
+    """A free choice, said in the receipt like the second-project note: a continuation
+    landing in another project names the predecessor's own project, on both verbs; one
+    landing at home carries no such sentence, so the note cannot fire unconditionally."""
+    from ouroboros.projects_registry import create_project
+    from ouroboros.tools.control_routing import _promote_chat_to_task, _route_to_project
+
+    create_project(tmp_path, "racer", name="Racer")
+    _tower(tmp_path)
+    note = "Note: predecessor tower-root belongs to project 'tower'; this continuation runs in project 'racer' (your choice)."
+
+    _confirm(monkeypatch, effective_project_id="racer")
+    ctx = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _promote_chat_to_task(ctx, "Continue elsewhere", project_id="racer", workspace="none",
+                                predecessor_task_id="tower-root")
+    assert out.startswith("OK: task") and note in out, out
+
+    routed = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _route_to_project(routed, "racer", "continue elsewhere", predecessor_task_id="tower-root")
+    assert out.startswith("✉️ Routed to project 'Racer' (racer)") and note in out, out
+
+    _confirm(monkeypatch, effective_project_id="tower")
+    home = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _promote_chat_to_task(home, "Continue at home", project_id="tower", workspace="none",
+                                predecessor_task_id="tower-root")
+    assert out.startswith("OK: task") and "belongs to" not in out, out
+
+
+def test_a_main_root_is_continued_from_a_room_and_its_home_is_named(tmp_path, monkeypatch):
+    """A project-less (Main) root was reachable only through the Main lane's list; the door
+    judges the root, so a room names it too, and the receipt says it comes from Main."""
+    from ouroboros.projects_registry import create_project
+    from ouroboros.task_results import write_task_result
+    from ouroboros.tools.control_routing import _promote_chat_to_task
+
+    create_project(tmp_path, "racer", name="Racer")
+    write_task_result(tmp_path, "main-root", "completed", project_id="", objective="main work")
+
+    evt: dict = {}
+    assert _door(_room_ctx(tmp_path, {}, project_id="racer"), "main-root", evt) == ""
+    assert evt["predecessor_task_id"] == "main-root" and evt["predecessor_facts"]["project_id"] == ""
+
+    _confirm(monkeypatch, effective_project_id="racer")
+    ctx = _room_ctx(tmp_path, {}, project_id="racer")
+    out = _promote_chat_to_task(ctx, "Continue the main work here", project_id="racer",
+                                workspace="none", predecessor_task_id="main-root")
+    assert "predecessor main-root belongs to the main chat; this continuation runs in project 'racer'" in out
+
+
+def test_a_public_conversation_continues_a_settled_root_and_still_lands_without_a_project(tmp_path, monkeypatch):
+    """Presence holds the routing verb under its own ceiling: the door judges the root,
+    while the promote still strips project, workspace and source - the ceiling is the
+    caller's, never the predecessor's - and the receipt names where the predecessor lives."""
+    from ouroboros.tools.control_routing import _promote_chat_to_task
+
+    _tower(tmp_path)
+    _confirm(monkeypatch, effective_project_id="")
+    ctx = _room_ctx(tmp_path, {"presence": {"binding_id": "b" * 32}}, project_id="")
+    out = _promote_chat_to_task(ctx, "Continue the tower work", project_id="tower",
+                                workspace="none", predecessor_task_id="tower-root")
+    assert out.startswith("OK: task"), out
+    [evt] = ctx.pending_events
+    assert evt["project_id"] == "" and evt["presence"] == {"binding_id": "b" * 32}
+    assert evt["predecessor_task_id"] == "tower-root"
+    assert "predecessor tower-root belongs to project 'tower'; this continuation runs in the main chat" in out
 
 
 def test_a_live_root_is_steer_territory_not_a_predecessor(tmp_path):
@@ -246,9 +432,11 @@ def test_an_unreadable_predecessor_still_answers_authority_source_unavailable(tm
     assert not (tmp_path / "task_results" / "racer-gone.json").exists()
 
 
-def test_outside_a_room_the_host_list_still_decides(tmp_path):
-    """The quiet direction of the same guard: with no room project there is no
-    `same project` to evaluate, so an unlisted id stays unaddressable."""
+def test_outside_a_room_an_unlisted_settled_root_is_continued_too(tmp_path):
+    """With no room there is no project to compare against, and none is needed: a Main
+    turn names any settled root, listed (the host's own pointer) or not (a pointer
+    rebuilt from the durable result); a missing id stays the one case no predicate
+    can rescue, and it still emits nothing."""
     import server
     from ouroboros.projects_registry import create_project
     from ouroboros.task_results import write_task_result
@@ -259,11 +447,17 @@ def test_outside_a_room_the_host_list_still_decides(tmp_path):
 
     metadata = server._decision_turn_metadata(_host_ctx(tmp_path), 1, "main-1", {})
     main_ctx = _room_ctx(tmp_path, {"client_message_id": "main-1"}, project_id="")
-    refusal = _door(main_ctx, "racer-root")
-    assert "not an addressable result in the host routing manifest" in refusal
+    evt: dict = {}
+    assert _door(main_ctx, "racer-root", evt) == ""
+    assert evt["predecessor_task_id"] == "racer-root"
+    assert evt["predecessor_authority_source"]["arguments"] == {"task_id": "racer-root", "include_authority": True}
 
     listed_ctx = _room_ctx(tmp_path, metadata, project_id="")
     assert _door(listed_ctx, "racer-root") == ""
+
+    gone: dict = {}
+    assert _door(main_ctx, "never-existed", gone) == "the selected predecessor task result is missing or unreadable"
+    assert gone == {}
 
 
 def test_only_a_root_finalization_moves_the_projects_pointer(tmp_path):
@@ -297,7 +491,7 @@ def test_only_a_root_finalization_moves_the_projects_pointer(tmp_path):
 def test_the_self_heal_scan_never_offers_or_stamps_a_child(tmp_path):
     """The lookup's fallback scan is the pointer's SECOND writer: with no pointer
     yet and a child as the project's newest result, it answers with the newest ROOT
-    and stamps that, never the child the door would refuse."""
+    and stamps that, never the child the hint does not offer."""
     import os
 
     import server

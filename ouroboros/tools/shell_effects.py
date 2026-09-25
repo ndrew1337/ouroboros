@@ -34,6 +34,9 @@ from ouroboros.utils import safe_relpath
 
 def _resolve_git_root(path: pathlib.Path) -> pathlib.Path | None:
     try:
+        from ouroboros.workspace_admission import has_git_metadata
+        if not has_git_metadata(path.resolve()):
+            return None
         from ouroboros.review_state import discover_repo_root
         root = discover_repo_root(path)
         if not (root / ".git").exists():

@@ -1,0 +1,67 @@
+# The ONE browser-lane definition, called by two triggers that share this runner:
+#   - .github/workflows/ci.yml       → pull requests into `ouroboros`, manual runs, `v*` tags
+#   - .github/workflows/ui-browser-push.yml → every push to `ouroboros`, with no path filter
+# Deliberately NOT wired to `schedule`: the owner decision adds no browser cron,
+# and the existing manual/tag checks stay exactly as they were.
+name: UI browser lane
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  ui-smoke:
+    runs-on: ubuntu-latest
+    # A bound, because ci.yml's release chain needs this job: the complete lane
+    # ran in about 51 minutes on a workstation, and a hung engine must end as a
+    # red run rather than an open one.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      # `github` here is the CALLING workflow's event, so one selection rule
+      # serves pull requests and pushes; manual runs and tags never compute one.
+      - name: Select browser coverage from the event diff
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          EVENT_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          EVENT_HEAD: ${{ github.sha }}
+        shell: bash
+        run: |
+          if [[ "$EVENT_NAME" == workflow_dispatch || "$EVENT_REF" == refs/tags/v* ]]; then
+            echo "run_browser=true" >> "$GITHUB_OUTPUT"
+          else
+            python3 -I -S scripts/browser_ci_scope.py --base "$EVENT_BASE" --head "$EVENT_HEAD" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Documentation-only browser result
+        if: steps.scope.outputs.run_browser == 'false'
+        run: echo "Browser lane not run — event changes documentation only." >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/setup-python-env
+        if: steps.scope.outputs.run_browser == 'true'
+        with:
+          install-project: 'false'
+        id: setup_python
+      - name: Install UI smoke Chromium and WebKit
+        id: install_browsers
+        if: ${{ !cancelled() && steps.setup_python.outcome == 'success' }}
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ui-browsers
+        run: python -m playwright install --with-deps chromium webkit
+      - name: Run complete host UI lane with collection and availability guards
+        if: ${{ !cancelled() && steps.install_browsers.outcome == 'success' }}
+        env:
+          OUROBOROS_RUN_UI_SMOKE: "1"
+          OUROBOROS_EXPECT_BROWSER_ENGINES: chromium,webkit
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ui-browsers
+        run: python -I -S scripts/safe_test.py -- python -m pytest tests/ -m ui_browser --require-ui-browser -q --tb=short
+      - name: Run browser tools Chromium/WebKit smoke
+        if: ${{ !cancelled() && steps.install_browsers.outcome == 'success' && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) }}
+        env:
+          OUROBOROS_EXPECT_BROWSER_ENGINES: chromium,webkit
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ui-browsers
+        run: python -I -S scripts/safe_test.py -- python -m pytest tests/test_browser_tools_smoke.py -m browser -q --tb=short

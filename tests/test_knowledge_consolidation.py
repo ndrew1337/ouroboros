@@ -229,5 +229,7 @@ def test_era_compression_cannot_erase_unpublished_knowledge_proposals(tmp_path, 
     # The era object carries no knowledge_writes, so the batch receipt lives in meta:
     # without it the incomplete publication would vanish from every resident surface.
     assert "knowledge_writes" not in saved[0]
-    receipt = json.loads(meta.read_text())["last_unpublished_nominations"]
-    assert receipt == {"entry_id": nominations["entry_id"], "failed": 11, "total": 11}
+    pending = json.loads(meta.read_text())["pending_knowledge_nominations"]
+    assert len(pending) == 11
+    assert all(row["id"].startswith(nominations["entry_id"] + ":") for row in pending)
+    assert all(row["reason"] == "revision_required" for row in pending)

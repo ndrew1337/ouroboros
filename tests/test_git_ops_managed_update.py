@@ -96,6 +96,9 @@ def test_dependency_sync_is_panic_tracked_and_killed_on_timeout(monkeypatch, tmp
     # (observed: nondeterministic live writes during full-battery serial runs).
     monkeypatch.setattr(git_ops, "DRIVE_ROOT", tmp_path / "data")
     (tmp_path / "data" / "logs").mkdir(parents=True)
+    # This case deliberately exercises the PRODUCTION install path, so it drops
+    # the test-boundary marker the suite sets (see the boundary test below).
+    monkeypatch.delenv("OUROBOROS_PYTEST_ACTIVE", raising=False)
 
     killed = []
 
@@ -463,3 +466,50 @@ def test_ensure_official_update_remote_blank_configured_source_defaults(monkeypa
     assert git_ops.managed_update_remote_url({"managed_remote_url": "   "}) == (
         git_ops.OFFICIAL_UPDATE_REMOTE_URL)
     assert git_ops.managed_update_remote_url({}) == git_ops.OFFICIAL_UPDATE_REMOTE_URL
+
+
+def test_dependency_sync_never_installs_into_an_interpreter_under_test(monkeypatch, tmp_path):
+    """The ONE chokepoint refuses installs for every caller, not just bootstrap."""
+    import server
+
+    monkeypatch.setattr(git_ops, "DRIVE_ROOT", tmp_path / "data")
+    (tmp_path / "data" / "logs").mkdir(parents=True)
+    spawned = []
+    monkeypatch.setattr(git_ops.subprocess, "Popen",
+                        lambda *a, **k: spawned.append(a) or _NeverRun())
+    monkeypatch.setenv("OUROBOROS_PYTEST_ACTIVE", "1")
+
+    assert git_ops.sync_runtime_dependencies("bootstrap_local_dev") == (True, "pytest:suppressed")
+    assert git_ops.sync_runtime_dependencies("managed_update_pre_restart") == (True, "pytest:suppressed")
+    assert spawned == [], "a test-boundary run reached the pip call site"
+
+    # The server bootstrap keeps calling the shared chokepoint: the suppression is
+    # a property of the dependency sync, never of one caller's local-dev branch.
+    calls = []
+    monkeypatch.setattr(server, "REPO_DIR", tmp_path / "repo")
+    monkeypatch.setattr(server, "DATA_DIR", tmp_path / "data")
+    monkeypatch.setattr(server, "_LAUNCHER_MANAGED", False)
+    monkeypatch.setattr(server, "setup_remote_if_configured", lambda *args: None)
+
+    class _Module:
+        def init(self, **_kwargs):
+            return None
+
+        def ensure_repo_present(self):
+            return None
+
+        def sync_runtime_dependencies(self, reason):
+            calls.append(reason)
+            return git_ops.sync_runtime_dependencies(reason)
+
+        def import_test(self):
+            return {"ok": True}
+
+    assert server._bootstrap_supervisor_repo({}, _Module())[0]
+    assert calls == ["bootstrap_local_dev"]
+    assert spawned == []
+
+
+class _NeverRun:
+    def wait(self, timeout=None):  # pragma: no cover - the boundary must precede this
+        raise AssertionError("the suppressed path must not wait on a pip process")

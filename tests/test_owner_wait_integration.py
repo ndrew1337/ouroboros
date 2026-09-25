@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -19,12 +18,12 @@ import pytest
 
 from devtools.benchmarks.common.server_runner import _api
 from ouroboros.owner_mailbox import write_owner_message
+from tests.candidate_checkout import candidate_checkout
 from tests.system_e2e.harness import (
     ArtifactOracle,
     ModelGate,
     ScriptedStubModel,
     body_text,
-    clone_repo,
     keyless_settings,
     start_server,
     wait_durable_result,
@@ -114,16 +113,9 @@ def wait_clone(tmp_path):
         if os.environ.get("OUROBOROS_EXPECT_BROWSER_ENGINES"):
             pytest.fail(str(exc))
         pytest.skip(str(exc))
-    clone = clone_repo(tmp_path)
-    # clone_repo captures HEAD. Local verification must also exercise the current
-    # candidate's tracked changes, exactly as the hermetic preflight does.
     source = Path(__file__).resolve().parents[1]
-    patch = subprocess.run(["git", "diff", "--binary", "HEAD"], cwd=source,
-                           check=True, capture_output=True).stdout
-    if patch:
-        subprocess.run(["git", "apply", "--binary", "-"], cwd=clone,
-                       input=patch, check=True, capture_output=True)
-    return clone
+    with candidate_checkout(source, tmp_path / "clone", origin_proof=True) as candidate:
+        yield candidate
 
 
 def _running(oracle, task_id):

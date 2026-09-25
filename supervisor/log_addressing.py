@@ -144,6 +144,11 @@ def address_task_event(running: Any, drive_root: Any, payload: Dict[str, Any]) -
     for key in ("parent_task_id", "root_task_id"):
         if not payload.get(key) and task_row.get(key):
             payload[key] = str(task_row[key])
+    if task_row.get("_is_direct_chat"):
+        # A direct turn resumed from its exact budget pause runs on a pooled
+        # worker (#1196): its frames keep the lane fact the direct lane would
+        # have stamped, so the chat chrome reads the same host truth.
+        payload.setdefault("_is_direct_chat", True)
     bound_chat = resolve_project_chat(
         drive_root, task_id, payload.get("parent_task_id"), payload.get("root_task_id")
     )

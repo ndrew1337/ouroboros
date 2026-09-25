@@ -340,17 +340,18 @@ def review_operation_timeout_sec(
 
     API calls may use their dead-socket bound as the settlement fallback because
     the physical request itself ends there.  Agent sessions are independent paid
-    processes, so an unset logical window inherits the existing task absolute
-    ceiling instead.  Explicit review windows and owner deadlines only narrow it.
+    processes, so an unset logical window inherits the task's operation window
+    instead (its finite absolute lifetime, else ``OPERATION_WINDOW_FALLBACK_SEC``).
+    Explicit review windows and owner deadlines only narrow it.
     """
     route_value = str(getattr(route, "value", route) or "")
     requested = explicit
     if explicit is None or (isinstance(explicit, str) and not explicit.strip()):
         requested = review_logical_fallback_timeout_sec()
     if route_value == "agent_session":
-        from ouroboros.config import get_task_abs_ceiling_sec
+        from ouroboros.config import get_task_abs_ceiling_sec, operation_window_sec
 
-        ceiling = float(get_task_abs_ceiling_sec())
+        ceiling = operation_window_sec(get_task_abs_ceiling_sec())
         return min(
             ceiling,
             logical_operation_timeout_sec(

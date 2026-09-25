@@ -565,7 +565,16 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 290 -> 291: the retained focus source (``task_results/artifacts/*/source_handles/
 # context_checkpoints``, ``ouroboros/task_finalization.py``'s digest glob) is the
 # one new durable plane of cross-focus awareness; it has its own row in section 2.
-EXPECTED_SCAN_PATHS = 291  # Linked project knowledge history is a dynamic validated shelf.
+# 291 -> 292: the streamed bytes blob's temp name under observability/blobs (the existing
+# ``observability/{calls,blobs,salvaged}/**`` row covers it).
+# 292 -> 293: the Presence previous-turn pointer (``state/presence_turn_gate/last-<sha256>.json``),
+# one rebuildable projection per conversation written by presence_runner at the end of an executed
+# turn; it has its own row in section 2.
+# 293 -> 295: the disposable test-environment caches (``cache/pip``, ``cache/uv``; test root only).
+# 295 -> 294: TZ-3 removed the destructive memory journal rewrite and its
+# ``.compact.tmp`` sibling path; PERSISTENCE.md keeps the journals, now
+# read-only observed and never age-digested.
+EXPECTED_SCAN_PATHS = 294
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

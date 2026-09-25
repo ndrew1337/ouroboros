@@ -14,6 +14,9 @@ from ouroboros.cost_projection import (
     normalize_task_result_cost_planes,
 )
 from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
+# Read-side custody of a published review projection belongs with the projection
+# owner; the historical name stays resolvable through this module.
+from ouroboros.review_projection import merge_review_projection as merge_review_projection
 from ouroboros.review_records import validate_author_disposition
 
 log = logging.getLogger(__name__)
@@ -624,22 +627,11 @@ def resolve_task_lineage(
     resolved_role = _field(delegation_role, "delegation_role").lower()
     resolved_original_id = _field(original_task_id, "original_task_id")
     resolved_retry_from = _field(timeout_retry_from, "timeout_retry_from")
-    is_regular_root = bool(
-        resolved_task_id
-        and resolved_root_id == resolved_task_id
-        and not resolved_parent_id
-        and resolved_role != "subagent"
-    )
-    is_retry_root = bool(
-        resolved_task_id
-        and resolved_root_id
-        and resolved_root_id != resolved_task_id
-        and not resolved_parent_id
-        and resolved_role == "root"
-        and resolved_original_id
-        and resolved_original_id == resolved_retry_from
-        and resolved_original_id != resolved_task_id
-    )
+    is_regular_root = bool(resolved_task_id and resolved_root_id == resolved_task_id
+                           and not resolved_parent_id and resolved_role != "subagent")
+    is_retry_root = bool(resolved_task_id and resolved_root_id and resolved_root_id != resolved_task_id
+                         and not resolved_parent_id and resolved_role == "root" and resolved_original_id
+                         and resolved_original_id == resolved_retry_from and resolved_original_id != resolved_task_id)
     return {
         "task_id": resolved_task_id,
         "root_task_id": resolved_root_id,
@@ -689,6 +681,42 @@ def _is_status_regression(existing_status: str, new_status: str) -> bool:
     return False
 
 
+def is_reconciled_presence_placeholder(row: Dict[str, Any]) -> bool:
+    """The orphan reconciler's failed mark on a lost presence turn: no terminal of its own ever ran."""
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    return (row.get("status") == STATUS_FAILED and not row.get("terminal_origin")
+            and row.get("status_reconciled_from") in {STATUS_RUNNING, STATUS_INTERRUPTED}
+            and row.get("reason_code") in {"orphaned_running_after_worker_restart", "interrupted_retry_lost"}
+            and (meta.get("source") == "presence" or isinstance(meta.get("presence"), dict)))
+
+
+def reopen_reconciled_presence_placeholder(drive_root: Any, task_id: str) -> bool:
+    """Return a placeholder to ``running`` for its re-run; the host mark moves to ``superseded_placeholder``."""
+    path, reopened = task_result_path(drive_root, task_id), []
+    # The terminal-projection bookkeeping of the placeholder's failed transition goes with it: the
+    # re-run's own terminal transition must originate its own room row, never inherit a failed one.
+    projection = ("canonical_terminal_projection", "canonical_terminal_projection_ready",
+                  "canonical_terminal_projection_origin")
+    cleared = {"reason_code", "outcome_axes", "artifact_status", "artifact_bundle", "result",
+               "status_reconciled_from", *projection}
+
+    def _reopen(existing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if not is_reconciled_presence_placeholder(existing):
+            return None
+        require_writable_task_result_schema(existing, path)
+        mark = {key: existing.get(key) for key in ("status", "reason_code", "status_reconciled_from", "ts", *projection)
+                if key in existing}
+        reopened.append(utc_now_iso())
+        return stamp_task_result_schema({
+            **{key: value for key, value in existing.items() if key not in cleared},
+            "status": STATUS_RUNNING, "ts": reopened[0], "updated_at": reopened[0],
+            "superseded_placeholder": {**mark, "result": str(existing.get("result") or "")[-500:]},
+        })
+
+    update_json_locked(path, _reopen, strict_existing_dict=True)
+    return bool(reopened)
+
+
 def validate_task_id(task_id: Any) -> str:
     text = str(task_id or "").strip()
     if not _TASK_ID_RE.fullmatch(text):
@@ -697,14 +725,10 @@ def validate_task_id(task_id: Any) -> str:
 
 
 def task_results_dir(drive_root: Any, *, create: bool = True) -> pathlib.Path:
-    """Resolve ``<drive_root>/task_results``.
+    """Resolve ``<drive_root>/task_results``; writers create it, readers pass ``create=False``.
 
-    ``create`` controls the mkdir side effect: WRITE callers leave it True so the
-    directory exists before the write; READ/LIST callers pass ``create=False`` so a
-    scan of a never-provisioned (or stubbed) root returns nothing instead of
-    MATERIALISING the directory. The latter previously let an unguarded scan with a
-    MagicMock-derived root create a stray ``MagicMock/.../task_results`` tree in cwd.
-    """
+    A read-side mkdir once let a scan with a MagicMock-derived root create a stray
+    ``MagicMock/.../task_results`` tree in cwd, so a never-provisioned root reads as empty."""
     path = pathlib.Path(drive_root) / "task_results"
     if create:
         path.mkdir(parents=True, exist_ok=True)
@@ -728,6 +752,28 @@ def _normalize_swarm_efficiency(data: Dict[str, Any]) -> Dict[str, Any]:
     return {**data, "swarm_efficiency": value}
 
 
+def _admit_task_result(
+    path: pathlib.Path, data: Any, task_id: str, *, strict: bool, noun: str,
+) -> tuple[Optional[Dict[str, Any]], str]:
+    """Schema admission shared by exact and scan reads: ``(row or None, refusal when quarantined)``.
+
+    Fail-soft refusal quarantines; strict refusal raises without moving, so
+    unreadable identities cannot be readmitted."""
+    refusal = task_result_schema_refusal(data)
+    if refusal and strict:  # "malformed" keeps the pre-ABI-2 strict message for unreadable rows
+        raise ValueError(f"{noun} is unreadable or invalid: {path}" if refusal == "malformed" else
+                         f"task result schema is inadmissible ({QUARANTINED_SCHEMA_REASON}: {refusal}): {path}")
+    if refusal:
+        outcome = _quarantine_task_result(path, refusal)
+        data = read_json_dict(path) if outcome == "kept_admissible" else None
+        if data is None or task_result_schema_refusal(data):
+            return None, refusal if outcome == "moved" else ""
+    if strict and (str(data.get("task_id") or "") != task_id or not isinstance(data.get("status"), str)
+                   or not str(data.get("status") or "").strip()):
+        raise ValueError(f"{noun} is unreadable or invalid: {path}")
+    return data, ""
+
+
 def load_task_result(
     drive_root: Any, task_id: str, *, strict: bool = False,
 ) -> Optional[Dict[str, Any]]:
@@ -749,31 +795,10 @@ def load_task_result(
         return None  # This read saw absence even if a writer publishes immediately after it.
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         data = None
-    refusal = task_result_schema_refusal(data)
-    if refusal:
-        if strict:
-            if refusal == "malformed":
-                # Pre-ABI-2 strict contract for unreadable rows, kept stable.
-                raise ValueError(f"task result authority is unreadable or invalid: {path}")
-            raise ValueError(
-                f"task result schema is inadmissible ({QUARANTINED_SCHEMA_REASON}: {refusal}): {path}"
-            )
-        outcome = _quarantine_task_result(path, refusal)
-        if outcome == "kept_admissible":
-            data = read_json_dict(path)
-            if task_result_schema_refusal(data):
-                return None
-        else:
-            if outcome == "moved":
-                _emit_quarantine_event(drive_root, [{"task_id": tid, "reason": refusal}])
-            return None
-    if strict and (
-        str(data.get("task_id") or "") != tid
-        or not isinstance(data.get("status"), str)
-        or not str(data.get("status") or "").strip()
-    ):
-        raise ValueError(f"task result authority is unreadable or invalid: {path}")
-    return _normalize_swarm_efficiency(data)
+    data, moved = _admit_task_result(path, data, tid, strict=strict, noun="task result authority")
+    if moved:
+        _emit_quarantine_event(drive_root, [{"task_id": tid, "reason": moved}])
+    return _normalize_swarm_efficiency(data) if data is not None else None
 
 
 def list_task_results(
@@ -800,70 +825,14 @@ def list_task_results(
         data = read_json_dict(path)
         if data is None and not path.is_file():
             continue  # vanished mid-scan — nothing to admit or quarantine
-        refusal = task_result_schema_refusal(data)
-        if refusal:
-            if strict:
-                if refusal == "malformed":
-                    # Pre-ABI-2 strict contract for unreadable rows, kept stable.
-                    raise ValueError(f"task result is unreadable or invalid: {path}")
-                raise ValueError(
-                    f"task result schema is inadmissible ({QUARANTINED_SCHEMA_REASON}: {refusal}): {path}"
-                )
-            outcome = _quarantine_task_result(path, refusal)
-            if outcome == "kept_admissible":
-                data = read_json_dict(path)
-                if task_result_schema_refusal(data):
-                    continue
-            else:
-                if outcome == "moved":
-                    quarantined.append({"task_id": path.stem, "reason": refusal})
-                continue
-        if strict and (
-            str(data.get("task_id") or "") != path.stem
-            or not isinstance(data.get("status"), str)
-            or not str(data.get("status") or "").strip()
-        ):
-            raise ValueError(f"task result is unreadable or invalid: {path}")
-        if wanted and str(data.get("status") or "") not in wanted:
+        data, moved = _admit_task_result(path, data, path.stem, strict=strict, noun="task result")
+        if moved:
+            quarantined.append({"task_id": path.stem, "reason": moved})
+        if data is None or (wanted and str(data.get("status") or "") not in wanted):
             continue
         results.append(data)
     _emit_quarantine_event(drive_root, quarantined)
     return results
-
-
-def merge_review_projection(previous: Any, incoming: Any) -> Any:
-    """Keep newer host publication facts when a delayed task snapshot arrives.
-
-    This is read-side custody, never review authority. Attempt identity comes
-    from the task; publication_revision only orders snapshots of the SAME
-    panel. Supersession cannot be reversed by a stale or replayed projection.
-    """
-    if not isinstance(previous, dict) or not isinstance(incoming, dict):
-        return incoming
-    old_rows, new_rows = previous.get("panels"), incoming.get("panels")
-    if not isinstance(old_rows, list) or not isinstance(new_rows, list):
-        return incoming
-    if not any(isinstance(row, dict) and row.get("publication_revision") for row in old_rows + new_rows):
-        return incoming  # unchanged legacy merge semantics
-    def rank(value: Dict[str, Any]) -> tuple:
-        return (bool(value.get("superseded")),
-                value.get("publication_revision") if type(value.get("publication_revision")) is int else 0)
-
-    merged: Dict[tuple, Dict[str, Any]] = {}
-    for index, row in enumerate(old_rows + new_rows):
-        if not isinstance(row, dict):
-            continue
-        key = (str(row.get("surface") or ""), str(row.get("task_attempt") or ""),
-               str(row.get("panel_id") or f"legacy:{index}"), row.get("panel_index"))
-        prior = merged.get(key)
-        if prior is None or rank(row) > rank(prior):
-            merged[key] = copy.deepcopy(row)
-    rows = list(merged.values())
-    rows.sort(key=lambda row: (
-        row.get("task_attempt") if type(row.get("task_attempt")) is int else 0,
-        row.get("panel_index") if type(row.get("panel_index")) is int else 0,
-    ))
-    return {**previous, **incoming, "panels": rows}
 
 
 def write_task_result(
@@ -922,18 +891,21 @@ def write_task_result(
             log.debug("Blocked status regression %s -> %s for task %s",
                       existing.get("status"), projected_status, task_id)
             return None
+        # Only this accepted transition can originate terminal delivery debt:
+        # enrichment/replica fields cannot adopt historical terminal rows or
+        # erase provenance persisted before the separate readiness write.
+        projected_fields.pop("canonical_terminal_projection_origin", None)
+        if projected_status in _TRULY_TERMINAL_STATUSES and existing_status not in _TRULY_TERMINAL_STATUSES:
+            merged = {**existing, **projected_fields}
+            lineage_keys = ("root_task_id", "parent_task_id", "delegation_role", "original_task_id", "timeout_retry_from")
+            if resolve_task_lineage(task_id, metadata=merged.get("metadata"),
+                                    **{key: merged.get(key) for key in lineage_keys})["is_root_task"]:
+                projected_fields["canonical_terminal_projection_origin"] = "terminal_transition"
         now = utc_now_iso()
-        # ABI-3 write seam: the merge BASE is the existing row normalized onto
-        # the honest cost names (its own legacy spelling wins its own pair,
-        # then is stripped) so a stored alias can neither survive the rewrite
-        # nor outrank this write's fresh honest value at the final
-        # normalization below; a legacy spelling arriving IN the write itself
-        # (a legacy mutator's edit) still wins that final resolution and
-        # leaves under the honest name only. Fix-round-3: BOTH passes use the
-        # shared deep normalizer, so the nested public cost planes (the
-        # subagent envelope + its usage snapshot, the loop-outcome usage)
-        # are rewritten onto honest names too — whichever side of the merge
-        # the nested dict came from.
+        # ABI-3 write seam: the merge BASE is normalized onto honest cost names first, so a stored alias
+        # neither survives nor outranks this write's fresh value; a legacy spelling IN this write still
+        # wins the final pass and leaves under the honest name. Both passes use the shared deep
+        # normalizer, so nested cost planes (subagent envelope, loop-outcome usage) are rewritten too.
         return stamp_task_result_schema(normalize_task_result_cost_planes({
             **normalize_task_result_cost_planes(existing),
             **projected_fields,
@@ -943,10 +915,8 @@ def write_task_result(
             "updated_at": now,
         }))
 
-    # Never fall back to an unlocked read/merge/write. Every task-result write is
-    # lifecycle authority; accepting stale state here makes the winner of a
-    # completed-vs-cancelled race depend on timing rather than the monotonic
-    # reducer above. Callers may retry or fail their transition explicitly.
+    # Never fall back to an unlocked read/merge/write: stale state would let timing, not the monotonic
+    # reducer, pick a completed-vs-cancelled winner. Callers retry or fail their transition explicitly.
     return update_json_locked(
         path,
         _merge,

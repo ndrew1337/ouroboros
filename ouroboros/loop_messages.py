@@ -241,15 +241,28 @@ def _record_owner_directive(
 
 
 def _initialize_owner_directives(ctx: Any, messages: List[Dict[str, Any]]) -> None:
-    """Capture the canonical initial user turn before system notices are added."""
+    """Capture the run's first user turn before system notices are added.
+
+    The row is always recorded, but its label states only what the host knows:
+    ``initial_user`` when the owner door stamped this run (``run_origin``'s
+    ``owner_ingress``), ``initial_text`` otherwise — a Presence event, a wake, a
+    schedule, a follow-up, a child's work order or an unmarked context. The bytes of
+    an owner row do not change, so ``owner_source_sha256`` stays what it was; the
+    label is read by the models that judge the corpus (acceptance, safety, the
+    post-task synthesis), never branched on by the host.
+    """
     existing = getattr(ctx, "_owner_directives", None)
     if isinstance(existing, list) and existing:
         return
     for message in messages:
         if isinstance(message, dict) and str(message.get("role") or "") == "user":
+            from ouroboros.dialogue_provenance import run_origin
+
+            metadata = getattr(ctx, "task_metadata", None)
+            stamped = run_origin({"metadata": metadata if isinstance(metadata, dict) else {}})["owner_ingress"]
             _loop()._record_owner_directive(
                 ctx,
-                source="initial_user",
+                source="initial_user" if stamped else "initial_text",
                 content=message.get("content"),
             )
             return

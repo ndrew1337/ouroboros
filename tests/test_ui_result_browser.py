@@ -81,6 +81,24 @@ def _seed_history(root):
     return {"preserved_path": str(preserved), "preserved_bytes": preserved.read_bytes()}
 
 
+def _seed_early_failure(root):
+    from ouroboros.task_results import write_task_result
+    from ouroboros.utils import append_jsonl
+    from supervisor.message_bus import log_chat
+    logs = root / "logs"
+    from ouroboros.task_finalization import stamp_root_final_phase
+
+    early = {"type": "send_message", "progress_meta": {"outcome_axes": {"execution": {"status": "infra_failed"}}}}
+    stamp_root_final_phase(early, {}, post_task_open=True, terminal_status="failed")
+    write_task_result(root, "known-failure", "failed", title="Known failed work",
+                      root_phase_checkpoint={"post_task_synthesis": "running"},
+                      outcome_axes={"execution": {"status": "infra_failed"}})
+    append_jsonl(logs / "progress.jsonl", {"task_id": "known-failure", "chat_id": 1,
+        "content": "Checking the requested result", "ts": "2026-09-08T10:00:00Z"})
+    log_chat("out", 1, 1, "The provider failed; retained work remains available.",
+             task_id="known-failure", message_meta=early["progress_meta"], drive_root=root)
+
+
 def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypatch):
     from playwright.sync_api import sync_playwright
 
@@ -111,11 +129,18 @@ def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypa
         oracle = ArtifactOracle(root)
         try:
             project = _api(server.base_url, "POST", "/api/projects", {"name": "Evidence review"})["project"]
+            _seed_early_failure(root)
             with sync_playwright() as pw:
                 browser = pw.chromium.launch()
                 page = browser.new_page(viewport={"width": 1440, "height": 1000}, reduced_motion="reduce")
                 try:
                     page.goto(server.base_url, wait_until="domcontentloaded")
+                    early_card = page.locator('.chat-live-card[data-task-id="known-failure"]')
+                    early_card.locator('[data-live-phase]').filter(has_text="Failed").wait_for(timeout=30000)
+                    early_card.get_by_text("Finalizing…", exact=True).wait_for()
+                    # This seeded row has no live actor. The real census can
+                    # correctly retire it; it is a replay metadata assertion,
+                    # not a screenshot claim of a live finalizing process.
                     cancelled = page.locator('.chat-live-card[data-task-id="old-cancelled"]')
                     cancelled.locator('[data-live-phase]').filter(has_text="Cancelled").wait_for(timeout=30000)
                     assert page.get_by_text("Retained ordinary answer before cancellation", exact=True).count() == 1

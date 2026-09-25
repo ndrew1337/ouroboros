@@ -225,7 +225,11 @@ def test_the_loop_publishes_one_monotonic_stamp_per_tick_phase():
     )
     assert [phase for phase, _clock in stamps] == ["events", "maintenance", "assign"], stamps
     assert {clock for _phase, clock in stamps} == {"monotonic"}, stamps
-    assert "observe_worker_event_lag(_loop_liveness, evt)" in source
+    # The bounded drain receives the loop's own liveness list and observes the lag itself.
+    from ouroboros import server_liveness
+
+    assert re.search(r"drain_worker_events\(\s*get_event_q\(\), _event_ctx, _loop_liveness,", source), source
+    assert "observe_worker_event_lag(liveness, evt)" in inspect.getsource(server_liveness.drain_worker_events)
 
 
 def _run_custody_tick(monkeypatch, *, failing_step=None):

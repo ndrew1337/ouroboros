@@ -1232,16 +1232,16 @@ def budget_line(force: bool = False) -> str:
                 raise RuntimeError("message bus data root is not initialized")
             from ouroboros.usage_accounting import (
                 ensure_legacy_imported,
-                usage_breakdown,
                 usage_projection,
+                usage_writer_snapshot,
             )
 
             ensure_legacy_imported(DATA_DIR)
             total = float(TOTAL_BUDGET_LIMIT or 0.0)
-            accounting = (  # display: messages are sent from the supervisor loop too
-                usage_projection(DATA_DIR, global_limit_usd=total, allow_stale=True)
+            accounting = (  # display of scalars, sent from the supervisor loop too: no per-root map
+                usage_projection(DATA_DIR, global_limit_usd=total, include_roots=False, allow_stale=True)
                 if total > 0
-                else usage_breakdown(DATA_DIR, allow_stale=True)
+                else usage_writer_snapshot(DATA_DIR, allow_stale=True)
             )
             display_state["spent_usd"] = float(accounting.get("accounted_usd") or 0.0)
             display_state["usage_accounting"] = accounting
@@ -1322,6 +1322,8 @@ def log_chat(
         for key in SUBAGENT_MESSAGE_FIELDS:
             if key in meta:
                 record[key] = meta[key]
+        if "narration" in meta:
+            record["narration"] = bool(meta["narration"])
         if record_type in ("project_started", "project_handoff", "project_completion_summary"):
             for key in ("project_id", "project_name", "target_label", "status", "completion_answer", "handoff_id"):
                 if key in meta:
@@ -1378,11 +1380,31 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
                      is_progress: bool = False, task_id: str = "",
                      progress_meta: Optional[Dict[str, Any]] = None,
                      ts: Optional[str] = None,
-                     role: str = "", system_type: str = "") -> None:
+                     role: str = "", system_type: str = "",
+                     narration: Optional[bool] = None) -> None:
+    """Send one owner-visible message through the shared host seam.
+
+    ``narration`` is the note's VOICE, the same typed fact the worker stamps on
+    every progress frame (``agent._emit_progress``): ``True`` only for the model's
+    own speech, ``False`` for the host talking about a turn. The browser reads an
+    ABSENT key as legacy narration, so every send that went through this seam
+    without one — startup, restart, evolution and command-reply notices, the
+    provider-death incident — was promoted to the card's title and collapsed
+    activity line as if Ouroboros had said it (#1011). New sends are therefore
+    normalized here to the host voice, once, into the ONE meta dict both the
+    durable record and the live bridge receive; an explicit value from the caller
+    (or one already on ``progress_meta``) is preserved, and stored rows written
+    before the fact keep their legacy reading.
+    """
     st = load_state()
     owner_id = int(st.get("owner_id") or 0)
     _text = str(text or "")
     msg_ts = ts or utc_now_iso()
+    meta = dict(progress_meta or {})
+    if narration is not None:
+        meta["narration"] = bool(narration)
+    meta.setdefault("narration", False)
+    progress_meta = meta
 
     if is_progress and DATA_DIR:
         progress_record = {

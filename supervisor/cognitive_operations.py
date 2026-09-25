@@ -74,6 +74,16 @@ def _handle_cognitive_operation(evt: Dict[str, Any], ctx: Any) -> None:
                     return
                 if supplied and stored and supplied != stored:
                     return
+        if phase == "finished" and isinstance(row, dict) and row.get("kind") == "tool":
+            # A tool call that physically completed is this task's own work, like a
+            # completed model round (events_budget) or a narration line
+            # (events_chat_delivery): the lease that spared the idle rail while the
+            # call ran closes INTO a fresh progress stamp, so the round that follows
+            # starts inside a full idle window instead of inheriting the time spent
+            # in earlier tools. Stamped before the pop so no tick reads the task as
+            # both lease-less and stale. Deadline, absolute ceiling, budget and
+            # cancellation never consult this stamp.
+            meta["last_progress_at"] = time.time()
         active.pop(operation_id, None)
         if not active:
             meta.pop("active_operation_leases", None)
@@ -83,11 +93,16 @@ def _handle_cognitive_operation(evt: Dict[str, Any], ctx: Any) -> None:
         requested_until = float(evt.get("lease_until") or 0.0)
     except (TypeError, ValueError):
         requested_until = 0.0
-    from ouroboros.config import get_task_abs_ceiling_sec
+    from ouroboros.config import OPERATION_WINDOW_FALLBACK_SEC, get_task_abs_ceiling_sec
     from ouroboros.deadline_utils import parse_deadline_ts
 
     started_at = float(meta.get("started_at") or now)
-    hard_until = started_at + float(get_task_abs_ceiling_sec())
+    ceiling = get_task_abs_ceiling_sec()
+    # A finite task lifetime bounds the lease from task start; without one the operation's
+    # own finite window bounds it from this start fact, so a lost terminal never spares the
+    # idle rail forever.
+    hard_until = (started_at + float(ceiling) if ceiling is not None
+                  else now + float(OPERATION_WINDOW_FALLBACK_SEC))
     task = meta.get("task") if isinstance(meta.get("task"), dict) else {}
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     deadline = parse_deadline_ts(task.get("deadline_at") or metadata.get("deadline_at"))

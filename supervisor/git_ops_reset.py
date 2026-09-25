@@ -474,6 +474,18 @@ def sync_runtime_dependencies(reason: str) -> Tuple[bool, str]:
         log.info("Skipping pip install in frozen (PyInstaller) mode — deps are bundled.")
         return True, "frozen:bundled"
 
+    # The one dependency-install chokepoint every caller reaches — bootstrap,
+    # managed update pre-restart and the reset fallbacks all route here — so the
+    # test boundary belongs on THIS line, not on one caller's local-dev branch.
+    # A verification run must never mutate the interpreter it is verifying (the
+    # operator's, or a fixture's dependency-only venv): the marker is set by
+    # tests/conftest.py and re-injected into every scrubbed child environment
+    # (ouroboros/test_environment.py), so a server started by a test inherits it.
+    # Production sets no such marker and keeps its install policy unchanged.
+    if os.environ.get("OUROBOROS_PYTEST_ACTIVE") == "1":
+        log.info("Skipping dependency sync under an active test boundary (%s).", reason)
+        return True, "pytest:suppressed"
+
     from ouroboros.platform_layer import pip_install_target_args
 
     req_path = _go().REPO_DIR / "requirements-runtime.lock"

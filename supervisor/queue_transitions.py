@@ -9,7 +9,9 @@ QUIESCENCE state, driven entirely through the queue module:
 
 - the acceptance FENCE (open/inspect/seal a root so no new subtask is admitted
   while its acceptance review runs),
-- explicit BUDGET resume of a zero-dispatch task and its root latch,
+- explicit BUDGET resume of a zero-dispatch task and its root latch (the
+  exact mid-run continuation's single-use GRANT and its revocation live in
+  ``supervisor/budget_resume.py`` and are re-exported here),
 - fenced PROJECT deletion: cancel the project's tree, then tombstone only after
   the tree is provably quiescent,
 - shared live-subtree and timeout-retry lineage views used by cancellation and
@@ -218,40 +220,89 @@ def budget_pause_fact(task, fences=None):
     pause = task.get("_budget_pause") if isinstance(task, dict) else None
     if isinstance(pause, dict):
         return pause
+    from supervisor.events_budget import BUDGET_HOLD_KEY, budget_fence_selected, budget_hold_fact
+
     fence_map = _queue_module().BUDGET_ROOT_FENCES if fences is None else fences
     root_id = str((task or {}).get("root_task_id") or (task or {}).get("id") or "")
     fence = fence_map.get(root_id)
-    if isinstance(fence, dict) and str(fence.get("status") or "") in {"active", "paused"}:
+    if (isinstance(fence, dict) and str(fence.get("status") or "") in {"active", "paused"}
+            and not budget_fence_selected(task, fence)):
+        # An explicit selection recorded against THIS fence released exactly one
+        # row; its siblings stay fenced (owner Q9).
         return fence
+    if isinstance(task, dict) and budget_hold_fact(task) is not None:
+        return dict(task[BUDGET_HOLD_KEY])
     return None
 
 
-def resume_budget_paused_task(task_id: str) -> Dict[str, Any]:
-    """Explicitly resume one zero-dispatch task and, if needed, its root latch."""
+def pending_member_replay_safe(q: Any, member: Dict[str, Any]) -> Tuple[bool, str]:
+    """Whether one PENDING row genuinely never dispatched (zero physical calls)."""
+    member_id = str(member.get("id") or "")
+    cost_fields = q.reconstruct_task_cost(
+        member_id, fields=True,
+        drive_root=pathlib.Path(member.get("budget_drive_root") or q.DRIVE_ROOT),
+    )
+    if cost_fields.get("cost_accounting_status") != "available":
+        return False, "accounting_unavailable"
+    retry_lineage = bool(
+        int(member.get("_attempt") or 1) > 1
+        or member.get("original_task_id") or member.get("timeout_retry_from")
+    )
+    return bool(
+        int(cost_fields.get("total_rounds") or 0) == 0
+        and not bool(cost_fields.get("ledger_integrity_degraded"))
+        and not retry_lineage
+    ), "replay_unsafe"
+
+
+def resume_budget_paused_task(task_id: str, *, selected_by: str = "") -> Dict[str, Any]:
+    """Explicitly resume one budget-paused task and, if needed, its root latch.
+
+    A replay-safe ZERO-dispatch row is released as before. An EXACT
+    continuation row (#1196) receives one single-use grant instead
+    (``grant_exact_budget_resume``); it is never re-run from scratch. A row held
+    behind a lifted root fence is released only by recording the selection.
+    ``selected_by`` names the MODEL-issued request (owner Q9); an empty value is
+    the owner's own act, which needs no root grant above itself.
+    """
     q = _queue_module()
     task_id = str(task_id or "").strip()
     if not task_id:
         return {"ok": False, "error": "missing_task_id"}
+    external = None
+    with q._queue_lock:
+        located = next((item for item in q.PENDING if str(item.get("id") or "") == task_id), None)
+        exact = bool(located is not None and isinstance(located.get("_budget_pause"), dict)
+                     and located["_budget_pause"].get("exact_continuation"))
+        result_root = pathlib.Path((located or {}).get("budget_drive_root") or q.DRIVE_ROOT)
+    if exact:
+        # Fresh custody at EVERY grant, read and stop-requested OUTSIDE the
+        # queue lock (a harness round trip is not a queue-lock tenant); the
+        # grant below re-locates the row and decides on this observation.
+        from ouroboros.budget_pause import observe_task_runs
+
+        external = observe_task_runs(result_root, task_id, reason="budget_resume_uncovered_cost")
     with q._queue_lock:
         task = next((item for item in q.PENDING if str(item.get("id") or "") == task_id), None)
         if task is None:
             return {"ok": False, "error": "task_not_pending"}
         pause = task.get("_budget_pause") if isinstance(task.get("_budget_pause"), dict) else None
+        if pause and pause.get("exact_continuation"):
+            return grant_exact_budget_resume(task, pause, selected_by=selected_by, external=external)
+        from supervisor.events_budget import budget_hold_fact, select_held_budget_row
+
+        hold = budget_hold_fact(task)
+        if hold is not None and not pause:
+            return select_held_budget_row(q, task, hold, selected_by=selected_by)
         if not pause:
-            # A root marker blocks every already-pending sibling without
-            # copying pause state onto each task.  An explicit resume request
-            # may nominate any genuinely zero-dispatch member of that root.
             candidate_root = str(task.get("root_task_id") or task_id).strip()
             candidate_fence = q.BUDGET_ROOT_FENCES.get(candidate_root)
             if not isinstance(candidate_fence, dict):
                 return {"ok": False, "error": "task_not_budget_paused"}
-            pause = {
-                **candidate_fence,
-                "status": "paused_before_dispatch",
-                "physical_calls": 0,
-                "replay_safe": True,
-                "resume_policy": "manual_same_generation",
-            }
+            if isinstance(task.get("_budget_pause_resume"), dict):
+                return {"ok": False, "error": "resume_already_granted",
+                        "grant_id": str(task["_budget_pause_resume"].get("grant_id") or "")}
+            pause = {**candidate_fence, "physical_calls": 0, "replay_safe": True}
         root_scope = str(pause.get("scope") or "") == "root"
         root_task_id = str(pause.get("root_task_id") or "").strip()
         fence = q.BUDGET_ROOT_FENCES.get(root_task_id) if root_scope and root_task_id else None
@@ -259,26 +310,7 @@ def resume_budget_paused_task(task_id: str) -> Dict[str, Any]:
             return {"ok": False, "error": "root_budget_fence_missing", "action": "cancel_or_new_run"}
         if root_scope and str(pause.get("fence_id") or "") != str(fence.get("fence_id") or ""):
             return {"ok": False, "error": "replay_unsafe", "action": "cancel_or_new_run"}
-        def _pending_member_is_replay_safe(member: Dict[str, Any]) -> tuple[bool, str]:
-            member_id = str(member.get("id") or "")
-            cost_fields = q.reconstruct_task_cost(
-                member_id,
-                fields=True,
-                drive_root=pathlib.Path(member.get("budget_drive_root") or q.DRIVE_ROOT),
-            )
-            if cost_fields.get("cost_accounting_status") != "available":
-                return False, "accounting_unavailable"
-            retry_lineage = bool(
-                int(member.get("_attempt") or 1) > 1
-                or member.get("original_task_id") or member.get("timeout_retry_from")
-            )
-            return bool(
-                int(cost_fields.get("total_rounds") or 0) == 0
-                and not bool(cost_fields.get("ledger_integrity_degraded"))
-                and not retry_lineage
-            ), "replay_unsafe"
-
-        nominated_safe, nominated_error = _pending_member_is_replay_safe(task)
+        nominated_safe, nominated_error = pending_member_replay_safe(q, task)
         nominated_safe = bool(
             nominated_safe
             and pause.get("replay_safe")
@@ -291,34 +323,21 @@ def resume_budget_paused_task(task_id: str) -> Dict[str, Any]:
                 "action": "cancel_or_new_run",
             }
         if root_scope:
-            # Clearing one root latch makes every pending member assignable. Check
-            # those members together under the existing queue lock; completed
-            # historical siblings are deliberately irrelevant.
-            unsafe_members: list[str] = []
-            for member in q.PENDING:
-                member_id = str(member.get("id") or "")
-                member_root = str(member.get("root_task_id") or member_id)
-                if member_root != root_task_id or member_id == task_id:
-                    continue
-                member_safe, _member_error = _pending_member_is_replay_safe(member)
-                if not member_safe:
-                    unsafe_members.append(member_id)
-            if unsafe_members:
-                return {
-                    "ok": False,
-                    "error": "root_replay_unsafe",
-                    "unsafe_task_ids": unsafe_members,
-                    "action": "cancel_or_new_run",
-                }
+            # Root Resume selects the root alone; children remain behind this
+            # same fence until individually selected under its root grant (Q9).
+            from supervisor.events_budget import HOLD_ROOT_FENCE_MEMBER_SELECTION, hold_budget_row
+
+            hold = hold_budget_row(
+                task, reason=HOLD_ROOT_FENCE_MEMBER_SELECTION,
+                extra={"root_task_id": root_task_id, "fence_id": fence["fence_id"]})
+            return select_held_budget_row(q, task, hold, selected_by=selected_by)
 
         resumed_at = utc_now_iso()
         prior_pause = dict(pause)
         task.pop("_budget_pause", None)
         task["budget_resumed_at"] = resumed_at
-        if root_scope:
-            q.BUDGET_ROOT_FENCES.pop(root_task_id, None)
         q.persist_queue_snapshot(
-            reason="budget_root_explicit_resume" if root_scope else "budget_pause_explicit_resume",
+            reason="budget_pause_explicit_resume",
         )
     try:
         from ouroboros.task_results import STATUS_SCHEDULED, write_task_result
@@ -1126,3 +1145,13 @@ def reconcile_terminal_task_projections(drive_root, task_id: str) -> None:
                 get_bridge().send_quiz_state(quiz_id, str(task_id), "expired_terminal")
     except Exception:
         log.debug("owner_quiz terminal reconcile failed for %s", task_id, exc_info=True)
+
+
+# The exact-continuation grant lifecycle (#1196) lives in its own owner module;
+# ``grant_exact_budget_resume`` is used above, and ``revoke_exact_budget_resume``
+# is still addressed on THIS surface by ``worker_assignment`` (the same shape
+# ``supervisor.queue`` uses for this file).
+from supervisor.budget_resume import (  # noqa: E402, F401 -- intentional public re-export
+    grant_exact_budget_resume,
+    revoke_exact_budget_resume,
+)

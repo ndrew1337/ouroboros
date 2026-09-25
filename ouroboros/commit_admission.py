@@ -39,8 +39,9 @@ def changed_worktree_paths(
     try:
         result = subprocess.run(
             ["git", "--no-optional-locks", "status", "--porcelain"] + path_args,
-            cwd=str(repo_dir), capture_output=True, text=True, timeout=10,
+            cwd=str(repo_dir), capture_output=True, timeout=10,
         )
+        stdout = result.stdout.decode("utf-8")
     except Exception:
         if strict:
             raise
@@ -49,7 +50,7 @@ def changed_worktree_paths(
         if strict:
             raise RuntimeError("git status failed")
         return []
-    return parse_changed_paths_from_porcelain(result.stdout)
+    return parse_changed_paths_from_porcelain(stdout)
 
 
 def auto_sync_release_metadata_if_needed(
@@ -104,9 +105,11 @@ def read_release_file(repo_dir, path: str, *, source: str) -> str | None:
     present.check_returncode()
     result = subprocess.run(
         ["git", "show", f":{path}"], cwd=str(repo_dir), capture_output=True,
-        encoding="utf-8", timeout=10, check=True,
+        timeout=10, check=True,
     )
-    return result.stdout
+    # Decode on the caller thread (Windows pipe-reader errors otherwise disappear),
+    # retaining the universal-newline semantics of worktree read_text().
+    return result.stdout.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
 
 
 def release_metadata_diagnostics(
@@ -133,9 +136,9 @@ def release_metadata_diagnostics(
             result = subprocess.run(
                 ["git", "--no-optional-locks", "diff", "--cached", "--name-only", "--diff-filter=d", "-z"],
                 cwd=str(repo_dir),
-                capture_output=True, encoding="utf-8", timeout=10, check=True,
+                capture_output=True, timeout=10, check=True,
             )
-            touched.update(filter(None, result.stdout.split("\0")))
+            touched.update(filter(None, result.stdout.decode("utf-8").split("\0")))
     except Exception as exc:
         unavailable.append(f"Changed {source} paths could not be read ({type(exc).__name__}).")
 
@@ -317,7 +320,7 @@ def preflight_test_workload(
     from ouroboros.preflight_node import candidate_node_tests, resolve_node
 
     base = pathlib.Path(tempfile.gettempdir()) / "ouroboros-preflight-contract"
-    env = pr._preflight_env(base, base / "repo")
+    env = pr._preflight_env(base, base / "repo", create=False)
     environment = hashlib.sha256(json.dumps(env, sort_keys=True).encode()).hexdigest()
     python = agent_python or os.environ.get("OUROBOROS_AGENT_PYTHON") or sys.executable or "python3"
     specs = pr._preflight_pass_specs(pytest_args) if passes is None else passes

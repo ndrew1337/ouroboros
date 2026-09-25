@@ -15,6 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, Iterator, List, Optional
 
+from ouroboros import budget_pause
 from ouroboros.config import (
     NESTED_SETTLEMENT_MARGIN_SEC,
     get_finalization_grace_sec,
@@ -113,29 +114,37 @@ def _attach_late_tool_settlement(
     """Close the cognitive lease when a timed-out worker finally settles."""
     tool_ctx = getattr(tools, "_ctx", None)
     event_queue = getattr(tool_ctx, "event_queue", None)
+    # Claim the quiescence row BEFORE attaching: a budget pause may not release
+    # the native worker while this callback is still producing effects, and
+    # ``future.done()`` is not callback-complete (#1196).
+    release_quiescence = budget_pause.hold_tool_settlement(tool_ctx, tool_call_id)
 
     def _settled(_future: Any) -> None:
-        if on_settled is not None:
-            try:
-                on_settled()
-            except Exception:
-                log.debug("Late tool cleanup failed", exc_info=True)
-        emit_cognitive_operation_event(
-            event_queue,
-            task_id=task_id,
-            operation_id=tool_call_id,
-            phase="finished",
-            kind="tool",
-            task_attempt=getattr(tool_ctx, "task_attempt", None),
-            execution_id=str(correlation.get("execution_id") or ""),
-            round_id=str(correlation.get("round_id") or ""),
-            tool=str(correlation.get("tool") or ""),
-        )
+        try:
+            if on_settled is not None:
+                try:
+                    on_settled()
+                except Exception:
+                    log.debug("Late tool cleanup failed", exc_info=True)
+            emit_cognitive_operation_event(
+                event_queue,
+                task_id=task_id,
+                operation_id=tool_call_id,
+                phase="finished",
+                kind="tool",
+                task_attempt=getattr(tool_ctx, "task_attempt", None),
+                execution_id=str(correlation.get("execution_id") or ""),
+                round_id=str(correlation.get("round_id") or ""),
+                tool=str(correlation.get("tool") or ""),
+            )
+        finally:
+            release_quiescence()
 
     try:
         future.add_done_callback(_settled)
     except Exception:
         log.debug("Failed to attach late tool settlement callback", exc_info=True)
+        release_quiescence()
 
 
 def _tool_correlation(tools: ToolRegistry) -> Dict[str, Any]:
@@ -281,7 +290,7 @@ def _get_tool_timeout(
 # per-call/run_command machinery and the deadline milestones own those.
 _DEADLINE_CLAMPED_TOOLS = frozenset({
     "web_search", "browse_page", "browser_action", "youtube_transcript",
-    "wait_task", "wait_tasks", "plan_task", "task_acceptance_review",
+    "wait_task", "wait_tasks", "await_messages", "plan_task", "task_acceptance_review",
     "analyze_screenshot", "vlm_query",
 })
 
@@ -1001,6 +1010,10 @@ def _execute_with_timeout(
             future = stateful_executor.submit(
                 _execute_browser_tool_bound, tools, tc, drive_logs, task_id, submit_generation,
             )
+        # The registration PINS settlement ownership until this call's own
+        # handling is over (result in time, or the late hold claimed below):
+        # released in the finally, after either branch (#1196).
+        release_tool_custody = budget_pause.register_tool_future(tool_ctx, tool_call_id, fn_name, future)
         try:
             result = future_result(future, timeout_sec)
             result_meta = result.get("result_meta") or {}
@@ -1072,9 +1085,15 @@ def _execute_with_timeout(
                 "timeout_sec": timeout_sec,
             }, correlation, tool_call_id=tool_call_id))
             return timeout_result
+        finally:
+            release_tool_custody()
     else:
         with abandoned_on_timeout(timeout_sec, bounded=not is_reviewed_mutative) as submit:
             future = submit(_execute_single_tool, tools, tc, drive_logs, task_id)
+            # Registered before the wait, so a call abandoned at its timeout is
+            # already visible to budget-pause quiescence (#1196); ownership is
+            # pinned until the finally below, after any late hold was claimed.
+            release_tool_custody = budget_pause.register_tool_future(tool_ctx, tool_call_id, fn_name, future)
             try:
                 result = future.result() if is_reviewed_mutative else future_result(future, timeout_sec)
                 result_meta = result.get("result_meta") or {}
@@ -1144,6 +1163,8 @@ def _execute_with_timeout(
                         "timeout_sec": timeout_sec,
                     }, correlation, tool_call_id=tool_call_id))
                     return timeout_result
+            finally:
+                release_tool_custody()
 
 
 _PARALLEL_SAFE_TOOLS: frozenset[str] = READ_ONLY_PARALLEL_TOOLS | PARALLEL_SAFE_ENQUEUE_TOOLS
@@ -1232,6 +1253,7 @@ def handle_tool_calls(
                 for idx, tc in enumerate(tool_calls)
             }
             results = [None] * len(tool_calls)
+            batch_raised = True
             for future in as_completed(future_to_index):
                 idx = future_to_index[future]
                 try:
@@ -1269,8 +1291,13 @@ def handle_tool_calls(
                         },
                         "tool_result": tool_result,
                     }
+            batch_raised = False
         finally:
-            executor.shutdown(wait=False, cancel_futures=True)
+            # A batch leaving on an exception (BudgetExceeded) must not strand an
+            # already-running wrapper that has not yet registered its inner future
+            # with budget-pause quiescence: cancel the queued ones, WAIT for the
+            # started ones (each bounded by its own tool timeout) (#1196, Astra #4).
+            executor.shutdown(wait=batch_raised, cancel_futures=True)
 
     return process_tool_results(results, messages, llm_trace, emit_progress, tools=tools)
 
@@ -1452,10 +1479,16 @@ def process_tool_results(
                 ctx._tool_trace_refs = refs
             refs[str(exec_result["tool_call_id"])] = trace_ref
 
+        # Ensure args are JSON-serializable for trace logging.
+        try:
+            trace_args = json.loads(json.dumps(exec_result["args_for_log"], ensure_ascii=False, default=str))
+        except Exception:
+            log.debug("Failed to serialize args for trace logging", exc_info=True)
+            trace_args = {"_repr": repr(exec_result["args_for_log"])}
         llm_trace["tool_calls"].append({
             "tool": fn_name,
             "tool_call_id": exec_result["tool_call_id"],
-            "args": _safe_args(exec_result["args_for_log"]),
+            "args": trace_args,
             # Evidence-parity (v6.71.1): store the SAME view the agent saw
             # (per-tool TOOL_RESULT_LIMITS, head-truncated) rather than a hidden
             # 700-char head+tail copy. A decider (acceptance reviewer, reflection)
@@ -1497,6 +1530,12 @@ def process_tool_results(
                     )
                     if deferred_to_host:
                         llm_trace.setdefault("acceptance_evidence_calls", []).append(parsed)
+                        if isinstance(parsed.get("acceptance_retry"), dict):
+                            # One explicit, source-bound retry of a disclosed local
+                            # preparation failure. Duplicate deliveries are idempotent.
+                            from ouroboros.acceptance_preparation import record_retry_intent
+
+                            record_retry_intent(llm_trace, parsed["acceptance_retry"], ctx)
                         if ctx is not None:
                             ctx._acceptance_request_pending = {
                                 **(parsed.get("request") or {}),
@@ -1556,10 +1595,3 @@ def process_tool_results(
     return error_count
 
 
-def _safe_args(v: Any) -> Any:
-    """Ensure args are JSON-serializable for trace logging."""
-    try:
-        return json.loads(json.dumps(v, ensure_ascii=False, default=str))
-    except Exception:
-        log.debug("Failed to serialize args for trace logging", exc_info=True)
-        return {"_repr": repr(v)}

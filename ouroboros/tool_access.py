@@ -16,6 +16,7 @@ from typing import Any, Iterable, Literal, Optional  # noqa: F401 — historical
 
 from ouroboros.artifacts import (delegated_capture_read_target,
                                  task_artifact_dir_path, task_id_for_artifacts)
+from ouroboros.headless import task_state_dir
 from ouroboros.tool_capabilities import ACTING_SUBAGENT_MODE, LOCAL_READONLY_SUBAGENT_MODE  # noqa: F401 — historical facade surface
 from ouroboros.contracts.task_constraint import VALID_WRITE_SURFACES, normalize_task_constraint  # noqa: F401 — historical facade surface
 from ouroboros import deliverables_paths as _deliverables_paths
@@ -106,8 +107,8 @@ def summarize_subagent_profile(profile: ToolProfile, *, effective_lane: str = ""
     lane = str(effective_lane or "").strip()
     if lane:
         bits.append(f"model_lane={lane}")
-    lineage = (" (task_drive/artifact_store: its own, its parent's and its root task's files,"
-               " never a sibling's)" if "task_drive" in read_roots else "")
+    lineage = (" (task_drive/artifact_store: its own, its parent's, its root task's and, when its"
+               " contract names one, its predecessor's files, never a sibling's)" if "task_drive" in read_roots else "")
     return (
         "child capabilities — " + " · ".join(bits)
         + f"\nreadable={', '.join(read_roots) or 'none'}{lineage}"
@@ -116,20 +117,22 @@ def summarize_subagent_profile(profile: ToolProfile, *, effective_lane: str = ""
 
 
 def lineage_task_ids(ctx: Any) -> tuple[str, ...]:
-    """Task ids whose ``task_drive``/``artifact_store`` this actor may READ: its own,
-    then ``parent_task_id`` and ``root_task_id`` from its own lineage fields (T4=A,
-    #1105) — never a sibling's, nothing found by walking the disk, malformed ids dropped."""
-    meta = getattr(ctx, "task_metadata", None)
-    meta = meta if isinstance(meta, dict) else {}
+    """Task ids whose ``task_drive``/``artifact_store`` this actor may READ: its own, its parent's
+    and its root's (own lineage fields, T4=A #1105) and the ONE predecessor its contract names
+    (``task_contract.predecessor_authority.source.task_id``, one hop, #1232; a child carrying the
+    envelope reads it too) — never a sibling's, nothing found by walking the disk, malformed ids dropped."""
+    meta, contract = (v if isinstance(v, dict) else {} for v in (
+        getattr(ctx, "task_metadata", None), getattr(ctx, "task_contract", None)))
+    authority = (contract or meta).get("predecessor_authority")
+    source = authority.get("source") if isinstance(authority, dict) else None
     ids = [task_id_for_artifacts(ctx)]
-    for key in ("parent_task_id", "root_task_id"):
+    for raw in (meta.get("parent_task_id"), meta.get("root_task_id"),
+                source.get("task_id") if isinstance(source, dict) else None):
         try:
-            candidate = validate_task_id(meta.get(key))
+            ids.append(validate_task_id(raw))
         except ValueError:
             continue
-        if candidate not in ids:
-            ids.append(candidate)
-    return tuple(ids)
+    return tuple(dict.fromkeys(ids))
 
 
 def _task_root_drives(ctx: Any) -> list[pathlib.Path]:
@@ -149,22 +152,22 @@ def _task_root_drives(ctx: Any) -> list[pathlib.Path]:
 
 def lineage_read_base(ctx: Any, root: ResourceRoot, target: pathlib.Path) -> pathlib.Path | None:
     """The lineage ``task_drive``/``artifact_store`` base containing ``target``, or None:
-    ``lineage_task_ids`` on the canonical data root (where a parent's task files live
-    while the child runs on a child or headless drive) and on the task's own drives.
-    Physical containment only; the caller keeps the READ-only gate."""
+    ``lineage_task_ids`` on the canonical data root and the task's own drives (where a parent's
+    files live while the child runs elsewhere), and each id on ITS OWN headless drive (#1260),
+    never through a symlinked headless root. Physical containment only; the caller keeps the READ-only gate."""
     if root not in {"task_drive", "artifact_store"} or not hasattr(ctx, "drive_root"):
         return None
-    candidate = pathlib.Path(target).resolve(strict=False)
-    drives = [canonical_data_root(ctx)]
-    drives += [drive for drive in _task_root_drives(ctx) if drive not in drives]
-    for drive in drives:
-        for task_id in lineage_task_ids(ctx):
-            base = (
-                drive / "task_drives" / task_id if root == "task_drive"
-                else task_artifact_dir_path(drive, task_id, create=False)
-            ).resolve(strict=False)
-            if path_is_relative_to(candidate, base):
-                return base
+    candidate, canonical = pathlib.Path(target).resolve(strict=False), canonical_data_root(ctx)
+    drives = [canonical] + [drive for drive in _task_root_drives(ctx) if drive != canonical]
+    task_ids = lineage_task_ids(ctx)
+    pairs = [(drive, task_id, False) for drive in drives for task_id in task_ids]
+    pairs += [(task_state_dir(canonical, task_id) / "data", task_id, True) for task_id in task_ids]
+    for drive, task_id, headless in pairs:
+        lexical = (drive / "task_drives" / task_id if root == "task_drive"
+                   else task_artifact_dir_path(drive, task_id, create=False))
+        base = lexical.resolve(strict=False)
+        if path_is_relative_to(candidate, base) and (base == lexical or not headless):
+            return base
     return None
 
 

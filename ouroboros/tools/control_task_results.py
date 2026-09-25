@@ -11,6 +11,7 @@ an id this tree never minted, and a prompt cache that expired while it waited.
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List
 
@@ -25,7 +26,7 @@ from ouroboros.task_status import (
     load_effective_task_result,
     wait_for_effective_tasks,
 )
-from ouroboros.tools.registry import ToolContext
+from ouroboros.tools.registry import ToolContext, ToolEntry
 from ouroboros.utils import truncate_review_artifact, utc_now_iso
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result
 
@@ -187,11 +188,33 @@ def _get_task_result(
     include_work_order_source: bool = False, source_start_char: Any = None,
     source_end_char: Any = None, include_completion_source: bool = False,
     known_result_sha256: str = "", include_focus_source: bool = False, focus_source_sha256: str = "",
+    presence_scope: str = "",
 ) -> str:
     """Read a task result, or a bounded canonical work-order/completion source range."""
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     status_drive_root = Path(str(metadata.get("budget_drive_root") or getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
+    scoped = bool(str(presence_scope or "").strip())
+    if scoped:
+        from ouroboros.presence_authority import PRESENCE_OWN_WORK_SCOPE, presence_caller_binding, presence_work_refusal
+
+        # The scoped read admits exactly the work a scoped page can list, plus this
+        # task's own tree; everything else refuses before any record is projected.
+        refusal = (
+            "⚠️ PRESENCE_CAPABILITY_BLOCKED: presence_scope=own_binding needs a Presence task with a binding id."
+            if str(presence_scope).strip() != PRESENCE_OWN_WORK_SCOPE or not presence_caller_binding(ctx)
+            else presence_work_refusal(ctx, str(task_id or ""), drive_root=status_drive_root, same_tree=True)
+        )
+        if refusal:
+            return _publish_tool_result(ctx, ToolResult(status="blocked", code="ACCESS_BLOCKED", text=refusal))
     data = load_effective_task_result(status_drive_root, task_id)
+    if scoped:
+        from ouroboros.presence_authority import presence_effective_refusal
+
+        # The effective read may substitute a retry successor's record: it is judged too.
+        refusal = presence_effective_refusal(ctx, str(task_id or ""), data, drive_root=status_drive_root,
+                                             same_tree=True)
+        if refusal:
+            return _publish_tool_result(ctx, ToolResult(status="blocked", code="ACCESS_BLOCKED", text=refusal))
     from ouroboros.tools.recent_tasks import _restricted_actor
 
     restricted = _restricted_actor(ctx)
@@ -564,6 +587,137 @@ def _wait_for_task(
     result = (_get_task_result(ctx, tid, known_result_sha256=known_result_sha256)
               if known_result_sha256 else _get_task_result(ctx, tid))
     return f"{header} after {waited.get('elapsed_sec', 0):.1f}s.{extra}\n\n{result}"
+
+
+_AWAIT_MESSAGES_POLL_SEC = 2.0
+_AWAIT_MESSAGES_NOTE = (
+    "Any pending message is delivered at the next round top, not by this tool; this wait "
+    "holds the worker slot and releases nothing."
+)
+
+
+def _await_messages_window(ctx: ToolContext, requested: int) -> tuple[int, str]:
+    """The wait window in seconds and the bound that set it.
+
+    ``requested`` is clamped to [1, per-call timeout ceiling]. Under a task deadline
+    the window also stops one second short of the emit window (remaining minus the
+    finalization reserve) that ``_deadline_clamped_timeout`` gives the executor's
+    kill timer, so the tool returns cleanly instead of being timed out mid-sleep;
+    a spent emit window is a zero-second window (one peek, then return).
+    """
+    from ouroboros.config import get_per_call_timeout_ceiling_sec
+    from ouroboros.deadline_utils import deadline_remaining_sec, has_deadline
+    from ouroboros.task_pacing import effective_finalization_reserve_sec
+
+    ceiling = int(get_per_call_timeout_ceiling_sec())
+    if requested < 1:
+        window, bound = 1, "minimum"
+    elif requested > ceiling:
+        window, bound = ceiling, "ceiling"
+    else:
+        window, bound = requested, "requested"
+    if has_deadline(ctx):
+        emit_window = deadline_remaining_sec(ctx) - effective_finalization_reserve_sec(ctx)
+        deadline_window = max(0, int(emit_window) - 1)
+        if deadline_window < window:
+            window, bound = deadline_window, "deadline"
+    return window, bound
+
+
+def _await_messages(ctx: ToolContext, timeout_sec: int) -> str:
+    """Hold this task's worker slot until an unread mailbox entry exists or the
+    window elapses. Delivers nothing: the round-top drain owns delivery and
+    acknowledgement, exactly as after a wait_task early return. An owner Stop
+    is a mailbox control, so it ends the wait like any message; a cancel kills
+    the worker process; the window is bounded by ``_await_messages_window``.
+
+    Idle rail, honestly: the supervisor stamps ``last_progress_at`` on completed
+    model rounds, on narration and, when a tool's typed lease closes, on the
+    completed tool call (``supervisor/cognitive_operations``); the per-call
+    ceiling alone would not keep a round that already spent long in earlier tools
+    under the rail ``max(idle, ceiling + 120)``. What spares a task while this
+    tool runs is the executor's typed cognitive-operation lease that EVERY tool
+    call holds while physically in flight (``loop_tool_execution._emit_live_log``,
+    kind ``tool``, bounded by the absolute ceiling and the deadline), and the
+    close of that lease is the progress stamp the next model round starts from —
+    a full idle window even after a wait that spent the whole ceiling, so the
+    supervisor tick between the finished wait and the next model call never
+    reaps the turn the wait was for. This tool therefore emits no lease of its
+    own and lends no slot; tests/test_await_messages.py drives the enforcer
+    through that lifecycle.
+    """
+    from ouroboros.loop_transport import _owner_signal_pending
+    from ouroboros.owner_mailbox import OwnerMailboxPeek
+
+    try:
+        requested = int(timeout_sec)
+    except (TypeError, ValueError):
+        return _publish_tool_result(ctx, ToolResult(
+            status="error", code="TOOL_ARG_ERROR",
+            text="⚠️ TOOL_ARG_ERROR (await_messages): timeout_sec must be an integer number of seconds.",
+        ))
+    window, bound = _await_messages_window(ctx, requested)
+    peek = OwnerMailboxPeek()
+    drive_root = getattr(ctx, "drive_root", None)
+    task_id = str(getattr(ctx, "task_id", "") or "")
+    seen = getattr(ctx, "_loop_mailbox_seen_ids", None)
+    attempt = getattr(ctx, "task_attempt", None) or 1
+    start = time.monotonic()
+    while True:
+        # The transport wait's non-destructive peek over a COPY of the seen
+        # set; the mailbox and its acknowledgements are untouched.
+        pending = bool(_owner_signal_pending(None, drive_root, task_id, seen, attempt, peek))
+        elapsed = time.monotonic() - start
+        if pending or elapsed >= window:
+            break
+        time.sleep(min(_AWAIT_MESSAGES_POLL_SEC, max(0.0, window - elapsed)))
+    if pending:
+        reason = "owner_mailbox_pending"
+    else:
+        reason = "deadline" if bound == "deadline" else "timeout"
+    out: Dict[str, Any] = {
+        "reason": reason,
+        "pending": pending,
+        "elapsed_sec": round(float(elapsed), 3),
+        "requested_sec": requested,
+        "window_sec": window,
+        "window_bound": bound,
+        "slot": "held",
+        "note": _AWAIT_MESSAGES_NOTE,
+    }
+    horizon_note = cache_horizon_note(ctx, elapsed)
+    if horizon_note:
+        out["cache_horizon"] = horizon_note
+    return json.dumps(out, ensure_ascii=False)
+
+
+def await_messages_entry() -> ToolEntry:
+    """The await_messages catalog entry, owned beside its handler; the kill timeout
+    sits 60s above the largest window the tool can choose (the per-call ceiling)."""
+    from ouroboros.config import get_per_call_timeout_ceiling_sec
+
+    return ToolEntry("await_messages", {
+        "name": "await_messages",
+        "description": (
+            "Wait, without spending model rounds, until an unread message for THIS task exists "
+            "in your mailbox (an addressed contribution from a peer task, a parent's steering, "
+            "an owner message, a child's escalation) or the window elapses. Use it when you have "
+            "asked a peer or your parent for its next turn and have nothing useful to do until "
+            "it arrives; you decide when waiting is worth it. The wait holds your worker slot "
+            "and releases nothing; the window is clamped to the per-call timeout ceiling and, "
+            "under a deadline, to the finalization emit window (the result names the bound); "
+            "while it runs, the ordinary in-flight tool lease keeps the supervisor's idle rail "
+            "off you and its completion counts as progress, so your next round starts inside a "
+            "full idle window — call again to keep waiting. It delivers nothing itself: the message "
+            "reaches you at the next round top, exactly as after a wait_task early return. The "
+            "result says when the applied prompt-cache horizon elapsed during the wait."
+        ),
+        "parameters": {"type": "object", "required": ["timeout_sec"], "properties": {
+            "timeout_sec": {"type": "integer", "description":
+                            "Seconds to wait; clamped to the per-call timeout ceiling and to the "
+                            "deadline emit window (the bound is reported in the result)."},
+        }},
+    }, _await_messages, timeout_sec=get_per_call_timeout_ceiling_sec() + 60)
 
 
 def _count_live_sibling_children(ctx: ToolContext, status_drive_root: Path, *, exclude_task_id: str) -> int:

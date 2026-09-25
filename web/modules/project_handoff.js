@@ -27,9 +27,9 @@ export function handoffPhase(activity, detail, connected = true) {
     if (activity.required_question || activeModelWaits(activity.model_waits || {}, false, activity.task_attempt || 0).length) {
         return { text: 'Waiting', className: 'warn' };
     }
-    const phases = { thinking: 'Thinking', queued: 'Queued', budget_paused: 'Paused', finalizing: 'Finalizing…', working: 'Working' };
+    const phases = { thinking: 'Thinking', queued: 'Queued', budget_paused: 'Paused', budget_pausing: 'Pausing…', finalizing: 'Finalizing…', working: 'Working' };
     const text = phases[activity.phase];
-    return text ? { text, className: activity.phase === 'budget_paused' ? 'warn' : 'working' }
+    return text ? { text, className: (activity.phase === 'budget_paused' || activity.phase === 'budget_pausing') ? 'warn' : 'working' }
         : { text: 'Activity unconfirmed', className: 'neutral' };
 }
 

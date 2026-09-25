@@ -581,7 +581,7 @@ def _annotate_terminal_task_truth(
                 # window still holds, so its harness chip needs no "Load older".
                 message.update(terminal_receipt_by_task.get(task_id) or {})
             is_summary = str(message.get("system_type") or "") == "task_summary"
-            if is_summary or (
+            if is_summary or (not message.get("is_progress") and message.get("task_terminal_status")) or (
                 task_id not in summary_task_ids
                 and latest_progress_by_task.get(task_id) is message
             ):
@@ -896,7 +896,7 @@ def _collect_chat_rows(
             _copy_task_summary_metadata(rec, entry)
             # Lineage, the origin label, and the host's card placement (card_row /
             # card_row_id) — a stored key is replayed verbatim, an absent one is omitted.
-            for field in (*SUBAGENT_MESSAGE_FIELDS, "initiator", "card_row", "card_row_id"):
+            for field in (*SUBAGENT_MESSAGE_FIELDS, "initiator", "card_row", "card_row_id", "narration"):
                 if field in entry:
                     rec[field] = entry[field]
             combined.append(rec)

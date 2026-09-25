@@ -17,6 +17,10 @@ name: CI
 
 # Two separate push triggers: branches have path filters, tags do not.
 # This ensures tag pushes always fire (even if only VERSION/README changed).
+# The browser lane is the ONE exception that must see every `ouroboros` push,
+# including a Makefile/spec/requirements-only one: it lives in its own
+# `ui-browser-push.yml`, which calls the SAME reusable `ui-browser.yml` job
+# this workflow calls for pull requests, manual runs and tags.
 on:
   push:
     branches: [main, ouroboros, ouroboros-stable]
@@ -51,7 +55,7 @@ on:
     tags:
       - 'v*'
   # Fork-safe PR validation: no provider secrets and no pull_request_target.
-  # Only fork-safe jobs match pull_request refs, including narrow Publish UI proof.
+  # Only fork-safe jobs match pull_request refs, including full host UI proof.
   pull_request:
     branches: [ouroboros]
   # Plain dispatch retains the provider and skill-review jobs and can spend
@@ -507,40 +511,17 @@ jobs:
           grep -q "tests/test_smoke.py" /tmp/size-ratchet-collect.txt
           grep -q "tests/test_repo_health_smoke.py" /tmp/size-ratchet-collect.txt
 
+  # Pushes are deliberately NOT matched here: this workflow keeps the base path
+  # filter, so a Makefile/spec-only push would silently skip the browser lane.
+  # `.github/workflows/ui-browser-push.yml` owns that trigger and shares this job.
   ui-smoke:
     if: |
       github.event_name == 'pull_request'
       || github.event_name == 'workflow_dispatch'
       || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ./.github/actions/setup-python-env
-        id: setup_python
-      - name: Install UI smoke Chromium
-        id: install_chromium
-        if: ${{ !cancelled() && steps.setup_python.outcome == 'success' }}
-        run: python -m playwright install --with-deps chromium
-      - name: Install full UI smoke WebKit
-        id: install_webkit
-        if: ${{ !cancelled() && steps.setup_python.outcome == 'success' && github.event_name != 'pull_request' }}
-        run: python -m playwright install --with-deps webkit
-      - name: Run Publish admission browser proof
-        if: ${{ !cancelled() && steps.install_chromium.outcome == 'success' && github.event_name == 'pull_request' }}
-        env:
-          OUROBOROS_RUN_UI_SMOKE: "1"
-          OUROBOROS_EXPECT_BROWSER_ENGINES: chromium
-        run: python -m pytest tests/test_skill_publish_browser.py -o addopts="" -m ui_browser -q --tb=short
-      - name: Run host UI smoke
-        if: ${{ !cancelled() && steps.install_chromium.outcome == 'success' && steps.install_webkit.outcome == 'success' && github.event_name != 'pull_request' }}
-        env:
-          OUROBOROS_RUN_UI_SMOKE: "1"
-        run: python -m pytest tests/ -m ui_browser -q --tb=short
-      - name: Run browser tools Chromium/WebKit smoke
-        if: ${{ !cancelled() && steps.install_chromium.outcome == 'success' && steps.install_webkit.outcome == 'success' && github.event_name != 'pull_request' }}
-        env:
-          OUROBOROS_EXPECT_BROWSER_ENGINES: chromium,webkit
-        run: python -m pytest tests/test_browser_tools_smoke.py -m browser -q --tb=short
+    uses: ./.github/workflows/ui-browser.yml
+    permissions:
+      contents: read
 
   docker-ui-smoke:
     if: |

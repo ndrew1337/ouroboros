@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import pathlib
+from functools import partial
 import time
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -23,7 +24,11 @@ from ouroboros.outcomes import (
     infra_failed_axes,
     normalize_outcome_axes,
 )
-from ouroboros.post_task_checkpoint import project_replica_task_result_fields
+from ouroboros.budget_pause import LIVE_PAUSE_STATES
+from ouroboros.post_task_checkpoint import (
+    _TERMINAL_ACCOUNTING_SCRUB_FIELDS,
+    project_replica_task_result_fields,
+)
 from ouroboros.task_results import (
     STATUS_CANCEL_REQUESTED,
     STATUS_CANCELLED,
@@ -401,6 +406,21 @@ class _EventsTailIndex:
         return self._worker_boot
 
 
+def _still_orphan_at_write(task_id: str, applied: List[bool], existing: Dict[str, Any],
+                           fields: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Projector for the reconciler's terminal write (bound with ``partial``): the decision was taken
+    outside the row lock, so a presence retry that went live meanwhile, or a row that already moved on
+    (requeued, settled by another writer), cancels the write. ``applied`` gets True only on a real write."""
+    from ouroboros.presence_runner import presence_turn_is_live
+
+    if presence_turn_is_live(task_id):
+        return None
+    if str(existing.get("status") or "").lower() not in {STATUS_RUNNING, STATUS_INTERRUPTED}:
+        return None
+    applied.append(True)
+    return fields
+
+
 def _is_stale_orphan_running_task(
     drive_root: pathlib.Path,
     task_id: str,
@@ -420,6 +440,15 @@ def _is_stale_orphan_running_task(
         # This helper is also imported by worker-side readers where the server's
         # direct registry is not available.  Absence of that optional observation
         # is not itself evidence of liveness, so retain the existing pooled path.
+        pass
+    try:
+        from ouroboros.presence_runner import presence_turn_is_live
+
+        # A presence turn executing in this process has no registry actor (owner
+        # routing never addresses a correspondent's turn) but is not an orphan.
+        if presence_turn_is_live(str(task_id or "")):
+            return False
+    except ImportError:
         pass
     status = str(result.get("status") or "").lower()
     # ``interrupted`` is the transient pre-requeue marker (A.11): a record still
@@ -531,12 +560,36 @@ def _parent_workspace_artifact_lifecycle_fields(result: Dict[str, Any]) -> froze
     return frozenset()
 
 
-def _merge_queue_status(current_status: str, queue_status: str) -> str:
+# A canonical row carrying a LIVE exact budget pause (#1196) owns its lifecycle
+# and accounting planes: the forked child-drive replica is the worker's
+# pre-pause ``running`` row, so it must neither resurrect ``running`` nor blank
+# the ledger-derived cost fields the park wrote onto the canonical row.
+_LIVE_PAUSE_CANONICAL_FIELDS = frozenset({
+    "status", "reason_code", "resource_limit", "result", "error", "ts", "outcome_axes",
+    "budget_pause", *_TERMINAL_ACCOUNTING_SCRUB_FIELDS,
+})
+
+
+def _budget_pause_marker(queue_task: Any) -> bool:
+    """A TYPED budget-pause marker on a PENDING row: exact (``exact_continuation``
+    is a bool, True for an exact mid-run pause, False for a pre-dispatch hold).
+    ``{}`` or a malformed dict is no marker, so it cannot defeat the ordinary
+    requeue race where the running mirror wins."""
+    pause = queue_task.get("_budget_pause") if isinstance(queue_task, dict) else None
+    return isinstance(pause, dict) and isinstance(pause.get("exact_continuation"), bool)
+
+
+def _merge_queue_status(
+    current_status: str, queue_status: str, queue_task: Optional[Dict[str, Any]] = None,
+) -> str:
     current = str(current_status or "").lower()
     queued = str(queue_status or "").lower()
     if not queued or current in FINAL_STATUSES:
         return current
-    if current == STATUS_RUNNING and queued == STATUS_SCHEDULED:
+    if current == STATUS_RUNNING and queued == STATUS_SCHEDULED and not _budget_pause_marker(queue_task):
+        # A PENDING row parked under a budget-pause marker is not running,
+        # whatever a stale mirror says (#1196); an ordinary PENDING row beside a
+        # ``running`` mirror is the requeue race the running mirror wins.
         return current
     return queued
 
@@ -576,9 +629,12 @@ def reconcile_orphaned_running_tasks(
     window, the worker-boot-after-task evidence, and the refusal to reconcile when
     the queue snapshot is missing. A task that is still pending/running in the
     queue, or whose worker has not booted after the task's last event, is never
-    reconciled. The monotonic guard in ``write_task_result`` additionally protects
-    a genuinely newer terminal/cancel write. Idempotent; safe at boot and on a
-    periodic supervisor tick.
+    reconciled. Two reads per candidate: the decision is a status-only
+    (``materialize_artifacts=False``) projection, and only a row it is about to
+    settle is read again with artifact materialization, so a live child's
+    scratch tree is never copied by this sweep. The monotonic guard in
+    ``write_task_result`` additionally protects a genuinely newer terminal/cancel
+    write. Idempotent; safe at boot and on a periodic supervisor tick.
 
     ``expired_quizzes`` collects ``(task_id, quiz_id)`` for every question this
     sweep expired, so the supervisor-side caller can send the same live frame the
@@ -610,7 +666,14 @@ def reconcile_orphaned_running_tasks(
         except Exception:
             log.debug("Orphan reconcile skipped %s: cancel authority unreadable", task_id, exc_info=True)
             continue
+        # Decide on the status-only projection: a live row costs one projection and
+        # zero artifact transfers. Only a row this sweep is about to settle pays the
+        # materializing read, so the persisted terminal row keeps full custody
+        # (artifact rebase, verification receipts, artifact_bundle) (issue #1230).
         try:
+            projected = load_effective_task_result(root, task_id, materialize_artifacts=False)
+            if str(projected.get("status") or "").strip().lower() not in SETTLED_STATUSES:
+                continue
             effective = load_effective_task_result(root, task_id)
         except Exception:
             continue
@@ -630,7 +693,11 @@ def reconcile_orphaned_running_tasks(
             if effective.get(key) is not None
         }
         try:
-            write_task_result(root, task_id, status=eff_status, **persist_fields)
+            applied: List[bool] = []
+            write_task_result(root, task_id, status=eff_status,
+                              _field_projector=partial(_still_orphan_at_write, task_id, applied), **persist_fields)
+            if not applied:
+                continue  # the row moved on between the effective read and this write: nothing was settled here
             healed += 1
         except Exception:
             continue
@@ -711,8 +778,9 @@ def effective_task_result(
     Read-only display surfaces (chat history annotation, ``api_tasks_list``, the
     SSE follow loop, ``api_logs_tail`` discovery) pass ``False``; every consumer
     that participates in the child-result sha economy or artifact durability
-    (join_ledger, wait_*/get_task_result, api_task_get/artifact, reconcile, prune)
-    keeps the ``True`` default.
+    (join_ledger, wait_*/get_task_result, api_task_get/artifact, prune) keeps the
+    ``True`` default. The orphan reconciler decides on a ``False`` read and
+    materializes only the row it heals.
     ``_events_index`` optionally shares ONE parsed events-tail across a batch of
     rows (the task-list request), so N stale-running rows cost one tail read
     instead of N; ``None`` keeps the per-call read for single-row callers.
@@ -804,6 +872,13 @@ def effective_task_result(
             else set()
         )
         parent_authoritative_fields = parent_authoritative_fields | _parent_workspace_artifact_lifecycle_fields(result)
+        canonical_pause = result.get("budget_pause") if isinstance(result.get("budget_pause"), dict) else {}
+        # Only a STALE nonterminal replica (the worker's pre-pause ``running``
+        # row) yields to the live pause; a replica that already reached a
+        # terminal status is the child's real outcome and is never suppressed
+        # by a canonical pause the copyback has not yet cleared.
+        if str(canonical_pause.get("state") or "") in LIVE_PAUSE_STATES and child_status not in FINAL_STATUSES:
+            parent_authoritative_fields = parent_authoritative_fields | _LIVE_PAUSE_CANONICAL_FIELDS
         child_overlay = project_replica_task_result_fields(result, child_result)
         for key, value in child_overlay.items():
             if key in {"task_id", "parent_task_id", "root_task_id", "session_id", "actor_id", "delegation_role"}:
@@ -827,7 +902,7 @@ def effective_task_result(
         queue_snapshot = _load_queue_snapshot(pathlib.Path(drive_root))
         queue_status, queue_task = _queue_task_status(queue_snapshot, task_id)
         if queue_status and queue_status != "unknown":
-            merged["status"] = _merge_queue_status(parent_status, queue_status)
+            merged["status"] = _merge_queue_status(parent_status, queue_status, queue_task)
             for key in (
                 "parent_task_id",
                 "root_task_id",
@@ -1188,7 +1263,7 @@ def find_child_tasks(
                     for key, value in row.items():
                         if key == "status":
                             combined["status"] = _merge_queue_status(
-                                str(disk.get("status") or ""), str(value or "")
+                                str(disk.get("status") or ""), str(value or ""), row,
                             )
                         elif not combined.get(key) and value:
                             combined[key] = value
@@ -1199,7 +1274,7 @@ def find_child_tasks(
             combined = dict(existing)
             for key, value in row.items():
                 if key == "status":
-                    combined["status"] = _merge_queue_status(str(existing.get("status") or ""), str(value or ""))
+                    combined["status"] = _merge_queue_status(str(existing.get("status") or ""), str(value or ""), row)
                 elif not combined.get(key) and value:
                     combined[key] = value
             rows[tid] = combined

@@ -9,6 +9,8 @@ from typing import Any, Dict
 
 from ouroboros.cost_projection import (
     COST_ALIAS_PAIRS,
+    COST_SCOPE_ROOT_TREE,
+    build_cost_presentation,
     carry_cost_meta,
     honest_accounted_amount,
     with_cost_aliases,
@@ -116,6 +118,16 @@ def project_replica_task_result_fields(
     ``updated_at`` is monotonic metadata only; it never selects field authority.
     """
     overlay = dict(replica_fields)
+    # The receiving drive's first accepted terminal transition owns provenance,
+    # including its absence on historical rows; replicas cannot originate it.
+    overlay.pop("canonical_terminal_projection_origin", None)
+    canonical_cost = canonical_fields.get("cost_presentation")
+    replica_cost = overlay.get("cost_presentation")
+    if (isinstance(canonical_cost, dict) and canonical_cost.get("scope") == COST_SCOPE_ROOT_TREE
+            and (not isinstance(replica_cost, dict) or replica_cost.get("scope") != COST_SCOPE_ROOT_TREE)):
+        # A worker's own bucket cannot replace an already published tree bucket.
+        # Its own monetary fields remain own; the scoped amount/facts stay paired.
+        overlay.pop("cost_presentation", None)
     if "review_projection" in overlay:
         overlay["review_projection"] = merge_review_projection(
             canonical_fields.get("review_projection"), overlay["review_projection"],
@@ -159,6 +171,12 @@ def project_replica_task_result_fields(
         # update_focus writes the canonical result only; a split root's worker
         # replica carries the stale (often null) execution-local copy.
         "focus",
+        # The terminal-projection obligation and its receipt are canonical
+        # bookkeeping (#1154): a replica that still carried the readiness row
+        # would resurrect an obligation this drive had already settled, and a
+        # replica marker would claim a Project row nobody appended here.
+        "canonical_terminal_projection",
+        "canonical_terminal_projection_ready",
     ):
         if field in canonical_fields:
             overlay.pop(field, None)
@@ -374,6 +392,13 @@ def set_root_post_task_checkpoint(
                     ),
                     "cost_with_children_partial": not subtree_final,
                     "cost_final": bool(cost_fields.get("cost_final") and subtree_final),
+                    # #498: a ROOT's terminal record speaks for its whole tree, so
+                    # the carrier is rebuilt from the SUBTREE bucket, replacing the
+                    # own-scope one `reconstruct_task_cost` just attached. Presence
+                    # is what selects it — a null subtree amount stays null and never
+                    # falls back to the root's own (often zero) number.
+                    "cost_presentation": build_cost_presentation(
+                        subtree, scope=COST_SCOPE_ROOT_TREE),
                 })
             except Exception:
                 log.error("Failed to refresh final root cost projection for %s", task_id, exc_info=True)
@@ -383,6 +408,7 @@ def set_root_post_task_checkpoint(
                     "cost_accounting_error": "ledger_unavailable",
                     "accounted_upper_bound_usd": None,
                     "accounted_upper_bound_usd_with_children": None,
+                    "cost_presentation": None,
                 })
         # SSOT cost naming (C2/F12/ABI-3): every branch above writes the honest
         # names directly onto the honest-named `reconstruct_task_cost` fields
@@ -464,37 +490,27 @@ def set_root_post_task_checkpoint(
                     bridge.push_log(address_handler_push(authority_root, dict(finalized_event)))
             except Exception:
                 log.debug("Live push of finalized task cost skipped for %s", task_id, exc_info=True)
-    pending_projection = (
-        stored.get("canonical_terminal_projection_ready")
-        if isinstance(stored, dict) else None
-    )
-    if (
-        isinstance(pending_projection, dict)
-        and post_task_synthesis_is_terminal(stored_post_task)
-        and not isinstance((stored or {}).get("canonical_terminal_projection"), dict)
-    ):
-        try:
-            from ouroboros.project_dialogue import append_terminal_task_projection
+    settle_terminal_projection(authority_root, task_id, task=task)
+    if stored is None:
+        # The write failed: nothing was stored, and the contract is "the record
+        # actually stored, if any" — a pre-existing row must not impersonate a
+        # persisted checkpoint (callers treat None as "not persisted").
+        return None
+    # Settlement writes receipts/retirement and can race another enrichment.
+    # Never hand a caller the pre-settlement obligation as current authority.
+    try:
+        return load_task_result(authority_root, task_id, strict=True)
+    except Exception:
+        log.warning("Failed to read settled root post-task checkpoint for %s", task_id, exc_info=True)
+        return None
 
-            projection_task = {**task, **(stored or {}), "id": task_id}
-            append_terminal_task_projection(
-                authority_root,
-                task_id,
-                projection_task,
-                stored or {},
-                {
-                    "ts": str(pending_projection.get("task_done_ts") or utc_now_iso()),
-                    "chat_id": int(pending_projection.get("chat_id") or 0),
-                    "status": str((stored or {}).get("status") or STATUS_COMPLETED),
-                },
-            )
-        except Exception:
-            log.warning(
-                "Failed to settle canonical terminal projection for %s",
-                task_id,
-                exc_info=True,
-            )
-    return stored
+
+# Compatibility exports: the continuation owns no synthesis or result lock.
+from ouroboros.terminal_projection import (  # noqa: E402, F401
+    SETTLEMENT_NONE, SETTLEMENT_DEFERRED, SETTLEMENT_SETTLED,
+    clear_terminal_projection_obligation as _clear_terminal_projection_obligation,
+    settle_terminal_projection,
+)
 
 
 def root_post_task_already_completed(env: Any, task: Dict[str, Any]) -> bool:

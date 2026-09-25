@@ -83,8 +83,18 @@ def _bindings_path(drive_root: Any) -> pathlib.Path:
     return pathlib.Path(drive_root) / "state" / _BINDINGS_NAME
 
 
-def _load(drive_root: Any) -> Dict[str, Any]:
-    data = read_json_dict(_registry_path(drive_root))
+def _load(drive_root: Any, *, strict: bool = False) -> Dict[str, Any]:
+    if strict:
+        import json
+        try:
+            data = json.loads(_registry_path(drive_root).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"projects": []}
+        if (not isinstance(data, dict) or not isinstance(data.get("projects"), list)
+                or any(not isinstance(row, dict) or not row.get("id") for row in data["projects"])):
+            raise ValueError("Project registry is unavailable")
+    else:
+        data = read_json_dict(_registry_path(drive_root))
     if not isinstance(data, dict) or not isinstance(data.get("projects"), list):
         return {"projects": []}
     data["projects"] = [
@@ -343,13 +353,16 @@ def all_task_project_bindings(drive_root: Any, *, strict: bool = False) -> Dict[
     return out
 
 
-def project_binding_for_task(drive_root: Any, task_id: str) -> Optional[Dict[str, Any]]:
+def project_binding_for_task(drive_root: Any, task_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     tid = str(task_id or "").strip()
     if not tid:
         return None
     # Read needs no lock: atomic_write_json renames into place, so a reader
     # always sees a complete (old or new) bindings file, never a torn one.
-    row = _load_bindings(drive_root)["bindings"].get(tid)
+    bindings = _load_bindings(drive_root, strict=strict)["bindings"]
+    row = bindings.get(tid)
+    if strict and tid in bindings and (not isinstance(row, dict) or not row.get("project_id")):
+        raise ValueError("Project binding is unavailable")
     return dict(row) if isinstance(row, dict) else None
 
 
@@ -630,10 +643,10 @@ def project_chat_for_task_tree(
     return 0
 
 
-def list_reserved_projects(drive_root: Any) -> List[Dict[str, Any]]:
+def list_reserved_projects(drive_root: Any, *, strict: bool = False) -> List[Dict[str, Any]]:
     """All Project ids, including deleting/tombstoned history reservations."""
     with _LOCK:
-        projects = _load(drive_root)["projects"]
+        projects = _load(drive_root, strict=strict)["projects"]
     return sorted(
         projects,
         key=lambda p: str(p.get("last_active_at") or p.get("updated_at") or p.get("created_at") or ""),
@@ -758,12 +771,12 @@ def get_project(drive_root: Any, project_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_reserved_project(drive_root: Any, project_id: str) -> Optional[Dict[str, Any]]:
+def get_reserved_project(drive_root: Any, project_id: str, *, strict: bool = False) -> Optional[Dict[str, Any]]:
     """Lookup irrespective of lifecycle (history/recovery only)."""
     pid = sanitize_project_id(project_id)
     if not pid:
         return None
-    for project in list_reserved_projects(drive_root):
+    for project in list_reserved_projects(drive_root, strict=strict):
         if project.get("id") == pid:
             return dict(project)
     return None
@@ -775,10 +788,10 @@ def _bounded_presentation_name(value: Any, *, fallback: str = "") -> str:
 
 
 def task_presentation_snapshot(drive_root: Any, task_id: str, *, task: Any = None,
-                               result: Any = None, project_id: str = "") -> Dict[str, Any]:
+                               result: Any = None, project_id: str = "", strict: bool = False) -> Dict[str, Any]:
     tid = str(task_id or "").strip()
     sources = [row for row in (task, result) if isinstance(row, dict)]
-    if tid:
+    if tid and not strict:
         try:
             from ouroboros.task_status import load_effective_task_result
             stored = load_effective_task_result(
@@ -800,7 +813,7 @@ def task_presentation_snapshot(drive_root: Any, task_id: str, *, task: Any = Non
             if pid:
                 break
     if not pid and tid:
-        binding = project_binding_for_task(drive_root, tid) or {}
+        binding = project_binding_for_task(drive_root, tid, strict=strict) or {}
         pid = str(binding.get("project_id") or "").strip()
     pname = ""
     registered = False
@@ -809,7 +822,7 @@ def task_presentation_snapshot(drive_root: Any, task_id: str, *, task: Any = Non
         # ``project_routable`` fact: a workspace-derived proj_<hash> is
         # project-SCOPED without having a room, and a producer that announces it
         # would point the owner at a project that does not exist.
-        project = get_reserved_project(drive_root, pid) or {}
+        project = get_reserved_project(drive_root, pid, strict=strict) or {}
         # ROUTABLE, not merely reserved: list_reserved_projects deliberately
         # includes deleting/tombstoned history reservations, and those have no
         # room left to open.

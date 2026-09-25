@@ -600,6 +600,7 @@ def test_a_deps_bearing_load_excludes_a_concurrent_no_deps_load(tmp_path):
     import builtins
 
     builtins._ouro_1195_gate = (inside, release)
+    threads = []
     try:
         (tmp_path / "owner").mkdir(parents=True, exist_ok=True)
         (tmp_path / "neighbour").mkdir(parents=True, exist_ok=True)
@@ -639,28 +640,42 @@ def test_a_deps_bearing_load_excludes_a_concurrent_no_deps_load(tmp_path):
         results: dict = {}
 
         def load_owner():
-            results["owner"] = extension_loader.load_extension(
-                owner, lambda: {}, drive_root=drive_root, _force_in_process=True)
+            try:
+                results["owner"] = extension_loader.load_extension(
+                    owner, lambda: {}, drive_root=drive_root, _force_in_process=True)
+            except BaseException as exc:
+                results["owner"] = exc
 
         def load_neighbour():
-            results["neighbour"] = extension_loader.load_extension(
-                neighbour, lambda: {}, drive_root=neighbour_root, _force_in_process=True)
+            try:
+                results["neighbour"] = extension_loader.load_extension(
+                    neighbour, lambda: {}, drive_root=neighbour_root, _force_in_process=True)
+            except BaseException as exc:
+                results["neighbour"] = exc
 
         writer_thread = threading.Thread(target=load_owner)
         writer_thread.start()
+        threads.append(writer_thread)
         assert inside.wait(GATE), "the deps-bearing import never started"
         reader_thread = threading.Thread(target=load_neighbour)
         reader_thread.start()
+        threads.append(reader_thread)
         reader_thread.join(timeout=0.3)
         assert reader_thread.is_alive(), "a no-deps load entered during dependency injection"
         release.set()
         writer_thread.join(timeout=GATE)
         reader_thread.join(timeout=GATE)
-        assert results.get("owner") is None, results
-        assert results.get("neighbour") is None, results
+        if any(thread.is_alive() for thread in threads):
+            import faulthandler
+            faulthandler.dump_traceback(all_threads=True)
+            pytest.fail("extension loads did not settle; all-thread stacks above")
+        assert results == {"owner": None, "neighbour": None}, results
         extension_loader.unload_extension("writer_owner")
         extension_loader.unload_extension("reader_neighbour")
     finally:
+        release.set()
+        for thread in threads:
+            thread.join(timeout=GATE)
         del builtins._ouro_1195_gate
 
 

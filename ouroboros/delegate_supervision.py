@@ -499,6 +499,10 @@ def _addressed_wakes(ctx: Any, state: dict[str, Any]) -> list[dict[str, Any]]:
             "provenance": str(entry.get("provenance") or "owner"),
             "source_task_id": str(entry.get("source_task_id") or ""),
             "relayed_from_task_id": str(entry.get("relayed_from_task_id") or ""),
+            # The peer relation the drain projected (sibling / parent): the sender's
+            # typed place, carried so a wake never signs a child or sibling as an
+            # ancestor or owner (the same fact the round-top prefix reads).
+            **({"relation": str(entry["relation"])} if str(entry.get("relation") or "") else {}),
             "text": str(entry.get("text") or ""),
             "ts": str(entry.get("ts") or ""),
         }
@@ -567,10 +571,14 @@ def _wake_event_summary(event: Any) -> dict[str, Any]:
         elif payload:
             summary["beacon"]["payload_available_in_full_source"] = True
         return summary
+    # Sender attribution (provenance, relayed-from identity, peer relation) rides the
+    # reduced projection too: a spilled wake must still say WHO wrote the text and
+    # in what place, or the model reads an addressed contribution as unsigned.
     summary = {
         key: event.get(key)
         for key in (
-            "type", "kind", "msg_id", "source_task_id", "child_task_id",
+            "type", "kind", "msg_id", "provenance", "source_task_id",
+            "relayed_from_task_id", "relation", "child_task_id",
             "status", "updated_at", "result_sha256",
         )
         if event.get(key) not in (None, "")
@@ -630,7 +638,8 @@ def _render_wake_payload(ctx: Any, payload: dict[str, Any]) -> ToolResult:
     # refusal too large to inline would read as a successful wait.
     envelope: dict[str, Any] = {
         key: (str(value)[:600] if isinstance(value, str) else value)
-        for key in ("status", "ok", "host_code", "run_id", "state", "last_seq", "reason")
+        for key in ("status", "ok", "host_code", "run_id", "state", "last_seq", "reason",
+                    "continuation", "continuation_note")
         if (value := payload.get(key)) not in (None, "")
     }
     envelope["supervision_wake_id"] = wake_id
@@ -674,6 +683,7 @@ def _render_wake_payload(ctx: Any, payload: dict[str, Any]) -> ToolResult:
             **({"ok": False, "host_code": str(payload.get("host_code") or "")}
                if payload.get("ok") is False else {}),
             "run_id": str(payload.get("run_id") or "")[:200],
+            **{key: payload[key] for key in ("continuation", "continuation_note") if key in payload},
             "supervision_wake_id": wake_id,
             "coordination_context": {"state": "available_in_full_wake_source"},
             "wake_delivery": envelope["wake_delivery"],

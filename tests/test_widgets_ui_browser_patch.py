@@ -255,8 +255,11 @@ def test_ui_smoke_widget_changed_card_and_reconnect_reconcile(direct_server_with
                     timeout=10_000,
                 )
                 wait_frame(page, "manual", True)
-                assert page.locator(f"{card('manual')} [data-widget-start-mode=\"auto\"]").get_attribute("aria-checked") == "true"
-                assert page.locator(f"{card('hang')} [data-widget-start-mode=\"manual\"]").get_attribute("aria-checked") == "true"
+                # The persisted map can be visible before the client receives the
+                # write response and paints its policy controls.
+                from playwright.sync_api import expect
+                expect(page.locator(f"{card('manual')} [data-widget-start-mode=\"auto\"]")).to_have_attribute("aria-checked", "true")
+                expect(page.locator(f"{card('hang')} [data-widget-start-mode=\"manual\"]")).to_have_attribute("aria-checked", "true")
                 assert hang_frame_kept(page), "Manual changes nothing until Stop"
 
                 # (4) Escape closes the menu and returns focus to the ⋮ trigger.

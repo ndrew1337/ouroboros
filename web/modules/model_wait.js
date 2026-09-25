@@ -102,7 +102,7 @@ export function createModelWaitController({ getRecord, onDomWrite = (fn) => fn()
             // A block without work carries no title placeholder while it waits: the chrome
             // follows the work it stands on, never the lane (and no lane is always shown).
             const phase = desiredLiveCardPhase(record);
-            setLiveCardPhase(record, phase.phase, phase.text, phase.className);
+            setLiveCardPhase(record, phase.phase, phase.text, phase.className, phase.secondary);
         }
         onChange(taskId, waiting);
     }

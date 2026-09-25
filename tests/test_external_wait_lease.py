@@ -283,6 +283,37 @@ def test_the_lease_never_spares_deadline_or_ceiling(monkeypatch, tmp_path):
     assert meta2.get("finalization_reason") == "deadline"
 
 
+def test_no_task_lifetime_never_ends_a_progressing_task_and_idle_still_binds(monkeypatch, tmp_path):
+    """#1196: an unlimited lifetime is no ceiling at all — a task a year old keeps running
+    while it progresses — and the idle rail still binds once it stops progressing."""
+    year = 365 * 86400.0
+    meta = {"task": {"id": "t1", "chat_id": 7}, "started_at": 1000.0,
+            "last_progress_at": 1000.0 + year, "worker_id": 0}
+    _enforcer(monkeypatch, tmp_path, {"t1": meta}, abs_ceiling=None)(1010.0 + year)
+    assert "finalization_requested_at" not in meta
+    meta["last_progress_at"] = 1000.0
+    _enforcer(monkeypatch, tmp_path, {"t1": meta}, abs_ceiling=None)(1010.0 + year)
+    assert meta.get("finalization_reason") == "idle_timeout"
+
+
+def test_an_operation_lease_stays_finite_without_a_task_lifetime(monkeypatch, tmp_path):
+    """#1196: without a task lifetime the operation's own finite window bounds the idle
+    reprieve from its start fact, so a lost terminal can never spare the rail forever."""
+    from ouroboros.config import OPERATION_WINDOW_FALLBACK_SEC
+    from supervisor import events as events_mod
+
+    monkeypatch.setattr("ouroboros.config.get_task_abs_ceiling_sec", lambda: None)
+    monkeypatch.setattr(events_mod.time, "time", lambda: 1100.0)
+    meta = {"task": {"id": "t5", "chat_id": 7}, "attempt": 1, "started_at": 1000.0,
+            "last_progress_at": 1000.0, "worker_id": 0}
+    events_mod._handle_cognitive_operation(
+        {"type": "cognitive_operation", "task_id": "t5", "operation_id": "llm-1",
+         "phase": "started", "kind": "llm", "task_attempt": 1},
+        types.SimpleNamespace(RUNNING={"t5": meta}),
+    )
+    assert meta["active_operation_leases"]["llm-1"]["until_ts"] == 1100.0 + OPERATION_WINDOW_FALLBACK_SEC
+
+
 def test_parallel_cognitive_operations_are_independent_and_attempt_bound(
     monkeypatch, tmp_path,
 ):

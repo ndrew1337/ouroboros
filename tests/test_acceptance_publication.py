@@ -251,19 +251,112 @@ def test_host_application_publishes_full_decision_before_finalization(tmp_path, 
     )
     assert again is apply_failure
     assert trace["acceptance_decision"]["status"] == ("revision_requested" if apply_failure else "accepted")
-    # Publishing again must preserve both the returned panel and its separate
-    # host application failure row, despite their shared binding-derived id.
+    # Host failure is a separate task fact, not a fabricated second critic.
+    # The received reviewer record still gets its own exact source publication.
     review_projection.publish_acceptance_checkpoint(ctx, trace)
     saved = load_task_result(tmp_path, "applied")
     assert saved["status"] == "running"
     panels = saved["review_projection"]["panels"]
-    assert len(panels) == (2 if apply_failure else 1)
-    full = _source(tmp_path, panels[-1])
-    assert full["applied_decision"] == trace["acceptance_decision"]
-    assert full["enforcement_impact"] == ("degrades_completion" if apply_failure else "allows_completion")
+    assert len(panels) == 1
+    full = _source(tmp_path, panels[0])
     assert full["task_attempt"] == ctx.task_attempt
+    assert full["actors"][0]["parsed"] == parsed
     if apply_failure:
-        assert panels[0]["panel_id"] == panels[1]["panel_id"]
-        assert [row["panel_index"] for row in panels] == [0, 1]
-        assert _source(tmp_path, panels[0])["actors"][0]["parsed"] == parsed
-        assert "host application failed" in full["degraded_reasons"][0]
+        assert "applied_decision" not in full
+        assert trace["review_decision"]["host_failure"]["stage"] == "application"
+        assert trace["acceptance_decision"]["origin"] == "host_acceptance_processing"
+    else:
+        assert full["applied_decision"] == trace["acceptance_decision"]
+        assert full["enforcement_impact"] == "allows_completion"
+
+
+def test_a_task_only_decision_publishes_a_settled_panel_and_keeps_unchanged_ones_identity_bound(tmp_path):
+    """The host's own local decision is no panel's applied verdict: it rewrites no
+    custody and grants a never-published LIVE producer none. A pending producer that
+    settles afterwards is a genuine producer update and must still reach the
+    durable projection — and so must a settled record that was never published at
+    all: a missing publication stamp alone never suppresses a real verdict. An
+    unchanged historical record keeps its revision and source."""
+    from ouroboros.acceptance_preparation import LOCAL_PREPARATION_ORIGIN
+
+    ctx = _context(tmp_path)
+    historical = {**_run(), "panel_id": "panel_history", "aggregate_signal": "FAIL"}
+    pending = {**_run(), "panel_id": "panel_pending", "aggregate_signal": "", "parsed_findings": [],
+               "actors": [{"slot_id": "s1", "operation_state": "in_flight", "operation_id": "op-1"}]}
+    unpublished = {**_run(), "panel_id": "panel_unpublished", "aggregate_signal": "PASS"}
+    live = {**_run(), "panel_id": "panel_live", "aggregate_signal": "", "parsed_findings": [],
+            "actors": [{"slot_id": "s1", "operation_state": "in_flight", "operation_id": "op-2"}]}
+    trace = {"review_runs": [historical, pending]}
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    first = copy.deepcopy(load_task_result(tmp_path, "applied")["review_projection"])
+    assert [row["publication_revision"] for row in first["panels"]] == [1, 1]
+    assert first["publication_revision"] == 1 and first["task_attempt"] == 1
+    history_ref, pending_ref = historical["applied_source_ref"], pending["applied_source_ref"]
+
+    trace["review_runs"].extend([unpublished, live])
+    incident = {"incident_id": "acceptance-preparation:x", "status": "failed", "attempts": 1,
+                "stage": "preparation", "source_identity": "x"}
+    trace["acceptance_preparation"] = dict(incident)
+    trace["acceptance_decision"] = {"origin": LOCAL_PREPARATION_ORIGIN, "status": "finalized_unaccepted",
+                                    "reason": "acceptance_preparation_failed"}
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    stored = load_task_result(tmp_path, "applied")["review_projection"]
+    assert stored["acceptance_incident"]["incident_id"] == "acceptance-preparation:x"
+    assert stored["publication_revision"] == 2
+    rows = {row["panel_id"]: row for row in stored["panels"]}
+    assert rows["panel_history"] == first["panels"][0] and rows["panel_pending"] == first["panels"][1]
+    # A genuine first-time SETTLED record is published under this revision…
+    assert rows["panel_unpublished"]["publication_revision"] == 2
+    assert _source(tmp_path, rows["panel_unpublished"])["aggregate_signal"] == "PASS"
+    assert unpublished["publication_revision"] == 2 and unpublished["applied_source_ref"]
+    # …while a never-published LIVE producer gains no custody from a task-only decision.
+    assert "publication_revision" not in rows["panel_live"] and "applied_source_ref" not in rows["panel_live"]
+    assert "publication_revision" not in live and "applied_source_ref" not in live
+    assert historical["applied_source_ref"] == history_ref and historical["publication_revision"] == 1
+    assert pending["applied_source_ref"] == pending_ref and pending["publication_revision"] == 1
+    assert all("applied_decision" not in run for run in trace["review_runs"])
+
+    # The pending producer settles ($0 reconcile, late settlement): its OWN record moved.
+    pending["actors"] = [{"slot_id": "s1", "operation_state": "settled", "operation_id": "op-1",
+                          "signal": "FAIL", "status": "ok", "parsed": {"verdict": "FAIL", "findings": []}}]
+    pending["aggregate_signal"] = "FAIL"
+    pending["late_settlement"] = {"note": "Reviewers later rejected this answer.",
+                                  "reviewed_revision": "delivered", "settled_after_terminal": True}
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    settled = load_task_result(tmp_path, "applied")["review_projection"]
+    rows = {row["panel_id"]: row for row in settled["panels"]}
+    assert rows["panel_history"] == first["panels"][0]                 # unchanged: identity-bound
+    assert rows["panel_pending"]["publication_revision"] == 3
+    assert rows["panel_pending"]["aggregate_signal"] == "FAIL"
+    assert rows["panel_pending"]["late_settlement"]["note"] == "Reviewers later rejected this answer."
+    assert _source(tmp_path, rows["panel_pending"])["aggregate_signal"] == "FAIL"
+    assert pending["applied_source_ref"] != pending_ref and pending["publication_revision"] == 3
+    assert historical["applied_source_ref"] == history_ref and historical["publication_revision"] == 1
+    assert unpublished["publication_revision"] == 2 and "publication_revision" not in live
+    assert all("applied_decision" not in run for run in trace["review_runs"])
+    assert settled["acceptance_incident"]["incident_id"] == "acceptance-preparation:x"
+    assert settled["publication_revision"] == 3
+
+    # A republication of the same settled bytes changes nothing again.
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    assert pending["publication_revision"] == 3
+    assert load_task_result(tmp_path, "applied")["review_projection"]["panels"] == settled["panels"]
+
+
+def test_a_task_only_decision_republishes_a_panel_whose_stored_source_is_unavailable(tmp_path, monkeypatch):
+    """Without a stored digest a panel cannot prove itself unchanged: it is
+    published again (one more attempt at the store), never given a new identity."""
+    from ouroboros.acceptance_preparation import HOST_PROCESSING_ORIGIN
+
+    ctx, run = _context(tmp_path), _run()
+    trace = {"review_runs": [run]}
+    monkeypatch.setattr(artifacts, "store_actor_source_bytes",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("disk unavailable")))
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    assert run["publication_revision"] == 1 and run["applied_source_status"] == "unavailable"
+    monkeypatch.undo()
+    trace["acceptance_decision"] = {"origin": HOST_PROCESSING_ORIGIN, "status": "finalized_unaccepted"}
+    review_projection.publish_acceptance_checkpoint(ctx, trace)
+    panel = load_task_result(tmp_path, "applied")["review_projection"]["panels"][0]
+    assert panel["publication_revision"] == 2 and panel["applied_source_status"] == "available"
+    assert panel["panel_id"] == "panel_exact" and _source(tmp_path, panel)["aggregate_signal"] == "PASS"

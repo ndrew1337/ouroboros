@@ -23,13 +23,27 @@ KIND_TASK_MESSAGE = "task_message"
 # receiving model judges, never the owner's steering text: it renders under its
 # own prefix, enters no owner corpus and supersedes no reviewed answer.
 PROVENANCE_INDEPENDENT_TASK = "independent_task"
+# Provenance of a contribution written by a task INSIDE the recipient's tree
+# that holds no authority over it: a sibling (same parent) or a child speaking
+# to its parent. ``relation`` names the recipient's place relative to the
+# sender (``sibling`` / ``parent``) and is stamped at write time; the render
+# prefix reads it, so a peer is never signed "ancestor" or "owner". Like an
+# independent task's words it is context the receiving model judges: it
+# enters no owner corpus and records no directive.
+PROVENANCE_PEER_TASK = "peer_task"
+PEER_TASK_RELATIONS = frozenset({"sibling", "parent"})
+# Upper bound on one forwarded task-message body. Every message later enters
+# plan packets through dialogue evidence, so forward_to_worker refuses an
+# oversized body whole — never truncated, never spilled to an artifact handle
+# the packet cannot read.
+TASK_MESSAGE_MAX_CHARS = 8000
 TASK_MESSAGE_PROVENANCES = frozenset({
     "ancestor_task", "peer_via_ancestor", "system", "descendant_task",
-    PROVENANCE_INDEPENDENT_TASK,
+    PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
 })
 # These messages wake the mind but do not enter its owner's directive corpus.
 CONTEXT_ONLY_TASK_PROVENANCES = frozenset({
-    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK,
+    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
 })
 KIND_FINALIZE_NOW = "finalize_now"
 # Owner "hurry" control (HQ1, 2026-08-15): a task-local typed acceleration
@@ -237,8 +251,16 @@ def write_task_message(
     relayed_from_task_id: str = "",
     msg_id: Optional[str] = None,
     review_feedback: Optional[Dict[str, Any]] = None,
+    relation: str = "",
+    sender_origin: Optional[Dict[str, Any]] = None,
 ) -> bool:
-    """Write an addressed task-tree message without forging owner provenance."""
+    """Write an addressed task-tree message without forging owner provenance.
+
+    ``relation`` is the peer_task sender's typed place relative to the
+    recipient (``sibling`` / ``parent``); stored only when non-empty.
+    ``sender_origin`` is the sending run's host-recorded origin (a Presence
+    room/event), never the author of the words it quotes.
+    """
 
     if provenance not in TASK_MESSAGE_PROVENANCES:
         return False
@@ -254,6 +276,10 @@ def write_task_message(
     }
     if relayed_from_task_id:
         entry["relayed_from_task_id"] = str(relayed_from_task_id)
+    if str(relation or ""):
+        entry["relation"] = str(relation)
+    if sender_origin:
+        entry["sender_origin"] = {str(key): str(value) for key, value in dict(sender_origin).items()}
     if provenance == "system" and isinstance(review_feedback, dict):
         entry["review_feedback"] = dict(review_feedback)
     try:
@@ -343,6 +369,7 @@ def deliver_task_message(
     provenance = str(entry.get("provenance") or "ancestor_task")
     source = str(entry.get("source_task_id") or "unknown")
     relayed = str(entry.get("relayed_from_task_id") or "")
+    relation = str(entry.get("relation") or "")
     if provenance == "peer_via_ancestor" and relayed:
         prefix = f"[Message from task {relayed}, relayed by ancestor {source}]"
     elif provenance == "system":
@@ -354,7 +381,17 @@ def deliver_task_message(
     elif provenance == PROVENANCE_INDEPENDENT_TASK:
         # A peer root's own words: never the ancestor fallback, which would
         # place a stranger above the recipient in its tree.
-        prefix = f"[Message from independent task {source}]"
+        origin = entry.get("sender_origin") if isinstance(entry.get("sender_origin"), dict) else {}
+        prefix = f"[Message from independent task {source}" + (
+            "; that task's run started from " + json.dumps(origin, ensure_ascii=False, sort_keys=True)
+            + ", which does not make it the author of any words it quotes]" if origin else "]")
+    elif provenance == PROVENANCE_PEER_TASK:
+        # A contribution from inside the tree without authority over the
+        # recipient: the stamped relation names the sender's place, so a
+        # child writing up or a sibling writing across is never signed
+        # "ancestor" (an authority the sender does not hold).
+        label = {"sibling": " (sibling)", "parent": " (your child)"}.get(relation, "")
+        prefix = f"[Message from peer task {source}{label}]"
     else:
         prefix = f"[Message from ancestor task {source}]"
     append_message(f"{prefix}\n{entry.get('text') or ''}")
@@ -364,6 +401,7 @@ def deliver_task_message(
                 "type": "task_message_injected", "task_id": task_id,
                 "source_task_id": source, "provenance": provenance,
                 "relayed_from_task_id": relayed,
+                **({"relation": relation} if relation else {}),
                 # A bounded preview for the receiver's visible timeline row
                 # (owner 5=A); the full text is in the receiver's transcript.
                 "text_preview": str(entry.get("text") or "")[:200],
@@ -657,6 +695,12 @@ def drain_owner_entries(
                         drained["review_feedback"] = dict(entry["review_feedback"])
                     drained["source_task_id"] = str(entry.get("source_task_id") or "")
                     drained["relayed_from_task_id"] = str(entry.get("relayed_from_task_id") or "")
+                    # The peer relation is a written fact the renderer reads;
+                    # left out of the projection it would never be delivered.
+                    if str(entry.get("relation") or ""):
+                        drained["relation"] = str(entry["relation"])
+                    if isinstance(entry.get("sender_origin"), dict) and entry.get("sender_origin"):
+                        drained["sender_origin"] = dict(entry["sender_origin"])  # rendered beside the words
                 entries.append(drained)
         if _read_status is not None:
             _read_status["complete"] = complete

@@ -32,6 +32,7 @@ os.environ.setdefault("PYTHONDONTWRITEBYTECODE", "1")
 from ouroboros.config import (
     AGENT_SERVER_PORT,
     DATA_DIR,
+    LAUNCHER_STOP_GRACE_SEC,
     PANIC_EXIT_CODE,
     PORT_FILE,
     REPO_DIR,
@@ -95,7 +96,7 @@ from ouroboros.platform_layer import (
     subprocess_new_group_kwargs,
     terminate_job,
     terminate_process_group_id,
-    terminate_process_tree, request_native_attention,
+    request_native_attention,
 )
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
@@ -532,11 +533,9 @@ def stop_agent() -> None:
 
     log.info("Stopping agent (pid=%s)...", proc.pid)
     try:
-        if IS_WINDOWS:
-            proc.terminate()
-        else:
-            terminate_process_tree(proc)
-        proc.wait(timeout=10)
+        # Graceful phase signals only the server: it owns its Manager and workers (#1142).
+        proc.terminate()
+        proc.wait(timeout=LAUNCHER_STOP_GRACE_SEC)
     except subprocess.TimeoutExpired:
         if IS_WINDOWS and job is not None:
             terminate_job(job)

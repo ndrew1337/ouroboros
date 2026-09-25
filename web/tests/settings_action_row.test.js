@@ -38,5 +38,5 @@ test('async actions expose the same busy and status semantics', () => {
     assert.match(catalogJs, /import \{ setInlineStatus \} from '\.\/ui_helpers\.js'/);
     assert.match(catalogJs, /setInlineStatus\(statusEl, text, tone\)/);
     assert.match(catalogJs, /refreshModelCatalog\(\{ button \} = \{\}\)/);
-    assert.match(catalogJs, /refreshSeq === catalogRefreshSeq/);
+    assert.match(catalogJs, /buttonRefreshes\.get\(button\) === refreshSeq/);
 });

@@ -19,14 +19,17 @@ changed since the last note, never merged into a row the model already saw.
 from __future__ import annotations
 
 import json
+import logging
 import pathlib
 import time
 from typing import Any, Dict, List, Optional
 
-from ouroboros.dialogue_provenance import is_presence_task
+from ouroboros.dialogue_provenance import is_presence_task, presence_caller_binding
 from ouroboros.focus import compact_focus, focus_fingerprint
 from ouroboros.task_status import _load_queue_snapshot, queue_snapshot_observation
 from ouroboros.utils import read_json_dict
+
+log = logging.getLogger(__name__)
 
 #: The supervisor's off-lock projection of live direct-chat roots.
 DIRECT_ROOTS_FRAGMENT = pathlib.Path("state") / "direct_roots.json"
@@ -266,7 +269,7 @@ def maybe_append_roster_note(ctx: Any, messages: List[Dict[str, Any]], drive_roo
                   "_presence_origin": getattr(ctx, "_presence_origin", None)}
     if (str(metadata.get("parent_task_id") or "").strip()
             or str(metadata.get("delegation_role") or "") == "subagent"
-            or is_presence_task(actor_task)):
+            or is_presence_task(actor_task) or presence_caller_binding(ctx) is not None):
         return False
     task_id = str(getattr(ctx, "task_id", "") or "")
     canonical = pathlib.Path(str(
@@ -311,3 +314,116 @@ def _latest_roster_note(messages: List[Dict[str, Any]]) -> str:
         # header to the end and compare that exact representation.
         return text[start:].rstrip("\n")
     return ""
+
+
+def durable_descendant_of(
+    drive_root: pathlib.Path,
+    task_id: str,
+    task: Dict[str, Any],
+    ancestor_id: str,
+    *,
+    max_hops: int = 64,
+) -> bool:
+    """Follow the durable parent chain; shared-root labels are not ancestry proof
+    (the descendant half of ``forward_to_worker``'s addressability)."""
+
+    from ouroboros.task_status import load_effective_task_result
+
+    current_id = str(task_id or "")
+    current = task if isinstance(task, dict) else {}
+    seen = {current_id}
+    for _hop in range(max_hops):
+        parent_id = str(current.get("parent_task_id") or "").strip()
+        if not parent_id:
+            return False
+        if parent_id == ancestor_id:
+            return True
+        if parent_id in seen:
+            return False
+        seen.add(parent_id)
+        current = load_effective_task_result(drive_root, parent_id)
+        if not current:
+            return False
+        current_id = parent_id
+    return False
+
+def peer_relation_to(
+    status_drive_root: pathlib.Path,
+    current_task_id: str,
+    metadata: Dict[str, Any],
+    tid: str,
+    data: Dict[str, Any],
+) -> str:
+    """``parent`` / ``sibling`` when ``tid`` is the caller's parent or shares its
+    parent inside ONE durable tree, else ``""``. The caller's own lineage comes
+    from its task metadata, falling back to its durable result; a recipient in
+    another root is never a peer even when the parent ids coincide."""
+    from ouroboros.task_status import load_effective_task_result
+
+    if tid == current_task_id:
+        return ""
+    caller_parent = str(metadata.get("parent_task_id") or "").strip()
+    caller_root = str(metadata.get("root_task_id") or "").strip()
+    if not caller_parent or not caller_root:
+        own = load_effective_task_result(status_drive_root, current_task_id) or {}
+        caller_parent = caller_parent or str(own.get("parent_task_id") or "").strip()
+        caller_root = caller_root or str(own.get("root_task_id") or "").strip()
+    if not caller_parent or not caller_root:
+        return ""
+    if tid == caller_parent:
+        relation = "parent"
+    elif str(data.get("parent_task_id") or "").strip() == caller_parent:
+        relation = "sibling"
+    else:
+        return ""
+    recipient_root = str(data.get("root_task_id") or "").strip()
+    # A direct-chat root may have no root_task_id carrier. The child's exact
+    # parent/root pair still proves this root; never infer a missing sibling root.
+    if not recipient_root and not data.get("parent_task_id") and tid == caller_root == caller_parent:
+        recipient_root = tid
+    return relation if recipient_root == caller_root else ""
+
+
+def peer_contribution_admission(
+    status_drive_root: pathlib.Path,
+    current_task_id: str,
+    metadata: Dict[str, Any],
+    tid: str,
+    data: Dict[str, Any],
+    *,
+    relayed_from: str = "",
+) -> tuple:
+    """``(relation, refusal)`` for a ``forward_to_worker`` recipient that is not
+    the caller's descendant (serial addressed turns, peer contributions).
+
+    ``relation`` is ``parent``/``sibling`` when the recipient is a peer inside the
+    caller's tree and the write may proceed. ``refusal`` is a typed ``ToolResult``
+    when it IS a peer but relay was asked (an ancestor-only act), or its
+    cancellation is pending, or that state cannot be read: a peer holds no
+    authority over the recipient, so it never writes blind — the fail-soft
+    ``cancel_pending`` read the tool already made answers "no cancel" for an
+    unreadable carrier, and ancestor steering and independent roots keep that
+    path. ``("", None)`` means the recipient is no peer at all.
+    """
+    from ouroboros.cancel_intents import cancel_pending
+    from ouroboros.tools.tool_result import ToolResult
+
+    relation = peer_relation_to(status_drive_root, current_task_id, metadata, tid, data)
+    if not relation:
+        return "", None
+    if relayed_from:
+        return "", ToolResult(status="blocked", code="LEGACY_BLOCKED", text=(
+            f"⚠️ TASK_FORBIDDEN: a relayed message reaches only your own descendants; "
+            f"task {tid} is your {relation} — relay is an ancestor-only act."))
+    try:
+        pending = cancel_pending(status_drive_root, tid, strict=True)
+    except Exception:
+        log.debug("peer contribution: strict cancel-state read failed for %s", tid, exc_info=True)
+        return "", ToolResult(status="unavailable", code="LEGACY_UNAVAILABLE", text=(
+            f"⚠️ TASK_CANCEL_STATE_UNAVAILABLE: task {tid}'s cancellation state could not be "
+            "read, so this peer contribution was NOT written; retry once it is readable."))
+    if pending:
+        return "", ToolResult(status="blocked", code="LEGACY_BLOCKED", text=(
+            f"⚠️ TASK_CANCEL_PENDING: task {tid} has a pending cancellation — the supervisor "
+            "is tearing it down; the message was NOT delivered."))
+    return relation, None

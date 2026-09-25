@@ -201,18 +201,27 @@ function routeCatalogItems(route, items = []) {
 /**
  * One suggestion per model: the label names the model and makes no account claim
  * (DESIGN.md §7). Availability, the reading account and its observation time are
- * account facts, so they never travel on a model option.
+ * account facts, so they never travel on a model option. Two row facts do: what an
+ * alias resolves to (`resolved_model`, shown only while every supplying row agrees)
+ * and a row known only from the engine's frozen list (`origin: "hint"` on every
+ * supplying row; absent origin is live). The value stays the row id either way.
  */
 export function catalogModelOptions(items = []) {
     const values = new Map();
     for (const item of items) {
         const value = String(item?.value || item?.id || item);
         const name = String(item?.name || item?.label || '');
+        if (!values.has(value)) values.set(value, { value, label: value, named: false, live: false, resolved: new Set() });
         const current = values.get(value);
-        if (!current) values.set(value, { value, label: name || value, named: Boolean(name) });
-        else if (name && !current.named) Object.assign(current, { label: name, named: true });
+        if (name && !current.named) Object.assign(current, { label: name, named: true });
+        if (item?.origin !== 'hint') current.live = true;
+        const resolved = item?.resolved_model;
+        if (typeof resolved === 'string' && resolved && resolved !== value) current.resolved.add(resolved);
     }
-    return [...values.values()].map(({ value, label }) => ({ value, label }));
+    return [...values.values()].map(({ value, label, live, resolved }) => {
+        const named = resolved.size === 1 ? `${value} → ${[...resolved][0]}` : label;
+        return { value, label: live ? named : `${named} (shipped list)` };
+    });
 }
 
 /** Suggestions carry the model alone; the source select already names the provider. */

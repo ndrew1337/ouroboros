@@ -242,6 +242,8 @@ def test_real_system_prompt_keeps_its_floor_rules_under_local_compaction():
     assert "# I Am Ouroboros" in compacted
     assert "exactly ONE routing decision" in normalized
     assert "one self-contained final response" in normalized
+    assert "My human's requests and commitments I make to others owe" in normalized
+    assert "host-admitted Presence observation may end silently" in normalized
     assert "[Message from my human]" in compacted
     assert "BIBLE P0/P3 governs my agency and review" in normalized
     assert "in Cyber Pro internal checks inform my judgment without veto" in normalized

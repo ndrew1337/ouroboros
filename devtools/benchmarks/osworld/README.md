@@ -147,8 +147,9 @@ Important cu_bridge details (`run_cu_bridge_agent.py`):
   `llm_rounds`, `screenshots`, `gui_action_calls`, `remote_exec_calls`) and
   `max_rounds_effective`; the manifest records the OSWorld checkout variant/pin
   (`osworld_checkout`) and `a11y_enabled`. The budget is the Ouroboros server's
-  `OUROBOROS_MAX_ROUNDS` (default 200) plus `--task_timeout_sec`; this is NOT a
-  100-step leaderboard cap — report both.
+  `OUROBOROS_MAX_ROUNDS` (200 in `settings_base.json`; the runtime itself ships
+  `unlimited`) plus `--task_timeout_sec`; this is NOT a 100-step leaderboard cap —
+  report both. A declared `--max-steps` is refused unless that cap is finite.
 - The VM sudo password is injected into `prompt.txt` (official OSWorld practice;
   `mm_agents/prompts.py`). Keep run artifacts access-controlled.
 - Proxy: for `"proxy": true` tasks the runner enables OSWorld's proxy pool only

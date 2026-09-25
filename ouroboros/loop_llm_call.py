@@ -722,13 +722,12 @@ def classify_llm_exception(exc: Exception, safe_error: str = "") -> LlmErrorClas
     if isinstance(exc, LocalContextTooLargeError):
         return LlmErrorClassification("context_overflow", False)
     # Structured fact, not a keyword scan (Bible P5): a transport that KNOWS its
-    # window is spent carries the typed code plus the reset instant.
-    if str(getattr(exc, "code", "") or "") == SUBSCRIPTION_WINDOW_EXHAUSTED:
-        reset_at = str(getattr(exc, "reset_at", "") or "")
-        return LlmErrorClassification(
-            SUBSCRIPTION_WINDOW_EXHAUSTED, True, _exception_status_code(exc),
-            "", seconds_until(reset_at), reset_at,
-        )
+    # window is spent carries the typed code plus the reset instant; a DATED credential
+    # pool heals on the same timer (its code stays as evidence), an undated one never gets here.
+    wcode, reset_at = str(getattr(exc, "code", "") or ""), str(getattr(exc, "reset_at", "") or "")
+    if wcode == SUBSCRIPTION_WINDOW_EXHAUSTED or (wcode == "credential_pool_exhausted" and reset_at):
+        return LlmErrorClassification(SUBSCRIPTION_WINDOW_EXHAUSTED, True, _exception_status_code(exc),
+                                      "" if wcode == SUBSCRIPTION_WINDOW_EXHAUSTED else wcode, seconds_until(reset_at), reset_at)
     status_code = _exception_status_code(exc)
     provider_code = _exception_provider_code(exc, safe)
     # Typed refusal (llm_attempt.ProviderPolicyRefusal): nothing upstream answered,

@@ -13,6 +13,8 @@ import pathlib
 import time
 from typing import Any, Dict
 
+from ouroboros.model_wait import budget_paused_seconds
+from supervisor.events_budget import budget_fence_selected, budget_hold_fact
 from supervisor.queue import _queue_lock
 
 
@@ -31,6 +33,20 @@ def _pool():
 
 
 log = logging.getLogger(__name__)
+
+
+def _direct_actor_still_registered(task_id: str) -> bool:
+    """Whether the in-process direct actor that paused ``task_id`` still holds its
+    registry entry. A parked direct turn releases the entry as its last act; a
+    grant dispatched before that would put a pooled worker beside a live actor
+    under the SAME id (#1196). Unreadable registry state fences (never admits)."""
+    try:
+        from supervisor.active_activity import get_direct_activity_registry
+
+        return get_direct_activity_registry().get(str(task_id or "")) is not None
+    except Exception:
+        log.debug("Direct activity registry unreadable during assignment", exc_info=True)
+        return True
 
 
 def _evolution_assignment_error(task: Dict[str, Any]) -> str:
@@ -212,8 +228,19 @@ def assign_tasks() -> None:
                     continue
                 if isinstance(task.get("_budget_pause"), dict):
                     continue
+                if budget_hold_fact(task) is not None:
+                    continue  # Held, not paused: no second pause row over the hold.
                 if task.get("_owner_wait_resume"):
                     continue  # Restore the checkpoint; the loop still owns its budget stop.
+                if isinstance(task.get("_budget_pause_resume"), dict):
+                    # Money vanished between the grant and this dispatch: the
+                    # single-use grant returns to its exact pause, never to a
+                    # pre-dispatch replay or a terminal.
+                    from supervisor.queue_transitions import revoke_exact_budget_resume
+
+                    revoke_exact_budget_resume(task, "budget_exhausted_before_dispatch")
+                    queue.persist_queue_snapshot(reason="budget_exact_resume_revoked")
+                    continue
                 task_id = str(task.get("id") or "")
                 cost_fields = _pool().reconstruct_task_cost(
                     task_id, fields=True,
@@ -336,8 +363,52 @@ def assign_tasks() -> None:
                         continue
                     if isinstance(candidate.get("_budget_pause"), dict):
                         continue
+                    if budget_hold_fact(candidate) is not None:
+                        # A durable budget hold (#1196): a sibling whose paused
+                        # root's fence was lifted without an explicit selection,
+                        # an unrestorable continuation, or a grant whose
+                        # revocation could not be written. Never assignable
+                        # until the selection is recorded on the row.
+                        continue
+                    if (candidate.get("_is_direct_chat")
+                            and _direct_actor_still_registered(str(candidate.get("id") or ""))):
+                        # The direct actor that parked this id has not released
+                        # its registry entry yet: no second live actor for one id.
+                        continue
                     root_task_id = str(candidate.get("root_task_id") or "").strip()
-                    if root_task_id in queue.BUDGET_ROOT_FENCES and not candidate.get("_owner_wait_resume"):
+                    from supervisor.events_budget import budget_resume_dispatch_allowed
+
+                    if not budget_resume_dispatch_allowed(queue, candidate):
+                        if isinstance(candidate.get("_budget_pause_resume"), dict):
+                            from supervisor.budget_resume import revoke_exact_budget_resume
+
+                            revoke_exact_budget_resume(candidate, "root_resume_generation_stale")
+                        else:
+                            # A zero-dispatch selection whose root grant or fence is
+                            # no longer live returns to an UNSELECTED hold (#1196, Q9):
+                            # the row keeps its hold identity, drops the dead grant
+                            # binding, and the next selection records the live one.
+                            from supervisor.events_budget import (
+                                BUDGET_HOLD_KEY, HOLD_ROOT_FENCE_LIFTED, hold_budget_row,
+                            )
+
+                            stale = candidate.get(BUDGET_HOLD_KEY) or {}
+                            hold_budget_row(
+                                candidate, reason=str(stale.get("reason") or HOLD_ROOT_FENCE_LIFTED),
+                                detail="root_resume_generation_stale",
+                                extra={**{key: stale[key] for key in ("root_task_id", "fence_id")
+                                          if key in stale},
+                                       "stale_root_grant_id": str(stale.get("root_grant_id") or "")},
+                                result_root=pathlib.Path(candidate.get("budget_drive_root") or _pool().DRIVE_ROOT))
+                        queue.persist_queue_snapshot(reason="stale_child_resume_held")
+                        continue
+                    if (root_task_id in queue.BUDGET_ROOT_FENCES
+                            and not candidate.get("_owner_wait_resume")
+                            and not candidate.get("_budget_pause_resume")
+                            # One member explicitly selected against THIS fence
+                            # is admitted; the latch stays up for the rest (Q9).
+                            and not budget_fence_selected(
+                                candidate, queue.BUDGET_ROOT_FENCES.get(root_task_id))):
                         continue
                     if str(candidate.get("type") or "") == "evolution" and remaining < EVOLUTION_BUDGET_RESERVE:
                         continue
@@ -383,13 +454,19 @@ def assign_tasks() -> None:
                 w.busy_task_id = task["id"]
                 w.in_q.put(task)
                 now_ts = time.time()
-                resume = task.get("_owner_wait_resume") or {}
+                resume = task.get("_owner_wait_resume") or task.get("_budget_pause_resume") or {}
                 _pool().RUNNING[task["id"]] = {
                     "task": dict(task), "worker_id": w.wid,
                     "started_at": float(resume.get("started_at") or now_ts), "last_heartbeat_at": now_ts,
                     "last_progress_at": now_ts,
                     **({"model_wait_quota_clock": dict(resume["model_wait_quota_clock"])}
                        if resume.get("model_wait_quota_clock") else {}),
+                    # Separate paused-interval carrier (#1196): the original
+                    # started_at is untouched; lifetime rails subtract this. ONE
+                    # reader for either handoff: a budget grant names it
+                    # ``paused_duration_sec``, an owner-wait restart ``budget_paused_sec``.
+                    **({"budget_paused_sec": budget_paused_seconds(resume)}
+                       if budget_paused_seconds(resume) > 0 else {}),
                     "soft_sent": False, "attempt": int(task.get("_attempt") or 1),
                 }
                 task_type = str(task.get("type") or "")

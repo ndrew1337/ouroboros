@@ -503,7 +503,7 @@ def test_budget_latch_preserves_stale_candidate_with_resume_disclosure(
     assert forced["source"] == (
         "budget_latched_fallback_stale_evidence_resume_required"
     )
-    assert forced["evidence_current"] is True
+    assert forced["evidence_current"] is False  # Preserved stale bytes are not current evidence.
     assert forced["evidence_revision"] == old.evidence_revision
     assert forced["current_evidence_revision"] == old.evidence_revision
     assert usage["_best_effort_extracted"] is True
@@ -566,7 +566,7 @@ def test_provider_unavailable_preserves_stale_candidate_with_resume_disclosure(
     assert returned_trace["delivery_candidate"]["evidence_current"] is True
     forced = returned_trace["forced_finalization"]
     assert forced["source"] == "host_fallback_stale_evidence_resume_required"
-    assert forced["evidence_current"] is True
+    assert forced["evidence_current"] is False  # Preserved stale bytes are not current evidence.
     assert forced["evidence_revision"] == old.evidence_revision
     assert forced["current_evidence_revision"] == old.evidence_revision
     assert usage["_best_effort_extracted"] is True

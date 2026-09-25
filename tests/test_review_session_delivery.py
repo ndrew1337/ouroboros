@@ -666,8 +666,8 @@ def test_session_is_never_restarted_for_format_repair(tmp_path, fake_route, monk
 
 def test_a_pool_exhausted_terminal_is_typed_like_a_spent_window(tmp_path, fake_route):
     """Cross-repo forward-compat (B1): a newer engine reports a spent credential POOL
-    with its own RunFailureCode. Same timer-healing semantics, same exception class —
-    with the ORIGINAL code preserved, never relabelled. An unknown code stays the
+    with its own RunFailureCode. A DATED pool gets the same timer-healing semantics and
+    exception class — with the ORIGINAL code preserved, never relabelled. An unknown code stays the
     generic typed refusal (fail-open: old engines emit code:null and behave as today)."""
     from ouroboros.gateways.claudexor import (
         ClaudexorSubscriptionWindowExhausted, ClaudexorUnavailable)

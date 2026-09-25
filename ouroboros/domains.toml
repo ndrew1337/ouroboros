@@ -63,6 +63,7 @@ D20 = "Presence"
 
 [modules]
 "launcher.py" = "D18"
+"ouroboros/budget_pause.py" = "D01"
 "ouroboros/launcher_windows_runtime.py" = "D18"
 "ouroboros/__init__.py" = "D18"
 "ouroboros/_outcome_receipts.py" = "D01"
@@ -70,6 +71,8 @@ D20 = "Presence"
 "ouroboros/_usage_response.py" = "D16"
 "ouroboros/_usage_rows.py" = "D16"
 "ouroboros/_usage_rows_memo.py" = "D16"
+"ouroboros/acceptance_preparation.py" = "D01"
+"ouroboros/acceptance_retrieving.py" = "D01"
 "ouroboros/acceptance_settlement.py" = "D01"
 "ouroboros/agent.py" = "D01"
 "ouroboros/focus.py" = "D01"
@@ -79,6 +82,7 @@ D20 = "Presence"
 "ouroboros/anthropic_native_custody.py" = "D02"
 "ouroboros/argv_budget.py" = "D13"
 "ouroboros/artifacts.py" = "D05"
+"ouroboros/repo_diff_capture.py" = "D05"
 "ouroboros/betterleaks_runtime.py" = "D14"
 "ouroboros/browser_policy.py" = "D05"
 "ouroboros/cancel_intents.py" = "D09"
@@ -133,6 +137,7 @@ D20 = "Presence"
 "ouroboros/deadline_utils.py" = "D01"
 "ouroboros/deep_self_review.py" = "D06"
 "ouroboros/delegate_containment.py" = "D07"
+"ouroboros/delegate_continuation.py" = "D07"
 "ouroboros/delegate_custody.py" = "D07"
 "ouroboros/delegate_custody_memo.py" = "D07"
 "ouroboros/delegate_state_sweep.py" = "D07"
@@ -268,6 +273,7 @@ D20 = "Presence"
 "ouroboros/mcp_client.py" = "D05"
 "ouroboros/memory.py" = "D15"
 "ouroboros/memory_journal_compaction.py" = "D15"
+"ouroboros/memory_nomination_receipts.py" = "D15"
 "ouroboros/model_concurrency.py" = "D02"
 "ouroboros/model_send_seal.py" = "D16"
 "ouroboros/mutation_attribution.py" = "D01"
@@ -293,6 +299,7 @@ D20 = "Presence"
 "ouroboros/post_task_evolution.py" = "D15"
 "ouroboros/preflight_node.py" = "D06"
 "ouroboros/preflight_runner.py" = "D06"
+"ouroboros/test_environment.py" = "D06"
 "ouroboros/presence_admission.py" = "D20"
 "ouroboros/presence_authority.py" = "D20"
 "ouroboros/presence_bindings.py" = "D20"
@@ -416,6 +423,7 @@ D20 = "Presence"
 "ouroboros/task_results.py" = "D17"
 "ouroboros/task_result_schema.py" = "D17"
 "ouroboros/task_status.py" = "D17"
+"ouroboros/terminal_projection.py" = "D17"
 "ouroboros/task_tree_ledger.py" = "D07"
 "ouroboros/tool_access.py" = "D04"
 "ouroboros/tool_access_paths.py" = "D04"
@@ -559,6 +567,7 @@ D20 = "Presence"
 "ouroboros/startup_historical_audit.py" = "D11"
 "supervisor/__init__.py" = "D08"
 "supervisor/active_activity.py" = "D08"
+"supervisor/budget_resume.py" = "D08"
 "supervisor/cancel_publication.py" = "D09"
 "supervisor/cognitive_operations.py" = "D08"
 "supervisor/events.py" = "D08"
@@ -848,6 +857,7 @@ lazy_only = [
   "D04->D12",
   "D04->D14",
   "D04->D15",
+  "D04->D16",
   "D04->D20",
   "D05->D06",
   "D05->D07",
@@ -902,6 +912,7 @@ lazy_only = [
   "D15->D10",
   "D15->D13",
   "D15->D17",
+  "D15->D20",
   "D16->D01",
   "D16->D03",
   "D16->D05",
@@ -915,6 +926,7 @@ lazy_only = [
   "D17->D09",
   "D17->D12",
   "D17->D13",
+  "D17->D20",
   "D18->D01",
   "D18->D07",
   "D18->D11",

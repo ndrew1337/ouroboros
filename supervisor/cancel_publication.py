@@ -36,6 +36,69 @@ CANCEL_FAILED = "failed"
 _CANCEL_TERMINALIZED = frozenset({CANCEL_CANCELLED, CANCEL_ALREADY_SETTLED, CANCEL_NOT_FOUND})
 
 
+# Transport is recorded fact, never proof that an HTTP caller was the owner.
+# The browser twin is ``web/modules/cancel_presentation.js``; both
+# tables must name the same sources, because one stored ``cancel_origin`` is
+# rendered by the task card AND by this host's durable terminal rows.
+CANCEL_SOURCE_PHRASES = {
+    "http_single": "Stopped from the app (Stop now)",
+    "http_cascade": "Stopped from the app (Stop now)",
+    "http_graceful": "Stopped from the app (Wrap up)",
+    # ``_cancel_subtree_sweep`` mints this for every captured descendant.
+    "cascade_descendant": "Stopped with the task tree it belongs to",
+}
+# A recorded cause is producer free text; bound it before it joins an owner line.
+CANCEL_REASON_MAX_CHARS = 160
+
+
+def cancel_cause_clauses(
+    origin: Dict[str, Any], result: Dict[str, Any], event: Dict[str, Any],
+) -> List[str]:
+    """The clauses a recorded ``cancel_origin`` PROVES, for one owner line.
+
+    Written here, beside ``_intent_outcome_fields`` which records the origin, so
+    the producer and the sentence share a home. The caller joins them with its
+    own separator; the browser twin is the cancelled branch of
+    ``log_events.js::taskReasonDetail`` and must stay word for word identical.
+
+    ``requested_by`` says which run ASKED — a cascade stamps the SWEPT ROOT
+    there — so reading it as the initiator named a task that somebody else had
+    stopped (#1061). When this record's OWN lineage proves that asker is its
+    parent or ancestor, the line states that relation. Only a typed
+    ``request_origin`` proves an actor; ``requested_by`` alone never does.
+    """
+    from ouroboros.utils import strip_markdown
+
+    request_origin = origin.get("request_origin")
+    actor = (
+        str(request_origin.get("task_id") or "")
+        if isinstance(request_origin, dict) and request_origin.get("kind") == "agent_task"
+        else ""
+    )
+    asked = str(origin.get("requested_by") or "")
+    record = {**event, **result}
+    self_id = str(record.get("task_id") or record.get("id") or record.get("subagent_task_id") or "")
+    parent = str(record.get("parent_task_id") or "")
+    root = str(record.get("root_task_id") or "")
+    relation = ""
+    if asked and asked != self_id:
+        if asked == parent:
+            relation = "Stopped with its parent task"
+        elif parent and asked == root:
+            relation = "Stopped with an ancestor task"
+    source = str(origin.get("source") or "")
+    reason = " ".join(strip_markdown(str(origin.get("reason") or "")).split())
+    if len(reason) > CANCEL_REASON_MAX_CHARS:
+        reason = reason[:CANCEL_REASON_MAX_CHARS - 1].rstrip() + "\u2026"
+    return [
+        CANCEL_SOURCE_PHRASES.get(source, source),
+        reason,
+        "this task and its sub-tasks" if origin.get("scope") == "cascade" else "",
+        relation,
+        "Requested by a task" if actor else "",
+    ]
+
+
 def _load_result_row(q: Any, task_id: str) -> Dict[str, Any]:
     """The durable result row, or ``{}`` — fail-soft."""
     try:

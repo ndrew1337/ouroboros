@@ -70,21 +70,21 @@ def _wait_bound_fields(ctx: Any) -> dict:
             "wait_max_minutes": int(getattr(ctx, "_owner_wait_max_minutes", 0) or 0)}
 
 
-def checkpoint_owner_wait(ctx: Any, messages: list, trace: dict, usage: dict,
-                          round_idx: int, tool_schemas: list, seen: set,
-                          *, review_binding: str = "") -> dict:
-    """Capture only the live loop's continuation values, never Python handles."""
-    wait_id = uuid.uuid4().hex
+def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
+                       round_idx: int, tool_schemas: list, seen: set) -> dict:
+    """The loop's exact continuation values, never Python handles.
+
+    ONE serializer for every same-ID continuation (owner wait, acceptance park,
+    budget pause): the carried fields are the loop's cognition — transcript,
+    trace, usage, route, delivery candidate, acceptance identities, owner
+    directives — so a second serializer could only drift from this one.
+    """
     candidate = getattr(ctx, "_delivery_candidate", None)
     cost_ceiling = getattr(ctx, "_cost_ceiling", None)
     model_wait = getattr(ctx, "model_wait_context", None)
     model_state = model_wait.continuation_state() if model_wait is not None else {}
-    state = {
+    return {
         "task_id": ctx.task_id, "task_attempt": int(ctx.task_attempt or 1),
-        "wait_id": wait_id, "quiz_id": getattr(ctx, "_owner_wait_requested", ""),
-        **_wait_bound_fields(ctx),
-        "reason": "review" if review_binding else "owner",
-        "review_binding": review_binding,
         "messages": messages, "trace": trace, "usage": usage,
         "cost_ceiling": asdict(cost_ceiling) if cost_ceiling is not None else None,
         "model_wait": model_state,
@@ -109,10 +109,30 @@ def checkpoint_owner_wait(ctx: Any, messages: list, trace: dict, usage: dict,
             "_task_acceptance_reviewed_subject": str(getattr(ctx, "_task_acceptance_reviewed_subject", "")),
         },
     }
+
+
+def store_continuation_source(ctx: Any, state: dict, source_id: str) -> dict:
+    """Persist one continuation state through the existing actor source store."""
     root = pathlib.Path(ctx.budget_drive_root or ctx.drive_root)
-    source = store_actor_source_bytes(root, ctx.task_id, category="context_checkpoints",
-                                     source_id="owner-wait-" + wait_id,
-                                     data=json.dumps(state, ensure_ascii=False).encode(), extension="json")
+    return store_actor_source_bytes(root, ctx.task_id, category="context_checkpoints",
+                                    source_id=source_id,
+                                    data=json.dumps(state, ensure_ascii=False).encode(), extension="json")
+
+
+def checkpoint_owner_wait(ctx: Any, messages: list, trace: dict, usage: dict,
+                          round_idx: int, tool_schemas: list, seen: set,
+                          *, review_binding: str = "") -> dict:
+    """Capture only the live loop's continuation values, never Python handles."""
+    wait_id = uuid.uuid4().hex
+    state = {
+        **continuation_state(ctx, messages, trace, usage, round_idx, tool_schemas, seen),
+        "wait_id": wait_id, "quiz_id": getattr(ctx, "_owner_wait_requested", ""),
+        **_wait_bound_fields(ctx),
+        "reason": "review" if review_binding else "owner",
+        "review_binding": review_binding,
+    }
+    source = store_continuation_source(ctx, state, "owner-wait-" + wait_id)
+    model_state = state.get("model_wait") or {}
     return {
         "wait_id": wait_id, "quiz_id": getattr(ctx, "_owner_wait_requested", ""),
         **_wait_bound_fields(ctx),
@@ -122,6 +142,10 @@ def checkpoint_owner_wait(ctx: Any, messages: list, trace: dict, usage: dict,
         "execution_drive_root": str(ctx.drive_root),
         "started_at": getattr(ctx, "task_started_at", None),
         "model_wait_quota_clock": model_state.get("quota_clock", {}),
+        # The SAME two carriers every finite-lifetime reader subtracts: the quota
+        # union above and the budget-paused interval (#1196, F5). Without it the
+        # row's own lifetime check would count a pause as execution.
+        "budget_paused_sec": float(model_state.get("budget_paused_sec") or 0.0),
     }
 
 
@@ -156,7 +180,7 @@ def restore_owner_wait_allowed(root: Any, task: dict) -> bool:
     from ouroboros.deadline_utils import parse_deadline_ts, utc_now
     from ouroboros.delegate_recovery import _ack_direct_exec_successor, _read_restart_transaction
     from ouroboros.config import get_task_abs_ceiling_sec
-    from ouroboros.model_wait import quota_waited_seconds
+    from ouroboros.model_wait import execution_elapsed_seconds
     import time
 
     handoff = task.get("_owner_wait_resume")
@@ -180,25 +204,26 @@ def restore_owner_wait_allowed(root: Any, task: dict) -> bool:
     deadline = parse_deadline_ts(task.get("deadline_at") or (task.get("task_contract") or {}).get("deadline_at"))
     if deadline is not None and deadline <= utc_now():
         return False
-    started = float(handoff.get("started_at") or 0)
+    started = float(handoff.get("started_at") or wait.get("started_at") or 0)
     now = time.time()
-    if started and now - started - quota_waited_seconds(wait, now) >= get_task_abs_ceiling_sec():
+    ceiling = get_task_abs_ceiling_sec()  # None = no lifetime bound to have outlived
+    # ONE shared clock (``model_wait.execution_elapsed_seconds``): wall time minus
+    # the quota union minus the budget-paused carrier. A task that was paused and
+    # then parked in an owner wait must not have that paused time charged to its
+    # finite lifetime by this reader alone (#1196, F5).
+    # The durable row is the authority whenever it carries the field (0.0 included);
+    # the handoff is the fallback for a row written before it existed.
+    paused_carrier = wait.get("budget_paused_sec")
+    if paused_carrier is None:
+        paused_carrier = handoff.get("budget_paused_sec") or 0.0
+    executed = execution_elapsed_seconds(
+        {"started_at": started,
+         "model_wait_quota_clock": wait.get("model_wait_quota_clock") or {},
+         "budget_paused_sec": paused_carrier}, now)
+    if started and ceiling is not None and executed >= ceiling:
         return False
     read_actor_source_bytes(root, task_id, wait["source_ref"])
     return True
-
-
-def _wait_deadline(checkpoint: dict) -> Any:
-    """The bound's absolute instant, or None when the wait is unbounded."""
-    from ouroboros.deadline_utils import parse_deadline_ts
-
-    return parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))
-
-
-def _bound_expired(deadline: Any) -> bool:
-    from ouroboros.deadline_utils import utc_now
-
-    return deadline is not None and utc_now() >= deadline
 
 
 def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
@@ -214,6 +239,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
     """
     import os
 
+    from ouroboros.deadline_utils import parse_deadline_ts, utc_now
+
     identity = {"type": "owner_wait", "worker_id": wid, "pid": os.getpid(),
                 "task_id": ctx.task_id, "task_attempt": int(ctx.task_attempt or 1),
                 "wait_id": checkpoint["wait_id"]}
@@ -224,7 +251,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
         del ctx.pending_events[0]
     out_q.put({**identity, "phase": "park", "checkpoint": checkpoint})
     peek = OwnerMailboxPeek()
-    deadline = _wait_deadline(checkpoint)
+    # The bound's absolute instant; None = an unbounded wait.
+    deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))
     parked = resume_requested = False
     outcome = "owner_input"
     while True:
@@ -247,7 +275,7 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
                     set(getattr(ctx, "_loop_mailbox_seen_ids", set())), ctx.task_attempt or 1):
                 out_q.put({**identity, "phase": "resume"})
                 resume_requested = True
-            elif _bound_expired(deadline):
+            elif deadline is not None and utc_now() >= deadline:
                 outcome = "timeout"
                 out_q.put({**identity, "phase": "resume", "resume_reason": outcome})
                 resume_requested = True
@@ -262,6 +290,8 @@ def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
     An optional bound releases the loop only AFTER those controls are consulted,
     so Stop, the task deadline and the absolute ceiling keep precedence.
     """
+    from ouroboros.deadline_utils import parse_deadline_ts, utc_now
+
     control = ctx.model_wait_context
     root = pathlib.Path(ctx.budget_drive_root or ctx.drive_root)
     while ctx.pending_events:
@@ -269,12 +299,12 @@ def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
         del ctx.pending_events[0]
     wait = set_owner_wait(root, ctx.task_id, {**checkpoint, "state": "waiting"})
     peek = OwnerMailboxPeek()
-    deadline = _wait_deadline(checkpoint)
+    deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))  # None = unbounded
     outcome = "owner_input"
     while not control.control_reason() and not peek.pending(
             pathlib.Path(ctx.drive_root), ctx.task_id,
             set(getattr(ctx, "_loop_mailbox_seen_ids", set())), ctx.task_attempt or 1):
-        if _bound_expired(deadline):
+        if deadline is not None and utc_now() >= deadline:
             outcome = "timeout"
             break
         time.sleep(1.0)
@@ -356,11 +386,14 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
     ctx._owner_wait_max_minutes = 0
 
 
-def resume_native_loop(tools: Any, state: dict, messages: list, trace: dict,
-                       usage: dict, seen: set) -> tuple:
-    """Restore the selected cold continuation and await its ordinary input grant."""
+def restore_continuation_state(tools: Any, state: dict, messages: list, trace: dict,
+                               usage: dict, seen: set) -> None:
+    """Rebind the saved cognition onto the live loop objects (shared by every
+    same-ID continuation). Python handles (browser, executors, services) are
+    NOT restored: they died with the previous process and stay invalidated."""
     from ouroboros.loop_delivery import DeliveryCandidate
-    from ouroboros.loop import _rebind_context_fit_plan, get_context_mode
+
+    from ouroboros.model_wait import budget_paused_seconds
 
     ctx = tools._ctx
     messages[:] = state["messages"]
@@ -369,27 +402,46 @@ def resume_native_loop(tools: Any, state: dict, messages: list, trace: dict,
     seen.update(state["seen"])
     ctx._loop_mailbox_seen_ids = seen
     ctx._owner_directives = state["owner_directives"]
+    # The cumulative budget-paused carrier rides EVERY same-ID continuation
+    # (#1196, F5): a cold owner-wait restore of a task that had been budget
+    # paused keeps it, so a later pause row and the delegate clock start from
+    # the same cumulative value; a budget grant overrides it with its own.
+    ctx._budget_paused_sec = budget_paused_seconds(state.get("model_wait") or {})
     for key, value in {**state["route"], **state["delivery"], **state["acceptance"]}.items():
         setattr(ctx, key, value)
     candidate = state.get("delivery_candidate")
     ctx._delivery_candidate = DeliveryCandidate(**candidate) if candidate else None
-    cold_checkpoint = ctx.owner_wait_resume
-    outcome = ctx.owner_wait_callback(ctx, cold_checkpoint)
-    ctx.owner_wait_resume = None
+
+
+def rebind_restored_route(tools: Any, state: dict, messages: list) -> tuple:
+    """Rebind the restored route's context-fit plan; returns ``(plan, mode)``."""
+    from ouroboros.loop import _rebind_context_fit_plan, get_context_mode
     from ouroboros.model_slots import task_model_binding
 
+    ctx = tools._ctx
     model_wait = getattr(ctx, "model_wait_context", None)
     role, account = task_model_binding(
         {"model_role": state.get("context_model_role"), "task_metadata": ctx.task_metadata},
         context_fit_plan=ctx.context_fit_plan,
         overrides=model_wait.overrides if model_wait is not None else None,
     )
-    plan, mode = _rebind_context_fit_plan(
+    return _rebind_context_fit_plan(
         ctx.context_fit_plan, tools, messages, model=ctx.active_model,
         use_local=ctx.active_use_local, preferred_mode=get_context_mode(),
         tool_schemas=state["tool_schemas"],
         model_role=role, model_route={}, credential_profile_id=account,
     )
+
+
+def resume_native_loop(tools: Any, state: dict, messages: list, trace: dict,
+                       usage: dict, seen: set) -> tuple:
+    """Restore the selected cold continuation and await its ordinary input grant."""
+    ctx = tools._ctx
+    restore_continuation_state(tools, state, messages, trace, usage, seen)
+    cold_checkpoint = ctx.owner_wait_resume
+    outcome = ctx.owner_wait_callback(ctx, cold_checkpoint)
+    ctx.owner_wait_resume = None
+    plan, mode = rebind_restored_route(tools, state, messages)
     messages.append({"role": "user", "content": (
         "[SYSTEM NOTICE]\nThis task continued from its saved owner wait after a planned restart. "
         "Prior tool results remain recorded; do not repeat completed effects. "

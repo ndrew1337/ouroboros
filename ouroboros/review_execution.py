@@ -744,14 +744,11 @@ def run_delegated_review_session(
     custody_drive: Any,
     invocation: SessionInvocation,
 ) -> Dict[str, Any]:
-    """Start, watch, settle and collect one delegated read-only review.
-    This is every review surface's single session transport. It pins one
-    subscription harness, asks for schema only when the effective adapter can
-    carry it, stores the canonical start request before POST, and replays only
-    an explicit pending invocation token. A bound token joins its existing run;
-    reconcile-only mode never mints a replacement. The nanny owns verified
-    cancellation at ``timeout_sec`` and reads the full primary output before
-    settling through ``delegate_custody``.
+    """All reviews share this transport: pin one subscription harness, request
+    schema only if its effective adapter supports it, store the canonical body
+    before POST, and replay only an explicit pending token. Bound tokens join
+    existing runs; reconciliation never replaces them. The nanny verifies
+    cancellation at ``timeout_sec`` and reads full output before ``delegate_custody`` settlement.
     """
     from ouroboros import delegate_custody as custody
     from ouroboros.claudexor_daemon import ensure_owned_gateway
@@ -872,6 +869,16 @@ def run_delegated_review_session(
             if schema_asked:
                 run_request["outputSchema"] = output_schema
         if not run_id:
+            from ouroboros.budget_pause import dispatch_fenced
+
+            if dispatch_fenced(task_id):
+                # Observation-only while the owning task pauses (#1196): a
+                # fresh start AND a pending-invocation replay are both a new
+                # POST. The invocation row stays pending for the resumed task.
+                raise ReviewRouteUnavailable(
+                    "the owning task is entering an exact budget pause; no delegated "
+                    "review is started or re-posted while it pauses",
+                    code="budget_pausing_no_send")
             if (not recovering and owner_deadline_at and owner_deadline_exhausted(
                 deadline_at=owner_deadline_at, reserve_sec=get_finalization_grace_sec())):
                 raise _deadline_exhausted_error()

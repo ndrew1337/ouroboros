@@ -1,0 +1,16 @@
+[
+  {"record":{"status":"cancelled","cancel_origin":{}},"text":""},
+  {"record":{"status":"cancelled"},"text":""},
+  {"record":{"status":"completed","cancel_origin":{"source":"http_single"}},"text":""},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"http_single"}},"text":"Stopped from the app (Stop now)"},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"http_cascade","scope":"cascade"}},"text":"Stopped from the app (Stop now) · this task and its sub-tasks."},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"http_graceful","requested_by":"owner"}},"text":"Stopped from the app (Wrap up)"},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"agent_tool","reason":"**Stop**\n_now_."}},"text":"agent_tool · Stop now."},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"__proto__"}},"text":"__proto__."},
+  {"record":{"task_id":"child","parent_task_id":"root","root_task_id":"root","status":"cancelled","cancel_origin":{"source":"cascade_descendant","requested_by":"root"}},"text":"Stopped with the task tree it belongs to · Stopped with its parent task."},
+  {"record":{"task_id":"grandchild","parent_task_id":"child","root_task_id":"root","status":"cancelled","cancel_origin":{"source":"cascade_descendant","requested_by":"root"}},"text":"Stopped with the task tree it belongs to · Stopped with an ancestor task."},
+  {"record":{"task_id":"root","root_task_id":"root","status":"cancelled","cancel_origin":{"source":"cascade_descendant","requested_by":"root"}},"text":"Stopped with the task tree it belongs to."},
+  {"record":{"task_id":"unrelated","parent_task_id":"other","status":"cancelled","cancel_origin":{"source":"cascade_descendant","requested_by":"root"}},"text":"Stopped with the task tree it belongs to."},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"agent_tool","request_origin":{"kind":"agent_task","task_id":"foreign-root"}}},"text":"agent_tool · Requested by a task."},
+  {"record":{"status":"cancelled","cancel_origin":{"source":"agent_tool","reason":"Keep saved work!"}},"text":"agent_tool · Keep saved work!"}
+]

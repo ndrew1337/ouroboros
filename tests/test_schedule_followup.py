@@ -262,10 +262,43 @@ def test_presence_recurring_followup_uses_existing_cron_and_preserves_authority(
     assert record["timezone"] == "Europe/Moscow"
     assert record["next_run_at"]
     assert record["task"]["metadata"]["presence"] == ctx.task_metadata["presence"]
-    assert record["task"]["task_contract"] == ctx.task_contract
+    assert record["task"]["task_contract"] == {"capability_ceiling": payload}  # the turn's objective is not the follow-up's
     scheduled = queue._task_from_schedule(record)
     assert scheduled["metadata"]["presence"] == ctx.task_metadata["presence"]
     assert scheduled["task_contract"]["capability_ceiling"] == ctx.task_contract["capability_ceiling"]
+    assert scheduled["task_contract"]["objective"] == "Re-run the plan panel once the reviewer window resets."
+
+
+def test_a_bindings_root_follow_up_runs_its_own_objective_under_the_inherited_authority(tmp_path):
+    from ouroboros.presence_authority import presence_ceiling_payload
+    from supervisor import queue
+    from tests.test_presence_own_work import _ceiling
+
+    ctx = _ctx(tmp_path)
+    # A root a delegated descendant promoted: binding authority only, a full contract of its own.
+    ctx.task_metadata["presence_binding_authority"] = {"binding_id": "b" * 32}
+    ceiling = presence_ceiling_payload(_ceiling())
+    ctx.task_contract = {"objective": "Compile the full audit", "context": "old audit ids 1-9",
+                         "expected_output": "Nine figures", "acceptance_claims": ["Q1 is closed"],
+                         "success_criteria": ["All nine figures reviewed"],
+                         "allowed_resources": {"network": True}, "capability_ceiling": ceiling}
+
+    assert _followup(ctx, objective="Revisit the Q2 figures", context="Q2 closes Friday").startswith(
+        "FOLLOWUP_SCHEDULED")
+    assert _followup(ctx, objective="Check the Q3 draft").startswith("FOLLOWUP_SCHEDULED")
+
+    records = queue.list_scheduled_tasks(tmp_path / "data")["tasks"]
+    scheduled = {row["task_contract"]["objective"]: row for row in map(queue._task_from_schedule, records)}
+    assert set(scheduled) == {"Revisit the Q2 figures", "Check the Q3 draft"}
+    assert scheduled["Revisit the Q2 figures"]["task_contract"]["context"] == "Q2 closes Friday"
+    assert scheduled["Check the Q3 draft"]["task_contract"]["context"] == ""  # no inherited context
+    for task in scheduled.values():
+        assert task["task_contract"]["expected_output"] == ""
+        assert task["task_contract"]["acceptance_claims"] == []
+        assert task["task_contract"]["success_criteria"] == []
+        assert task["metadata"]["presence_binding_authority"] == {"binding_id": "b" * 32}
+        assert task["task_contract"]["capability_ceiling"] == ceiling
+        assert task["task_contract"]["allowed_resources"] == {"network": True}
 
 
 def test_schedule_followup_requires_exactly_one_valid_trigger(tmp_path):

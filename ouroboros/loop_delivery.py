@@ -246,6 +246,8 @@ def apply_delivery_subject_decision(
     revision, fingerprint = _loop()._delivery_evidence_state(tools, ctx, llm_trace)
     candidate = getattr(tools._ctx, "_delivery_candidate", None)
     if isinstance(candidate, DeliveryCandidate):
+        if not fingerprint:
+            _loop()._supersede_delivery_acceptance_binding(tools, llm_trace, candidate, reason="delivery_subject_unverifiable")
         candidate.effective_criteria = tools._ctx._delivery_effective_criteria
         candidate.material_tool_indices = tools._ctx._delivery_material_tool_indices
         candidate.owner_source_sha256 = source
@@ -259,9 +261,14 @@ def apply_delivery_subject_decision(
 
 def delivery_evidence_fingerprint(
     tool_ctx: Any, llm_trace: Dict[str, Any], *, task_id: str = "",
-    status_root: Any = None, root_task_id: str = "",
+    status_root: Any = None, root_task_id: str = "", effective_criteria: Any = None,
 ) -> str:
-    """Fingerprint only evidence that can invalidate a complete answer."""
+    """Fingerprint only evidence that can invalidate a complete answer.
+
+    ``effective_criteria`` permits an explicit criteria projection. Local
+    preparation uses its separate content identity, never this paid subject's
+    tool history or indices.
+    """
 
     from ouroboros.outcomes import read_context_verification_receipts
     from ouroboros.tools.join_ledger import _child_result_sha256
@@ -283,7 +290,8 @@ def delivery_evidence_fingerprint(
     ]
     receipt_root = getattr(tool_ctx, "drive_root", None) or status_root
     evidence = {
-        "effective_criteria": _effective_delivery_criteria(tool_ctx),
+        "effective_criteria": (effective_criteria if effective_criteria is not None
+                               else _effective_delivery_criteria(tool_ctx)),
         "material_tool_results": [
             {"index": index, **{key: call.get(key) for key in (
                 "tool", "args", "status", "is_error", "result", "result_ref", "artifact_registered",
@@ -322,31 +330,39 @@ def delivery_evidence_fingerprint(
         default=str,
     ).encode("utf-8")).hexdigest()
 
+def observed_delivery_evidence(tool_ctx: Any, llm_trace: Dict[str, Any], **bounds: Any) -> str:
+    """The ONE fallible evidence read, typed: an uncomputable fingerprint is
+    UNKNOWN (``""``), never an exception after an answer exists and never
+    currency; the host pass, reading the subject itself, accounts the incident."""
+    try:
+        return delivery_evidence_fingerprint(tool_ctx, llm_trace, **bounds)
+    except Exception:
+        log.debug("delivery evidence fingerprint unavailable; typed unknown", exc_info=True)
+        return ""
 
-def _delivery_evidence_state(
-    tools: ToolRegistry,
-    ctx: _RoundLimitContext,
-    llm_trace: Dict[str, Any],
-) -> tuple[int, str]:
-    """Track the shared answer-invalidating evidence fingerprint."""
-    fingerprint = delivery_evidence_fingerprint(
+def _delivery_evidence_state(tools: ToolRegistry, ctx: _RoundLimitContext, llm_trace: Dict[str, Any]) -> tuple[int, str]:
+    """Track the shared answer-invalidating evidence fingerprint (every retention,
+    nomination, post-tool, control, publication and delivery path). UNKNOWN (#1224)
+    bumps no revision, keeps the last KNOWN fingerprint and supersedes no binding —
+    missing evidence is not a change; a KNOWN candidate compared against it is
+    re-retained explicitly by its caller, its unverifiable approval superseded."""
+    retained = _preparation_choice_candidate(tools._ctx, llm_trace)
+    if retained is not None:
+        # Retention only, never a new evidence identity or a paid binding. The
+        # published projection below explicitly states that freshness is unknown.
+        return retained.evidence_revision, retained.evidence_fingerprint
+    revision = int(getattr(tools._ctx, "_delivery_evidence_revision", 0) or 0)
+    fingerprint = observed_delivery_evidence(
         tools._ctx, llm_trace, task_id=ctx.task_id, root_task_id=ctx.root_task_id,
         status_root=ctx.status_drive_root or ctx.drive_root or pathlib.Path(ctx.drive_logs).parent,
     )
-    previous = str(getattr(tools._ctx, "_delivery_evidence_fingerprint", "") or "")
-    revision = int(getattr(tools._ctx, "_delivery_evidence_revision", 0) or 0)
-    if fingerprint != previous:
+    if not fingerprint:
+        return revision, ""
+    if fingerprint != str(getattr(tools._ctx, "_delivery_evidence_fingerprint", "") or ""):
         candidate = getattr(tools._ctx, "_delivery_candidate", None)
-        if (
-            isinstance(candidate, _loop().DeliveryCandidate)
-            and bool(candidate.evidence_fingerprint)
-            and candidate.evidence_fingerprint != fingerprint
-        ):
+        if isinstance(candidate, _loop().DeliveryCandidate) and candidate.evidence_fingerprint not in {"", fingerprint}:
             _loop()._supersede_delivery_acceptance_binding(
-                tools,
-                llm_trace,
-                candidate,
-                reason="delivery_evidence_changed_after_host_acceptance",
+                tools, llm_trace, candidate, reason="delivery_evidence_changed_after_host_acceptance",
             )
         revision += 1
         tools._ctx._delivery_evidence_fingerprint = fingerprint
@@ -381,6 +397,8 @@ def _delivery_acceptance_binding(
     """Refresh a candidate from one exact, complete, active host-root verdict."""
 
     binding = _unaccepted_delivery_binding(tools, candidate_hash)
+    if _preparation_choice_candidate(tools._ctx, llm_trace) is not None:
+        return binding
     review_decision = llm_trace.get("review_decision") if isinstance(llm_trace.get("review_decision"), dict) else {}
     expected_panel = str(review_decision.get("panel_id") or "")
     expected_binding = str(review_decision.get("binding_hash") or "")
@@ -425,6 +443,18 @@ def _delivery_acceptance_binding(
     return binding
 
 
+def _preparation_choice_candidate(tool_ctx: Any, llm_trace: Dict[str, Any]) -> Optional[DeliveryCandidate]:
+    from ouroboros.acceptance_preparation import preparation_delivery_choice
+
+    candidate = getattr(tool_ctx, "_delivery_candidate", None)
+    if (not isinstance(candidate, DeliveryCandidate)
+            or candidate.finalization_control in _DELIVERY_HOLD_CONTROLS
+            or candidate.finalization_control == "owner_revision_required"
+            or _loop()._delivery_replace_required(candidate)):
+        return None
+    return candidate if preparation_delivery_choice(tool_ctx, llm_trace) else None
+
+
 def _publish_delivery_candidate(
     tools: ToolRegistry,
     candidate: DeliveryCandidate,
@@ -434,12 +464,19 @@ def _publish_delivery_candidate(
     from ouroboros.observability import redact_projection
 
     current_fp = str(getattr(tools._ctx, "_delivery_evidence_fingerprint", "") or "")
+    local_choice = _preparation_choice_candidate(tools._ctx, llm_trace) is candidate
+    subject = ""  # empty for an informed local choice, unknown evidence, or a subject the host could not compute
+    if not local_choice and candidate.evidence_fingerprint:
+        try:
+            subject = delivery_subject_hash(tools._ctx, llm_trace, candidate.full_text)
+        except Exception:  # the host's own subject computation failed: published as unavailable, never as approved
+            log.debug("delivery subject unavailable for the retained answer", exc_info=True)
     llm_trace["delivery_candidate"] = {
         "content_sha256": candidate.content_sha256,
         "revision": candidate.revision,
         "evidence_revision": candidate.evidence_revision,
         "evidence_fingerprint": candidate.evidence_fingerprint,
-        "evidence_current": candidate.evidence_fingerprint == current_fp,
+        "evidence_current": bool(subject) and candidate.evidence_fingerprint == current_fp,
         "acceptance_binding": dict(candidate.acceptance_binding),
         "finalization_control": candidate.finalization_control,
         "control_episode_seen": candidate.control_episode_seen,
@@ -449,7 +486,8 @@ def _publish_delivery_candidate(
         "material_tool_indices": list(candidate.material_tool_indices),
         "owner_source_sha256": candidate.owner_source_sha256,
         "owner_source_current": not _loop()._task_acceptance_owner_generation_changed(tools._ctx),
-        "subject_sha256": delivery_subject_hash(tools._ctx, llm_trace, candidate.full_text),
+        "subject_sha256": subject,
+        **({} if subject else {"evidence_status": "unavailable_local_preparation"}),
     }
 
 
@@ -467,6 +505,13 @@ def _replace_delivery_candidate(
         full_text if model_text is None else model_text
     )
     previous_candidate = getattr(tools._ctx, "_delivery_candidate", None)
+    retained = _preparation_choice_candidate(tools._ctx, llm_trace)
+    if retained is not None:
+        # An incident-bound finish/stop chooses the retained work, not a fresh
+        # nomination through the very fingerprint whose preparation failed.
+        tools._ctx._delivery_control_required = False
+        _loop()._publish_delivery_candidate(tools, retained, llm_trace)
+        return retained
     from ouroboros.loop_acceptance import acknowledge_acceptance_observation
     from ouroboros.loop_messages import owner_source_sha256
 
@@ -477,15 +522,14 @@ def _replace_delivery_candidate(
         tools._ctx._delivery_effective_criteria = json.loads(json.dumps(
             _effective_delivery_criteria(tools._ctx), ensure_ascii=False, default=str,
         ))
-    if (
-        isinstance(previous_candidate, _loop().DeliveryCandidate)
-        and previous_candidate.full_text == full_text
-        and _loop()._current_delivery_candidate(ctx, llm_trace) is previous_candidate
-    ):
+    if (isinstance(previous_candidate, _loop().DeliveryCandidate) and previous_candidate.full_text == full_text
+            # An unchanged repeat under the same (known or UNKNOWN) evidence stays that candidate.
+            and _loop()._current_delivery_candidate(ctx, llm_trace) is previous_candidate):
         previous_candidate.finalization_control = control
         tools._ctx._delivery_control_required = False
         _loop()._publish_delivery_candidate(tools, previous_candidate, llm_trace)
         return previous_candidate
+    # Retention never waits on the evidence read (#1224): unknown evidence keeps the answer.
     evidence_revision, evidence_fingerprint = _loop()._delivery_evidence_state(tools, ctx, llm_trace)
     if isinstance(previous_candidate, _loop().DeliveryCandidate):
         _loop()._supersede_delivery_acceptance_binding(
@@ -580,6 +624,8 @@ def _current_delivery_candidate(
     if _loop()._task_acceptance_owner_generation_changed(ctx.tools._ctx):
         return None
     if candidate.acceptance_binding.get("authoritative") is True:
+        if not candidate.evidence_fingerprint:
+            return None  # Unknown equality cannot validate a prior approval.
         current_binding = _delivery_acceptance_binding(ctx.tools, llm_trace, candidate.content_sha256)
         if not current_binding.get("authoritative") or any(
             current_binding.get(key) != candidate.acceptance_binding.get(key)
@@ -641,9 +687,10 @@ def _merge_finalization_trace(
 def _delivery_control_prompt(candidate: DeliveryCandidate, *, keep_allowed: bool,
                              pending_review_choice: bool = False) -> str:
     keep_line = (
-        "keep is allowed because no answer-invalidating evidence changed."
-        if keep_allowed
-        else "keep is NOT allowed because owner/tool/child/verification evidence changed."
+        "keep is NOT allowed because owner/tool/child/verification evidence changed or can no longer be verified."
+        if not keep_allowed else "keep is allowed because no answer-invalidating evidence changed."
+        if candidate.evidence_fingerprint else
+        "keep is allowed: it restates an answer retained over evidence the host could not read; no verified subject is claimed."
     )
     return (
         f"{_DELIVERY_CONTROL_MARKER}\n"
@@ -701,6 +748,8 @@ def _arm_delivery_control(
     candidate = getattr(tools._ctx, "_delivery_candidate", None)
     if not isinstance(candidate, _loop().DeliveryCandidate):
         return
+    if _preparation_choice_candidate(tools._ctx, llm_trace) is candidate:
+        return  # No new freshness claim/control round for an informed local finish/stop.
     if control == "acceptance_feedback" and (
         candidate.finalization_control in _DELIVERY_HOLD_CONTROLS
         or candidate.finalization_control == "owner_revision_required"
@@ -818,9 +867,9 @@ def _parse_delivery_control_object(
 def _classify_parsed_delivery_control(
     parsed: Optional[Dict[str, Any]],
     duplicate_protocol_key: bool,
-    embedded: bool,
+    embedded: bool, *, envelope_keys: Tuple[str, ...] = (),
 ) -> Tuple[str, str, str]:
-    """Return ``(kind, replacement, error)`` for a parsed control body."""
+    """Return ``(kind, replacement, error)``; ``envelope_keys`` are members an armed caller reads itself."""
 
     exact_error = "control must be one exact JSON object"
     if embedded:
@@ -841,7 +890,7 @@ def _classify_parsed_delivery_control(
     selected = str(parsed.get("delivery_control") or "")
     if "pending_review" in parsed and str(parsed.get("pending_review") or "").strip().lower() not in {"wait", "finish"}:
         return "invalid", "", 'pending_review must be "wait" or "finish"'
-    keys = set(parsed) - {"acceptance_subject", "pending_review"}
+    keys = set(parsed) - {"acceptance_subject", "pending_review", *envelope_keys}
     if selected == "keep" and keys == {"delivery_control"}:
         return "keep", "", ""
     if selected == "replace" and keys == {"delivery_control", "full_answer"}:
@@ -856,7 +905,7 @@ def _resolve_forced_delivery_control_body(
     raw: str,
     candidate: Optional[DeliveryCandidate],
     *,
-    armed: bool,
+    armed: bool, envelope_keys: Tuple[str, ...] = (),  # members the armed caller reads itself
 ) -> Tuple[str, bool, bool, bool, bool]:
     """Return text plus retained/degraded/consumed/replaced facts."""
 
@@ -864,7 +913,7 @@ def _resolve_forced_delivery_control_body(
         candidate = None
     parsed, duplicate_protocol_key, embedded_protocol = _parse_delivery_control_body(raw)
     control_kind, replacement, _error = _classify_parsed_delivery_control(
-        parsed, duplicate_protocol_key, embedded_protocol,
+        parsed, duplicate_protocol_key, embedded_protocol, envelope_keys=envelope_keys,
     )
     historical = bool(
         not armed
@@ -886,6 +935,7 @@ def _resolve_forced_delivery_control_body(
         control_kind != "none"
         or (parsed is None and strip_protocol_fence(raw).startswith("{"))
         or bool(getattr(parsed, "has_duplicate_keys", False))
+        or bool(envelope_keys and isinstance(parsed, dict) and set(parsed).intersection(envelope_keys))
     )
     if not protocol_intent:
         # Ordinary prose under an armed latch stands (a control object quoted
@@ -1376,9 +1426,8 @@ def _no_tool_final_answer(
             _loop()._merge_finalization_trace(llm_trace, forced_trace)
             return text, usage, llm_trace
     _loop()._project_child_result_dispositions(limit_ctx, llm_trace)
-    evidence_revision, evidence_fingerprint = _loop()._delivery_evidence_state(
-        tools, limit_ctx, llm_trace,
-    )
+    # UNKNOWN evidence delivers a candidate retained over it as published; a KNOWN candidate is re-retained below.
+    evidence_revision, evidence_fingerprint = _loop()._delivery_evidence_state(tools, limit_ctx, llm_trace)
     candidate = getattr(tools._ctx, "_delivery_candidate", None)
     if (
         isinstance(candidate, _loop().DeliveryCandidate)
@@ -1423,6 +1472,8 @@ def _no_tool_final_answer(
             messages.append({"role": "assistant", "content": candidate.full_text})
         llm_trace["reasoning_notes"].append(
             "Delivery evidence changed after host acceptance; a complete replacement answer is required."
+            if evidence_fingerprint else
+            "Delivery evidence can no longer be verified; the complete answer must be restated and is retained over unknown evidence."
         )
         _loop()._arm_delivery_control(tools, limit_ctx, llm_trace)
         return None

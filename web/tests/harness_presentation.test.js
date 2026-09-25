@@ -9,9 +9,12 @@ import { createLoginCardController, loginCardHtml } from '../modules/harness_log
 import {
     GENERIC_HARNESS_MARK,
     HARNESS_MARKS,
+    META_PART_SEPARATOR,
+    executorIdentityMarkup,
     harnessAccountIdentityMarkup,
     harnessIdentityMarkup,
     harnessPresentation,
+    joinMetaParts,
 } from '../modules/harness_presentation.js';
 import {
     ROUTE_KIND_AGENT_SESSION,
@@ -294,4 +297,34 @@ test('Chat, Logs, onboarding, and reviewer lanes consume the same mark owner', (
     assert.match(events, /harnessPresentation/);
     assert.doesNotMatch(events, /HARNESS_CHIP_(?:ICON|NAME)/);
     assert.doesNotMatch(events, /['"](?:◇|✳|▸|◆)['"]/);
+});
+
+test('#516 the card meta line separates its parts with real text, not a CSS gap', () => {
+    const chip = { harness: 'claudexor', label: 'Claudexor', title: 'route', observedModels: ['opus'] };
+    const markup = executorIdentityMarkup(chip, { agentModel: 'sonnet' });
+    // Chip, coordinator model and observed models are three parts of one line,
+    // and every boundary between them carries the separator itself — a copied
+    // line and a screen reader get it, which a flex gap never provided.
+    assert.equal([...markup.matchAll(/ · /g)].length, 2);
+    assert.match(markup, /<\/span> · <span class="chat-live-meta-text">Coordinator: sonnet<\/span> · /);
+    // A missing part takes its separator with it: no leading or doubled dots.
+    assert.equal(executorIdentityMarkup(null, { agentModel: 'sonnet' }),
+        '<span class="chat-live-meta-text">Agent model: sonnet</span>');
+    assert.equal(executorIdentityMarkup(null, {}), '');
+    assert.equal(joinMetaParts(['a', '', 'b']), `a${META_PART_SEPARATOR}b`);
+    assert.equal(META_PART_SEPARATOR, ' · ');
+
+    // The renderer joins the executor block with the rest through that same rule,
+    // instead of concatenating it onto the first fact.
+    const activitySource = readFileSync(new URL('../modules/chat_activity.js', import.meta.url), 'utf8');
+    const renderer = activitySource.slice(
+        activitySource.indexOf('export function renderLiveCardMeta'),
+        activitySource.indexOf('export function ownLiveActionsEl'),
+    );
+    assert.match(renderer, /joinMetaParts\(\[\s*executorIdentityMarkup\(/);
+    assert.doesNotMatch(renderer, /\.join\(' · '\)/);
+    // The visual-only spacing that stood in for the separator is gone.
+    const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+    const chipRule = css.slice(css.indexOf('.chat-live-executor-chip {'), css.indexOf('.chat-live-executor-chip {') + 400);
+    assert.doesNotMatch(chipRule, /margin-right/);
 });

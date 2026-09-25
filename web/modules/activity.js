@@ -66,8 +66,13 @@ export function initActivity({ mount, ws } = {}) {
             ((queue && queue.budget_root_fences) || [])
                 .filter((f) => f && ['active', 'paused'].includes(String(f.status || '')))
                 .map((f) => String(f.root_task_id || '')));
+        // #1196: a row whose root fence was lifted keeps a durable HOLD instead —
+        // nothing dispatches it until an explicit selection is recorded, so
+        // showing it as plain "queued" would promise work that cannot start.
+        const heldRow = (t) => Boolean(t && t._budget_pause_hold && !t._budget_pause_hold.selected);
         const rowBudgetPaused = (q, t, kind) => kind === 'pending' && Boolean(
             (t && t._budget_pause)
+            || heldRow(t)
             || fencedRoots.has(String((t && (t.root_task_id || t.id)) || q.id || '')));
         const row = (q, kind) => {
             const t = (q && q.task) || {};

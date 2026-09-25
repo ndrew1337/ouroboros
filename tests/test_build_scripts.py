@@ -233,8 +233,10 @@ def test_compileall_env_neutralization_actually_seals_bytecode(tmp_path):
         pkg.mkdir()
         (pkg / "mod.py").write_text("x = 1\n", encoding="utf-8")
         env = dict(os.environ)
-        env.pop("PYTHONDONTWRITEBYTECODE", None)
-        env.pop("PYTHONPYCACHEPREFIX", None)
+        # Explicit empty values disable the controls; a scrubbed child otherwise
+        # receives the test suite's safe cache defaults again.
+        env["PYTHONDONTWRITEBYTECODE"] = ""
+        env["PYTHONPYCACHEPREFIX"] = ""
         env.update(extra_env)
         subprocess.run(
             [sys.executable, "-m", "compileall", "-q", "-f",
@@ -509,6 +511,38 @@ class TestBuildWindowsPs1:
 # Dockerfile  (Docker / web runtime)
 # ---------------------------------------------------------------------------
 
+class TestDockerignore:
+    """The root .dockerignore owns the build context of Dockerfile's COPY . .
+
+    Both halves matter: private local state must stay out of image layers,
+    and the paths CI needs inside the image (Git history, tests, sources)
+    must stay in."""
+
+    def _patterns(self):
+        lines = _read(".dockerignore").splitlines()
+        return {ln.strip() for ln in lines if ln.strip() and not ln.lstrip().startswith("#")}
+
+    def test_private_state_is_excluded(self):
+        patterns = self._patterns()
+        required = {
+            "**/.env", "**/.env.*", "**/*.key", "**/*.pem",
+            ".venv/", "venv/", "env/", "/data/",
+            "/.review-drive/", "/.claudexor/", "/.adversarial-review/",
+        }
+        missing = sorted(required - patterns)
+        assert not missing, f".dockerignore must exclude private local state: {missing}"
+
+    def test_ci_needed_paths_stay_in_context(self):
+        patterns = self._patterns()
+        for kept in (".git", "tests", "ouroboros", "web", "prompts", "docs",
+                     "supervisor", "pyproject.toml", "uv.lock", "server.py"):
+            for spelling in (kept, kept + "/", "/" + kept, "/" + kept + "/", "**/" + kept):
+                assert spelling not in patterns, (
+                    f".dockerignore must not exclude {kept}: CI runs pytest inside the image"
+                )
+        assert "*" not in patterns and "**" not in patterns
+
+
 class TestDockerfile:
     """Dockerfile must install Playwright Chromium/WebKit binaries so browser tools work
     out of the box in the container without additional setup."""
@@ -756,7 +790,11 @@ class TestMacOSSigning:
         )
         for job in ("marker-guards", "ui-smoke", "docker-ui-smoke", "docker-portable-test", "skill-smoke"):
             assert job in needs_line, f"release job must wait for {job}"
-        assert "OUROBOROS_EXPECT_BROWSER_ENGINES: chromium,webkit" in src
+        # Host browser-tool coverage lives in the shared lane both triggers call;
+        # the Docker lane keeps its own container spelling here.
+        shared = _read(".github/workflows/ui-browser.yml")
+        assert "OUROBOROS_EXPECT_BROWSER_ENGINES: chromium,webkit" in shared
+        assert "tests/test_browser_tools_smoke.py -m browser" in shared
         assert "Run Docker browser tools Chromium/WebKit smoke" in src
         assert "tests/test_browser_tools_smoke.py -m browser" in src
         assert "-e OUROBOROS_EXPECT_BROWSER_ENGINES=chromium,webkit" in src
@@ -1091,6 +1129,14 @@ def test_build_sh_supports_unsigned_macos_release():
 # ----- CI release workflow checks (from test_release_workflow.py) -----
 
 
+def _ui_browser_jobs() -> dict:
+    """The shared browser lane ci.yml and ui-browser-push.yml both call."""
+    import yaml
+
+    return yaml.safe_load(
+        (_REPO_PATH / ".github/workflows/ui-browser.yml").read_text(encoding="utf-8"))["jobs"]
+
+
 def _ci_workflow() -> str:
     return (_REPO_PATH / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 
@@ -1126,13 +1172,15 @@ def test_ci_collects_independent_failures_without_relaxing_release_gates():
 def test_ci_setup_aware_failure_collection_guards_each_independent_lane():
     import yaml
     jobs = yaml.safe_load(_ci_workflow())["jobs"]
-    for job_name in ("quick-test", "full-test", "marker-guards", "ui-smoke", "docker-ui-smoke", "system-e2e-mock", "android-test"):
+    for job_name in ("quick-test", "full-test", "marker-guards", "docker-ui-smoke", "system-e2e-mock", "android-test"):
         steps = jobs[job_name]["steps"]
         assert any("!cancelled()" in str(step.get("if", "")) for step in steps if "run" in step), job_name
-    ui = {step.get("name"): step for step in jobs["ui-smoke"]["steps"]}
-    assert "github.event_name == 'pull_request'" in ui["Run Publish admission browser proof"]["if"]
-    assert "github.event_name != 'pull_request'" in ui["Run host UI smoke"]["if"]
-    assert "github.event_name != 'pull_request'" in ui["Run browser tools Chromium/WebKit smoke"]["if"]
+    ui = {step.get("name"): step for step in _ui_browser_jobs()["ui-smoke"]["steps"]}
+    host = ui["Run complete host UI lane with collection and availability guards"]
+    assert "github.event_name" not in host["if"]
+    assert "--require-ui-browser" in host["run"]
+    assert "workflow_dispatch" in ui["Run browser tools Chromium/WebKit smoke"]["if"]
+    assert "refs/tags/v" in ui["Run browser tools Chromium/WebKit smoke"]["if"]
 
 
 def test_ci_release_prerequisite_shell_gate_truth_table():
@@ -1166,11 +1214,14 @@ def test_ci_failure_collection_guards_every_independent_step_and_rerun_uploads()
         "quick-test": ["Verify generated Pages output", "Lint (deterministic F-rule gate — catches the NameError-under-except class)", "Run browser-module tests (node --test — mirrored by the hermetic commit gate)", "Lint browser modules (ESLint no-undef — CI-only second layer of the acorn gate)", "Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
         "full-test": ["Run browser-module tests (node --test — mirrored by the hermetic commit gate)", "Lint browser modules (ESLint no-undef — CI-only second layer of the acorn gate)", "Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
         "marker-guards": ["Guard non-empty browser marker lanes", "Guard non-empty serial marker lane", "Guard non-empty skill_smoke marker lane", "Guard non-empty size_ratchet marker lane"],
-        "ui-smoke": ["Install UI smoke Chromium", "Install full UI smoke WebKit", "Run Publish admission browser proof", "Run host UI smoke", "Run browser tools Chromium/WebKit smoke"],
         "docker-ui-smoke": ["Install UI smoke browser binaries", "Run Docker UI smoke", "Run Docker browser tools Chromium/WebKit smoke"],
         "system-e2e-mock": ["Run the keyless system E2E scenario lane (real isolated servers)", "Run the cancellation E-suite mock lane"],
         "android-test": ["Run Android source and release contract tests", "Compile and verify explicitly test-signed Android host"],
     }
+    expected["ui-smoke"] = ["Install UI smoke Chromium and WebKit",
+                           "Run complete host UI lane with collection and availability guards",
+                           "Run browser tools Chromium/WebKit smoke"]
+    jobs = {**jobs, "ui-smoke": _ui_browser_jobs()["ui-smoke"]}
     for job, names in expected.items():
         steps = {step.get("name"): step for step in jobs[job]["steps"]}
         for name in names:
@@ -1199,6 +1250,27 @@ def test_ci_branch_filters_include_packaging_assets():
 
     assert "- 'packaging/**'" in workflow
     assert "- 'devtools/**'" in workflow
+
+
+def test_only_the_browser_push_workflow_drops_the_path_filter():
+    import yaml
+
+    # The shared workflow keeps ci.yml's filter for every other job; the browser
+    # lane alone must also see a Makefile-, spec- or requirements-only push.
+    ci_push = yaml.safe_load(_ci_workflow()).get("on", None)
+    ci_push = (ci_push or yaml.safe_load(_ci_workflow())[True])["push"]
+    assert ci_push["paths"] and "Makefile" not in str(ci_push["paths"])
+
+    push = yaml.safe_load((_REPO_PATH / ".github/workflows/ui-browser-push.yml").read_text(encoding="utf-8"))
+    trigger = push.get("on", push.get(True))
+    assert list(trigger) == ["push"], "the push lane adds no schedule and no new cron"
+    assert trigger["push"]["branches"] == ["ouroboros"]
+    assert "paths" not in trigger["push"] and "paths-ignore" not in trigger["push"]
+    assert push["jobs"]["ui-smoke"]["uses"] == "./.github/workflows/ui-browser.yml"
+
+    shared = yaml.safe_load((_REPO_PATH / ".github/workflows/ui-browser.yml").read_text(encoding="utf-8"))
+    assert list(shared.get("on", shared.get(True))) == ["workflow_call"]
+    assert "secrets" not in str(shared["jobs"]["ui-smoke"])
 
 
 def test_ci_release_prerelease_flag_uses_preflight_output():

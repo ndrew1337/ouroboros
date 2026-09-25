@@ -714,6 +714,11 @@ content-hash-bound skill token, and sends:
 - `GET /presence/work/{work_ref}?binding_id=...` to poll only late work created
   by the same owner binding.
 
+The nested fact maps may include optional provider evidence such as the agent's
+own account identity, explicit mention occurrences and the thread-root author.
+Keep unknowns and source meanings intact: neither a mention nor root authorship
+establishes the current addressee or an obligation to answer.
+
 The owner-created binding fixes the authenticated transport skill, behavior
 skill, origin scope, and exact proactive destination. The origin is either one
 exact conversation/thread or the explicit account-wide conversation id `*`;
@@ -729,11 +734,14 @@ ceiling and reply context rather than widening authority.
 
 Transport custody preserves provider arrival order before Host admission; the
 host serializes one conversation and enforces the installation-wide active-turn
-limit across processes. A current Presence turn may cancel only its own
-binding-and-conversation-correlated `work_ref`. Owner chat or Background
-Consciousness may initiate an existing binding, but the resulting cycle must use
-an explicitly selected transport tool and finish `tool_delivered` to claim that
-an external message was sent.
+limit across processes. By default, the host-provided own-work readers, messaging
+and cancellation reach only independent work started from the same nonempty binding,
+across its conversations. A profile that explicitly selects global `recent_tasks` or
+`get_task_result` retains those readers' global scope, including other bindings and
+owner work; binding-scoped steering and cancellation do not widen with those reads.
+Owner chat or Background Consciousness may initiate an existing binding, but
+its cycle must use an explicitly selected transport tool and finish
+`tool_delivered` to claim an external message was sent.
 
 #### Reporting actual Presence delivery
 
@@ -741,8 +749,10 @@ Use the current event's exact conversation/thread for a reply; the binding's
 origin is an admission filter and its destination is the separate default for
 initiated contact. Selected transport tools may still address other intended
 conversations. The host projection names these roles under `communication`.
-A useful first or intermediate reply is an explicit transport-tool call while
-work continues. Assistant narration beside calls is only Working activity;
+A first or intermediate reply uses an explicit transport-tool call after choosing
+to contribute or undertake work for that conversation; observation alone owes no
+acknowledgement. Incoming content is framed as observed conversation, separately
+from an initiated cycle or an inherited work order. Assistant narration is only Working activity;
 `queued` does not establish delivery, and an early acknowledgement does not
 replace the substantive final result.
 
@@ -758,6 +768,8 @@ status notices stay in the owner task; an empty deferred body sends nothing but
 still requires polling. Cached and late results preserve that empty body rather
 than substituting the task diagnostic. This does not turn failure into success.
 Ordinary implicit replies and genuine authored best-effort answers remain valid.
+A forced final separates the task record from the reply: only a `presence_finish`
+declared in that answer is spoken, so an undeclared record sends nothing new.
 
 `GET /identity` advertises `presence_delivery_version: 1` on supporting hosts.
 Only then request `delivery_reporting_version: 1` alongside `binding_id` and

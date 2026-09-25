@@ -84,6 +84,10 @@ def handle_owner_wait(event: dict, ctx: Any) -> None:
         try:
             wait = set_owner_wait(ctx.DRIVE_ROOT, task_id, wait)
             meta["owner_wait"] = wait
+            # A spent exact-budget carrier still on this row is retired by the
+            # revocation seam's ``_owner_wait_resume`` branch when the restart
+            # reads the durable grant as consumed (#1196, F3); it decides nothing
+            # while the task stays RUNNING here.
             worker.active_capacity = False
             if not queue.persist_queue_snapshot(reason="owner_wait_parked"):
                 raise RuntimeError("owner wait queue snapshot was not persisted")
@@ -120,13 +124,6 @@ def _resume_allowed(task_id: str, meta: dict, worker: Any) -> bool:
         log.warning("Owner wait cannot read cancellation authority for %s", task_id, exc_info=True)
         return False
     return (not intent or intent.get("stop_policy") == "finalize_then_cancel") and _pool().repo_writer_task_allowed(meta["task"])
-
-
-def _announce_wait_ended(task_id: str, quiz_id: str, chat_id: int) -> None:
-    """The bound closed and the pooled task resumed: one seam with the direct lane."""
-    from ouroboros.owner_wait import announce_wait_ended
-
-    announce_wait_ended(_pool().DRIVE_ROOT, task_id, quiz_id, chat_id)
 
 
 def _grant_resume(
@@ -174,7 +171,11 @@ def _grant_resume(
             raise
         meta.pop("owner_wait_resume_requested", None)
         if str(resumed.get("resume_reason") or "") == "timeout" and str(resumed.get("quiz_id") or ""):
-            _announce_wait_ended(task_id, str(resumed["quiz_id"]), int((meta.get("task") or {}).get("chat_id") or 0))
+            # The bound closed and the pooled task resumed: one seam with the direct lane.
+            from ouroboros.owner_wait import announce_wait_ended
+
+            announce_wait_ended(_pool().DRIVE_ROOT, task_id, str(resumed["quiz_id"]),
+                                int((meta.get("task") or {}).get("chat_id") or 0))
         # A mailbox wake is the start of useful model work, not a new attempt.
         meta["last_progress_at"] = _pool().time.time()
         return True

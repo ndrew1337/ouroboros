@@ -224,7 +224,7 @@ def test_root_budget_fence_is_one_durable_marker_without_subtree_reclassificatio
     assert workers.PENDING[0]["id"] == pending["id"]
 
 
-def test_root_budget_resume_checks_one_task_and_clears_marker(tmp_path, monkeypatch):
+def test_root_budget_resume_selects_one_task_and_keeps_tree_marker(tmp_path, monkeypatch):
     queue, _state, workers = _install_queue(tmp_path, monkeypatch)
     fence_id = "root-fence-id"
     queue.BUDGET_ROOT_FENCES["safe-root"] = {
@@ -243,12 +243,12 @@ def test_root_budget_resume_checks_one_task_and_clears_marker(tmp_path, monkeypa
 
     result = queue.resume_budget_paused_task("safe-child")
 
-    assert result == {"ok": True, "task_id": "safe-child", "same_generation": True}
-    assert "safe-root" not in queue.BUDGET_ROOT_FENCES
-    assert workers.PENDING[0]["budget_resumed_at"]
+    assert result["ok"] and result["task_id"] == "safe-child" and result["same_generation"]
+    assert "safe-root" in queue.BUDGET_ROOT_FENCES
+    assert workers.PENDING[0]["_budget_pause_hold"]["selected"]
 
 
-def test_root_budget_resume_refuses_unsafe_pending_sibling(tmp_path, monkeypatch):
+def test_root_budget_selection_leaves_unsafe_pending_sibling_held(tmp_path, monkeypatch):
     queue, _state, workers = _install_queue(tmp_path, monkeypatch)
     fence_id = "root-fence-id"
     queue.BUDGET_ROOT_FENCES["mixed-root"] = {
@@ -269,11 +269,7 @@ def test_root_budget_resume_refuses_unsafe_pending_sibling(tmp_path, monkeypatch
 
     result = queue.resume_budget_paused_task("safe-child")
 
-    assert result == {
-        "ok": False,
-        "error": "root_replay_unsafe",
-        "unsafe_task_ids": ["retry-child"],
-        "action": "cancel_or_new_run",
-    }
+    assert result["ok"] and result["task_id"] == "safe-child"
     assert "mixed-root" in queue.BUDGET_ROOT_FENCES
-    assert "budget_resumed_at" not in safe
+    assert safe["_budget_pause_hold"]["selected"]
+    assert queue.resume_budget_paused_task("retry-child")["error"] == "replay_unsafe"

@@ -464,6 +464,37 @@ export function joinMarkdownHeadings(text) {
     }).join('\n');
 }
 
+/**
+ * One plain-text projection of RECORDED free text before it joins a host cause
+ * cancellation clause. The Python twin is
+ * `ouroboros.utils.strip_markdown` followed by a whitespace split/join, and the
+ * two strip the SAME marker inventory so one stored cause reads the same in the
+ * browser card and in the host's durable chat row. Line-anchored patterns
+ * (headings, bullets) only match while the newlines are still there, so
+ * stripping precedes flattening — exactly the order the Python docstring names.
+ * The common fixture pins Markdown, empty provenance and sentence punctuation
+ * through both consumers. `max` of 0 keeps the whole text; any other value
+ * bounds it by Unicode characters with an ellipsis.
+ */
+export function plainCauseText(value, max = 160) {
+    const plain = String(value || '')
+        .replace(/```[^\n]*\n([\s\S]*?)```/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\*\*\*(.+?)\*\*\*/g, '$1')
+        .replace(/\*\*(.+?)\*\*/g, '$1')
+        .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, '$1')
+        .replace(/(?<![\p{L}\p{N}_])_(.+?)_(?![\p{L}\p{N}_])/gu, '$1')
+        .replace(/~~(.+?)~~/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/^[*-]\s+/gm, '• ')
+        .replace(/\*\*|__|~~|`/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+    const chars = Array.from(plain);
+    return max > 0 && chars.length > max ? `${chars.slice(0, max - 1).join('').trimEnd()}…` : plain;
+}
+
 export function renderMarkdown(text, { inlineHeadingBreaks = false } = {}) {
     let html = escapeHtmlText(text);
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');

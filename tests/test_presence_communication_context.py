@@ -110,6 +110,10 @@ def test_early_reply_guidance_preserves_profile_topics_and_completion(tmp_path):
     rendered, section = _render(tmp_path, value)
     guidance = rendered["communication"]["speaking_during_work"]
 
+    assert "what your participation adds" in guidance
+    assert "social warmth do not require a mention" in guidance
+    assert "Observation or private consideration may stay silent" in guidance
+    assert "When you undertake long work that calls for a response here" in guidance
     assert "available selected transport send tool" in guidance
     assert "then continue the work" in guidance
     assert "queued is not delivered" in guidance

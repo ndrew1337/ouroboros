@@ -362,6 +362,8 @@ def test_system_prompt_separates_routing_annotation_from_final_reply():
     assert "exactly ONE routing decision" in normalized
     assert "A typed routing annotation is metadata" in normalized
     assert "one self-contained final response" in normalized
+    assert "Requests to me get exactly ONE routing decision" in normalized
+    assert "host-admitted Presence observation may end silently" in normalized
     assert "exactly ONE owner-visible outcome" not in normalized
 
 

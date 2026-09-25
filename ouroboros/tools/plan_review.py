@@ -40,6 +40,7 @@ from ouroboros.config import (
     get_llm_transport_read_timeout_sec,
     get_review_enforcement,
     get_task_abs_ceiling_sec,
+    operation_window_sec,
 )
 from ouroboros.review_cycles import emit_review_cycles_exhausted, review_max_cycles
 from ouroboros.task_results import (
@@ -110,15 +111,15 @@ log = logging.getLogger(__name__)
 # These wrappers are outer settlement bounds, not cognition cutoffs.  Resolve
 # them when the tool is built/used so a settings reload cannot leave an old
 # transport bound baked into an imported module.
-def _plan_review_wrapper_timeout_sec() -> float:
-    return float(get_llm_transport_read_timeout_sec() + get_finalization_grace_sec())
-
 def _plan_task_tool_timeout_sec() -> float:
-    # ``agent_session`` reviewers inherit the task's existing absolute
-    # lifetime, which is deliberately much longer than an API transport read.
-    # The outer ToolEntry must cover either route plus one finalization grace
-    # window; it is a settlement envelope, never a cognition cutoff.
-    return max(_plan_review_wrapper_timeout_sec(), float(get_task_abs_ceiling_sec())) + get_finalization_grace_sec()
+    # ``agent_session`` reviewers inherit the task's operation window (its finite
+    # absolute lifetime, else the operation fallback), which is deliberately much
+    # longer than an API transport read (one read plus one finalization grace). The
+    # outer ToolEntry must cover either route plus one finalization grace window;
+    # it is a settlement envelope, never a cognition cutoff.
+    return (max(float(get_llm_transport_read_timeout_sec() + get_finalization_grace_sec()),
+                operation_window_sec(get_task_abs_ceiling_sec()))
+            + get_finalization_grace_sec())
 
 @dataclass(frozen=True)
 class _PlanRequest:
@@ -301,36 +302,6 @@ def get_tools():
 
 _SPEC_FIELDS = frozenset(_SPEC_SCHEMA["properties"])
 
-def _vacuous(name: str, value: object) -> bool:
-    """Nothing was said in this optional envelope field: absent, blank prose, or the
-    spec's DECLARED keys each holding their schema-default empty value. A non-empty
-    list, an unknown key or a wrong type is meaning and reaches the existing refusal."""
-    if value is None:
-        return True
-    if name == "spec":
-        return (isinstance(value, dict) and set(value) <= _SPEC_FIELDS
-                and all(member in (None, "", []) for member in value.values()))
-    return isinstance(value, str) and not value.strip()
-
-def _vacuous_disposition(value: object) -> bool:
-    """A schema-shaped but empty disposition (models fill optional objects with defaults).
-    An UNKNOWN key or a non-empty items list is never vacuous: refused, not ignored.
-    A default-filled ``author_disposition`` ({"disposition": "accepted", "rationale": ""})
-    beside an EMPTY fingerprint names no wave and answers no finding, so it carries
-    nothing either: without this a model that fills every schema key sent it with
-    its first plan and looped on PLAN_REVIEW_DISPOSITION_MIXED_ENVELOPE (seen live)."""
-    if not isinstance(value, dict) or set(value) - {"review_fingerprint", "items", "author_disposition", "author_action"}:
-        return False
-    if value.get("author_action", "none") != "none":
-        return False
-    author = value.get("author_disposition")
-    author_vacuous = author is None or (
-        isinstance(author, dict) and set(author) <= {"disposition", "rationale"}
-        and not str(author.get("rationale") or "").strip()
-    )
-    return (author_vacuous and not str(value.get("review_fingerprint") or "").strip()
-            and not value.get("items"))
-
 def _typed_refusal(ctx: ToolContext, code: str, text: str) -> str:
     """Publish a refusal the producer ALREADY knows about (D02). The text ABI is
     unchanged; only the registry-visible status stops reading as a successful call."""
@@ -356,8 +327,41 @@ def _handle_plan_task(ctx: ToolContext, **params) -> str:
                 + _argument_values(params["review_disposition"], ("author_action", "author_disposition")))
         raw_disposition.pop("author_action")
     # Effort declares a NEW panel's strength; a recorded wave keeps its frozen roster.
-    envelope_fields = [k for k in ("goal", "plan", "spec") if not _vacuous(k, params.get(k))]
-    if raw_disposition is not None and not _vacuous_disposition(raw_disposition):
+    # An optional envelope field in which nothing was said — absent, blank prose, or
+    # the spec's DECLARED keys each holding their schema-default empty value — is
+    # vacuous; a non-empty list, an unknown key or a wrong type is meaning and
+    # reaches the existing refusal.
+    envelope_fields = []
+    for name in ("goal", "plan", "spec"):
+        value = params.get(name)
+        if value is None:
+            continue
+        if name == "spec":
+            if (isinstance(value, dict) and set(value) <= _SPEC_FIELDS
+                    and all(member in (None, "", []) for member in value.values())):
+                continue
+        elif isinstance(value, str) and not value.strip():
+            continue
+        envelope_fields.append(name)
+    # A schema-shaped but empty disposition (models fill optional objects with
+    # defaults) is vacuous too. An UNKNOWN key or a non-empty items list never is:
+    # refused, not ignored. A default-filled ``author_disposition``
+    # ({"disposition": "accepted", "rationale": ""}) beside an EMPTY fingerprint
+    # names no wave and answers no finding, so it carries nothing either: without
+    # this a model that fills every schema key sent it with its first plan and
+    # looped on PLAN_REVIEW_DISPOSITION_MIXED_ENVELOPE (seen live).
+    disposition_vacuous = False
+    if (isinstance(raw_disposition, dict)
+            and not set(raw_disposition) - {"review_fingerprint", "items", "author_disposition", "author_action"}
+            and raw_disposition.get("author_action", "none") == "none"):
+        author = raw_disposition.get("author_disposition")
+        author_vacuous = author is None or (
+            isinstance(author, dict) and set(author) <= {"disposition", "rationale"}
+            and not str(author.get("rationale") or "").strip()
+        )
+        disposition_vacuous = (author_vacuous and not str(raw_disposition.get("review_fingerprint") or "").strip()
+                               and not raw_disposition.get("items"))
+    if raw_disposition is not None and not disposition_vacuous:
         if isinstance(raw_disposition, dict) and "author_action" in raw_disposition:
             return _apply_author_subject(ctx, raw_disposition, params if envelope_fields else None)
         if envelope_fields:

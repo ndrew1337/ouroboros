@@ -32,24 +32,44 @@ def _workflow() -> dict:
     return yaml.safe_load(CI_PATH.read_text(encoding="utf-8"))
 
 
-def test_pull_requests_run_only_the_narrow_publish_browser_proof():
-    job = _workflow()["jobs"]["ui-smoke"]
-    assert " ".join(job["if"].split()) == (
+def test_pull_requests_and_ouroboros_pushes_share_one_full_browser_lane():
+    """The PR lane is no longer the narrow Publish proof: it is the whole marker lane.
+
+    `ci.yml` matches pull requests, manual runs and tags and delegates to the
+    reusable lane; every `ouroboros` push reaches the SAME job through its own
+    path-filter-free workflow. Nothing here may pull the costly system-e2e
+    scenarios into a pull request.
+    """
+    shared_path = REPO_ROOT / ".github" / "workflows" / "ui-browser.yml"
+    push_path = REPO_ROOT / ".github" / "workflows" / "ui-browser-push.yml"
+    caller = _workflow()["jobs"]["ui-smoke"]
+    assert " ".join(caller["if"].split()) == (
         "github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'"
         " || startsWith(github.ref, 'refs/tags/v')"
     )
-    steps = {step.get("name"): step for step in job["steps"] if step.get("name")}
-    narrow = steps["Run Publish admission browser proof"]
-    assert narrow["if"] == "${{ !cancelled() && steps.install_chromium.outcome == 'success' && github.event_name == 'pull_request' }}"
-    assert narrow["run"] == (
-        'python -m pytest tests/test_skill_publish_browser.py -o addopts="" -m ui_browser -q --tb=short'
-    )
-    assert narrow["env"]["OUROBOROS_RUN_UI_SMOKE"] == "1"
-    assert narrow["env"]["OUROBOROS_EXPECT_BROWSER_ENGINES"] == "chromium"
-    assert steps["Install full UI smoke WebKit"]["if"] == "${{ !cancelled() && steps.setup_python.outcome == 'success' && github.event_name != 'pull_request' }}"
-    for name in ("Run host UI smoke", "Run browser tools Chromium/WebKit smoke"):
-        assert steps[name]["if"] == "${{ !cancelled() && steps.install_chromium.outcome == 'success' && steps.install_webkit.outcome == 'success' && github.event_name != 'pull_request' }}"
-    assert "secrets." not in _job_text("ui-smoke")
+    assert caller["uses"] == "./.github/workflows/ui-browser.yml"
+    assert "steps" not in caller, "the browser steps belong to the shared lane"
+
+    push = yaml.safe_load(push_path.read_text(encoding="utf-8"))
+    assert _triggers(push) == {"push": {"branches": ["ouroboros"]}}
+    assert push["jobs"]["ui-smoke"]["uses"] == caller["uses"]
+
+    shared = yaml.safe_load(shared_path.read_text(encoding="utf-8"))
+    assert list(_triggers(shared)) == ["workflow_call"]
+    steps = {step.get("name"): step for step in shared["jobs"]["ui-smoke"]["steps"] if step.get("name")}
+    full = steps["Run complete host UI lane with collection and availability guards"]
+    assert full["if"] == "${{ !cancelled() && steps.install_browsers.outcome == 'success' }}"
+    assert full["run"].endswith(
+        "python -m pytest tests/ -m ui_browser --require-ui-browser -q --tb=short")
+    assert full["env"]["OUROBOROS_RUN_UI_SMOKE"] == "1"
+    assert full["env"]["OUROBOROS_EXPECT_BROWSER_ENGINES"] == "chromium,webkit"
+    assert steps["Run browser tools Chromium/WebKit smoke"]["if"] == (
+        "${{ !cancelled() && steps.install_browsers.outcome == 'success'"
+        " && (github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/v')) }}")
+    for text in (_job_text("ui-smoke"), shared_path.read_text(encoding="utf-8"),
+                 push_path.read_text(encoding="utf-8")):
+        assert "secrets." not in text
+        assert "system_e2e" not in text and "OUROBOROS_E2E_DEEP" not in text
 
 
 def _triggers(workflow: dict) -> dict:

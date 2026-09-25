@@ -256,7 +256,9 @@ leaderboard run without the disclosures below.
    STEP cap; `--max-steps` now declares one and the runtime enforces it (see
    4a-bis). The other three caps still apply, and the one that binds in
    practice is the third:
-   - the bench server's `OUROBOROS_MAX_ROUNDS` (default 200);
+   - the bench server's `OUROBOROS_MAX_ROUNDS` (200 in `settings_base.json`;
+     the runtime default without a settings document is `unlimited`, which a
+     declared `--max-steps` refuses rather than certifies);
    - `--task_timeout_sec` wall clock;
    - **the runtime's per-task USD reservation rail**
      (`OUROBOROS_PER_TASK_COST_USD`, enforced by

@@ -51,7 +51,7 @@ def _managed_resolution_repo(tmp_path, monkeypatch, official_binary=False):
     _git(repo, "config", "user.name", "t")
     _git(repo, "config", "commit.gpgsign", "false")
     (repo / "conflict.txt").write_text("base\n")
-    (repo / "keep.txt").write_text("k1\nk2\nk3\nk4\nk5\n")
+    (repo / "keep.txt").write_bytes(b"k1\nk2\nk3\nk4\nk5\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
     head = _git(repo, "symbolic-ref", "--short", "HEAD").stdout.strip()
@@ -129,7 +129,7 @@ def test_managed_capture_returns_resolution_delta_only(tmp_path, monkeypatch):
 def test_managed_capture_supports_zero_context_rung(tmp_path, monkeypatch):
     repo, ctx, _tx = _managed_resolution_repo(tmp_path, monkeypatch)
     # A mid-file resolver edit gives the ladder real context lines to drop.
-    (repo / "keep.txt").write_text("k1\nk2\nk3-resolved\nk4\nk5\n")
+    (repo / "keep.txt").write_bytes(b"k1\nk2\nk3-resolved\nk4\nk5\n")
     _git(repo, "add", "-A")
 
     full = capture_review_diff(ctx, repo)

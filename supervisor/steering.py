@@ -53,27 +53,34 @@ def _task_issued(evt: Dict[str, Any]) -> bool:
     return str(_issuer(evt).get("kind") or "") == "task"
 
 
-def _record_task_message_routing(
-    ctx: Any, evt: Dict[str, Any], target: str, *, status: str, reason: str = "",
-) -> None:
-    """One typed Logs row per task-authored act: true author, target, outcome (7A).
+def _presence_target_refused(ctx: Any, evt: Dict[str, Any], task: Dict[str, Any]) -> bool:
+    """A Presence sender's live target must be independent work of its own binding.
 
-    The receiving task's own timeline gets ``task_message_injected`` when it
-    drains the row; this row lands in the SENDER's timeline (keyed on its id),
-    so a refusal a target never saw is still visible somewhere."""
-    issuer = _issuer(evt)
-    try:
-        ctx.append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
-            "ts": utc_now_iso(),
-            "type": "task_message_routed",
-            "task_id": str(issuer.get("task_id") or ""),
-            "target_task_id": target,
-            "status": status,
-            "reason": reason,
-            "routing_token": str(evt.get("routing_token") or ""),
-        })
-    except Exception:
-        log.debug("task_message_routed row failed", exc_info=True)
+    The sender is Presence by the host's stamp on the event or, failing that, by
+    its own live queue row (a delegated descendant's inherited binding authority),
+    so the fence never rests on one producer remembering to stamp the event; a
+    malformed stamp or carrier narrows to nothing. Whose work the target is follows
+    the read/cancel precedence: its canonical record decides, and the live row
+    stands in only for a record without Presence provenance.
+    """
+    from ouroboros.dialogue_provenance import (
+        presence_metadata_binding, presence_related_work, presence_target_record,
+    )
+
+    if "presence_binding_id" in evt:
+        stamp = evt.get("presence_binding_id")
+        binding = stamp.strip() if isinstance(stamp, str) else ""
+    else:
+        running = getattr(ctx, "RUNNING", None)
+        meta = running.get(str(_issuer(evt).get("task_id") or "")) if isinstance(running, dict) else None
+        row = meta.get("task") if isinstance(meta, dict) else None
+        binding = presence_metadata_binding(row.get("metadata")) if isinstance(row, dict) else None
+        if binding is None and isinstance(row, dict) and isinstance(row.get("task_contract"), dict):
+            binding = "" if "capability_ceiling" in row["task_contract"] else None
+    if binding is None:
+        return False
+    target = str(evt.get("target_task_id") or task.get("id") or "").strip()
+    return not presence_related_work(binding, presence_target_record(ctx.DRIVE_ROOT, target, queue_row=task))
 
 
 def _refuse_steering_while_cancelling(
@@ -150,11 +157,22 @@ def _steer_receipt(
         attachment_manifest=attachment_manifest, publish=not task_issued or bool(owner_message_id),
     )
     if task_issued:
-        _record_task_message_routing(
-            ctx, evt, target,
-            status="written" if status == "delivered" else "refused",
-            reason=reason,
-        )
+        # One typed Logs row per task-authored act: true author, target, outcome
+        # (7A). The receiving task's own timeline gets ``task_message_injected``
+        # when it drains the row; this row lands in the SENDER's timeline (keyed
+        # on its id), so a refusal a target never saw is still visible somewhere.
+        try:
+            ctx.append_jsonl(ctx.DRIVE_ROOT / "logs" / "events.jsonl", {
+                "ts": utc_now_iso(),
+                "type": "task_message_routed",
+                "task_id": str(_issuer(evt).get("task_id") or ""),
+                "target_task_id": target,
+                "status": "written" if status == "delivered" else "refused",
+                "reason": reason,
+                "routing_token": str(evt.get("routing_token") or ""),
+            })
+        except Exception:
+            log.debug("task_message_routed row failed", exc_info=True)
     return receipt
 
 
@@ -249,17 +267,21 @@ def _handle_steer_task(evt: Dict[str, Any], ctx: Any) -> None:
     ):
         return
 
-    # Four different refusals in the same order the boolean used to fold them
+    # Three different refusals in the same order the boolean used to fold them
     # into one. Which one fired is what the owner needs: a task running in its
     # own project room for another half hour is not a task that "may have
     # finished", and a receipt that says only `target_not_steerable` cannot tell
-    # the two apart afterwards either.
+    # the two apart afterwards either. A direct turn is steerable exactly when it
+    # is a live in-process actor OR a queue row — parked under its exact budget
+    # pause, or resumed on a pooled worker under the SAME id (#1196): the owner's
+    # follow-up reaches that actor's mailbox, never a second direct turn. A
+    # direct turn that is neither is simply unknown here.
     if not isinstance(task, dict):
         refusal = "target_unknown"
-    elif not (direct_active or not task.get("_is_direct_chat")):
-        refusal = "direct_chat_turn"
     elif str(task.get("delegation_role") or "") == "subagent":
         refusal = "subagent_target"
+    elif task_issued and _presence_target_refused(ctx, evt, task):
+        refusal = "presence_work_not_related"
     elif not task_issued and not _owner_lane_allows(ctx, task, target, chat_id):
         refusal = "chat_mismatch"
     else:
@@ -383,6 +405,7 @@ def _handle_steer_task(evt: Dict[str, Any], ctx: Any) -> None:
             if not write_task_message(
                 drive, message, target, source_task_id=issuer_task_id,
                 provenance=PROVENANCE_INDEPENDENT_TASK, msg_id=msg_id,
+                sender_origin=evt.get("sender_origin") if isinstance(evt.get("sender_origin"), dict) else None,
             ):
                 raise OSError("task mailbox append was not durable")
             delivered = True

@@ -155,6 +155,7 @@ def _handle_main_llm_call_state(evt: Dict[str, Any], ctx: Any) -> None:
 # so this facade stays the single import surface for callers and tests.
 from supervisor.events_budget import (  # noqa: E402, F401 -- intentional public re-exports
     _handle_budget_pause,
+    _handle_budget_resume_child,
     _handle_budget_root_fence,
     _handle_llm_usage,
     _set_root_budget_pause_locked,
@@ -262,6 +263,7 @@ EVENT_HANDLERS = {
     "main_llm_call_state": _handle_main_llm_call_state,
     "budget_pause": _handle_budget_pause,
     "budget_root_fence": _handle_budget_root_fence,
+    "budget_resume_child": _handle_budget_resume_child,
     "task_heartbeat": _handle_task_heartbeat,
     "task_dispatch_resolved": _handle_task_dispatch_resolved,
     "task_focus_updated": _handle_task_focus_updated,

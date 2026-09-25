@@ -11,6 +11,8 @@ Pins the "ghost subagent" / status-corruption protections:
 - normal forward progress and same-status enrichment are unaffected
 """
 
+import json
+
 import pytest
 
 from ouroboros import task_results as tr
@@ -55,6 +57,71 @@ def test_same_terminal_status_enrichment_allowed(drive):
     assert data["status"] == tr.STATUS_COMPLETED
     assert data["result"] == "enriched"
     assert data["trace_summary"] == "trace"
+
+
+@pytest.mark.parametrize("previous", [None, tr.STATUS_RUNNING])
+@pytest.mark.parametrize("terminal", [
+    tr.STATUS_COMPLETED, tr.STATUS_FAILED, tr.STATUS_CANCELLED, tr.STATUS_REJECTED_DUPLICATE,
+])
+def test_first_accepted_root_terminal_write_originates_projection_debt(drive, previous, terminal):
+    if previous is not None:
+        tr.write_task_result(drive, "root", previous)
+    stored = tr.write_task_result(drive, "root", terminal)
+    assert stored["canonical_terminal_projection_origin"] == "terminal_transition"
+    assert "canonical_terminal_projection_ready" not in stored
+    assert tr.load_task_result(drive, "root", strict=True) == stored
+    enriched = tr.write_task_result(drive, "root", terminal,
+                                   canonical_terminal_projection_origin=None, result="enriched")
+    assert enriched["canonical_terminal_projection_origin"] == "terminal_transition"
+
+
+@pytest.mark.parametrize("lineage", [
+    {"parent_task_id": "parent", "root_task_id": "parent", "delegation_role": "subagent"},
+    {"metadata": {"parent_task_id": "parent", "root_task_id": "parent", "delegation_role": "subagent"}},
+    {"root_task_id": "other"},
+])
+def test_child_or_unproven_lineage_cannot_originate_projection_debt(drive, lineage):
+    tr.write_task_result(drive, "child", tr.STATUS_RUNNING, **lineage)
+    stored = tr.write_task_result(drive, "child", tr.STATUS_COMPLETED,
+                                 canonical_terminal_projection_origin="terminal_transition")
+    assert "canonical_terminal_projection_origin" not in stored
+
+
+def test_root_retry_transition_uses_merged_lineage(drive):
+    tr.write_task_result(drive, "retry", tr.STATUS_RUNNING, root_task_id="logical-root",
+                        parent_task_id="", delegation_role="root", original_task_id="previous",
+                        timeout_retry_from="previous")
+    stored = tr.write_task_result(drive, "retry", tr.STATUS_COMPLETED)
+    assert stored["canonical_terminal_projection_origin"] == "terminal_transition"
+
+
+@pytest.mark.parametrize("projector", ["plain", "replica", "enrichment"])
+def test_terminal_enrichment_cannot_adopt_a_historical_result(drive, projector):
+    from ouroboros.post_task_checkpoint import project_replica_task_result_fields
+
+    path = tr.task_result_path(drive, "historical")
+    path.write_text(json.dumps({"_schema_version": tr.TASK_RESULT_SCHEMA_VERSION,
+                               "task_id": "historical", "status": tr.STATUS_COMPLETED}), encoding="utf-8")
+
+    def enrich(_current, fields):
+        return {**fields, "canonical_terminal_projection_origin": "terminal_transition"}
+
+    reducer = {"plain": None, "replica": project_replica_task_result_fields, "enrichment": enrich}[projector]
+    stored = tr.write_task_result(drive, "historical", tr.STATUS_COMPLETED, result="refreshed",
+                                 canonical_terminal_projection_origin="terminal_transition",
+                                 _field_projector=reducer)
+    assert stored["result"] == "refreshed"
+    assert "canonical_terminal_projection_origin" not in stored
+    # A rejected lifecycle write cannot create provenance either.
+    assert tr.write_task_result(drive, "historical", tr.STATUS_FAILED,
+                                canonical_terminal_projection_origin="terminal_transition") == stored
+
+
+def test_replica_cannot_supply_terminal_origin_to_an_effective_read():
+    from ouroboros.post_task_checkpoint import project_replica_task_result_fields
+
+    replica = {"canonical_terminal_projection_origin": "terminal_transition", "result": "worker"}
+    assert project_replica_task_result_fields({}, replica) == {"result": "worker"}
 
 
 def test_replica_projector_keeps_terminal_lifecycle_guard(drive):

@@ -142,6 +142,19 @@ def _waiting_on_user_note(pending: List[Dict[str, Any]]) -> str:
     )
 
 
+# Route fact of EVERY pending question, inline, spilled and re-waited alike: a run
+# paused on a question keeps its session, so the answer (delegate_answer, free_text
+# included) resumes THIS session rather than starting a new physical run — and each
+# resumed turn is a paid/quota round. Its honest opposite is the ``input_required``
+# terminal's ``continuation: new_physical_run`` (delegate_terminal_evidence). Neutral
+# on purpose: nothing here names a question a contribution or an exchange.
+SAME_SESSION_CONTINUATION: Dict[str, str] = {
+    "continuation": "same_session",
+    "continuation_note": ("the answer resumes THIS session (delegate_answer, free_text "
+                          "included); each resumed turn is a paid/quota round"),
+}
+
+
 def _waiting_on_user_payload(ctx: ToolContext, run_id: str, state: str,
                              last_seq: int, pending: List[Dict[str, Any]],
                              seen: Any = None, source_request: Any = None,
@@ -167,6 +180,7 @@ def _waiting_on_user_payload(ctx: ToolContext, run_id: str, state: str,
         "last_seq": last_seq,
         "pending_interactions": pending,
         "note": _waiting_on_user_note(pending),
+        **SAME_SESSION_CONTINUATION,
     }
     if isinstance(source_request, dict) and source_request:
         full["work_order_source_request"] = dict(source_request)

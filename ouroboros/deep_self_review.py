@@ -112,39 +112,6 @@ _MANDATORY_READS = ("BIBLE.md",)
 _REPO_ROOTS = frozenset({"", "active_workspace", "system_repo"})
 
 
-def _append_memory_whitelist(
-    parts: list[str],
-    *,
-    drive_root: pathlib.Path,
-) -> Dict[str, Any]:
-    """Inline the memory whitelist byte-exact and return the typed memory fact
-    every delivery carries: ``{"inlined": n, "total": 7, "dispositions": {rel:
-    inlined | missing | empty | oversized | read_error}}`` — one disposition per
-    whitelisted path (task text, usage fact, provenance header), never a silent
-    skip."""
-    dispositions: Dict[str, str] = {}
-    for rel_mem in _MEMORY_WHITELIST:
-        full_path = drive_root / rel_mem
-        try:
-            if not full_path.is_file():
-                dispositions[rel_mem] = "missing"
-                continue
-            if full_path.stat().st_size > _MAX_FULL_REPO_FILE_BYTES:
-                dispositions[rel_mem] = "oversized"
-                continue
-            content = full_path.read_text(encoding="utf-8", errors="replace")
-            if not content.strip():
-                dispositions[rel_mem] = "empty"
-                continue
-            parts.append(f"## FILE: drive/{rel_mem}\n{content}\n")
-            dispositions[rel_mem] = "inlined"
-        except Exception:
-            dispositions[rel_mem] = "read_error"
-            log.debug("memory whitelist entry unreadable: %s", rel_mem, exc_info=True)
-    return {"inlined": sum(1 for d in dispositions.values() if d == "inlined"),
-            "total": len(_MEMORY_WHITELIST), "dispositions": dispositions}
-
-
 # ---------------------------------------------------------------------------
 # Availability — route-aware on the configured row.
 # ---------------------------------------------------------------------------
@@ -242,21 +209,6 @@ def deep_review_unavailable_text(reason: str) -> str:
 # ---------------------------------------------------------------------------
 # The two retrieving deliveries.
 # ---------------------------------------------------------------------------
-
-
-def _review_slot(row: ConfiguredReviewerSlot, model: str, timeout_sec: Optional[float]) -> Any:
-    from ouroboros.config import review_model_uses_local
-    from ouroboros.review_execution import ReviewRouteKind
-    from ouroboros.review_substrate import ReviewSlot
-
-    return ReviewSlot(
-        slot_id=row.slot_id, model=model, effort=row_effort(row, "deep_self_review"),
-        timeout_sec=timeout_sec, max_tokens=_DEEP_MAX_OUTPUT_TOKENS,
-        role_hint="deep self-reviewer", use_local=row.use_local if row.use_local is not None else review_model_uses_local(model),
-        route=ReviewRouteKind.AGENT_SESSION if row.is_session else ReviewRouteKind.API_CHAT,
-        session_target=row.session_target, session_profile=row.profile_id,
-        subagent_id=row.subagent_id,
-    )
 
 
 def _record_execution(slot: Any, usage: Dict[str, Any], *, status: str, error: str = "") -> None:
@@ -504,8 +456,33 @@ def _retrieving_task(repo_dir: pathlib.Path, drive_root: pathlib.Path, *,
     bible = load_governance_doc(repo_dir, "BIBLE.md", on_missing="silent")
     if not bible.strip():
         raise RuntimeError("BIBLE.md is missing at the repository root — a deep self-review has no constitution to check against")
+    # The memory whitelist, inlined byte-exact, and the typed memory fact every
+    # delivery carries: ``{"inlined": n, "total": 7, "dispositions": {rel:
+    # inlined | missing | empty | oversized | read_error}}`` — one disposition
+    # per whitelisted path (task text, usage fact, provenance header), never a
+    # silent skip.
     memory_parts: list[str] = []
-    memory = _append_memory_whitelist(memory_parts, drive_root=drive_root)
+    dispositions: Dict[str, str] = {}
+    for rel_mem in _MEMORY_WHITELIST:
+        full_path = drive_root / rel_mem
+        try:
+            if not full_path.is_file():
+                dispositions[rel_mem] = "missing"
+                continue
+            if full_path.stat().st_size > _MAX_FULL_REPO_FILE_BYTES:
+                dispositions[rel_mem] = "oversized"
+                continue
+            content = full_path.read_text(encoding="utf-8", errors="replace")
+            if not content.strip():
+                dispositions[rel_mem] = "empty"
+                continue
+            memory_parts.append(f"## FILE: drive/{rel_mem}\n{content}\n")
+            dispositions[rel_mem] = "inlined"
+        except Exception:
+            dispositions[rel_mem] = "read_error"
+            log.debug("memory whitelist entry unreadable: %s", rel_mem, exc_info=True)
+    memory = {"inlined": sum(1 for d in dispositions.values() if d == "inlined"),
+              "total": len(_MEMORY_WHITELIST), "dispositions": dispositions}
     governance = governance_context(
         repo_dir, surface="deep_self_review", touched_paths=(),
         usable_window_tokens=usable_window_tokens, delivery="retrieving",
@@ -572,7 +549,7 @@ def _run_retrieving_review(
     resolved for the row (its own target when the caller names none)."""
     from dataclasses import asdict
 
-    from ouroboros.config import get_finalization_grace_sec, get_task_abs_ceiling_sec
+    from ouroboros.config import get_finalization_grace_sec, get_task_abs_ceiling_sec, operation_window_sec
     from ouroboros.deadline_utils import review_operation_timeout_sec
     from ouroboros.observability import persist_call
     from ouroboros.review_execution import ReviewAssignment, _review_route_executor
@@ -610,16 +587,28 @@ def _run_retrieving_review(
         policy=policy,
         deadline_at=deadline_at,
     )
-    # The logical window: the task's absolute ceiling narrowed by the owner
-    # deadline — the same clock the coordinator gives a slot; without it the
-    # native episode would run with no window at all and a session would fall
-    # to the transport's own defaults.
+    # The logical window: the task's operation window (its finite absolute lifetime,
+    # else the operation fallback) narrowed by the owner deadline — the same clock the
+    # coordinator gives a slot; without it the native episode would run with no window
+    # at all and a session would fall to the transport's own defaults.
     window = review_operation_timeout_sec(
-        float(get_task_abs_ceiling_sec()),
+        operation_window_sec(get_task_abs_ceiling_sec()),
         route="agent_session" if row.is_session else "api_chat",
         deadline_at=deadline_at, reserve_sec=get_finalization_grace_sec(),
     )
-    slot = _review_slot(row, sendable, window)
+    from ouroboros.config import review_model_uses_local
+    from ouroboros.review_execution import ReviewRouteKind
+    from ouroboros.review_substrate import ReviewSlot
+
+    slot = ReviewSlot(
+        slot_id=row.slot_id, model=sendable, effort=row_effort(row, "deep_self_review"),
+        timeout_sec=window, max_tokens=_DEEP_MAX_OUTPUT_TOKENS,
+        role_hint="deep self-reviewer",
+        use_local=row.use_local if row.use_local is not None else review_model_uses_local(sendable),
+        route=ReviewRouteKind.AGENT_SESSION if row.is_session else ReviewRouteKind.API_CHAT,
+        session_target=row.session_target, session_profile=row.profile_id,
+        subagent_id=row.subagent_id,
+    )
     assignment = ReviewAssignment(
         request=request, slot=slot, call_id=f"deep_self_review:{task_id or 'manual'}",
         call_type="deep_self_review", custody_root=pathlib.Path(drive_root),

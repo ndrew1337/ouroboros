@@ -50,6 +50,7 @@ def _handle_task_message_injected(evt: Dict[str, Any], ctx: Any) -> None:
         "task_id": evt.get("task_id", ""),
         "source_task_id": evt.get("source_task_id", ""),
         "provenance": evt.get("provenance", ""),
+        **({"relation": evt["relation"]} if evt.get("relation") in {"parent", "sibling"} else {}),
         "relayed_from_task_id": evt.get("relayed_from_task_id", ""),
         "text_preview": str(evt.get("text_preview") or "")[:200],
     }

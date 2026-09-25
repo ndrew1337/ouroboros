@@ -183,7 +183,7 @@
       },
       "phase": "error",
       "headline": "Failed",
-      "acceptance_clause": "provider_unavailable · Some delegated work was never reconciled."
+      "acceptance_clause": "The model provider stopped answering, so the task could not finish · Some delegated work was never reconciled."
     },
     {
       "name": "a healed custody debt names the current execution cause alone",
@@ -195,7 +195,7 @@
       },
       "phase": "error",
       "headline": "Failed",
-      "acceptance_clause": "provider_unavailable."
+      "acceptance_clause": "The model provider stopped answering, so the task could not finish."
     },
     {
       "name": "a record carrying no debt list states nothing about the debt",
@@ -206,7 +206,7 @@
       },
       "phase": "error",
       "headline": "Failed",
-      "acceptance_clause": "provider_unavailable."
+      "acceptance_clause": "The model provider stopped answering, so the task could not finish."
     },
     {
       "name": "acceptance reason author_finish says its own sentence",
@@ -698,6 +698,27 @@
       "phase": "error",
       "headline": "Failed",
       "acceptance_clause": "The task stopped on an internal error."
+    },
+    {
+      "name": "a local acceptance-preparation failure states the host's own cause, not a reviewer's",
+      "record": {"status": "completed", "outcome_axes": {"execution": {"status": "ok"}, "review": {"status": "degraded", "acceptance_decision": {"status": "finalized_unaccepted", "reason": "acceptance_preparation_failed", "acceptance_incident": {"incident_id": "acceptance-preparation:1f2e3d4c", "status": "failed", "stage": "preparation", "attempts": 1, "source_known": true, "failure_kind": "UnicodeDecodeError"}}}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": "Ouroboros could not assemble the evidence for this answer's review, so this preparation attempt dispatched no new reviewers; the work itself is kept."
+    },
+    {
+      "name": "a local acceptance failure and the rail that ended the task are BOTH stated",
+      "record": {"status": "completed", "reason_code": "budget_exhausted", "outcome_axes": {"execution": {"status": "degraded", "reason_code": "budget_exhausted"}, "review": {"status": "degraded", "acceptance_decision": {"status": "finalized_unaccepted", "reason": "acceptance_preparation_failed", "acceptance_incident": {"incident_id": "acceptance-preparation:1f2e3d4c", "status": "failed", "stage": "preparation", "attempts": 1, "source_known": true, "failure_kind": "UnicodeDecodeError"}}}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": "Ouroboros could not assemble the evidence for this answer's review, so this preparation attempt dispatched no new reviewers; the work itself is kept · The task ran out of budget before it could finish cleanly."
+    },
+    {
+      "name": "a RESOLVED acceptance incident states nothing beside the answer",
+      "record": {"status": "completed", "outcome_axes": {"execution": {"status": "ok"}, "review": {"status": "degraded", "acceptance_decision": {"status": "finalized_unaccepted", "reason": "author_finish", "acceptance_incident": {"incident_id": "acceptance-preparation:1f2e3d4c", "status": "resolved", "stage": "preparation", "attempts": 1}}}}},
+      "phase": "warn",
+      "headline": "Done with warnings",
+      "acceptance_clause": "Ouroboros delivered this answer on its own judgement; the reviewers had not signed it off."
     }
   ]
 }

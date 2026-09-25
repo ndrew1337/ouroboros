@@ -218,6 +218,13 @@ def _extract_verdict_via_light_model(
     model = get_light_model()
     if owner_deadline_exhausted(deadline_at=deadline_at, reserve_sec=get_finalization_grace_sec()):
         return None, {"model": model, "reason_code": "deadline_exhausted", "dispatch": "not_dispatched"}
+    from ouroboros.budget_pause import dispatch_fenced
+    from ouroboros.usage_accounting import current_usage_scope as _scope_now
+
+    if dispatch_fenced(getattr(_scope_now(), "task_id", "")):
+        # Observation-only while the owning task pauses (#1196): the raw
+        # answer is kept verbatim; no Light call canonicalizes it on the way out.
+        return None, {"model": model, "reason_code": "budget_pausing_no_extraction", "dispatch": "not_dispatched"}
     template = _SESSION_EXTRACT_OBJECT_PROMPT if shape == "object" else _SESSION_EXTRACT_PROMPT
     prompt = template.format(
         contract=contract or default_output_contract(shape),

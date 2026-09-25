@@ -109,7 +109,17 @@ def test_real_server_serves_readiness_and_requests_while_history_runs_elsewhere(
     url = direct_server_with_data["url"]
     data_dir: pathlib.Path = direct_server_with_data["data_dir"]
 
-    direct_server_with_data["stop_server"]()
+    direct_server_with_data["stop_server"]()   # returns only after a PROVEN container reap
+    # The first generation's own audit child may have been reaped between creating
+    # the monetary lock file and writing its owner stamp. Such a stampless lock has
+    # no pid to prove dead, so the owner-aware acquirer would wait out its age grace
+    # and the fixture's compactor would time out. Every process of THIS data root is
+    # proven gone by the reap above, so an EMPTY lock here is an orphan by proof.
+    from ouroboros.usage_ledger import LOCK_REL
+
+    orphan_lock = data_dir / LOCK_REL
+    if orphan_lock.exists() and orphan_lock.stat().st_size == 0:
+        orphan_lock.unlink()
     fixture = f1_archive_fixture
     os.environ["OUROBOROS_DATA_DIR"] = str(data_dir)
     build_started = time.monotonic()

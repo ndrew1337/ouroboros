@@ -339,9 +339,10 @@ def _validate_external_workspace(ctx, path: str) -> str:
 
 def _external_workspace_head(path: str) -> tuple[str, str]:
     """Return a Git base or an empty base for an admitted ordinary directory."""
+    from ouroboros.workspace_admission import has_git_metadata
+
     p = pathlib.Path(path).expanduser().resolve(strict=False)
-    if p.is_dir() and not any((root / ".git").exists() or (root / ".git").is_symlink()
-                              for root in (p, *p.parents)):
+    if p.is_dir() and not has_git_metadata(p):
         return "", ""
     try:
         result = subprocess.run(

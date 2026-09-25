@@ -1202,7 +1202,7 @@ test('initiator detail is omitted when it is the owner', () => {
 
 test('review updates never change owner disclosure state', () => {
     const host = { innerHTML: '', addEventListener() {} };
-    const summary = { hidden: true, textContent: '' };
+    const summary = { hidden: true, textContent: '', dataset: {} };
     const disclosure = { sectionExpanded: false, expandedGroups: new Set(), expandedAttempts: new Set() };
     let domWrites = 0;
     const controller = createReviewPresentationController({
@@ -1260,7 +1260,7 @@ test('an open exact Skill detail survives a review re-render while its read is i
     };
     const controller = createReviewPresentationController({
         host,
-        summary: { hidden: true, textContent: '' },
+        summary: { hidden: true, textContent: '', dataset: {} },
         disclosure,
         onLoadSkillDetail(detail) {
             loads.push(loadSkillReviewDetail(detail, {
@@ -1437,7 +1437,7 @@ test('review re-render restores keyboard focus to the equivalent disclosure cont
         },
         get innerHTML() { return this._html || ''; },
     };
-    const summary = { hidden: true, textContent: '' };
+    const summary = { hidden: true, textContent: '', dataset: {} };
     const disclosure = { sectionExpanded: false, expandedGroups: new Set(), expandedAttempts: new Set() };
     const controller = createReviewPresentationController({ host, summary, disclosure });
     controller.update(reviewGroupFromHistoryRow(groupedSkillRow()));
@@ -1560,7 +1560,7 @@ test('Retry keeps keyboard focus on the live detail status while refetching', ()
     };
     createReviewPresentationController({
         host,
-        summary: { hidden: true, textContent: '' },
+        summary: { hidden: true, textContent: '', dataset: {} },
         disclosure: {},
         onLoadSkillDetail(_detail, options) { retryOptions = options; },
     });

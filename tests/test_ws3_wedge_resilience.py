@@ -155,6 +155,7 @@ def test_watchdog_alerts_on_chat_turn_wedge(monkeypatch):
     assert wedge[2]["progress_meta"] == {
         "task_incident": "chat_turn_wedge",
         "toast_once": "wedged1:chat_turn_wedge",
+        "narration": False,
     }
 
 

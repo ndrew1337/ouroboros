@@ -2,34 +2,35 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 from pathlib import Path
-import subprocess
 
 import pytest
 
 from devtools.benchmarks.common.server_runner import _api
 from ouroboros.skill_loader import compute_content_hash
+from tests.candidate_checkout import candidate_checkout
 from tests.system_e2e.harness import (
-    ArtifactOracle, ScriptedStubModel, clone_repo, keyless_settings, start_server, wait_until,
+    ArtifactOracle, ScriptedStubModel, keyless_settings, start_server, wait_until,
 )
+
+
+@pytest.fixture
+def repair_clone(tmp_path):
+    if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
+        pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1")
+    source = Path(__file__).resolve().parents[1]
+    with candidate_checkout(source, tmp_path / "clone", origin_proof=True) as candidate:
+        yield candidate
 
 
 @pytest.mark.ui_browser
 @pytest.mark.serial
-def test_repair_button_records_owner_intent_and_runs_the_installed_skill(tmp_path):
+def test_repair_button_records_owner_intent_and_runs_the_installed_skill(tmp_path, repair_clone):
     if os.environ.get("OUROBOROS_RUN_UI_SMOKE") != "1":
         pytest.skip("set OUROBOROS_RUN_UI_SMOKE=1")
     playwright = pytest.importorskip("playwright.sync_api")
-    source = Path(__file__).resolve().parents[1]
-    clone = clone_repo(tmp_path / "source")
-    # clone_repo captures HEAD; this developer scenario exercises the complete
-    # candidate, including an uncommitted fix, in a disposable clone only.
-    patch = subprocess.check_output(["git", "diff", "--binary", "HEAD"], cwd=source)
-    if patch:
-        subprocess.run(["git", "apply", "--binary", "-"], input=patch, cwd=clone, check=True)
     name = "repair_owner_probe"
     evidence = Path(os.environ.get("OUROBOROS_UI_SCREENSHOT_DIR", str(tmp_path)))
     evidence.mkdir(parents=True, exist_ok=True)
@@ -48,7 +49,7 @@ def test_repair_button_records_owner_intent_and_runs_the_installed_skill(tmp_pat
         {"tool": "toggle_skill", "arguments": {"skill": name, "enabled": True}},
     ]
     with ScriptedStubModel(script, final_answer="The repaired skill is running.") as stub:
-        server = start_server(clone, tmp_path / "runtime", keyless_settings(
+        server = start_server(repair_clone, tmp_path / "runtime", keyless_settings(
             stub, OUROBOROS_MAX_WORKERS=1, OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS=True,
         ))
         try:
@@ -128,7 +129,7 @@ def test_repair_button_records_owner_intent_and_runs_the_installed_skill(tmp_pat
                     (evidence / "repair-and-run.json").write_text(json.dumps({
                         "task_id": task_id, "origin": ref, "initial_hash": initial_hash,
                         "final_hash": compute_content_hash(payload), "companion_pid": companions["pid"],
-                        "candidate_patch_sha256": hashlib.sha256(patch).hexdigest(),
+                        "candidate_identity": repair_clone.identity,
                         "review_delivery": "real pipeline, controlled loopback reviewer models",
                     }, indent=2) + "\n")
                     _api(server.base_url, "POST", f"/api/skills/{name}/toggle", {"enabled": False})

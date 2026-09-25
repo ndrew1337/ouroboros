@@ -14,7 +14,9 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Dict, Optional
 
-from ouroboros.config import SETTINGS_DEFAULTS, normalize_settings_raw, serialize_settings
+from ouroboros.config import (
+    SETTINGS_DEFAULTS, defaults_for_settings_document, normalize_settings_raw, serialize_settings,
+)
 from ouroboros.update_channels import get_managed_update_fetch_timeout_sec, normalize_update_channel
 from ouroboros.utils import atomic_write_json, write_text_atomic
 
@@ -122,6 +124,7 @@ def build_colab_settings(
     models: Dict[str, str] | None = None,
     network_password: str = "",
     existing: Optional[Dict[str, Any]] = None,
+    drive_document_present: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Build a Drive-persisted settings payload for Colab.
 
@@ -130,8 +133,12 @@ def build_colab_settings(
     explicitly — a pinned ``TELEGRAM_CHAT_ID``, tweaked model slots, an auto-grant
     preference — survive instead of being reset to defaults. The launch knobs
     below (secrets, budget, runtime mode, workers, host, repo) then win.
+    ``drive_document_present`` says whether that Drive file existed (default: a
+    non-empty ``existing``): an existing document keeps the finite optional bounds it
+    ran under when it lacks them (``config.defaults_for_settings_document``).
     """
-    settings = dict(SETTINGS_DEFAULTS)
+    present = bool(existing) if drive_document_present is None else bool(drive_document_present)
+    settings = defaults_for_settings_document(present)
     if existing:
         # The Drive document is an install's settings document, so it is read the way
         # every reader reads one: the raw-stage normalization (coercion, retention fold,

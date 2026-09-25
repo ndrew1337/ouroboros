@@ -406,7 +406,7 @@ def _ref_path(drive_root: pathlib.Path, ref: dict, relative: pathlib.Path) -> pa
 
 def _blob_ref_path(drive_root: pathlib.Path, ref: dict) -> pathlib.Path:
     digest, kind = str(ref.get("sha256") or ""), str(ref.get("kind") or "")
-    if not re.fullmatch(r"[0-9a-f]{64}", digest) or kind not in {"json", "txt"}:
+    if not re.fullmatch(r"[0-9a-f]{64}", digest) or kind not in {"json", "txt", "bin"}:
         raise ValueError("observability blob ref has no valid sha256 or kind")
     return _ref_path(drive_root, ref, pathlib.Path("blobs") / f"{digest}.{kind}.gz")
 

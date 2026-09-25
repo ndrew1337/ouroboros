@@ -34,7 +34,7 @@ def settings_server(request, tmp_path, monkeypatch):
         '''), encoding="utf-8")
     bootstrap.write_text(textwrap.dedent(f'''\
         import pathlib, runpy, subprocess, sys
-        sys.path.insert(0, {smoke.REPO_ROOT!r})
+        sys.path.insert(0, str(pathlib.Path.cwd()))
         from ouroboros.local_model import LocalModelManager
         LocalModelManager.download_model = lambda self, source, filename: str(pathlib.Path({str(tmp_path)!r}) / filename)
         original_popen, original_run = subprocess.Popen, subprocess.run
@@ -49,7 +49,7 @@ def settings_server(request, tmp_path, monkeypatch):
             return original_run(command, **kwargs)
         subprocess.Popen, subprocess.run = Popen, run
         sys.argv = sys.argv[1:]
-        runpy.run_path({str(pathlib.Path(smoke.REPO_ROOT) / 'server.py')!r}, run_name="__main__")
+        runpy.run_path(str(pathlib.Path.cwd() / 'server.py'), run_name="__main__")
         '''), encoding="utf-8")
     launcher = tmp_path / "python-fixture"
     launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{bootstrap}" "$@"\n', encoding="utf-8")
@@ -152,7 +152,9 @@ def test_pending_survives_reconnect_draft_and_restart_request(settings_server, e
             expect(page.locator('#btn-restart-now')).to_be_visible()
             page.locator('#settings-restart-status').scroll_into_view_if_needed()
             page.screenshot(path=str(evidence / f'settings-host-source-unknown-{engine}.png'))
-            page.unroute('**/api/settings', old_launcher_metadata)
+            # Reconnect refresh may still be inside fetch/fulfill: drain it
+            # before removing interception, rather than continuing its route twice.
+            page.unroute_all(behavior='wait')
             fill_value('#s-workers', 1)
             fill_value('#s-server-host', '127.0.0.1')
             save()

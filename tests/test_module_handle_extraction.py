@@ -122,6 +122,9 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         # Runtime707: health hands off recovery; the reaper owns storm/respawn.
         "DRIVE_ROOT", "QUEUE_MAX_RETRIES", "RUNNING", "WORKERS",
         "_LAST_SPAWN_TIME", "_SPAWN_GRACE_SEC", "_emit_task_done_terminal",
+        # #1196: completing a saved exact budget pause after a worker death re-parks
+        # the row into the pool's PENDING through the same handle.
+        "PENDING",
         "_ensure_workers_healthy_locked", "_reconcile_confirmed_dead_review_owner",
         "_worker_crash_storm_detected", "append_jsonl", "coerce_chat_identity",
         "disable_exhausted_worker_pool", "get_event_q", "load_state", "reconstruct_task_cost",
@@ -466,6 +469,9 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_provider_unavailable_result", "_record_owner_directive",
         "_soft_land_exhausted_ceiling", "_task_deadline_epoch", "compact_tool_history_llm",
         "provider_no_call_source", "utc_now",
+        # #1196: a budget-pause HOLD ended by control rejoins the model-wait rails and
+        # merges its forced trace like every other controlled exit.
+        "_merge_finalization_trace",
     })),
 }
 

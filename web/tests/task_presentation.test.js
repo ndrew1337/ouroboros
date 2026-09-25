@@ -16,6 +16,7 @@ import {
     desiredLiveCardPhase,
     replayTerminalPhase,
     restoreLiveCardPhaseState,
+    setInertCardPresentation,
     setLiveCardPhase,
 } from '../modules/task_phase_chip.js';
 
@@ -187,9 +188,13 @@ test('interrupted child stays retryable with a Working chip and inspectable deta
         chatSource.indexOf('function applyLiveCardStateMutation'),
         chatSource.indexOf('function finishLiveCard'),
     );
-    assert.match(applyState, /const desiredPhase = desiredLiveCardPhase\(record, activePhase\);/);
-    assert.match(applyState, /setLiveCardPhase\(record, desiredPhase\.phase, desiredPhase\.text, desiredPhase\.className\);/);
+    // #1110: an unfinished card's chip comes from the record's own state, so the
+    // terminal phase is passed only when the card is finished.
+    assert.match(applyState, /desiredLiveCardPhase\(record, record\.finished \? summary\.phase \|\| 'done' : ''\)/);
+    assert.match(applyState, /setLiveCardPhase\(record, desiredPhase\.phase, desiredPhase\.text, desiredPhase\.className,\s*desiredPhase\.secondary\)/);
     assert.equal([...applyState.matchAll(/setLiveCardPhase\(/g)].length, 1);
+    // The Failed-into-the-title workaround is gone: the name stays stable.
+    assert.doesNotMatch(chatSource, /failedHeadline/);
 });
 
 test('desired phase-chip precedence keeps stop/finalizing state sticky', () => {
@@ -212,6 +217,81 @@ test('desired phase-chip precedence keeps stop/finalizing state sticky', () => {
     assert.deepEqual(desiredLiveCardPhase({ finished: false }, 'warn'), {
         phase: 'working', text: 'Working', className: 'chat-live-phase working',
     });
+});
+
+test('#1110 an observed outcome owns the chip while Finalizing states itself beside it', () => {
+    // The outcome is known (the lifecycle status settled) while post-task work
+    // still runs: the card says Failed and adds the hold as a SECOND fact, so
+    // the title never has to carry the failure.
+    assert.deepEqual(desiredLiveCardPhase({
+        finished: false, finalizingHold: true, observedOutcome: 'error',
+    }, 'working'), {
+        phase: 'error', text: 'Failed', className: 'chat-live-phase error',
+        secondary: 'Finalizing…',
+    });
+    // An owner stop outranks the hold entirely — no secondary, no outcome chip.
+    assert.deepEqual(desiredLiveCardPhase({
+        finished: false, cancelPendingPolicy: 'immediate', finalizingHold: true,
+        observedOutcome: 'error',
+    }, 'working'), {
+        phase: 'working', text: 'Cancelling…', className: 'chat-live-phase working cancelling',
+    });
+    // A hold with no observed outcome keeps the plain Finalizing chip.
+    assert.equal('secondary' in desiredLiveCardPhase({
+        finished: false, finalizingHold: true,
+    }, 'working'), false);
+
+    // The observed outcome comes from a task-scope frame whose own lifecycle
+    // status settled — NEVER from a failed tool call, which is diagnostics.
+    assert.equal(taskTerminalSummary({
+        status: 'failed', task_phase: 'finalizing',
+    }).observedOutcome, 'error');
+    assert.equal(taskTerminalSummary({ status: 'failed', task_phase: 'finalizing' }).terminal, false);
+    // R1 (#1110): a finalizing REPLAY row often carries no stamp — history merges
+    // the result's canonical axes, not `task_terminal_status`. The settled
+    // lifecycle inside those axes is the same knowledge: the Failed is painted,
+    // the hold stays secondary. A still-running lifecycle stays unobserved.
+    const unstampedFailed = taskTerminalSummary({
+        task_phase: 'finalizing', outcome_final: false, outcome_phase: 'error',
+        outcome_axes: { lifecycle: { status: 'failed' }, execution: { status: 'infra_failed', reason_code: 'provider_unavailable' } },
+    });
+    assert.equal(unstampedFailed.observedOutcome, 'error');
+    assert.equal(unstampedFailed.terminal, false);
+    assert.equal(taskTerminalSummary({
+        task_phase: 'finalizing', outcome_axes: { lifecycle: { status: 'running' } },
+    }).observedOutcome, undefined);
+    // While unfinished the frame itself paints Working: the chip is the record's.
+    assert.equal(taskTerminalSummary({ status: 'failed', task_phase: 'finalizing' }).phase, 'working');
+    assert.equal(taskTerminalSummary({ status: 'running' }).observedOutcome, undefined);
+    assert.equal(summarizeChatLiveEvent({
+        type: 'tool_call_finished', task_id: 't1', is_error: true, tool: 'bash',
+    }).observedOutcome, undefined);
+
+    // Recycling a card slot drops the outcome with the rest of the cycle state.
+    assert.match(activitySource, /record\.observedOutcome = '';/);
+    assert.match(chatSource, /record\.observedOutcome = summary\.observedOutcome;/);
+});
+
+test('#1110 the secondary chip is a separate element with its own accessible name', () => {
+    const record = {
+        isSubagent: false,
+        phaseEl: {
+            dataset: {}, className: '', textContent: '',
+            attrs: {},
+            getAttribute(name) { return this.attrs[name] ?? null; },
+            setAttribute(name, value) { this.attrs[name] = value; },
+        },
+        phaseSecondaryEl: { textContent: '', hidden: true, isConnected: true },
+    };
+    setLiveCardPhase(record, 'error', 'Failed', 'chat-live-phase error', 'Finalizing…');
+    assert.equal(record.phaseEl.textContent, 'Failed');
+    assert.equal(record.phaseSecondaryEl.textContent, 'Finalizing…');
+    assert.equal(record.phaseSecondaryEl.hidden, false);
+    assert.equal(record.phaseEl.getAttribute('aria-label'), 'Task status: Failed, Finalizing…');
+    setLiveCardPhase(record, 'error', 'Failed', 'chat-live-phase error');
+    assert.equal(record.phaseSecondaryEl.textContent, '');
+    assert.equal(record.phaseSecondaryEl.hidden, true);
+    assert.equal(record.phaseEl.getAttribute('aria-label'), 'Task status: Failed');
 });
 
 test('failed optimistic stop restores the finalizing fact, not only its DOM text', () => {
@@ -425,4 +505,44 @@ test('a review-caused warning names the acceptance decision on the card and in L
     assert.doesNotMatch(live.body, /finalized_unaccepted/);
     assert.ok(replay.meta.includes('review degraded'));
     assert.ok(replay.meta.includes('acceptance finalized_unaccepted'));
+});
+
+test('#1110 inert history cannot retain a floating Finalizing chip', () => {
+    const record = {
+        finalizingHold: true, observedOutcome: 'error', finished: false,
+        phaseEl: { hidden: false, dataset: {}, attrs: {}, textContent: '', className: '',
+            getAttribute(key) { return this.attrs[key]; }, setAttribute(key, value) { this.attrs[key] = value; } },
+        phaseSecondaryEl: { hidden: true, textContent: '', isConnected: true },
+    };
+    setLiveCardPhase(record, 'error', 'Failed', '', 'Finalizing…');
+    assert.equal(record.phaseSecondaryEl.hidden, false);
+    setInertCardPresentation(record, true);
+    setLiveCardPhase(record, 'error', 'Failed', '', 'Finalizing…');
+    assert.equal(record.phaseEl.hidden, true);
+    assert.equal(record.phaseSecondaryEl.hidden, true);
+    setInertCardPresentation(record, false);
+    assert.equal(record.phaseSecondaryEl.hidden, false);
+});
+
+
+test('ordinary early-final handler consumes producer status without ending lifecycle', () => {
+    const body = chatSource.slice(chatSource.indexOf('    function markLiveCardFinalizing('),
+        chatSource.indexOf('    // Durable cancel state wins', chatSource.indexOf('    function markLiveCardFinalizing(')));
+    for (const [fact, expected] of [
+        [{ task_terminal_status: 'failed' }, 'error'],
+        [{ task_terminal_status: 'completed', outcome_axes: { execution: { status: 'degraded' } } }, 'warn'],
+        [{}, 'working'],
+        [{ type: 'tool_error', status: 'running' }, 'working'],
+    ]) {
+        const record = { phaseEl: {}, title: 'Stable task name', finished: false };
+        const handler = new Function('liveCardRecords', 'taskKey', 'withStableViewport',
+            'markReviewAnchor', 'taskTerminalSummary', 'desiredLiveCardPhase', 'setLiveCardPhase',
+            `${body}; return markLiveCardFinalizing;`)(new Map([['t', record]]), x => x, fn => fn(),
+            () => false, taskTerminalSummary, desiredLiveCardPhase, () => true);
+        handler('t', { ...fact, task_phase: 'finalizing' });
+        assert.equal(desiredLiveCardPhase(record).phase, expected);
+        assert.equal(record.finalizingHold, true);
+        assert.equal(record.finished, false);
+        assert.equal(record.title, 'Stable task name');
+    }
 });

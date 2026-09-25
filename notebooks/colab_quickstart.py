@@ -233,6 +233,7 @@ settings = build_colab_settings(
     runtime_mode=os.environ.get("OUROBOROS_RUNTIME_MODE", "advanced"),
     max_workers=int(os.environ.get("OUROBOROS_MAX_WORKERS", "1")),
     existing=_settings_seed,
+    drive_document_present=bool(_existing_settings),
 )
 # GitHub persistence is optional: a personal fork is configured only when a token
 # is present, otherwise the prototype still runs (without remote self-persistence).

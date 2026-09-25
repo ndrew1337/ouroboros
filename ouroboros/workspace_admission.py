@@ -29,6 +29,7 @@ event-drain thread responsive).
 from __future__ import annotations
 
 import logging
+import os
 import pathlib
 import subprocess
 from typing import Any, Optional
@@ -40,6 +41,18 @@ log = logging.getLogger(__name__)
 
 class WorkspaceRootError(ValueError):
     """A workspace_root that is missing, overlapping, or has invalid Git geometry."""
+
+
+def has_git_metadata(root: pathlib.Path) -> bool:
+    """Match Git's ancestor search, including an explicitly selected ceiling."""
+    ceilings = {pathlib.Path(p).resolve() for p in
+                os.environ.get("GIT_CEILING_DIRECTORIES", "").split(os.pathsep) if p}
+    for parent in (root, *root.parents):
+        if parent != root and parent in ceilings:
+            break
+        if (parent / ".git").exists() or (parent / ".git").is_symlink():
+            return True
+    return False
 
 
 def validate_workspace_root(
@@ -97,8 +110,7 @@ def validate_workspace_root(
     if git_root is None:
         # A failed probe must not reclassify an existing/broken Git worktree
         # as an ordinary folder (including linked worktrees with a .git file).
-        if any((parent / ".git").exists() or (parent / ".git").is_symlink()
-               for parent in (root, *root.parents)):
+        if has_git_metadata(root):
             raise WorkspaceRootError("workspace_root Git worktree could not be resolved")
         return root
     if git_root != root:

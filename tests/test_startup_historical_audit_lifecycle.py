@@ -190,6 +190,26 @@ def _patch_spawn(monkeypatch, child, *, gate: threading.Event | None = None, see
     monkeypatch.setattr(process_custody, "spawn_supervised", fake_spawn)
 
 
+def test_the_audit_child_inherits_the_containment_token(tmp_path, monkeypatch):
+    """The reap that proves a data root quiet is env-token membership: a child
+    spawned without the token is a live writer the container cannot see."""
+    from ouroboros.process_containment import CONTAINMENT_ENV_PREFIX
+
+    (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv(CONTAINMENT_ENV_PREFIX + "DEADBEEF", "1")  # upper: Windows folds env keys
+    monkeypatch.setenv("OUROBOROS_UNRELATED_SECRET", "no")
+    seen: list = []
+    _patch_spawn(monkeypatch, _FakeChild(), seen=seen)
+
+    audit = HistoricalAudit()
+    audit.start(tmp_path, REPO)
+    _await_terminal(tmp_path, timeout=10)
+    assert len(seen) == 1
+    env = seen[0][1]["env"]
+    assert env[CONTAINMENT_ENV_PREFIX + "DEADBEEF"] == "1"
+    assert "OUROBOROS_UNRELATED_SECRET" not in env  # the allowlist still holds
+
+
 def test_stop_between_spawn_and_publication_still_kills_the_child(tmp_path, monkeypatch):
     """Stop wins even when it lands while the spawner is inside Popen."""
     (tmp_path / "logs").mkdir(parents=True, exist_ok=True)
@@ -287,8 +307,11 @@ def test_the_child_gets_a_dedicated_process_group(tmp_path, monkeypatch):
     assert kwargs["purpose"] == "startup_historical_audit"
     assert kwargs["scope"] == "session"
     assert cmd[1:3] == ["-m", "ouroboros.startup_historical_audit"]
-    # Only ordinary runtime environment and explicit roots reach the child.
-    assert set(kwargs["env"]) <= {
+    # Only ordinary runtime environment, explicit roots and the inherited
+    # containment token reach the child.
+    from ouroboros.process_containment import CONTAINMENT_ENV_PREFIX
+
+    assert {key for key in kwargs["env"] if not key.startswith(CONTAINMENT_ENV_PREFIX)} <= {
         "PATH", "HOME", "USERPROFILE", "SystemRoot", "WINDIR", "TEMP", "TMP", "TMPDIR",
         "LANG", "LC_ALL", "PYTHONDONTWRITEBYTECODE", "PYTHONPATH",
         "OUROBOROS_DATA_DIR", "OUROBOROS_REPO_DIR", "OUROBOROS_SETTINGS_PATH",

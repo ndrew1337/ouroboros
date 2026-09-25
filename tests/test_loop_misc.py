@@ -76,7 +76,8 @@ def test_owner_directives_survive_compaction_without_control_prose(tmp_path):
         write_owner_message,
     )
 
-    ctx = SimpleNamespace()
+    # An owner-started root: the door's stamp keeps the first text an owner row.
+    ctx = SimpleNamespace(task_metadata={"origin_message_ref": {"chat_id": 1, "client_message_id": "cm-root"}})
     messages = [
         {"role": "system", "content": "policy"},
         {"role": "user", "content": "Initial requirement verbatim"},

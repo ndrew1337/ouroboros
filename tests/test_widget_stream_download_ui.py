@@ -270,14 +270,18 @@ def _native_controller(window, actions, expected, root, evidence, failures):
 
 
 def test_native_widget_exports(widget_server, tmp_path, monkeypatch):
+    # The opt-in comes FIRST: the browser lane installs no desktop extra, and its
+    # registered skip is this reason, not a missing optional import. A run that DID
+    # select native Qt still stops on absent webview/qtpy below, a skip reason the
+    # required lane does not register, so it fails there instead of passing.
+    if os.environ.get('PYWEBVIEW_GUI') != 'qt':
+        pytest.skip('native Qt probe is explicitly selected by its isolated launcher')
     runtime = tmp_path / 'qt-runtime'
     runtime.mkdir(mode=0o700)
     monkeypatch.setenv('XDG_RUNTIME_DIR', str(runtime))
     webview = pytest.importorskip('webview')
     pytest.importorskip('qtpy')
     from qtpy.QtCore import QObject, Signal, Slot
-    if os.environ.get('PYWEBVIEW_GUI') != 'qt':
-        pytest.skip('native Qt probe is explicitly selected by its isolated launcher')
     class Actions(QObject):
         call = Signal(object)
         @Slot(object)

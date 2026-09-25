@@ -45,7 +45,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 
 from ouroboros.config import DATA_DIR
-from ouroboros.config import SETTINGS_DEFAULTS as _SETTINGS_DEFAULTS
+from ouroboros.config import defaults_for_settings_document as _defaults_for_settings_document
 from ouroboros.context_mode_compat import normalize_context_mode_compat
 from ouroboros.gateway._helpers import json_error, request_drive_root
 from ouroboros.settings_integrity import SettingsIntegrityError, read_settings_json_verified
@@ -247,7 +247,8 @@ def _owner_read_settings_raw() -> Dict[str, Any]:
     ratchets and the one-window context-pair persistence are skipped here."""
     from ouroboros import config as _config
 
-    merged = dict(_SETTINGS_DEFAULTS)
+    # An existing (even unreadable) document keeps the optional bounds it ran under.
+    merged = _defaults_for_settings_document(_config.SETTINGS_PATH.exists())
     try:
         raw = read_settings_json_verified(_config.SETTINGS_PATH)
         if isinstance(raw, dict):

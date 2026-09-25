@@ -427,6 +427,8 @@ def test_launcher_forced_stop_passes_retained_subtree(monkeypatch):
     class Process:
         pid = 9990011
         waits = 0
+        def terminate(self):
+            calls.append("graceful")
         def wait(self, timeout):
             self.waits += 1
             if self.waits == 1:
@@ -435,7 +437,6 @@ def test_launcher_forced_stop_passes_retained_subtree(monkeypatch):
     monkeypatch.setattr(launcher, "_agent_proc", Process())
     monkeypatch.setattr(launcher, "_agent_job", None)
     monkeypatch.setattr(launcher, "_retained_shared_daemon_pids", lambda: {9990022})
-    monkeypatch.setattr(launcher, "terminate_process_tree", lambda proc: calls.append("graceful"))
     monkeypatch.setattr(launcher, "kill_process_tree", lambda proc, **kw: calls.append((proc.pid, kw)))
     monkeypatch.setattr(launcher, "_cleanup_recorded_server_group_for_pid", lambda *a: None)
     monkeypatch.setattr(launcher, "_kill_stale_on_port", lambda *a: None)

@@ -17,6 +17,7 @@ from ouroboros.settings_defaults import (
     SUPERVISOR_LIVENESS_DEADLINE_DEFAULT_SEC,
 )
 from ouroboros.settings_integrity import runtime_setting
+from ouroboros.settings_scales import optional_bound_value
 
 # Local model-operation status polling; not a provider deadline or quota timer.
 CLAUDEXOR_MODEL_POLL_INTERVAL_SEC = 0.25
@@ -32,6 +33,12 @@ EXTERNAL_PLATFORM_UPDATE_TIMEOUT_SEC = 3600.0
 EXTENSION_STREAM_CHUNK_BYTES = 64 * 1024
 # Exit/pipe-drain grace after a response ends; never a response lifetime timer.
 EXTENSION_CHILD_CLEANUP_GRACE_SEC = 2
+# Ordinary close (#1142): the launcher waits this long for the server to exit before the group SIGKILL
+# fallback; uvicorn's graceful drain of open HTTP/WS tasks is bounded to the second value so the lifespan
+# teardown — the terminal-custody write `kill_workers` — starts well inside the first. The pair is one
+# budget, not two knobs: raise the drain only with the launcher wait (which ships with a release).
+LAUNCHER_STOP_GRACE_SEC = 10.0
+SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SEC = 3.0
 NESTED_SETTLEMENT_MARGIN_SEC = 30  # Structural ordering margin, not a cognition timeout.
 # Owner-note cadence while a task waits out a provider-connection outage; the effective interval is min(this, idle_timeout/2) so the notes also keep the idle rail alive.
 NETWORK_WAIT_NOTE_INTERVAL_SEC = 300
@@ -63,6 +70,18 @@ WORKER_READY_WINDOW_SEC = 90.0
 WORKER_READY_MAX_ATTEMPTS = 3
 # One extension for a child that wrote its own entry progress, measured from birth, never from the last poll.
 WORKER_READY_CEILING_SEC = 300.0
+
+# Supervisor loop events phase (structural constants, not env knobs). One pass drains at most
+# this many worker events, and stops once this many seconds have passed (checked between
+# handlers, so a running handler can overrun it), before bridge intake runs, so a producer that
+# keeps the queue non-empty can never hide an owner message; the remainder waits for the next
+# turn and a turn that hit its bound skips the idle sleep, so a backlog still drains at full speed.
+SUPERVISOR_EVENT_BATCH_MAX_EVENTS = 100
+SUPERVISOR_EVENT_BATCH_MAX_SEC = 2.0
+# After a compatibility budget-projection write returned False or raised (unknown or stale ledger
+# marker, corrupt ledger), the loop keeps the projection dirty and retries no more often than this,
+# so a frozen-marker install cannot render the ledger every turn forever.
+BUDGET_PROJECTION_RETRY_SEC = 30.0
 
 
 def _clamped_number_setting(key: str, *, low, high=float("inf"), cast=float):
@@ -100,11 +119,42 @@ def get_task_idle_timeout_sec() -> int:
     return _clamped_number_setting("OUROBOROS_TASK_IDLE_TIMEOUT_SEC", low=60, cast=int)
 
 
-def get_task_abs_ceiling_sec() -> int:
-    """Absolute wall-clock backstop per task, independent of activity — the only hard
-    time axis (budget/cost is the other, separate hard axis). A productively-waiting
-    orchestrator survives to this ceiling instead of a flat 1800s wall-clock kill."""
-    return _clamped_number_setting("OUROBOROS_TASK_ABS_CEILING_SEC", low=300, cast=int)
+def _optional_bound_setting(key: str, *, low: int) -> Optional[int]:
+    """Env-or-default optional bound (``settings_scales.optional_bound_value``): ``None`` = no
+    bound, else at least ``low``. An absent variable is the shipped default; an explicitly empty
+    or malformed one is a typo and takes the finite legacy fallback, never "no bound"."""
+    raw = runtime_setting(key)
+    value = optional_bound_value(key, SETTINGS_DEFAULTS[key] if raw is None else raw)
+    return None if value is None else max(low, value)
+
+
+def get_max_rounds() -> Optional[int]:
+    """The total round limit of one task loop; ``None`` = no limit (the shipped default).
+    Presence turns add their own finite inline cap (``loop._resolve_loop_max_rounds``)."""
+    return _optional_bound_setting("OUROBOROS_MAX_ROUNDS", low=1)
+
+
+def get_task_abs_ceiling_sec() -> Optional[int]:
+    """Absolute wall-clock backstop per task, independent of activity; ``None`` = no lifetime
+    bound (the shipped default). Budget/cost and an explicit deadline stay separate hard axes,
+    and a productively-waiting orchestrator is never killed by a flat wall-clock timer. A set
+    value is floored at 300 s so a typo cannot end every task at birth."""
+    return _optional_bound_setting("OUROBOROS_TASK_ABS_CEILING_SEC", low=300)
+
+
+# The finite window ONE physical operation that inherits the task lifetime keeps when the task
+# has none: a delegated agent-session run, a retrieving review session, a VLM child, the
+# plan/preflight tool envelopes, an active-operation idle lease. It is the former shipped task
+# ceiling, so an unlimited task never turns a wedged operation into an unbounded one and never
+# shrinks those operations to a transport bound; a finite lifetime and every deadline still
+# narrow it. Structural, not a settings key.
+OPERATION_WINDOW_FALLBACK_SEC = 21600
+
+
+def operation_window_sec(task_lifetime_sec: Optional[float]) -> float:
+    """The outer window of an operation bounded by the task lifetime: that lifetime when it
+    is finite (``get_task_abs_ceiling_sec()``), else ``OPERATION_WINDOW_FALLBACK_SEC``."""
+    return float(OPERATION_WINDOW_FALLBACK_SEC if task_lifetime_sec is None else task_lifetime_sec)
 
 
 def get_per_call_timeout_ceiling_sec() -> int:

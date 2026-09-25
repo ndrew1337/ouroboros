@@ -326,10 +326,9 @@ def test_infra_failure_is_returned_to_author_without_claiming_acceptance(tmp_pat
     assert decision["status"] == ACCEPTANCE_REVISION_REQUESTED
     assert decision["reason"] == "review_outcome_received"
     assert "boom" in ctx.messages[-1]["content"]
-    run = ctx.llm_trace["review_runs"][-1]
-    assert run["aggregate_signal"] == "DEGRADED"
-    assert run["degraded_reasons"] == ["RuntimeError: boom"]
-    assert not run.get("feedback_delivered")
+    assert not ctx.llm_trace.get("review_runs")  # Local failure invents no critic.
+    assert ctx.llm_trace["review_decision"]["host_failure"]["detail"] == "RuntimeError: boom"
+    assert decision["origin"] == "host_acceptance_processing"
 
 
 def test_supersede_paths_request_a_revision_with_their_own_reason(tmp_path):

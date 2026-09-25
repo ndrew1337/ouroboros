@@ -302,6 +302,13 @@ pointer alone; a card in another chat keeps the excerpt.
 - **Status renders as dot + text.** The dot carries the state at a glance, so
   the sentence does not have to shout it in saturated colour and can sit at
   ordinary reading contrast.
+- **A known outcome owns the status; an unfinished lifecycle stands beside it.**
+  When a task's outcome is already settled while post-task work still runs, the
+  chip states that outcome from the five-word family and `Finalizing…` is a
+  SECOND, quieter fact next to it — not a replacement, not a sixth status word,
+  and never something the card title has to carry instead. The pair is one
+  accessible name, so a screen reader hears the outcome and the hold together.
+  An owner stop outranks the hold entirely and speaks for itself.
 - **Neutral is a real state**, not an absence of one. A classification chip
   (which agent, which family) is neutral: it is a tag, not an alarm.
   A tone value the code actually emits (`muted`) must have a rule; falling
@@ -767,7 +774,18 @@ the wait controls stay, and its first row of work gives it the title. The
 collapsed header carries the tool count live and, once the turn ends, cost and
 duration (a replayed header carries the count and cost; duration is a live
 fact); its `updated` stamp follows the turn's own narration, never a host note
-and never a tool call. The
+and never a tool call. Money on that header is ONE line whose wording carries
+its own openness, and it never renders an unknown as a number: `$0.00` only
+where priced rows evidenced that zero, `up to $1.20` while the tracked subtotal
+is still inexact, `Tracked: $1.20` with the reason stated in words
+beside it (`some steps have no price`) when part of the same scope has no price
+at all (`Tracked: up to $1.20` when that subtotal itself is inexact), and
+`Cost unknown` for unpriced rows with no tracked amount. An empty, intact ledger
+has no money line; an empty view with an integrity gap stays unknown. Neither
+proves a free result. The explanation is text on the line,
+never a hover-only title, because a tooltip is invisible on touch, to assistive
+technology and in a copied line. Every part of that meta line is separated by a
+real ` · ` text part for the same reason. The
 host's `_is_direct_chat` fact keeps its host jobs (routing, census `kind`, Stop
 custody, terminal rows) and, on the client, only the header pill (a direct turn
 keeps the census verdict beside its block). A block whose only reason to exist

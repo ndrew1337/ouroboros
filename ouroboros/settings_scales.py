@@ -1,14 +1,16 @@
 """Ouroboros — the closed scales a settings value is clamped to.
 
-Reasoning effort, prompt-cache tier, runtime mode and safety-supervisor coverage
-are ordered or enumerated vocabularies. Each one is defined once here, with the
+Reasoning effort, prompt-cache tier, runtime mode, safety-supervisor coverage and the
+optional positive bounds (a positive integer or "unlimited") are ordered or enumerated
+vocabularies. Each one is defined once here, with the
 clamp that turns any caller-supplied or environment-supplied text into a member
 of it, so an unknown value can never reach a consumer.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import logging
+from typing import Any, Optional
 
 from ouroboros.settings_defaults import SETTINGS_DEFAULTS
 from ouroboros.settings_integrity import runtime_setting
@@ -154,3 +156,74 @@ RESTART_REQUIRED_SETTINGS = frozenset({
     # deliberately NOT here: the alarm clock reads them at each decision
     # (consciousness.tick / set_next_wakeup), so a save applies without a restart.
 })
+
+
+# Optional positive bounds: a positive integer, or the literal "unlimited" for no bound. ONE
+# vocabulary for every such knob — the shared paid-review-cycle cap (review_cycles.py), the task
+# round limit and the absolute task lifetime — so the Settings UI, the settings write boundary and
+# every runtime reader spell "no limit" alike. "none" is deliberately NOT an alias: it reads as
+# "zero" as easily as "no cap".
+UNLIMITED = "unlimited"
+UNLIMITED_ALIASES = frozenset({UNLIMITED, "inf", "∞"})
+
+
+def parse_positive_or_unlimited(raw: Any) -> Optional[int]:
+    """Strict parser: positive-integer text → int; an unlimited alias → None.
+
+    Raises ``ValueError`` for anything else (empty, zero, negative, non-integer,
+    unknown word) so each caller decides between its own fail-closed read and a
+    400 at the write boundary."""
+    text = str(raw if raw is not None else "").strip().lower()
+    if text in UNLIMITED_ALIASES:
+        return None
+    if not text:
+        raise ValueError("empty bound")
+    value = int(text)  # ValueError on non-integer text (incl. "true"/"1.5")
+    if value < 1:
+        raise ValueError(f"bound must be a positive integer, got {value}")
+    return value
+
+
+# The task round limit and the absolute task lifetime ship as "unlimited" (#1196): a fresh
+# install — no settings document yet — bounds a task by money, deadlines, Stop/Panic and the idle
+# rail, not by its age or round count. A document an earlier release wrote without one of these
+# keys ran under that release's finite default, so readers keep THAT value as the key's default for
+# such a document (``defaults_for_settings_document``) and as the typed fallback for a malformed
+# value: an update never silently lifts a bound an install was running under, a typo never means
+# "no bound", and a read never rewrites the document.
+OPTIONAL_BOUND_LEGACY: dict[str, int] = {
+    "OUROBOROS_MAX_ROUNDS": 200,
+    "OUROBOROS_TASK_ABS_CEILING_SEC": 21600,
+}
+_WARNED_OPTIONAL_BOUNDS: set = set()
+
+
+def optional_bound_value(key: str, raw: Any) -> Optional[int]:
+    """One read of an ``OPTIONAL_BOUND_LEGACY`` key: ``None`` = no bound, else a positive int.
+
+    An integral float is its integer (a harness may write ``10800.0``). Whatever the strict
+    parser refuses — blank, null, zero, negative, a fraction, a word — is a typo, never "no
+    bound": it takes the key's finite legacy value, reported once per process and value."""
+    value = int(raw) if isinstance(raw, float) and raw.is_integer() else raw
+    try:
+        return parse_positive_or_unlimited(value)
+    except (TypeError, ValueError):
+        fallback = OPTIONAL_BOUND_LEGACY[key]
+        if (key, repr(raw)) not in _WARNED_OPTIONAL_BOUNDS:
+            _WARNED_OPTIONAL_BOUNDS.add((key, repr(raw)))
+            logging.getLogger(__name__).warning(
+                "%s=%r is not a positive integer or %r; using the finite fallback %s",
+                key, raw, UNLIMITED, fallback)
+        return fallback
+
+
+def defaults_for_settings_document(document_present: bool) -> dict:
+    """The defaults a reader merges under the settings document: the shipped values, with each
+    optional bound's finite legacy value while a document exists (``OPTIONAL_BOUND_LEGACY``).
+    Every writer that creates a document persists a defaults-merged one (the context-mode
+    compatibility pass only rewrites an existing document), so only a document an earlier
+    release or a harness wrote without the key falls to the legacy value."""
+    defaults = dict(SETTINGS_DEFAULTS)
+    if document_present:
+        defaults.update(OPTIONAL_BOUND_LEGACY)
+    return defaults

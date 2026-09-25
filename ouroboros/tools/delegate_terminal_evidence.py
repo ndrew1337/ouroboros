@@ -217,6 +217,10 @@ def _terminal_payload(run_id: str, detail: Dict[str, Any],
             "assignment plus the answers; custody of the new run stays with you. "
             "Do not look for a rerun/decision verb — none exists on this surface."
         )
+        # The typed twin of the note (serial addressed turns): this lane's next
+        # turn is a NEW physical run, never a resumed session — the honest
+        # opposite of the waiting_on_user payload's ``same_session``.
+        payload["continuation"] = "new_physical_run"
     return payload
 
 

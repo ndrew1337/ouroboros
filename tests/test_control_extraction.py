@@ -157,6 +157,7 @@ def test_control_catalog_handler_owners_point_at_the_carried_leaves():
         "get_task_result": (control_task_results, "_get_task_result"),
         "wait_task": (control_task_results, "_wait_for_task"),
         "wait_tasks": (control_task_results, "_wait_for_tasks"),
+        "await_messages": (control_task_results, "_await_messages"),
     }
     for name, (module, attr) in owned.items():
         assert name in entries, name

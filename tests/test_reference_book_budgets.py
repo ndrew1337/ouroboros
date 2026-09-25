@@ -26,7 +26,14 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # extension_isolated_deps.py barrier and the widget_list.js request seam land
     # beside the handoff/schedule rows the base added; none displaces older text.
     # +400 (#1213): two new module rows (focus.py, room_consolidation.py) in the tree map.
-    "docs/architecture/01-high-level-architecture.md": 164800,
+    # +500 (#1222-#1224): three module rows for the new leaves
+    # (acceptance_preparation.py, acceptance_retrieving.py, repo_diff_capture.py)
+    # and what each owns; none displaces older text.
+    # +200 (issue #1241): the subagent_worktrees module-map row states the lock scope
+    # (measured 165470 on the merged chapter).
+    # 165500 -> 165550: the long-work continuity merge landed the chapter at 165507 (over by
+    # 7 bytes on the official line); re-based here, no text of this chapter was touched.
+    "docs/architecture/01-high-level-architecture.md": 165550,
     # 15517 -> 16200 (#1195): the session-custodied startup historical audit is a
     # new node of the startup flow (readiness no longer waits for the historical
     # seal diagnostic); the chapter had no older description of that pass to replace.
@@ -59,7 +66,12 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # 106400 -> 106600 (#1195 merge of 32d8dfc6): the base's settings_catalog.js
     # paragraph (#1214, +319 bytes) landed in the same window; both additions stand,
     # neither displaces the other's text.
-    "docs/architecture/03-web-ui-pages-and-buttons.md": 106600,
+    # 106600 -> 107000 (truthful-cards batch): the chapter gains one new owner
+    # paragraph (`terminal_projection.py`, #1154) and the checkpoint/cancellation
+    # vocabulary (#931/#1061); the touched descriptions were REPLACED and
+    # compressed (net chapter growth is under the added owner's paragraph size),
+    # and the merged #1236 base already sat 5 bytes under the previous budget.
+    "docs/architecture/03-web-ui-pages-and-buttons.md": 107000,
     "docs/architecture/04-server-api-endpoints.md": 26833,
     # 27137 -> 30400: the schedule table gains a documented write contract the
     # chapter had no text for — one transaction owning the lock ORDER, the strict
@@ -72,7 +84,19 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # displace; two neighbouring sentences were compressed by 168 bytes first.
     # +300: the queue snapshot and the supervisor focus event carry the root's
     # bounded authored focus (cross-focus awareness).
-    "docs/architecture/05-supervisor-loop.md": 30900,
+    # 30900 -> 31150 (issue #1142): the crash counter's shutdown exemption names WHERE the stop
+    # event is set (the uvicorn signal handler, then the lifespan teardown) and why both are needed.
+    # 31150 -> 31300 (issue #1002): the budget-projection paragraph states what the persisted
+    # projection carries (totals only) and where per-root money lives; the chapter had no
+    # sentence about the shape of the persisted projection to replace.
+    # 31300 -> 31500 (issue #1230): the reconciliation sentence states the two-read rule of
+    # task reconciliation (decide on a status-only read, materialize only the healed row)
+    # and the cadence stamp at pass end; the older clause it extends is kept, not duplicated.
+    # 31500 -> 32400: the tick description names the bounded events batch and the one
+    # projection write per turn (the unbounded drain and per-event write they replace had
+    # no sentence of their own), and the projection paragraph states the writer's slim read,
+    # its retry interval and the crossing rule of the OpenRouter check.
+    "docs/architecture/05-supervisor-loop.md": 32400,
     # 286850 -> 287600: "an answer that has not arrived is a gap" is a new invariant of
     # plan review and task acceptance (the slot census vocabulary, the `awaiting`
     # projection, the only-awaited task outcome); the in-flight sentence it grew from is
@@ -96,11 +120,63 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # the digest-selected historical read and the reader admission rule.
     # 295650 -> 297250: document the new diagnostic-only source/coverage contract,
     # unavailable evidence and no-effects ordering without removing review/custody rules.
-    "docs/architecture/06-agent-core.md": 297250,
-    "docs/architecture/07-configuration.md": 36991,
+    # 297250 -> 303900 (#1222-#1224; measured 303813 on the merged chapter): three mechanisms this chapter had no text for.
+    # The single acceptance repository BYTES capture (file-backed spool under a real
+    # subprocess timeout, streamed private retention, redaction before any cut) with its
+    # two non-interchangeable identities and typed gaps; the LOCAL pre-binding
+    # preparation incident (semantic material identity without the owner transcript,
+    # the source-bytes identity, one exposure per real attempt bound to that attempt,
+    # the repeat guard ahead of every fallible pre-binding step, the informed author
+    # path that needs neither a working builder nor a fingerprint, the one-use
+    # source-bound retry with spent keys, the stage separation, and the existing
+    # review-projection carrier that makes it visible); and the unified
+    # spend-and-continue budget tail, which replaces only the half-sentence "checks the
+    # axis only after tool-call rounds".
+    # 303900 -> 306000 (issue #1241; measured 305853 on the merged chapter): the
+    # private-snapshot paragraph now states the worktree ops lock's scope (shared
+    # metadata only, row-then-ref order, batched binary verdict, typed busy refusal)
+    # — rationale-layer text BIBLE P6 requires.
+    # 306000 -> 306800: the predecessor door is a predicate on the result, never on the
+    # caller's room, the landing project or the root/helper distinction (the disclosed
+    # notes replace the one-clause pointer to §10); the registry read of the routing
+    # verbs on a forked execution drive and the predecessor's task files as a lineage
+    # read are new facts of the paragraphs they extend. The merged base sat 147 bytes
+    # under the previous budget.
+    # 306800 -> 307100 (#1247 fix-forward; measured 306832 on the merged chapter): the
+    # populate sentence names the post-copy stat re-record that keeps a CRLF-converting
+    # checkout clean.
+    # 307100 -> 307800 (#1196, measured 307709): the exact budget pause / Resume owner
+    # table, the finite leaf continuation admission and the strict money read are the
+    # rationale layer of a new lifecycle; the Budget tracking prose they extend was
+    # compressed in the same diff rather than appended to.
+    # 307800 -> 308900: the official line landed the chapter over its own budget (308475
+    # after the long-work continuity merge, 308678 after the Claudexor 3.14.0 pin, #1264);
+    # the run-origin sentences replace the "request decides what the run was for" and the
+    # owner-turn descriptions (+144 on the merged base) rather than appending to them.
+    # 308900 -> 309800 (#1262): the one name-miss answer, every-mode discovery and the MCP
+    # lookup-before-safety facts are mechanisms no older text held; the "Not found"
+    # sentence they sit in was compressed rather than appended to (measured 309712).
+    # 309800 -> 310100 (TZ2 + #1262 merge, measured 309985): the Presence task-message
+    # own-binding boundary and forced declaration remain beside #1262's name-miss
+    # contract; both are independent rules in the same chapter, not duplicate prose.
+    "docs/architecture/06-agent-core.md": 310100,
+    # 36991 -> 37300: the facade paragraph names the three loop constants runtime_limits.py
+    # gained (events batch bound, budget-projection retry interval); no older text to displace.
+    "docs/architecture/07-configuration.md": 37300,
     # 18947 -> 19287: CI failure collection now documents diagnostic desktop builds while release remains gated.
-    "docs/architecture/08-git-branching-ci-and-build.md": 19287,
-    "docs/architecture/09-shutdown-and-process-cleanup.md": 12405,
+    # 19287 -> 20560 (#1215): three contracts the chapter had no older text for — the
+    # ONE reusable browser lane and the two triggers that share it (the unfiltered
+    # `ouroboros` push included), the per-checkout static/VERSION provenance a boot
+    # and a restart prove, and the scrubbed roots plus the single dependency-sync
+    # chokepoint. The `ui-smoke` row it replaces was rewritten, not appended to.
+    # 20560 -> 20800 (PR #1255; measured 20768): the Docker subsection maps the new root
+    # .dockerignore (what it keeps out of image layers and why .git/tests/ must stay in),
+    # a config BIBLE P6 requires on the map.
+    "docs/architecture/08-git-branching-ci-and-build.md": 20800,
+    # 12405 -> 14400 (issue #1142): the ordinary-close paragraph gains the mechanism the chapter had
+    # no text for — graceful stop signals the server PID only, the server half (stop event at the
+    # signal, bounded uvicorn drain) is self-sufficient against an old group-SIGTERM launcher.
+    "docs/architecture/09-shutdown-and-process-cleanup.md": 14400,
     # 17655 -> 20400: the supervisor-reliability sprint adds eight invariants the chapter lacked
     # (typed permanent engine refusal, interrupted parent, stalled-loop facts, source-ack
     # pre-check, host-owed round, reviewer tool bound, off-thread custody, fence transport) —
@@ -114,10 +190,29 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # residual sentence of the off-thread invariant; the rule itself has no older text.
     # +200 (2026-09-22): invariant 10 names the process-local fingerprint memos
     # and their fallback rule; the base sat 23 bytes under the previous budget.
-    "docs/architecture/10-key-invariants.md": 21300,
+    # 21300 -> 21700: invariant 27 states the door as a predicate on the root (any actor
+    # holding a routing verb, any project, a disclosed landing) with the reason the
+    # room comparison protected nothing; the earlier one-clause form is replaced, and
+    # the base sat 34 bytes under the previous budget.
+    "docs/architecture/10-key-invariants.md": 21700,
     "docs/architecture/11-frozen-contracts-v1.md": 24194,
     # +400 (#1213): Presence turns are named as actors without cross-focus catalogue or focus authority.
-    "docs/architecture/12-host-service-companions-and-chat-ids.md": 11400,
+    # 11400 -> 12500: presence PR0 adds rules the chapter lacked, one sentence each (unified
+    # conversation key, placeholder re-run and its lost-attempt facts, presence-local liveness,
+    # previous-turn pointer and its replay repair, split in-flight budgets, silent orphaned work,
+    # presence room label); the base sat 2 bytes under.
+    # 12500 -> 13400 (TZ2 own work): the Presence paragraph gains two contracts it had
+    # no text for — what a binding's own work is and which readers/controls reach it
+    # (replacing the conversation-exact cancel sentence), and the forced-final split
+    # between the internal record and the declared reply; the base sat 10 bytes under.
+    # 13400 -> 13700 (TZ2 descendant authority): one sentence the chapter lacked — a
+    # delegated descendant's inherited binding authority, apart from the speaker metadata.
+    # 13700 -> 13950 (TZ2 repair, measured 13918): that sentence now names what the
+    # descendant's promote/follow-up roots carry and the canonical-first steer precedence
+    # (replacing the live-row clause), and "host diagnostics" states its ordinary-final limit.
+    # 13950 -> 14100 (TZ2 review): a deferred tool-delivery finish note is
+    # carried separately from prior speech in the same previous-turn pointer.
+    "docs/architecture/12-host-service-companions-and-chat-ids.md": 14100,
     # 7764 -> 8600 (#1195): the fresh selected-subject + immutable peer projection
     # execution check (`skill_peer_inventory.py`, `skill_conflicts.py`) replaces
     # whole-inventory hashing; the chapter had no description of that seam to swap out.
@@ -131,7 +226,9 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # +300 (2026-09-22): two new house precedents (custody row memo, bounded
     # filtered tail reader) join the projection-over-replay list; the base sat
     # 15 bytes under the previous budget.
-    "docs/development/03-module-size-and-complexity.md": 23400,
+    # 23400 -> 23500: the long-work continuity merge landed the chapter at 23471 on the
+    # official line; re-based here, no text of this chapter was touched.
+    "docs/development/03-module-size-and-complexity.md": 23500,
     "docs/development/04-core-governance-artifacts.md": 16431,
     "docs/development/05-review-and-commit-protocol.md": 12956,
     # 94197 -> 94520: the usage-ledger lock rule gains its reader contract (a display read
@@ -139,7 +236,15 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # never does; a pre-check's refusal takes the exact read). The one sentence it touches
     # (the lock's caller wait) is replaced; the rest is a rule the chapter lacked, and the
     # chapter had 5 bytes left. Sized to the text: 5 bytes of margin.
-    "docs/development/06-rules-by-change-class.md": 94520,
+    # 94520 -> 94900: the delegated-lane bullet names the worktree ops lock rule
+    # (issue #1241: no tree walk or per-file git process under the lock).
+    # 94900 -> 95000 (TZ2 own work): the Presence bullets replace the conversation-exact
+    # cancel clause with the own-binding rule and name the forced declaration.
+    # 95000 -> 95150 (TZ2 descendant authority): the own-binding bullet names how a delegated
+    # descendant is a Presence caller (inherited binding authority, never speaker metadata).
+    # 95150 -> 95200 (TZ2 repair, measured 95191): the promotion/follow-up clause names the
+    # one carrier it copies instead of "the Presence metadata".
+    "docs/development/06-rules-by-change-class.md": 95200,
     "docs/development/07-managed-update-rule.md": 4166,
     "docs/development/08-mutation-attribution-rule.md": 2899,
     "docs/development/09-process-custody-rule.md": 10028,
@@ -150,10 +255,18 @@ CHAPTER_BYTE_BUDGETS: dict[str, int] = {
     # system-message-actions bullet and adds what no older text held: the door, the
     # regenerate-and-read-the-neighbours duty and what enforces each half.
     "docs/development/11-design-system.md": 28300,
-    "docs/development/12-mcp-client-integration.md": 3313,
+    # 3313 -> 3520 (#1262): the missed-name rule (catalog-only answer, no guess, alias,
+    # cross-server hint or automatic call, before safety); no older text held it (measured 3506).
+    "docs/development/12-mcp-client-integration.md": 3520,
     "docs/development/13-gateway-boundary-pattern.md": 2228,
     # 14958 -> 16100: release proof now records diagnostic signing/attestation side effects, authority asymmetry, and fail-closed prerequisites.
-    "docs/development/14-build-and-ci.md": 16100,
+    # 16100 -> 19350 (#1215): the safe-launch recipe an operator must copy exactly,
+    # and the dirty-candidate contract (supported and refused inputs, proof bytes,
+    # required-lane guards). Compressed first and the guard description deduplicated
+    # against the lane bullet; what remains is a mechanism the chapter lacked, so it
+    # cannot replace older text. 3283 -> 2969 bytes of section after that pass, plus
+    # the `--temp-parent` refusal clause (a nested disposable root is not disposable).
+    "docs/development/14-build-and-ci.md": 19500,
 }
 
 

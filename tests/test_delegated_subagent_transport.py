@@ -307,6 +307,82 @@ def test_the_window_class_is_transient_and_scheduled_by_its_reset():
     assert classification.reset_at == "2030-01-01T00:00:00Z"
 
 
+def _control_problem(code: str, context: dict, status: int = 409) -> cx.ClaudexorUnavailable:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, json={
+            "code": code, "message": f"{code} refusal", "retryable": False, "context": context})
+
+    with _gateway(handler) as gateway:
+        with pytest.raises(cx.ClaudexorUnavailable) as excinfo:
+            gateway.get_run("run-1")
+    return excinfo.value
+
+
+def test_a_pool_heals_on_a_timer_only_when_the_engine_dated_it():
+    """Owner decision: a credential pool exhausted for a STRUCTURAL reason (every enabled
+    account refused the model, every account disabled: the engine names no reset) must not
+    masquerade as a quota timer. Both producer seams (run failure, ControlProblem) key on
+    the structured `resetsAt` through one helper; nothing reads the prose."""
+    reset = "2030-01-01T00:00:00Z"
+    dated_failure = {"code": "credential_pool_exhausted", "resetsAt": reset,
+                     "safeMessage": "every account is cooling down"}
+    for dated in (_control_problem("credential_pool_exhausted", {"resetsAt": reset}),
+                  cx.run_failure_error("run-1", "failed", dated_failure)):
+        assert isinstance(dated, cx.ClaudexorSubscriptionWindowExhausted)
+        assert (dated.code, dated.reset_at) == ("credential_pool_exhausted", reset)
+    dated_run = cx.run_failure_error("run-1", "failed", dated_failure)
+    assert dated_run.reported_cause == "every account is cooling down"
+    # A dated pool heals on the same timer as a spent window, so it is SCHEDULED
+    # against its reset (not the short backoff) and keeps its own code as evidence.
+    dated_class = classify_llm_exception(dated_run)
+    assert (dated_class.kind, dated_class.retry_same_request) == (SUBSCRIPTION_WINDOW_EXHAUSTED, True)
+    assert dated_class.provider_code == "credential_pool_exhausted"
+    assert dated_class.reset_at == reset and dated_class.retry_after_sec is not None
+    assert dated_class.retry_after_sec > 60.0
+
+    # Other direction: an absent, empty or null reset is structural: a plain refusal
+    # under the SAME code, the engine's words still carried beside it.
+    undated_failure = {"code": "credential_pool_exhausted",
+                       "safeMessage": "every enabled account refused the model"}
+    undated = [
+        _control_problem("credential_pool_exhausted", {}),
+        _control_problem("credential_pool_exhausted", {"resetsAt": ""}),
+        _control_problem("credential_pool_exhausted", {"resetsAt": None}),
+        cx.run_failure_error("run-1", "failed", undated_failure),
+        cx.run_failure_error("run-1", "failed", {**undated_failure, "resetsAt": ""}),
+    ]
+    for exc in undated:
+        assert type(exc) is cx.ClaudexorUnavailable
+        assert exc.code == "credential_pool_exhausted"
+    run_undated = undated[3]
+    assert run_undated.reported_cause == "every enabled account refused the model"
+    # It classifies exactly as a plain refusal of the same code: no timer, no instant.
+    classification = classify_llm_exception(run_undated)
+    assert classification == classify_llm_exception(
+        cx.ClaudexorUnavailable("credential_pool_exhausted", str(run_undated)))
+    assert classification.kind == "provider_error"
+    assert classification.kind != SUBSCRIPTION_WINDOW_EXHAUSTED
+    assert (classification.retry_after_sec, classification.reset_at) == (None, "")
+
+    # A spent subscription window keeps its unconditional mapping (the engine always
+    # dates it): even an undated one stays the window class.
+    for context in ({"resetsAt": reset}, {}):
+        window = _control_problem("subscription_window_exhausted", context, status=429)
+        assert isinstance(window, cx.ClaudexorSubscriptionWindowExhausted)
+        assert classify_llm_exception(window).kind == SUBSCRIPTION_WINDOW_EXHAUSTED
+
+
+def test_an_invalid_request_stays_a_permanent_plain_refusal():
+    """The code decides: a stray reset instant never turns a request refusal into a
+    timer, and the engine's 400 stays non-retryable."""
+    exc = _control_problem("invalid_request", {"resetsAt": "2030-01-01T00:00:00Z"}, status=400)
+    assert type(exc) is cx.ClaudexorUnavailable and exc.code == "invalid_request"
+    classification = classify_llm_exception(exc)
+    assert classification.kind == "bad_request"
+    assert classification.retry_same_request is False
+    assert (classification.retry_after_sec, classification.reset_at) == (None, "")
+
+
 def test_a_billing_refusal_stays_permanently_classified():
     classification = classify_llm_exception(RuntimeError("402 payment required"))
     assert classification.kind == "quota_exhausted"
@@ -469,6 +545,7 @@ def test_the_public_wait_is_event_only_and_its_outer_bound_matches_task_lifetime
         DELEGATE_WAIT_WINDOW_MAX_SEC,
         get_delegate_wait_max_sec,
         get_task_abs_ceiling_sec,
+        operation_window_sec,
     )
     from ouroboros.delegate_progress import EXTERNAL_WAIT_LEASE_CEILING_SEC
     from ouroboros.loop_tool_execution import _DEADLINE_CLAMPED_TOOLS, _PER_CALL_TIMEOUT_TOOLS
@@ -476,7 +553,7 @@ def test_the_public_wait_is_event_only_and_its_outer_bound_matches_task_lifetime
 
     entry = next(e for e in get_tools() if e.schema["name"] == "delegate_wait")
     assert "wait_sec" not in entry.schema["parameters"]["properties"]
-    assert entry.timeout_sec == get_task_abs_ceiling_sec() + 120
+    assert entry.timeout_sec == operation_window_sec(get_task_abs_ceiling_sec()) + 120
     assert DELEGATE_WAIT_WINDOW_MAX_SEC < DELEGATE_WAIT_CEILING_SEC < EXTERNAL_WAIT_LEASE_CEILING_SEC
     assert (DELEGATE_WAIT_WINDOW_MAX_SEC, DELEGATE_WAIT_CEILING_SEC,
             EXTERNAL_WAIT_LEASE_CEILING_SEC) == (1800, 2100, 2400)

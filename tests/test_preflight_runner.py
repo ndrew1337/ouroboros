@@ -533,7 +533,7 @@ def test_projected_settings_keys_never_reach_the_candidate_suite(tmp_path, monke
 
     monkeypatch.setenv(key, "owner-runtime-state")
     env = _preflight_env(tmp_path / "root", tmp_path / "root" / "repo")
-    assert key not in env, f"{key} leaked into the candidate suite"
+    assert env.get(key) != "owner-runtime-state", f"{key} leaked into the candidate suite"
 
 
 def test_the_gate_pins_the_worker_count_it_verified(tmp_path, monkeypatch):
@@ -567,7 +567,7 @@ def test_the_worker_probe_is_prepended_to_pythonpath(tmp_path, monkeypatch):
     assert entries[0] == str(pr._probe_dir(root.resolve(strict=False))), (
         "the gate's probe dir is shadowable"
     )
-    assert "/inherited/first" in entries, "the inherited PYTHONPATH was discarded, not prepended to"
+    assert "/inherited/first" not in entries, "an owner import path leaked into the candidate"
 
     module = pr._install_worker_probe(root)
     assert module.startswith(pr._WORKER_PROBE_MODULE + "_"), module
@@ -1259,6 +1259,75 @@ def test_a_pass_whose_tree_cannot_be_proven_gone_blocks_even_when_it_exits_zero(
     assert [event[0] for event in events].count("pass") == 1, (
         "the serial pass ran on top of a tree that could not be proven gone"
     )
+
+
+@pytest.mark.parametrize("lane", ["proven", "pass_reported", "pass_raised", "node_reported", "node_raised"])
+def test_the_hermetic_tree_is_deleted_only_after_every_lane_proved_its_teardown(
+    tmp_path, two_pass_env, stub_passes, monkeypatch, lane,
+):
+    """The verdict blocks; the TREE is a separate custody question.
+
+    A lane whose processes were not proven gone — reported by its container, or
+    left unknown because the lane raised — must not have the worktree those
+    processes run in deleted under them, nor its source-repository registration
+    removed: tree, marker and registration stay, and the verdict names the path.
+    The proven control is the other half: a clean run leaks nothing."""
+    from ouroboros import preflight_runner as pr
+    from ouroboros.test_environment import RETENTION_MARKER
+
+    temp_root = (tmp_path / "preflight-root").resolve()
+    temp_root.mkdir()
+    monkeypatch.setattr(tempfile, "mkdtemp", lambda *a, **k: str(temp_root))
+    worktree = temp_root / "repo"
+    unproven = "pid 4242 was still alive after the reap"
+
+    def crash(*_args):
+        raise RuntimeError("the lane crashed before its teardown settled")
+
+    if lane == "node_reported":
+        monkeypatch.setattr(pr, "run_node_tests", lambda *_a: {
+            "returncode": 0, "reap_error": unproven,
+            "error": "⚠️ PRE_PUSH_TEST_ERROR: PREFLIGHT_CONTAINMENT_FAILED (hard block): node",
+        })
+    elif lane == "node_raised":
+        monkeypatch.setattr(pr, "run_node_tests", crash)
+    stub_passes({
+        "proven": [(0, "1 passed"), (0, "1 passed")],
+        "pass_reported": [(0, "1 passed", unproven)],
+        "pass_raised": [crash],
+    }.get(lane, []))
+    repo = _make_repo(tmp_path, {"tests/test_plain.py": "def test_ok():\n    assert True\n"})
+    try:
+        result = pr.run_hermetic_pytest(repo, timeout=120)
+        registered = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"], cwd=str(repo),
+            capture_output=True, text=True, check=True,
+        ).stdout
+        if lane == "proven":
+            assert result is None, result
+            assert not temp_root.exists(), "a proven teardown leaked its disposable tree"
+            assert f"worktree {worktree.as_posix()}\n" not in registered, registered
+            return
+        assert result is not None and result.startswith("⚠️ PRE_PUSH_TEST_ERROR"), result
+        assert result.splitlines()[1].startswith(f"RETAINED (not deleted): {temp_root}"), result
+        assert worktree.is_dir(), "the worktree was deleted under processes not proven gone"
+        assert f"worktree {worktree.as_posix()}\n" in registered, registered
+        marker = (temp_root / RETENTION_MARKER).read_text(encoding="utf-8")
+        assert marker.startswith("hermetic preflight: "), marker
+        assert (unproven in marker) == lane.endswith("_reported"), marker
+    finally:
+        subprocess.run(["git", "worktree", "remove", "--force", str(worktree)],
+                       cwd=str(repo), capture_output=True)
+
+
+def test_the_retention_notice_precedes_the_body_and_stays_inside_the_budget():
+    from ouroboros.preflight_runner import _with_retention_notice
+
+    tree = pathlib.Path("/t/ouroboros-preflight-x/repo")
+    assert _with_retention_notice("H\nbody", "", tree, 8000) == "H\nbody"
+    kept = _with_retention_notice("H\n" + "b" * 9000, "unproven", tree, 400)
+    assert kept.startswith(f"H\nRETAINED (not deleted): {tree.parent},"), kept
+    assert len(kept) == 400
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX marker-enumeration containment")

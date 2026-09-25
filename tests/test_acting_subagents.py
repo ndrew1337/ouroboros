@@ -20,8 +20,8 @@ from ouroboros.tools.registry import ToolContext, ToolRegistry
 from ouroboros import subagent_worktrees as sw
 
 
-def _git(repo, *args, check=True):
-    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, check=check)
+def _git(repo, *args, check=True, text=True):
+    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=text, check=check)
 
 
 def _init_repo(path: pathlib.Path, files: dict) -> str:
@@ -422,7 +422,7 @@ def _make_child_patch(target_repo: pathlib.Path, drive: pathlib.Path, child_id: 
     (target_repo / rel).parent.mkdir(parents=True, exist_ok=True)
     original = (target_repo / rel).read_text(encoding="utf-8") if (target_repo / rel).exists() else ""
     (target_repo / rel).write_text(new_content, encoding="utf-8")
-    patch = _git(target_repo, "diff", "--binary", "HEAD", "--").stdout
+    patch = _git(target_repo, "diff", "--binary", "HEAD", "--", text=False).stdout
     # revert working tree so the patch can be applied fresh by the tool
     _git(target_repo, "checkout", "--", rel) if original else (target_repo / rel).unlink()
     art = task_artifact_dir_path(drive, child_id, create=True)
@@ -430,7 +430,7 @@ def _make_child_patch(target_repo: pathlib.Path, drive: pathlib.Path, child_id: 
     # hash. write_text() would translate "\n" -> "\r\n" on Windows, so the file's
     # sha256 (read back as bytes by the integrate tool) would diverge from the
     # manifest digest and trip INTEGRATE_PATCH_CORRUPT. Binary write keeps parity.
-    patch_bytes = patch.encode("utf-8")
+    patch_bytes = patch
     (art / "workspace.patch").write_bytes(patch_bytes)
     digest = sha256(patch_bytes).hexdigest()
     manifest = {
@@ -464,10 +464,10 @@ def _make_child_delete_patch(target_repo: pathlib.Path, drive: pathlib.Path, chi
     from hashlib import sha256
 
     (target_repo / rel).unlink()
-    patch = _git(target_repo, "diff", "--binary", "HEAD", "--").stdout
+    patch = _git(target_repo, "diff", "--binary", "HEAD", "--", text=False).stdout
     _git(target_repo, "checkout", "--", rel)
     art = task_artifact_dir_path(drive, child_id, create=True)
-    patch_bytes = patch.encode("utf-8")
+    patch_bytes = patch
     (art / "workspace.patch").write_bytes(patch_bytes)
     digest = sha256(patch_bytes).hexdigest()
     manifest = {

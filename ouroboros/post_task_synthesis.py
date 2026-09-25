@@ -86,6 +86,18 @@ def capture_task_inputs(ctx: Any, task: dict, drive_root: Any, receipts: list) -
         "unavailable_sections": [],
     }
     try:
+        # The run's provenance comes first: the synthesis reads who started the run
+        # and whether the owner door stamped it before it reads the first text.
+        from ouroboros.dialogue_provenance import run_origin
+
+        metadata = getattr(ctx, "task_metadata", None)
+        result["run_origin"] = run_origin({
+            **task, "metadata": metadata if isinstance(metadata, dict) else task.get("metadata"),
+        })
+    except Exception:
+        result["unavailable_sections"].append("run_origin")
+        log.warning("Task run origin unavailable for synthesis: %s", task_id, exc_info=True)
+    try:
         result["owner_requirements_and_decisions"] = _accept_owner_directives(ctx, drive_root, task_id)
     except Exception:
         result["unavailable_sections"].append("owner_requirements_and_decisions")
@@ -444,11 +456,13 @@ def _pre_synthesis_usage_snapshot(
     })
     try:
         from ouroboros.usage_accounting import usage_breakdown
+        from ouroboros.cost_projection import COST_SCOPE_ROOT_TREE, build_cost_presentation
 
         logical_root_id = str(task.get("root_task_id") or task_id)
         subtree = usage_breakdown(budget_root, root_task_id=logical_root_id)
         snapshot.update({
             "accounted_upper_bound_usd_with_children": round(float(subtree["accounted_usd"]), 6),
+            "cost_presentation": build_cost_presentation(subtree, scope=COST_SCOPE_ROOT_TREE),
             "reserved_usd": round(float(subtree["reserved_usd"]), 6),
             "unresolved_upper_bound_usd": round(
                 float(subtree["unresolved_upper_bound_usd"]), 6
@@ -472,6 +486,7 @@ def _pre_synthesis_usage_snapshot(
             "unknown_unmetered": None,
             "ledger_integrity": "unavailable",
             "cost_accounting_status": "unavailable",
+            "cost_presentation": None,
         })
     return snapshot
 
@@ -761,7 +776,7 @@ End with a task-scoped trace pointer: task_id={task_id}, task-events reader
 (CLI: ouroboros tasks watch {task_id} --jsonl). Do not guess flat log-file paths;
 the existing task reader merges this task's retained local, project and archived events.
 ## Task
-Goal: {goal}
+Initial text: {goal}
 Type: {task_type}
 Rounds: {rounds}, Cost: {cost_text}
 

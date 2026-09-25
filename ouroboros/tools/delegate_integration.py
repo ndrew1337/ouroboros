@@ -22,7 +22,7 @@ from ouroboros.delegate_custody import RunCustody as _RunCustody
 # ONE refusal author for the whole delegate surface: the neutral leaf
 # `delegate_shared` (phase B's facade split), never a local twin that could drift.
 from ouroboros.delegate_registration_policy import record_persistent as _record_persistent
-from ouroboros.delegate_shared import _fail
+from ouroboros.delegate_shared import _fail, lock_busy_facts
 from ouroboros.configured_subagents import SESSION_ACCESS_PROFILES
 from ouroboros.tools.tool_result import ToolResult
 from ouroboros.tools.registry import ToolContext, active_repo_dir_for
@@ -379,7 +379,7 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
             "A private execution snapshot of the write root could not be provisioned "
             f"({type(exc).__name__}: {exc}). The run was NOT started: a mutating "
             "delegated run executes only in its own snapshot, never in the shared tree.",
-            target_root=target_root)
+            target_root=target_root, definitely_unrun=True, **lock_busy_facts(exc))
     _record_baseline_manifest(drive, task_id, invocation_id, handle)
     return handle, None
 
@@ -405,6 +405,7 @@ def _record_baseline_manifest(drive: pathlib.Path, task_id: str, invocation_id: 
             "entry_count": handle.entry_count,
             "file_input_count": len(getattr(handle, "file_baseline", {})),
             "file_input_bytes": sum(item.get("size", 0) for item in getattr(handle, "file_baseline", {}).values()),
+            "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0),
             "target_root": handle.target_root,
             "target_head": handle.target_head,
             "execution_root": handle.path,
@@ -904,7 +905,7 @@ def _provision_payload_snapshot(
             f"provisioned ({type(exc).__name__}: {exc}). The run was NOT started: "
             "a mutating delegated run executes only in its own snapshot, never "
             "in the live payload.",
-            target_root=record["target_root"])
+            target_root=record["target_root"], definitely_unrun=True, **lock_busy_facts(exc))
     record["resource_ref"]["payload_hash"] = handle.payload_hash
     _record_baseline_manifest(drive, task_id, invocation_id, handle,
                               payload_hash=handle.payload_hash,

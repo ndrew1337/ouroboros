@@ -187,12 +187,18 @@ def test_lost_admission_reply_does_not_prove_no_model_work(agent_episode):
 
 
 @pytest.mark.serial
-def test_completion_waits_for_artifacts_and_cost_then_keeps_full_answer(agent_episode):
+@pytest.mark.parametrize("carrier", [None, {
+    "scope": "root_tree", "tracked_amount": 2.5, "has_unpriced": False,
+    "tracked_final": True, "accounting_open": False, "has_rows": True,
+}])
+def test_completion_waits_for_artifacts_and_cost_then_keeps_full_answer(agent_episode, carrier):
     answer = "Полный ответ " * 3000
     final = {"status": "completed", "artifact_bundle": {"status": "ready"}, "cost_final": True,
              "cost_with_children_partial": False, "accounted_upper_bound_usd": 1.25,
+             "accounted_upper_bound_usd_with_children": 2.5,
              "cost_known": True, "reserved_usd": 0.0, "unresolved_upper_bound_usd": 0.0,
-             "unknown_unmetered": 0, "prompt_tokens": 200, "final_answer": answer}
+             "unknown_unmetered": 0, "prompt_tokens": 200, "final_answer": answer,
+             "cost_presentation": carrier}
     agent_episode.results[:] = [
         {**final, "artifact_bundle": {"status": "finalizing"}, "cost_final": False},
         {**final, "cost_final": False, "cost_with_children_partial": True}, final,
@@ -201,6 +207,9 @@ def test_completion_waits_for_artifacts_and_cost_then_keeps_full_answer(agent_ep
     assert agent_episode.calls == ["POST", "GET", "GET", "GET", "terminate", "terminate"]
     assert agent_episode.clock.now == 4
     assert summary["artifact_bundle"]["status"] == "ready"
+    # The scoped presentation is passed intact, including explicit unknown.
+    # Do not rebuild it from the own-scope amount or finality beside it.
+    assert summary["cost_presentation"] == carrier
     for key in adapter.COST_RESULT_FIELDS:
         if key in final:
             assert summary[key] == final[key]

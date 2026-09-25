@@ -185,8 +185,8 @@ class TestGoalSection:
 
 class TestTouchedFilePack:
     def test_reads_existing_files(self, tmp_path):
-        (tmp_path / "a.py").write_text("print('hello')", encoding="utf-8")
-        (tmp_path / "b.md").write_text("# readme", encoding="utf-8")
+        (tmp_path / "a.py").write_text("print('hello')", encoding="utf-8", newline="\n")
+        (tmp_path / "b.md").write_text("# readme", encoding="utf-8", newline="\n")
         mod = _get_module("ouroboros.tools.review_helpers")
         pack, omitted = mod.build_touched_file_pack(tmp_path, ["a.py", "b.md"])
         assert "a.py" in pack
@@ -778,20 +778,20 @@ class TestPathAwareFreshness:
     def test_snapshot_hash_changes_with_file_content(self, tmp_path):
         """Snapshot hash must change when file content changes."""
         subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        (tmp_path / "file.py").write_text("v1", encoding="utf-8")
+        (tmp_path / "file.py").write_text("v1", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "file.py"], cwd=str(tmp_path), capture_output=True)
         rs = _get_module("ouroboros.review_state")
         h1 = rs.compute_snapshot_hash(tmp_path, "msg")
         # Modify file
-        (tmp_path / "file.py").write_text("v2", encoding="utf-8")
+        (tmp_path / "file.py").write_text("v2", encoding="utf-8", newline="\n")
         h2 = rs.compute_snapshot_hash(tmp_path, "msg")
         assert h1 != h2
 
     def test_path_scoped_hash(self, tmp_path):
         """When paths= is provided, only those files affect the hash."""
         subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
-        (tmp_path / "a.py").write_text("aaa", encoding="utf-8")
-        (tmp_path / "b.py").write_text("bbb", encoding="utf-8")
+        (tmp_path / "a.py").write_text("aaa", encoding="utf-8", newline="\n")
+        (tmp_path / "b.py").write_text("bbb", encoding="utf-8", newline="\n")
         rs = _get_module("ouroboros.review_state")
         h_a = rs.compute_snapshot_hash(tmp_path, paths=["a.py"])
         h_b = rs.compute_snapshot_hash(tmp_path, paths=["b.py"])
@@ -1295,16 +1295,16 @@ class TestScopePromptMatrixContract:
         subprocess.run(["git", "init"], cwd=str(tmp_path), capture_output=True)
         (tmp_path / "docs").mkdir(exist_ok=True)
         (tmp_path / "docs" / "CHECKLISTS.md").write_text(
-            "## Intent / Scope Review Checklist\n\nplaceholder\n", encoding="utf-8"
+            "## Intent / Scope Review Checklist\n\nplaceholder\n", encoding="utf-8", newline="\n"
         )
-        (tmp_path / "docs" / "DEVELOPMENT.md").write_text("dev guide\n", encoding="utf-8")
-        (tmp_path / "a.py").write_text("aaa", encoding="utf-8")
+        (tmp_path / "docs" / "DEVELOPMENT.md").write_text("dev guide\n", encoding="utf-8", newline="\n")
+        (tmp_path / "a.py").write_text("aaa", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
         subprocess.run(
             ["git", "-c", "user.email=t@o", "-c", "user.name=T", "commit", "-m", "init"],
             cwd=str(tmp_path), capture_output=True,
         )
-        (tmp_path / "a.py").write_text("bbb", encoding="utf-8")
+        (tmp_path / "a.py").write_text("bbb", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "."], cwd=str(tmp_path), capture_output=True)
         session = _get_module("ouroboros.tools.scope_review_session")
         brief, _manifest = session.build_scope_session_task(
@@ -1791,7 +1791,7 @@ def _seed_scope_evidence(monkeypatch, tmp_path, model, *, window, status, ts, us
     store.write_text(_json.dumps({key: {fp: {
         "window_tokens": window, "status": status, "source": "provider_metadata",
         "route_fp": fp, "model": model, "provider": provider, "ts": ts,
-    }}}), encoding="utf-8")
+    }}}), encoding="utf-8", newline="\n")
     return fp
 
 
@@ -1983,7 +1983,7 @@ class TestTriadPackExclusions:
         mod = _get_module("ouroboros.tools.review_helpers")
         # Oversize AND excluded: the exclusion marker wins, never two markers.
         (tmp_path / "uv.lock").write_bytes(b"x" * (1_048_576 + 1))
-        (tmp_path / "a.py").write_text("print('kept')", encoding="utf-8")
+        (tmp_path / "a.py").write_text("print('kept')", encoding="utf-8", newline="\n")
         pack, omitted = mod.build_touched_file_pack(
             tmp_path, ["uv.lock", "a.py"], exclude_paths={"uv.lock"})
         assert omitted == ["uv.lock"]
@@ -2002,16 +2002,16 @@ class TestTriadPackExclusions:
         subprocess.run(["git", "init", "-q"], cwd=str(repo), check=True)
         subprocess.run(["git", "config", "user.email", "t@t"], cwd=str(repo), check=True)
         subprocess.run(["git", "config", "user.name", "t"], cwd=str(repo), check=True)
-        (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        (repo / "VERSION").write_text("1.0.0\n", encoding="utf-8", newline="\n")
         (repo / "pyproject.toml").write_text(
-            '[project]\nname = "ouroboros"\nversion = "1.0.0"\n', encoding="utf-8")
+            '[project]\nname = "ouroboros"\nversion = "1.0.0"\n', encoding="utf-8", newline="\n")
         if with_lock:
-            (repo / "uv.lock").write_text(_uv_lock_text("1.0.0"), encoding="utf-8")
+            (repo / "uv.lock").write_text(_uv_lock_text("1.0.0"), encoding="utf-8", newline="\n")
         (repo / "docs").mkdir()
         (repo / "docs" / "ARCHITECTURE.md").write_text(
-            "# Ouroboros v1.0.0 — Architecture\n\nArchitecture body.\n", encoding="utf-8")
-        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body.\n", encoding="utf-8")
-        (repo / "app.py").write_text("x = 1\n", encoding="utf-8")
+            "# Ouroboros v1.0.0 — Architecture\n\nArchitecture body.\n", encoding="utf-8", newline="\n")
+        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body.\n", encoding="utf-8", newline="\n")
+        (repo / "app.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
         subprocess.run(["git", "commit", "-qm", "base"], cwd=str(repo), check=True)
         return repo
@@ -2025,16 +2025,16 @@ class TestTriadPackExclusions:
     def test_span_only_carriers_and_prefix_duplicates_are_cut_on_a_version_bump(self, tmp_path):
         mod = _get_module("ouroboros.tools.review_file_pack")
         repo = self._carrier_repo(tmp_path)
-        (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8")
-        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8")
+        (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8", newline="\n")
+        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8", newline="\n")
         # pyproject: version bump PLUS a dependency edit outside its span.
         (repo / "pyproject.toml").write_text(
             '[project]\nname = "ouroboros"\nversion = "1.0.1"\ndependencies = ["httpx"]\n',
-            encoding="utf-8")
+            encoding="utf-8", newline="\n")
         (repo / "docs" / "ARCHITECTURE.md").write_text(
-            "# Ouroboros v1.0.1 — Architecture\n\nArchitecture body.\n", encoding="utf-8")
-        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body, revised.\n", encoding="utf-8")
-        (repo / "app.py").write_text("x = 2\n", encoding="utf-8")
+            "# Ouroboros v1.0.1 — Architecture\n\nArchitecture body.\n", encoding="utf-8", newline="\n")
+        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body, revised.\n", encoding="utf-8", newline="\n")
+        (repo / "app.py").write_text("x = 2\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
         paths = self._staged_paths(repo)
         dev_text = (repo / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
@@ -2059,8 +2059,8 @@ class TestTriadPackExclusions:
         class is independent of it."""
         mod = _get_module("ouroboros.tools.review_file_pack")
         repo = self._carrier_repo(tmp_path)
-        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8")
-        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body, revised.\n", encoding="utf-8")
+        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8", newline="\n")
+        (repo / "docs" / "DEVELOPMENT.md").write_text("# DEV\n\nHandbook body, revised.\n", encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
         paths = self._staged_paths(repo)
         dev_text = (repo / "docs" / "DEVELOPMENT.md").read_text(encoding="utf-8")
@@ -2077,8 +2077,8 @@ class TestTriadPackExclusions:
     def test_a_carrier_new_at_head_keeps_its_text(self, tmp_path):
         mod = _get_module("ouroboros.tools.review_file_pack")
         repo = self._carrier_repo(tmp_path, with_lock=False)
-        (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8")
-        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8")
+        (repo / "VERSION").write_text("1.0.1\n", encoding="utf-8", newline="\n")
+        (repo / "uv.lock").write_text(_uv_lock_text("1.0.1"), encoding="utf-8", newline="\n")
         subprocess.run(["git", "add", "-A"], cwd=str(repo), check=True)
         excluded, _note = mod.triad_pack_exclusions(
             repo, self._staged_paths(repo), prefix_texts={})

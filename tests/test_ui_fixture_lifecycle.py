@@ -18,6 +18,8 @@ from types import SimpleNamespace
 import pytest
 
 from ouroboros import platform_layer as pl, process_containment as pc
+from ouroboros.subagent_worktrees import _force_rmtree
+from ouroboros.test_environment import RETENTION_MARKER
 from tests import test_ui_smoke_playwright as ui
 
 
@@ -71,6 +73,12 @@ def _assert_stopped(probe, run):
     assert ("reap", run.index) in probe.events
     assert ("close", run.index) in probe.events
     assert probe.sentinel.poll() is None, "cleanup killed an unrelated process"
+
+
+def _assert_retained_then_discard(checkout):
+    """The fixture kept a checkout it could not prove idle; the caller has since proved it."""
+    assert "never proven gone" in (checkout / RETENTION_MARKER).read_text(encoding="utf-8")
+    _force_rmtree(checkout)
 
 
 @pytest.fixture
@@ -171,11 +179,14 @@ def fixture_probe(tmp_path, monkeypatch):
         probe.generators.append(gen)
         return gen, next(gen)
 
+    probe.checkout = lambda index: tmp_path / f"fixture-{index}" / "repo"
     monkeypatch.setenv("OUROBOROS_RUN_UI_SMOKE", "1")
     monkeypatch.setattr(pc, "ProcessContainer", ObservedContainer)
     monkeypatch.setattr(ui, "MockLLMServer", lambda: nullcontext(
         SimpleNamespace(base_url="http://127.0.0.1:9/v1")
     ))
+    monkeypatch.setattr(ui, "_assert_served_candidate", lambda *args: None)
+    monkeypatch.setattr(ui, "require_candidate_interpreter", lambda *args: None)
     monkeypatch.setattr(ui, "_free_port", lambda: 27991)  # no port is actually bound
     monkeypatch.setattr(ui, "_wait_health", health)
     monkeypatch.setattr(ui, "_wait_supervisor_ready", supervisor)
@@ -222,6 +233,7 @@ def test_ui_fixture_reaps_descendants_after_parent_exit_or_normal_stop(fixture_p
     assert (run.proc.poll() is not None) == (mode == "exited")
     gen.close()
     _assert_stopped(probe, run)
+    assert not probe.checkout(0).exists(), "a proven-clean teardown deletes its checkout"
 
 
 @pytest.mark.parametrize("stage", ["health", "supervisor"])
@@ -232,6 +244,7 @@ def test_ui_fixture_reaps_after_readiness_failure(fixture_probe, stage):
         probe.open()
     assert len(probe.runs) == 1
     _assert_stopped(probe, probe.runs[0])
+    assert not probe.checkout(0).exists(), "the failed start was reaped clean, so nothing pins it"
 
 
 def test_ui_fixture_restart_retires_one_container_before_spawning_another(fixture_probe):
@@ -248,6 +261,7 @@ def test_ui_fixture_restart_retires_one_container_before_spawning_another(fixtur
     assert second.proc.poll() is None and not _gone(second.child)
     gen.close()
     _assert_stopped(probe, second)
+    assert not probe.checkout(0).exists()
 
 
 @pytest.mark.parametrize("raises", [False, True], ids=["returned-error", "raised-error"])
@@ -270,6 +284,8 @@ def test_ui_fixture_surfaces_reap_failure_and_still_closes(fixture_probe, raises
     with suppress(RuntimeError, pytest.fail.Exception):
         gen.close()
     assert len(probe.runs) == 1
+    # Unproven custody keeps the tree in place for every enclosing layer.
+    _assert_retained_then_discard(probe.checkout(0))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="requires actual Windows Job and suspended-start APIs")
@@ -323,9 +339,11 @@ def test_ui_fixture_native_windows_assigns_suspended_root_then_reaps_orphan(fixt
 
 @pytest.mark.parametrize("reap_result", ["returned-error", "raised-error", "clean"])
 def test_ui_fixture_preserves_reap_diagnostic_when_parent_survives(tmp_path, monkeypatch, reap_result):
-    waits, closed = [], []
+    waits, closed, probed, spawned = [], [], [], []
 
     class UnstoppedProcess:
+        pid = 12345  # Synthetic identity; the served-candidate probe is stubbed below.
+
         def poll(self):
             return None
 
@@ -337,7 +355,8 @@ def test_ui_fixture_preserves_reap_diagnostic_when_parent_survives(tmp_path, mon
             raise subprocess.TimeoutExpired(["fixture-root"], timeout)
 
     class FailedContainer:
-        def spawn(self, *args, **kwargs):
+        def spawn(self, argv, **kwargs):
+            spawned.append((argv[0], kwargs["env"], kwargs["cwd"]))
             return UnstoppedProcess()
 
         def reap(self):
@@ -351,11 +370,15 @@ def test_ui_fixture_preserves_reap_diagnostic_when_parent_survives(tmp_path, mon
     monkeypatch.setenv("OUROBOROS_RUN_UI_SMOKE", "1")
     monkeypatch.setattr(pc, "ProcessContainer", FailedContainer)
     monkeypatch.setattr(ui, "MockLLMServer", lambda: nullcontext(SimpleNamespace(base_url="http://127.0.0.1:9")))
+    monkeypatch.setattr(ui, "_assert_served_candidate", lambda *args: None)
+    monkeypatch.setattr(ui, "require_candidate_interpreter", lambda *args: probed.append(args))
     monkeypatch.setattr(ui, "_free_port", lambda: 27991)
     monkeypatch.setattr(ui, "_wait_health", lambda _: None)
     monkeypatch.setattr(ui, "_wait_supervisor_ready", lambda _: None)
     gen = ui.direct_server_with_data.__wrapped__(tmp_path)
     next(gen)
+    # The interpreter validated is the one launched, with the server's own env and cwd.
+    assert probed == spawned and spawned[0][0] == ui._fixture_interpreter()
     expected = subprocess.TimeoutExpired if reap_result == "clean" else RuntimeError
     with pytest.raises(expected) as failure:
         gen.close()
@@ -363,3 +386,6 @@ def test_ui_fixture_preserves_reap_diagnostic_when_parent_survives(tmp_path, mon
     assert waits == ([10, 5] if reap_result == "clean" else [10])
     if reap_result != "clean":
         assert "owned root could not be proven gone" in str(failure.value)
+    # Even a clean reap is not proof while the parent never exited. The synthetic
+    # process owns nothing real, so this test may discard what the fixture kept.
+    _assert_retained_then_discard(tmp_path / "repo")

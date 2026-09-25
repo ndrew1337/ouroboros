@@ -124,7 +124,7 @@ def admit_presence_turn(
     drive_root: Path,
     authenticated_transport_skill: str,
     binding_id: str,
-    global_max_rounds: int,
+    global_max_rounds: int | None,  # None = no task round limit; the inline cap stays finite
     repo_path: str | None = None,
 ) -> PresenceAdmission:
     """Resolve one opaque binding into a frozen, reviewed admission snapshot."""

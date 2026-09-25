@@ -53,6 +53,33 @@ test('an option label is byte-identical with one account and with eighteen', () 
     assert.equal(many[0].label.length, 'Same model'.length);
 });
 
+test('an alias names its resolution and a frozen-list row says so; the value stays the row id', () => {
+    const alias = { id: 'default', label: 'Default (recommended)', origin: 'live', resolved_model: 'claude-opus-5-5[1m]' };
+    const hint = { id: 'claude-sonnet-5', label: null, origin: 'hint', resolved_model: null };
+    const [aliasOption, hintOption] = catalogModelOptions([alias, hint]);
+    assert.deepEqual(aliasOption, { value: 'default', label: 'default → claude-opus-5-5[1m]' });
+    assert.deepEqual(hintOption, { value: 'claude-sonnet-5', label: 'claude-sonnet-5 (shipped list)' });
+    // The one projection feeds the session chooser too: the value is what travels.
+    assert.deepEqual(sessionModelOptions({ models: [alias, hint] }, 'default').slice(1), [aliasOption, hintOption]);
+    // Other direction: a row without the fields (a 3.13 engine), a live row, a resolution
+    // equal to the id and an empty one all label exactly as before.
+    for (const row of [{ id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol' }, { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', origin: 'live' },
+        { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', resolved_model: 'gpt-5.6-sol' }, { id: 'gpt-5.6-sol', name: 'GPT-5.6 Sol', resolved_model: '' }]) {
+        assert.deepEqual(catalogModelOptions([row]), [{ value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' }]);
+    }
+    assert.deepEqual(catalogModelOptions(['plain-id']), [{ value: 'plain-id', label: 'plain-id' }]);
+    // Account-free: eighteen supplying accounts label byte-identically to one; the suffix
+    // needs every supplier on the frozen list, and a disputed resolution is not shown.
+    for (const row of [alias, hint]) {
+        const eighteen = Array.from({ length: 18 }, (_, index) => ({ ...row, credential_profile_id: `acct-${index + 1}`,
+            availability: index % 2 ? 'unavailable' : 'available', observed_at: '2026-09-24T00:00:00Z' }));
+        assert.equal(catalogModelOptions(eighteen)[0].label, catalogModelOptions([eighteen[0]])[0].label);
+        assert.doesNotMatch(catalogModelOptions(eighteen)[0].label, /acct|18|available|2026-09-24/);
+    }
+    assert.equal(catalogModelOptions([hint, { ...hint, origin: 'live' }])[0].label, 'claude-sonnet-5');
+    assert.equal(catalogModelOptions([alias, { ...alias, resolved_model: 'claude-sonnet-5' }])[0].label, 'Default (recommended)');
+});
+
 test('a nameless first duplicate yields to a later name, and otherwise the value is the label', () => {
     const nameless = { value: 'same', id: 'same', name: undefined, label: undefined, credential_profile_id: 'personal' };
     assert.equal(catalogModelOptions([nameless, { ...nameless, name: 'Named' }])[0].label, 'Named');

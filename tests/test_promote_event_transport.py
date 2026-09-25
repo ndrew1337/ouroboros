@@ -16,6 +16,17 @@ import pytest
 pytestmark = pytest.mark.serial
 
 
+def _owner_stamp(client_message_id, text="owner text"):
+    """The owner door's stamp on a direct turn (ref + retained text, written together
+    at ingress): the one fact that makes it an owner turn."""
+    from ouroboros.project_dialogue import build_owner_message_ref
+
+    ref = build_owner_message_ref(
+        chat_id=1, client_message_id=client_message_id, ts="2026-09-24T00:00:00+00:00", text=text,
+    )
+    return {"origin_message_ref": ref, "origin_message_text": text}
+
+
 @pytest.fixture(autouse=True)
 def _isolated_projects_root(tmp_path_factory, monkeypatch):
     """Q10=A auto-provisions a genesis workspace for file-less project promotes;
@@ -403,7 +414,9 @@ def test_route_to_project_waits_for_same_durable_admission(monkeypatch, tmp_path
         pending_events=[],
         current_chat_id=1,
         drive_root=tmp_path,
-        task_metadata={"client_message_id": "route-owner-1"},
+        is_direct_chat=True,
+        task_metadata={"client_message_id": "route-owner-1",
+                       **_owner_stamp("route-owner-1")},
     )
     try:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -469,8 +482,10 @@ def test_manual_target_tool_waits_for_durable_handler_receipt(monkeypatch, tmp_p
         pending_events=[],
         current_chat_id=1,
         drive_root=tmp_path,
+        is_direct_chat=True,
         task_metadata={
             "client_message_id": "manual-owner-1",
+            **_owner_stamp("manual-owner-1"),
             "routing_contract": {"manual_options": [{"kind": "new_task"}]},
         },
     )
@@ -513,7 +528,10 @@ def test_steer_tool_reports_delivery_only_after_mailbox_receipt(
         pending_events=[],
         current_chat_id=1,
         drive_root=tmp_path,
-        task_metadata={"client_message_id": "steer-owner-1"},
+        is_direct_chat=True,
+        task_metadata={"client_message_id": "steer-owner-1",
+                       # The turn's first act relays the owner's own bytes: the steer IS them.
+                       **_owner_stamp("steer-owner-1", text="Use the new data")},
     )
     handler_ctx = types.SimpleNamespace(
         DRIVE_ROOT=tmp_path,

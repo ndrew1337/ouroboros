@@ -20,7 +20,9 @@ from tests._delegated_transport_shared import (  # noqa: F401  (autouse fixture 
 )
 
 WORDS = "Selected model is at capacity. Please try a different model."
-CAUSE_KEYS = {"requested_model", "failure_code", "reported_cause"}
+# ``outcome_reason`` is the engine's TYPED terminal reason (``wall_clock_exceeded`` =
+# maxSeconds expiry), the one fact the finite leaf continuation gate reads (#1196).
+CAUSE_KEYS = {"requested_model", "failure_code", "reported_cause", "outcome_reason"}
 
 
 def _settle(root, run_id, summary, *, model="gpt-6-astra"):
@@ -49,7 +51,8 @@ def test_a_failed_settlement_row_carries_its_cause_and_a_succeeded_row_is_unchan
     assert failed["state"] == "failed"
     # The engine gave no code: the row says so with "", never with a host-derived placeholder.
     assert {key: failed[key] for key in CAUSE_KEYS} == {
-        "requested_model": "gpt-6-astra", "failure_code": "", "reported_cause": WORDS}
+        "requested_model": "gpt-6-astra", "failure_code": "", "reported_cause": WORDS,
+        "outcome_reason": ""}
     # The requested model never poses as the observed one (the evidence reader lists `model`).
     assert failed["model"] == ""
     # Other direction: a succeeded settlement has exactly the keys it had before.
@@ -77,6 +80,6 @@ def test_a_failed_settlement_row_carries_its_cause_and_a_succeeded_row_is_unchan
 ])
 def test_every_non_succeeded_state_carries_the_keys_with_honest_absence(tmp_path, state, failure, expected):
     row = _settle(tmp_path, f"run-{state}", {"state": state, "failure": failure}, model="")
-    assert {key: row[key] for key in CAUSE_KEYS} == {"requested_model": "", **expected}
+    assert {key: row[key] for key in CAUSE_KEYS} == {"requested_model": "", "outcome_reason": "", **expected}
     # Other direction: the same summary on a succeeded run adds nothing.
     assert not CAUSE_KEYS & set(_settle(tmp_path, f"ok-{state}", {"state": "succeeded", "failure": failure}))

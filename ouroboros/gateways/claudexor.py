@@ -123,8 +123,11 @@ class ClaudexorUnavailable(RuntimeError):
 
 # Cross-repo contract (B1): the engine's window-exhausted RunFailure codes. A
 # newer engine (rotation PR-A) reports a spent credential POOL under its own
-# code; both heal on a timer, so both map onto the exhausted class below — with
-# the ORIGINAL code preserved. Any other code stays a generic
+# code. A spent subscription window always heals on a timer (the engine always
+# dates it); a pool heals on a timer only when the engine DATED it (`resetsAt`),
+# an undated pool (every enabled account refused the model, every account
+# disabled) is structural. `_window_exhausted_refusal` is the one reader; the
+# ORIGINAL code is preserved either way. Any other code stays a generic
 # ClaudexorUnavailable: fail-open, old engines emitting code:null included.
 WINDOW_EXHAUSTED_CODES = ("subscription_window_exhausted", "credential_pool_exhausted")
 
@@ -136,6 +139,20 @@ class ClaudexorSubscriptionWindowExhausted(ClaudexorUnavailable):
                  code: str = "subscription_window_exhausted") -> None:
         super().__init__(code, message, status_code=status_code)
         self.reset_at = str(reset_at or "")
+
+
+def _window_exhausted_refusal(code: str, message: str, resets_at: Any, *,
+                              status_code: int = 0) -> Optional[ClaudexorSubscriptionWindowExhausted]:
+    """The timer-healing class for a window-exhausted code, or None for the caller's
+    plain refusal. Keyed on the structured ``resetsAt`` field only, never on prose: a
+    pool maps only when the engine dated it (a non-empty string), so an undated pool
+    never masquerades as a quota timer."""
+    dated = isinstance(resets_at, str) and bool(resets_at.strip())
+    if code not in WINDOW_EXHAUSTED_CODES or (
+            code != "subscription_window_exhausted" and not dated):
+        return None
+    return ClaudexorSubscriptionWindowExhausted(
+        message, reset_at=str(resets_at or ""), status_code=status_code, code=code)
 
 
 REPORTED_CAUSE_CHARS = 512  # strict bound of the record field, omission marker included
@@ -161,10 +178,8 @@ def run_failure_error(run_id: str, run_state: str, failure: Any) -> ClaudexorUna
     message = (f"delegated review session {run_id} ended {run_state or 'unknown'}"
                + (f": {json.dumps(failure, ensure_ascii=False)}" if failure else ""))
     code = str(failure.get("code") or "")
-    exc = (ClaudexorSubscriptionWindowExhausted(
-               message, reset_at=str(failure.get("resetsAt") or ""), code=code)
-           if code in WINDOW_EXHAUSTED_CODES
-           else ClaudexorUnavailable(code or f"run_{run_state or 'unknown'}", message))
+    exc = (_window_exhausted_refusal(code, message, failure.get("resetsAt"))
+           or ClaudexorUnavailable(code or f"run_{run_state or 'unknown'}", message))
     exc.reported_cause = run_failure_cause(failure)
     return exc
 
@@ -471,19 +486,17 @@ class ClaudexorGateway:
                     if isinstance(item, str) and item
                 )
         # The CODE decides, exactly as every other classification on this seam does.
-        # Sniffing `context` for a reset key instead had it both ways: no producer puts
-        # `resetsAt`/`resets_at`/`cooldownUntil` in a ControlProblem context (a spent
-        # window is reported as a run-detail RunFailure, and `cooldown_until` lives in a
-        # quota snapshot), so the transient class was unreachable — while any unrelated
-        # refusal that happened to carry one, an `idempotency_conflict` say, would have
-        # been announced as a spent subscription window and retried on a timer.
-        if code in WINDOW_EXHAUSTED_CODES:
-            return ClaudexorSubscriptionWindowExhausted(
-                message, reset_at=str(context.get("resetsAt") or ""),
-                status_code=response.status_code, code=code,
-            )
-        return ClaudexorUnavailable(code, message, status_code=response.status_code,
-                                    required_actions=required_actions)
+        # Sniffing `context` for a reset key on ANY code had it both ways: an unrelated
+        # refusal that happened to carry one, an `idempotency_conflict` say, was announced
+        # as a spent subscription window and retried on a timer. So a reset key is read
+        # only inside a window code, and there only the pool's own `resetsAt` says whether
+        # it is a timer at all. At engine 3.14.0 the daemon serializes no `resetsAt` into a
+        # pool ControlProblem context (the dated producer is the run-detail RunFailure, and
+        # `cooldown_until` lives in a quota snapshot), so this seam yields the plain class.
+        return (_window_exhausted_refusal(code, message, context.get("resetsAt"),
+                                          status_code=response.status_code)
+                or ClaudexorUnavailable(code, message, status_code=response.status_code,
+                                        required_actions=required_actions))
 
     # -- operations ------------------------------------------------------------
 

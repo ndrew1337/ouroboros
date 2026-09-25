@@ -54,22 +54,6 @@ async def run_sync_to_completion(function, /, *args, **kwargs):
         raise
 
 
-def _read_jsonl_segment_with_gaps(
-    path: pathlib.Path,
-    *,
-    tail_bytes: int | None = None,
-) -> tuple[list, set[str]]:
-    """Gateway wrapper over ``jsonl_tail.read_jsonl_segment_with_gaps``.
-
-    The parser is THIS module's ``iter_jsonl_objects`` name, resolved at call
-    time, so the gateway tests that monkeypatch it keep governing every gateway
-    read (``tests/test_gateway_history.py``).
-    """
-    from ouroboros.jsonl_tail import read_jsonl_segment_with_gaps
-
-    return read_jsonl_segment_with_gaps(path, tail_bytes=tail_bytes, iter_objects=iter_jsonl_objects)
-
-
 def read_rotated_jsonl_entries(
     live: pathlib.Path,
     archive_dir: pathlib.Path,

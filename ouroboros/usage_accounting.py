@@ -29,24 +29,12 @@ from ouroboros._usage_response import (
 from ouroboros.review_dispatch import invoke_bound_api_review_paid_stamp
 from ouroboros.transport_custody import release_pre_dispatch_attempt
 from ouroboros.usage_ledger import (  # noqa: F401 — re-exported substrate
-    LEDGER_REL,
-    QUARANTINE_REL,
-    LedgerResumeState,
-    UsageAccountingError,
-    UsageLedgerCorrupt,
-    _append_bytes_fsync,
-    _append_rows_locked,
-    _drive_root,
-    _final_rows,
-    _ledger_resume_state,
-    _locked,
-    _named_lock,
-    _number,
-    _read_new_records_locked,
-    _read_records_locked,
-    _TERMINAL,
-    _validate_records,
-    _write_bytes_atomic_fsync,
+    LEDGER_REL, QUARANTINE_REL, LedgerResumeState,
+    UsageAccountingError, UsageLedgerCorrupt,
+    _append_bytes_fsync, _append_rows_locked,
+    _drive_root, _final_rows, _ledger_resume_state,
+    _locked, _named_lock, _number,
+    _read_new_records_locked, _read_records_locked, _TERMINAL, _validate_records, _write_bytes_atomic_fsync,
 )
 from ouroboros.utils import append_jsonl, atomic_write_json, utc_now_iso  # noqa: F401 -- the accounting module keeps its historical import surface for the L-C2 leaf
 from ouroboros._usage_rows import (  # noqa: F401  (re-exported substrate vocabulary)
@@ -54,6 +42,7 @@ from ouroboros._usage_rows import (  # noqa: F401  (re-exported substrate vocabu
     _breakdown_bucket,
     _marker_from_final,
     _physical_call_count,
+    _projection_from_final,
     _summary,
     _with_integrity,
     _with_limit,
@@ -75,6 +64,7 @@ __all__ = (
     "record_unmetered_external_dispatch", "refresh_root_accounting",
     "release_attempt", "reserve_attempt", "settle_attempt",
     "skill_review_usage", "usage_breakdown", "usage_from_response", "usage_projection", "usage_scope",
+    "usage_writer_snapshot",
     "review_wave_admission",
 )
 _CURRENT_SCOPE: contextvars.ContextVar[Optional["UsageScope"]] = contextvars.ContextVar(
@@ -104,6 +94,8 @@ def _stash_root_accounting(
     accounted_usd: Optional[float],
     root_limit_usd: Optional[float],
     reservation: Optional[Dict[str, Any]] = None,
+    *,
+    integrity_degraded: bool = False,
 ) -> None:
     """Refresh the process-local root snapshot. ``reservation`` is the identity
     of a row this call has just APPENDED (attempt id, task, category, review
@@ -130,6 +122,10 @@ def _stash_root_accounting(
         _ROOT_ACCOUNTING_TELEMETRY[root_task_id] = {
             "accounted_usd": None if accounted_usd is None else float(accounted_usd),
             "root_limit_usd": None if root_limit_usd is None else float(root_limit_usd),
+            # The projection's own integrity verdict rides the snapshot (#1196): a
+            # money decision (the exact-pause grant, the Q10 refresh) refuses a
+            # degraded tree instead of reading its number as room.
+            "integrity_degraded": bool(integrity_degraded),
             "updated_monotonic": now,
             "reservations": kept,
         }
@@ -158,12 +154,20 @@ def refresh_root_accounting(
     root_task_id: str,
     *,
     max_age_sec: float = 0.0,
+    strict: bool = False,
 ) -> Optional[Dict[str, Any]]:
-    """Refresh a stale root snapshot; on failure return stale/None, never fake $0."""
+    """Refresh a stale root snapshot; on failure return stale/None, never fake $0.
+
+    A DISPLAY reader (``strict=False``) may take the age-bounded cache, or the last
+    snapshot when the ledger cannot answer now. A MONEY reader (``strict=True``: the
+    exact-pause grant, the Q10 threshold refresh) gets ONE fresh successful observation
+    or ``None`` — a snapshot cached before a failed read is unknown spend, not room
+    (#1196, the one place that rule lives); a success still refreshes the cache.
+    """
     root_task_id = str(root_task_id or "").strip()
     if not root_task_id:
         return None
-    cached = last_root_accounting(root_task_id)
+    cached = None if strict else last_root_accounting(root_task_id)
     if cached is not None and max_age_sec > 0 and cached["age_sec"] <= max_age_sec:
         return cached
     try:
@@ -172,6 +176,7 @@ def refresh_root_accounting(
             root_task_id,
             _number(projection.get("accounted_usd")),
             _number(projection.get("limit_usd")),
+            integrity_degraded=bool(projection.get("integrity_degraded")),
         )
         return last_root_accounting(root_task_id)
     except Exception:
@@ -185,6 +190,15 @@ class BudgetExceeded(UsageAccountingError):
         super().__init__(message)
         self.limit_scope = str(limit_scope or "global")
         self.root_task_id = str(root_task_id or "")
+
+
+class DispatchFenced(BudgetExceeded):
+    """Raised before dispatch while the task is entering an exact budget pause.
+
+    A ``BudgetExceeded`` so every existing catcher treats it as the monetary
+    stop it is; ``limit_scope="pausing"`` names the fence. Nothing sent after
+    the fence closed can outrun the pause checkpoint (#1196).
+    """
 
 
 class PhysicalAttemptLimitExceeded(UsageAccountingError):
@@ -404,14 +418,6 @@ def _claim_physical_dispatch(attempt_id: str = "") -> None:
             state.claimed_ids.add(attempt_id)
 
 
-def _release_physical_dispatch_claim(attempt_id: str) -> None:
-    """Return only this context's positively never-sent claim, at most once."""
-    state = _PHYSICAL_LIMIT.get()
-    if state is not None:
-        with state.lock:
-            if attempt_id in state.claimed_ids:
-                state.claimed_ids.remove(attempt_id)
-                state.used -= 1
 def _merge_scope(request: AttemptRequest) -> Tuple[AttemptRequest, UsageScope]:
     bound = _CURRENT_SCOPE.get() or UsageScope()
     limit_owner = request if request.global_limit_usd is not None else bound
@@ -451,35 +457,6 @@ from ouroboros._usage_rows_memo import (  # noqa: F401,E402  (re-exported seam)
     _LedgerRowsMemo, _ROWS_MEMO, _ROWS_MEMO_LOCK,
     _memoized_final_rows, _read_records_locked_cached, _render_cached,
 )
-
-
-def _projection_from_final(
-    final: list, integrity_degraded: bool, configured_limit: Optional[float] = None,
-    *, root_task_id: str = "", include_roots: bool = True,
-) -> Dict[str, Any]:
-    """Render the money projection from ALREADY-VALIDATED final rows: one
-    snapshot, one projection, so a caller deriving the ordering marker from
-    the SAME rows writes both under one authority instead of pairing a marker
-    with a second, later ledger read."""
-    def limit_of(rows: list) -> Optional[float]:
-        known = [v for v in (_number(row.get("root_limit_usd")) for row in rows) if v is not None]
-        return min(known) if known else None
-    if root_task_id:
-        rows = [row for row in final if str(row.get("root_task_id") or "") == root_task_id]
-        return _with_integrity(_with_limit(_summary(rows), limit_of(rows)), integrity_degraded)
-    result = _with_limit(_summary(final), configured_limit)
-    if include_roots:
-        grouped: Dict[str, list] = {}
-        for row in final:
-            rid = str(row.get("root_task_id") or "")
-            if rid:
-                grouped.setdefault(rid, []).append(row)
-        result["by_root"] = {
-            rid: _with_integrity(_with_limit(_summary(grouped[rid]), limit_of(grouped[rid])),
-                                 integrity_degraded)
-            for rid in sorted(grouped)
-        }
-    return _with_integrity(result, integrity_degraded)
 
 
 def usage_projection(
@@ -591,6 +568,34 @@ def usage_breakdown(
     return _render_cached(root, cache_key, render, allow_stale=allow_stale)
 
 
+def usage_writer_snapshot(
+    drive_root: pathlib.Path | str | None = None, *, allow_stale: bool = False,
+) -> Dict[str, Any]:
+    """The compatibility writer's slim read: the totals it persists, the ordering marker,
+    the OpenRouter provider bucket its drift check compares and the totals-only money
+    projection, rendered from ONE validated read exactly like ``usage_breakdown`` (same
+    rows, same marker, same render cache) minus the grouped axes and the per-root map
+    the writer never reads. Provider grouping mirrors ``usage_breakdown``: legacy
+    metadata/delta rows stay unattributed and an absent provider has no bucket."""
+    root = _drive_root(drive_root)
+
+    def render(final: list, integrity_degraded: bool) -> Dict[str, Any]:
+        openrouter = [row for row in final if str(row.get("provider") or "") == "openrouter"
+                      and str(row.get("kind") or "") not in {"legacy_metadata", "legacy_delta"}]
+        by_provider = {"openrouter": _breakdown_bucket(openrouter)} if openrouter else {}
+        if integrity_degraded:
+            for bucket in by_provider.values():
+                _with_integrity(bucket, True)
+        return {
+            **_with_integrity(_breakdown_bucket(final), integrity_degraded),
+            "_ledger_high_water_seq": _marker_from_final(final),
+            "by_provider": by_provider,
+            "_usage_projection": _projection_from_final(final, integrity_degraded, include_roots=False),
+        }
+
+    return _render_cached(root, ("usage_writer_snapshot", "", "", None, True), render, allow_stale=allow_stale)
+
+
 def _reservation_cost(request: AttemptRequest) -> Optional[float]:
     explicit = request.max_budget_usd if request.max_budget_usd is not None else request.reservation_usd
     if explicit is not None:
@@ -658,13 +663,6 @@ def _per_slot(value: Any, count: int) -> list:
         values = list(value)
         return values[:count] + [values[-1] if values else 0] * max(0, count - len(values))
     return [value] * count
-
-
-def _submitted_mode_for_preference(preference: Any) -> str:
-    """Project a captured preference onto the provider-neutral reservation mode."""
-    return {"standard": "default", "fast": "priority", "economy": "flex"}.get(
-        str(preference or "").strip().lower(), ""
-    )
 
 
 def review_wave_admission(
@@ -765,7 +763,9 @@ def review_wave_admission(
                         max_completion_tokens=max(0, int(outputs[index] or 0)),
                         task_id=str(task_id or ""),
                         processing_preference=str(seat_processing[index] or ""),
-                        submitted_processing_mode=_submitted_mode_for_preference(seat_processing[index]),
+                        # The captured preference projected onto the provider-neutral reservation mode.
+                        submitted_processing_mode={"standard": "default", "fast": "priority", "economy": "flex"}.get(
+                            str(seat_processing[index] or "").strip().lower(), ""),
                     )
                 )
             result["slot_bounds"].append(None if bound is None else round(float(bound), 6))
@@ -791,34 +791,6 @@ def _global_limit(request: AttemptRequest) -> float:
     return float("inf") if configured is None else max(0.0, configured)
 
 
-def _active_root_budget_fence(root: pathlib.Path, root_task_id: str) -> Optional[Dict[str, Any]]:
-    """Read the queue's atomic durable root-dispatch fence, if present."""
-    root_task_id = str(root_task_id or "").strip()
-    if not root_task_id:
-        return None
-    snapshot_path = root / "state" / "queue_snapshot.json"
-    if not snapshot_path.exists():
-        return None
-    try:
-        snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
-    except Exception as exc:
-        raise UsageAccountingError(
-            f"root budget fence authority unavailable: {snapshot_path}"
-        ) from exc
-    rows = snapshot.get("budget_root_fences", []) if isinstance(snapshot, dict) else None
-    if not isinstance(rows, list):
-        raise UsageAccountingError(f"invalid root budget fence authority: {snapshot_path}")
-    for row in rows:
-        if not isinstance(row, dict):
-            raise UsageAccountingError(f"invalid root budget fence row: {snapshot_path}")
-        if (
-            str(row.get("root_task_id") or "") == root_task_id
-            and str(row.get("status") or "") in {"active", "paused"}
-        ):
-            return row
-    return None
-
-
 _CANDIDATE_ROW_FIELDS = (
     "candidate_raw_sha256", "candidate_raw_size_bytes", "candidate_context_sha256",
     "candidate_context_size_bytes", "candidate_measurement_kind", "physical_context",
@@ -827,30 +799,55 @@ _CANDIDATE_ROW_FIELDS = (
 )
 
 
-def _candidate_request_fields(request: AttemptRequest) -> Dict[str, Any]:
-    return {
-        "candidate_raw_sha256": request.candidate_raw_sha256,
-        "candidate_raw_size_bytes": request.candidate_raw_size_bytes,
-        "candidate_context_sha256": request.candidate_context_sha256,
-        "candidate_context_size_bytes": request.candidate_context_size_bytes,
-        "candidate_measurement_kind": request.candidate_measurement_kind,
-        "physical_context": asdict(request.physical_context) if request.physical_context else None,
-        **({"processing_preference": request.processing_preference,
-            "submitted_processing_mode": request.submitted_processing_mode,
-            "processing_basis": copy.deepcopy(request.processing_basis)}
-           if request.processing_preference or request.submitted_processing_mode or request.processing_basis else {}),
-    }
 def reserve_attempt(request: AttemptRequest) -> AttemptReservation:
     """Atomically check global/root limits and append a ``reserved`` record."""
     request, scope = _merge_scope(request)
+    from ouroboros.budget_pause import dispatch_fenced
+
+    if dispatch_fenced(scope.task_id):
+        # Process-local pause fence: no NEW send (loop, tool, reviewer, verdict
+        # extraction) under a task that is writing its exact pause checkpoint.
+        raise DispatchFenced(
+            f"model dispatch fenced: task {scope.task_id} is entering an exact budget pause",
+            limit_scope="pausing", root_task_id=scope.root_task_id)
     root = _drive_root(scope.drive_root)
-    root_fence = _active_root_budget_fence(root, scope.root_task_id)
-    if root_fence is not None:
-        raise BudgetExceeded(
-            f"root model dispatch paused pending explicit resume for {scope.root_task_id}",
-            limit_scope="root",
-            root_task_id=scope.root_task_id,
-        )
+    # The queue's atomic durable root-dispatch fence, read from its snapshot:
+    # a fenced root refuses every send until an explicit resume.
+    root_task_id = str(scope.root_task_id or "").strip()
+    snapshot_path = root / "state" / "queue_snapshot.json"
+    if root_task_id and snapshot_path.exists():
+        try:
+            snapshot = json.loads(snapshot_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise UsageAccountingError(f"root budget fence authority unavailable: {snapshot_path}") from exc
+        rows = snapshot.get("budget_root_fences", []) if isinstance(snapshot, dict) else None
+        if not isinstance(rows, list):
+            raise UsageAccountingError(f"invalid root budget fence authority: {snapshot_path}")
+        for row in rows:
+            if not isinstance(row, dict):
+                raise UsageAccountingError(f"invalid root budget fence row: {snapshot_path}")
+            if (str(row.get("root_task_id") or "") != root_task_id
+                    or str(row.get("status") or "") not in {"active", "paused"}):
+                continue
+            # ONE member explicitly selected against THIS fence generation is
+            # admitted (owner Q9, #1196): the queue recorded that selection on
+            # the row itself, and the latch still refuses every unselected member.
+            fence_id = str(row.get("fence_id") or "")
+            selected = False
+            for bucket in ("running", "pending"):
+                for entry in (snapshot.get(bucket) or []) if isinstance(snapshot, dict) else []:
+                    member = entry.get("task") if isinstance(entry, dict) else None
+                    if not isinstance(member, dict) or str(member.get("id") or "") != scope.task_id:
+                        continue
+                    hold = member.get("_budget_pause_hold")
+                    selected = bool(fence_id and isinstance(hold, dict) and hold.get("selected")
+                                    and str(hold.get("fence_id") or "") == fence_id)
+            if not selected:
+                raise BudgetExceeded(
+                    f"root model dispatch paused pending explicit resume for {scope.root_task_id}",
+                    limit_scope="root",
+                    root_task_id=scope.root_task_id,
+                )
     ensure_legacy_imported(root)
     # IMPORTANT: live catalog I/O belongs before ``with _locked(root)`` below — the lock protects only the atomic budget read/check/append transaction.
     bound = _reservation_cost(request)
@@ -927,7 +924,17 @@ def reserve_attempt(request: AttemptRequest) -> AttemptReservation:
                     "global_limit_source": scope.global_limit_source or "settings_budget_resolver",
                     "global_limit_revision": scope.global_limit_revision,
                     "root_limit_usd": scope.root_limit_usd,
-                    **_candidate_request_fields(request),
+                    "candidate_raw_sha256": request.candidate_raw_sha256,
+                    "candidate_raw_size_bytes": request.candidate_raw_size_bytes,
+                    "candidate_context_sha256": request.candidate_context_sha256,
+                    "candidate_context_size_bytes": request.candidate_context_size_bytes,
+                    "candidate_measurement_kind": request.candidate_measurement_kind,
+                    "physical_context": asdict(request.physical_context) if request.physical_context else None,
+                    **({"processing_preference": request.processing_preference,
+                        "submitted_processing_mode": request.submitted_processing_mode,
+                        "processing_basis": copy.deepcopy(request.processing_basis)}
+                       if request.processing_preference or request.submitted_processing_mode
+                       or request.processing_basis else {}),
                 }
             ],
         )
@@ -1329,7 +1336,13 @@ def _is_tos_rejection(exc: BaseException) -> bool:
 def _terminalize_failed_attempt(reservation: AttemptReservation, exc: BaseException) -> str:
     """Route a raised provider send to its honest terminal ledger state."""
     if release_pre_dispatch_attempt(reservation, exc):
-        _release_physical_dispatch_claim(reservation.attempt_id)
+        # Return only this context's positively never-sent physical claim, at most once.
+        state = _PHYSICAL_LIMIT.get()
+        if state is not None:
+            with state.lock:
+                if reservation.attempt_id in state.claimed_ids:
+                    state.claimed_ids.remove(reservation.attempt_id)
+                    state.used -= 1
         return "released"
     provider = str(reservation.provider or "").strip().lower()
     stream_usage = getattr(exc, "stream_usage", None)
@@ -1468,19 +1481,10 @@ def execute_physical_attempt(
     except BaseException as exc:
         if isinstance(exc, PhysicalAttemptLimitExceeded):
             _record_attempt_capture(
-                reservation,
-                request,
-                "released",
-                candidate_manifest_ref=manifest_ref,
-                exc=exc,
-            )
+                reservation, request, "released", candidate_manifest_ref=manifest_ref, exc=exc)
             raise
         failure = _pre_dispatch_failure(
-            reservation,
-            request,
-            exc,
-            candidate_manifest_ref=manifest_ref,
-        )
+            reservation, request, exc, candidate_manifest_ref=manifest_ref)
         if failure is exc:
             raise
         raise failure from exc
@@ -1538,19 +1542,10 @@ async def execute_physical_attempt_async(
     except BaseException as exc:
         if isinstance(exc, PhysicalAttemptLimitExceeded):
             _record_attempt_capture(
-                reservation,
-                request,
-                "released",
-                candidate_manifest_ref=manifest_ref,
-                exc=exc,
-            )
+                reservation, request, "released", candidate_manifest_ref=manifest_ref, exc=exc)
             raise
         failure = _pre_dispatch_failure(
-            reservation,
-            request,
-            exc,
-            candidate_manifest_ref=manifest_ref,
-        )
+            reservation, request, exc, candidate_manifest_ref=manifest_ref)
         if failure is exc:
             raise
         raise failure from exc

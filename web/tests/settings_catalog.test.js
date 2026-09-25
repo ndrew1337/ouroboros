@@ -136,6 +136,34 @@ test('an older Refresh completion cannot replace newer success or its read facts
     assert.deepEqual(events[0].items, first.items);
 });
 
+test('background refresh cannot strand a superseded manual button busy', async (t) => {
+    const previousDocument = globalThis.document;
+    const previousFetch = globalThis.fetch;
+    t.after(() => { globalThis.document = previousDocument; globalThis.fetch = previousFetch; });
+    const document = new EventTarget();
+    document.getElementById = () => null;
+    globalThis.document = document;
+    const button = { disabled: false, setAttribute() {}, removeAttribute() {} };
+    const pending = [];
+    globalThis.fetch = () => new Promise((resolve) => pending.push(resolve));
+    const manual = refreshModelCatalog({ button });
+    const background = refreshModelCatalog();
+    pending[1]({ ok: true, json: async () => first });
+    await background;
+    assert.equal(button.disabled, true, 'manual request still owns its busy state');
+    pending[0]({ ok: true, json: async () => first });
+    assert.equal((await manual).stale, true);
+    assert.equal(button.disabled, false);
+    const old = refreshModelCatalog({ button });
+    const latest = refreshModelCatalog({ button });
+    pending[2]({ ok: true, json: async () => first });
+    await old;
+    assert.equal(button.disabled, true, 'older request cannot release a newer button owner');
+    pending[3]({ ok: true, json: async () => first });
+    await latest;
+    assert.equal(button.disabled, false);
+});
+
 test('read errors drop the httpx documentation pointer and rows get the compact form', () => {
     const data = {
         items: [{ value: 'openai/gpt-x' }],

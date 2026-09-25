@@ -683,3 +683,14 @@ def test_quiz_option_recommendation_is_an_additive_optional_field_in_both_langua
     )
     option_decl = re.search(r"@typedef \{Object\} QuizOption\b([\s\S]*?)\*/", text)
     assert option_decl and "@property {boolean=} recommended" in option_decl.group(1)
+
+
+def test_cost_presentation_has_a_closed_nullable_wire_shape():
+    from typing import get_args, get_type_hints
+    from ouroboros.cost_projection import CostPresentation
+
+    hints = get_type_hints(CostPresentation)
+    assert set(hints) == {'scope', 'tracked_amount', 'has_unpriced', 'tracked_final', 'accounting_open', 'has_rows'}
+    assert set(get_args(hints['scope'])) == {'own', 'root_tree'}
+    assert _contains_none(hints['tracked_amount'])
+    assert _contains_none(get_type_hints(ChatOutbound, include_extras=True)['cost_presentation'])

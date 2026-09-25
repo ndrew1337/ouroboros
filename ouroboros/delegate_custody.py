@@ -152,6 +152,8 @@ class RunCustody:
     ledger_recorded: bool = False
     settled: bool = False
     terminal_state: str = ""  # SETTLED row's state, replayed (empty pre-existing/CLOSED_ABSENT)
+    terminal_reason: str = ""  # #1196: engine ``outcomeFacts.reason`` replayed from SETTLED ("" = none)
+    continuation_of: str = ""  # #1196: the settled run this one explicitly continued (``continue_from``)
     containment_disclosed: bool = False  # written once; a re-poll must not re-find
     unread_disclosed: bool = False  # settled-never-read omission named durably
     # Staged-output half of the terminal story (D7). ``output_artifact``:
@@ -530,6 +532,7 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         # emitted it before SETTLED, so replay is unaffected).
         custody.ledger_recorded = custody.settled = True
         custody.terminal_state = str(row.get("state") or "") or custody.terminal_state
+        custody.terminal_reason = str(row.get("outcome_reason") or "") or custody.terminal_reason
     elif kind == CLOSED_ABSENT:
         # Closed, not settled: custody is over, the run leaves ``open_runs``.
         # The registration survives independently (wholesale clearing here was
@@ -810,6 +813,10 @@ def invocation_record(drive_root: Any, invocation_id: str, *,
                 "work_order_coverage": str(row.get("work_order_coverage") or ""),
                 "authority_fingerprint": str(row.get("authority_fingerprint") or ""),
                 "processing": copy.deepcopy(row.get("processing")) if isinstance(row.get("processing"), dict) else {},
+                # #1196: the cap and HOW it was decided replay with the body a
+                # retry re-POSTs, so the replayed STARTED row keeps the same basis.
+                "max_seconds": int(row.get("max_seconds") or 0) if str(row.get("max_seconds") or "").lstrip("-").isdigit() else 0,
+                "max_seconds_basis": str(row.get("max_seconds_basis") or ""),
                 "work_order_source_request": (
                     copy.deepcopy(row.get("work_order_source_request"))
                     if isinstance(row.get("work_order_source_request"), dict) else {}
@@ -932,21 +939,6 @@ def _project_runs(drive_root: Any, custody: RunCustody) -> Optional[List[RunCust
     return [run for run in state.values() if run.project_id == custody.project_id and run.run_id]
 
 
-def _project_settled(drive_root: Any, custody: RunCustody) -> bool:
-    """Every run of the project is settled, per a complete view read NOW.
-
-    Re-read under the retirement lock right before a discharge row is appended,
-    because STARTED appends take no lock: a PROJECT_RETIRED replayed after a
-    sibling's STARTED strips that sibling's ownership. Nothing proven means no.
-    """
-    try:
-        rows = _project_runs(drive_root, custody)
-    except Exception:
-        log.warning("Discharge deferred: replay failed for %s", custody.run_id, exc_info=True)
-        return False
-    return bool(rows) and all(run.settled for run in rows)
-
-
 def _release_registration(drive_root: Any, custody: RunCustody, **facts: Any) -> None:
     """Our custody over the registration ends: the memo (every sibling, exactly as
     the replay clears them) and the durable row, ``facts`` naming why it was kept."""
@@ -993,12 +985,23 @@ def _retire_project_locked(drive_root: Any, gateway: Any, custody: RunCustody) -
             # is what tells a permanent refusal from one worth retrying.
             refusal = {"code": str(getattr(exc, "code", "") or ""),
                        "status": int(getattr(exc, "status_code", 0) or 0)}
-            if daemon_keeps_project(exc) and _project_settled(drive_root, custody):
-                # The #362 vocabulary — our custody ends, the engine keeps the
-                # project — under the engine's own code; never a deletion claim.
-                _release_registration(drive_root, custody, project_kept=True,
-                                      reason=PROJECT_HAS_THREADS, **refusal)
-                return
+            if daemon_keeps_project(exc):
+                # Discharge only when EVERY run of the project is settled per a
+                # complete view read NOW, under the retirement lock and right
+                # before the discharge row is appended: STARTED appends take no
+                # lock, so a PROJECT_RETIRED replayed after a sibling's STARTED
+                # would strip that sibling's ownership. Nothing proven means no.
+                try:
+                    settled_rows = _project_runs(drive_root, custody)
+                except Exception:
+                    log.warning("Discharge deferred: replay failed for %s", custody.run_id, exc_info=True)
+                    settled_rows = None
+                if settled_rows and all(run.settled for run in settled_rows):
+                    # The #362 vocabulary — our custody ends, the engine keeps the
+                    # project — under the engine's own code; never a deletion claim.
+                    _release_registration(drive_root, custody, project_kept=True,
+                                          reason=PROJECT_HAS_THREADS, **refusal)
+                    return
             emit(drive_root, PROJECT_RETIRE_FAILED, {"run_id": custody.run_id, "task_id": custody.task_id,
                                                      "project_id": custody.project_id,
                                                      "reason": str(exc)[:500], **refusal})
@@ -1048,9 +1051,12 @@ def settle_run(drive_root: Any, gateway: Any, custody: RunCustody, detail: Dict[
     # ENGINE's own code ("" = it gave none) and the words it reported (opaque, never
     # branched on). A succeeded row is byte-identical to before.
     failure = summary.get("failure") if isinstance(summary.get("failure"), dict) else {}
+    outcome_facts = summary.get("outcomeFacts") if isinstance(summary.get("outcomeFacts"), dict) else {}
     failure_facts = {} if str(summary.get("state") or "") in SUCCEEDED_STATES else {
         "requested_model": custody.model, "failure_code": str(failure.get("code") or ""),
-        "reported_cause": run_failure_cause(failure)}
+        "reported_cause": run_failure_cause(failure),
+        # Engine TYPED reason (``wall_clock_exceeded`` = maxSeconds expiry): the continuation gate's one fact.
+        "outcome_reason": str(outcome_facts.get("reason") or "")}
     # Claudexor reports CASH in `spendUsd`, EXACTNESS in `spendEstimated`. A run
     # is only free when the amount is really zero AND really settled: expired
     # sessions, bill-by-construction routes and auth fallbacks all charge, and

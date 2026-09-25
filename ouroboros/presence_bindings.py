@@ -84,6 +84,12 @@ def new_presence_binding_id() -> str:
     return uuid.uuid4().hex
 
 
+def conversation_key(provider: str, account_id: str, conversation_id: str, thread_id: str = "") -> str:
+    """The one concurrency/history identity of a provider conversation (no thread = ``0``)."""
+    parts = (provider, account_id, conversation_id, thread_id or "0")
+    return ":".join(str(part or "") for part in parts)
+
+
 def _state_path(data_root: Path) -> Path:
     return Path(data_root) / "state" / PRESENCE_BINDINGS_FILENAME
 
@@ -185,6 +191,7 @@ __all__ = [
     "PresenceBinding",
     "PresenceBindingError",
     "PresenceEndpoint",
+    "conversation_key",
     "load_presence_binding",
     "list_presence_bindings",
     "new_presence_binding_id",
