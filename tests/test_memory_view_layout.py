@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import queue
 
 import pytest
@@ -539,14 +540,24 @@ def test_a_measured_build_times_each_section_on_its_receipt(tmp_path):
     from ouroboros.context_timing import measured_sections
 
     env, memory, _rooms = world(tmp_path)
+    events = memory.drive_root / "logs" / "events.jsonl"
+
+    def receipt():
+        return [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()
+                if '"context_memory_view"' in line][-1]
+
+    history = events.read_bytes() if events.exists() else b""
     with measured_sections():
         timed_messages, _cap = _messages(env, memory, MAIN)
+    timed = receipt()
+    events.write_bytes(history)  # the second build reads the same recent events as the first
     plain_messages, _cap = _messages(env, memory, MAIN)
-    events = [json.loads(line) for line in (memory.drive_root / "logs" / "events.jsonl").read_text(
-        encoding="utf-8").splitlines() if '"context_memory_view"' in line]
-    timed, plain = events
+    plain = receipt()
     assert {"memory_view", "knowledge", "health", "runtime", "drive_state", "fit"} <= set(timed["sections_ms"])
     assert set(timed["sections_cpu_ms"]) == set(timed["sections_ms"])
+    assert timed["sections_ms"]["total"] >= max(timed["sections_ms"].values())  # the build's own time
     assert all(isinstance(ms, int) and ms >= 0 for ms in [*timed["sections_ms"].values(), *timed["sections_cpu_ms"].values()])
     assert "sections_ms" not in plain and "sections_cpu_ms" not in plain
-    assert len(timed_messages) == len(plain_messages) and timed_messages[0]["role"] == plain_messages[0]["role"]
+    # The spans stay on the receipt: both requests are the same text, apart from their capture time.
+    stamp = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?([+-]\d{2}:?\d{2}|Z)?")
+    assert stamp.sub("<ts>", json.dumps(timed_messages)) == stamp.sub("<ts>", json.dumps(plain_messages))

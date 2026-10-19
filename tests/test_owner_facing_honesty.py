@@ -7,7 +7,6 @@ ground-truth probe guidance, and the decision-turn outcome contract."""
 from __future__ import annotations
 
 import logging
-import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -211,12 +210,10 @@ def test_stray_server_check_reports_foreign_pid(tmp_path, monkeypatch):
     env = SimpleNamespace(drive_root=str(tmp_path))
     (tmp_path / "state").mkdir(parents=True, exist_ok=True)
 
-    real_run = subprocess.run
-
     def fake_run(cmd, **kwargs):
         if cmd and cmd[0] == "pgrep":
             return SimpleNamespace(stdout="424242\n", returncode=0)
-        return real_run(cmd, **kwargs)
+        return SimpleNamespace(stdout="", returncode=1)  # the batch reads nothing: a live 424242 elsewhere is not this pid
 
     monkeypatch.setattr("subprocess.run", fake_run)
     monkeypatch.setattr(
