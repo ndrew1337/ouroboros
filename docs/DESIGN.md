@@ -1184,6 +1184,17 @@ not child-task cards and never prove execution by themselves.
   local 24-hour clock, prefixed with the short date when the wait began on an
   earlier day, only where the host recorded the moment it sent that reviewer's
   request; a time is never inferred.
+- A review record whose wave recorded the review pool says it in words at the
+  top of its attempt detail: one panel line (the strictness, who chose the
+  panel — Ouroboros, the host or you — `k of n ticked reviewers` and any
+  advisers, `not counted`), the reason given or `widened to every ticked
+  reviewer (Blocking)`, each seat not reached with its cause, and the wave
+  total over the priced seats, naming those on a subscription or of unknown
+  cost. Each reviewer line leads with `counted` or `adviser, not counted` and
+  its own cost (an amount, `subscription` or `cost unknown`, never $0 for a
+  gap). A seat still owed an answer reads `awaiting an answer`, never `not
+  reached`; a preflight record keeps its own one-row line. A record written
+  before these facts reads as it always did.
 - A panel that settled after its task ended stays one attempt row of its group,
   labelled as settled after the task ended; its note (which verdict, which
   revision, whether a reviewer's outcome is still unknown) is host-composed and
@@ -2120,6 +2131,15 @@ its own. The surface fact sent with a message reads the same switch. On docked,
 the Project panel lies beside Main at its own width over the dimmed room; its
 handle resizes it apart from the sidebar's, and it is never wider than the
 content area.
+
+**Resizing.** A handle drag writes only the dragged box's width, once per
+displayed frame; the sidebar's column, the dimmed room and the panel's edge
+follow that box by layout, and the width is stored once, when the drag ends.
+While a feed's width keeps moving (a drag, a live window resize), the rows far
+from the screen keep the size they were last laid out at and only the rows near
+it are laid out again; once the width holds, every row is laid out at the new
+width and the passage being read stays where it was. A single change of width (a
+window jump, a layout switch) is laid out at once.
 
 **Navigation.** Places come from one registry (`web/modules/pages.js`): it renders
 the navigation rows, names the titles and feeds the shell gate, so a new page is
