@@ -531,3 +531,22 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
     # The first request keeps the owner-mode selection: a full list is not what Nano sends there.
     assert (built.nano_projection.memory_facts["floor"]["physical_allowance_tokens"]
             == plan(meta + big, 1.0).nano_projection.memory_facts["floor"]["physical_allowance_tokens"])
+
+
+def test_a_measured_build_times_each_section_on_its_receipt(tmp_path):
+    """The receipt of a build inside ``measured_sections`` carries each section's wall and CPU time;
+    a build outside one carries neither, and the request itself is the same."""
+    from ouroboros.context_timing import measured_sections
+
+    env, memory, _rooms = world(tmp_path)
+    with measured_sections():
+        timed_messages, _cap = _messages(env, memory, MAIN)
+    plain_messages, _cap = _messages(env, memory, MAIN)
+    events = [json.loads(line) for line in (memory.drive_root / "logs" / "events.jsonl").read_text(
+        encoding="utf-8").splitlines() if '"context_memory_view"' in line]
+    timed, plain = events
+    assert {"memory_view", "knowledge", "health", "runtime", "drive_state", "fit"} <= set(timed["sections_ms"])
+    assert set(timed["sections_cpu_ms"]) == set(timed["sections_ms"])
+    assert all(isinstance(ms, int) and ms >= 0 for ms in [*timed["sections_ms"].values(), *timed["sections_cpu_ms"].values()])
+    assert "sections_ms" not in plain and "sections_cpu_ms" not in plain
+    assert len(timed_messages) == len(plain_messages) and timed_messages[0]["role"] == plain_messages[0]["role"]
