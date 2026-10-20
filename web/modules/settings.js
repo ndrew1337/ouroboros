@@ -377,6 +377,9 @@ export async function renderExtensionSettingsSections(root, sections, { isCurren
                 if (!resp.ok || data.error) throw new Error(data.error || `HTTP ${resp.status}`);
                 const outcome = extensionActionStatus(data);
                 setInlineStatus(status, outcome.text, outcome.tone);
+                if (data.ok !== false) window.dispatchEvent(new CustomEvent('ouro:settings-updated', {
+                    detail: { reason: 'extension settings saved', source: 'settings', skill, route },
+                }));
             } catch (err) {
                 setInlineStatus(status, err.message || String(err), 'danger');
             } finally {
