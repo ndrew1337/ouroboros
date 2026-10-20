@@ -49,13 +49,13 @@ export function createCaptureLease(env = globalThis) {
         listeners.push(() => target?.removeEventListener?.(event, fn));
     }
     function releaseAll(reason = 'cancelled') { holder?.release(reason); }
-    function watchPage() {
+    function watchPage(keepWhenHidden) {
         listen(env, 'pagehide', () => releaseAll('hidden'));
         listen(env.document, 'visibilitychange', () => {
-            if (env.document.hidden) releaseAll('hidden');
+            if (env.document.hidden && !keepWhenHidden) releaseAll('hidden');
         });
     }
-    function acquire({ kind = 'audio', owner, label = '', constraints = {}, capture = true } = {}) {
+    function acquire({ kind = 'audio', owner, label = '', constraints = {}, capture = true, keepWhenHidden = false } = {}) {
         if (holder) return { code: 'in_use', label: holder.label, owner: holder.owner };
         const available = captureAvailability(env, { kind, capture });
         if (!available.ok) return { code: available.code };
@@ -81,7 +81,7 @@ export function createCaptureLease(env = globalThis) {
             },
         };
         holder = handle;
-        watchPage();
+        watchPage(keepWhenHidden);
         function adopt(stream, ticket, fellBack) {
             if (holder !== handle || ticket !== request) {
                 stopTracks(stream);

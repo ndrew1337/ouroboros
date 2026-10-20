@@ -137,7 +137,8 @@ export class CallSession {
             this.resuming = resume;
             // This client's chosen microphone and cleaning (Settings → Live calls), else the system's own.
             const prefs = loadDevicePrefs(this.env);
-            const pending = acquire({ owner: this, label: 'Live Conversation', constraints: microphoneConstraints(prefs).audio });
+            const pending = acquire({ owner: this, label: 'Live Conversation', keepWhenHidden: true,
+                constraints: microphoneConstraints(prefs).audio });
             this.pendingLease = pending;
             const lease = await pending;
             if (lease.code) {
