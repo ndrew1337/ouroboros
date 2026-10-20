@@ -115,12 +115,17 @@ from ouroboros.extension_registry_state import (
     _load_failures,
     _lock,
     _record_companion_name,  # noqa: F401
-    _routes,
-    _settings_sections,
+    _routes,  # noqa: F401 — facade re-export (extraction contract)
+    _retiring_imports,
+    SURFACE_KINDS,
+    defer_reconcile_until_imports_release,
+    realtime_load_refusal,
+    retire_extension_imports,
+    _settings_sections,  # noqa: F401 — facade re-export (extraction contract)
     _tools,
-    _ui_tabs,
+    _ui_tabs,  # noqa: F401 — facade re-export (extraction contract)
     _unloading,
-    _ws_handlers,
+    _ws_handlers,  # noqa: F401 — facade re-export (extraction contract)
     extension_generation_digest,  # noqa: F401 — ABI-9 dispatch-provenance API
     get_tool_stamped as _registry_get_tool_stamped,
 )
@@ -418,6 +423,12 @@ def reconcile_extension(
             return state
         if loaded_present:
             unload_extension(skill_name)
+        if defer_reconcile_until_imports_release(skill_name, drive_root):
+            # Old imports still drain; their release requeues this reconcile. No load failure, no revert.
+            state.update(reason="imports_retiring", action="extension_reload_pending", live_loaded=False,
+                         loaded_present=False)
+            _finalize_extension_reconcile(state, drive_root, skill_name, reason="imports_retiring", health_stamp=health_stamp)
+            return state
         try:
             err = load_extension(
                 loaded,
@@ -592,6 +603,8 @@ def load_extension(
     """
     if drive_root is None:
         raise TypeError("load_extension requires explicit drive_root")
+    if refusal := realtime_load_refusal(skill.name):
+        return refusal
     if not skill.manifest.is_extension():
         return f"skill {skill.name!r} is not type=extension"
     if skill.load_error:
@@ -840,6 +853,8 @@ def _unload_extension_locked(skill_name: str) -> None:
     closed runtime API make such a late call a no-op against the host.
     """
     with _lock:
+        if skill_name in _retiring_imports:
+            return  # Stop was already requested; its imports still have an owner.
         bundle = _extensions.get(skill_name)
         event_subscriptions = list(bundle.event_subscriptions) if bundle else []
         api_instances = list(bundle.api_instances) if bundle else []
@@ -864,16 +879,11 @@ def _unload_extension_locked(skill_name: str) -> None:
             companion_names = list(bundle.companion_names) if bundle else []
             supervised_futures = list(bundle.supervised_futures) if bundle else []
             if bundle:
-                for key in bundle.tools:
-                    _tools.pop(key, None)
-                for key in bundle.routes:
-                    _routes.pop(key, None)
-                for key in bundle.ws_handlers:
-                    _ws_handlers.pop(key, None)
-                for key in bundle.ui_tabs:
-                    _ui_tabs.pop(key, None)
-                for key in bundle.settings_sections:
-                    _settings_sections.pop(key, None)
+                for kind, live, _label in SURFACE_KINDS:
+                    for key in getattr(bundle, kind):
+                        live.pop(key, None)
+                if bundle.import_users:
+                    _retiring_imports[skill_name] = bundle
         for future in supervised_futures:
             try:
                 future.cancel()
@@ -887,13 +897,15 @@ def _unload_extension_locked(skill_name: str) -> None:
                     supervisor.stop(skill_name, name)
         for callback in callbacks:
             _run_unload_callback(skill_name, callback)
-        prefix = _module_key(skill_name)
-        # Copy keys before mutating sys.modules.
-        for mod_name in list(sys.modules.keys()):
-            if mod_name == prefix or mod_name.startswith(prefix + "."):
-                sys.modules.pop(mod_name, None)
-        if import_root is not None:
-            release_extension_import_tree(import_root)
+        def purge():
+            prefix = _module_key(skill_name)
+            for mod_name in list(sys.modules.keys()):  # copy keys before mutating sys.modules
+                if mod_name == prefix or mod_name.startswith(prefix + "."):
+                    sys.modules.pop(mod_name, None)
+            if import_root is not None:
+                release_extension_import_tree(import_root)
+
+        retire_extension_imports(skill_name, bundle, purge)
     finally:
         with _lock:
             _unloading.discard(skill_name)

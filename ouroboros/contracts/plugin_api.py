@@ -17,6 +17,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Sequence, TypedDict, runtime_checkable
 
+from ouroboros.contracts.realtime import RealtimeRoute
 from ouroboros.contracts.skill_manifest import VALID_SKILL_PERMISSIONS
 from ouroboros.skill_token import SkillToken
 
@@ -27,7 +28,7 @@ from ouroboros.skill_token import SkillToken
 # refused a NEW PASS at issuance (``extension_new_pass_admission_error``).
 # 2.0 absorbs 1.4's presence capability (reviewed transport skills may submit
 # authenticated non-owner presence events through the Host Service ceiling).
-PLUGIN_API_VERSION = "2.0"
+PLUGIN_API_VERSION = "2.1"  # additive, in-process realtime setup provider
 # The generation an extension WITHOUT the manifest field binds against —
 # "absent ≡ 1.3 by construction" (owner-ratified §6.1-Δ; deliberately NOT 1.4).
 LEGACY_PLUGIN_API_GENERATION = "1.3"
@@ -55,8 +56,8 @@ class ExecutionMode(enum.Enum):
 
     ``OUT_OF_PROCESS`` is the short-lived, per-call child used for isolated-dep /
     native-marker extensions (``OUROBOROS_EXTENSION_PROCESS_CHILD == "1"``). Such a
-    child cannot host a persistent in-process subscription or asyncio task, so two
-    capabilities are unavailable there; a manifest-declared ``companion_process``
+    child cannot host a persistent in-process subscription, asyncio task or
+    realtime provider. A manifest-declared ``companion_process``
     (host-spawned and supervised) is the supported alternative for long-running
     work and host-event subscription.
     """
@@ -73,7 +74,7 @@ class ExecutionMode(enum.Enum):
 MATRIX_CAPABILITIES: frozenset[str] = frozenset({
     "register_tool", "register_route", "register_ws_handler", "register_ui_tab",
     "register_settings_section", "send_ws_message", "register_companion_process",
-    "register_supervised_task", "subscribe_event", "on_unload",
+    "register_supervised_task", "subscribe_event", "on_unload", "register_realtime_provider",
 })
 
 # Runtime-access/introspection methods always available in every execution mode
@@ -84,12 +85,13 @@ ALWAYS_AVAILABLE_CAPABILITIES: frozenset[str] = frozenset({
 })
 
 # Capabilities a short-lived OUT_OF_PROCESS child cannot use directly: a persistent
-# host-event subscription and an in-process supervised asyncio task have no meaning
-# in a per-call child. Long-running work, host events, and supervised loops belong
-# in a manifest-declared companion_process.
+# host-event subscription, in-process supervised task and realtime provider have
+# no lifetime in a per-call child. Long-running general work and host events can
+# use a companion_process; the realtime setup boundary is in-process only.
 OUT_OF_PROCESS_UNAVAILABLE_CAPABILITIES: frozenset[str] = frozenset({
     "subscribe_event",
     "register_supervised_task",
+    "register_realtime_provider",
 })
 
 
@@ -199,6 +201,7 @@ def plugin_api_surface_fingerprint() -> str:
 # bumped and the new fingerprint recorded here.
 PLUGIN_API_SURFACE_FINGERPRINTS: Dict[str, str] = {
     "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
+    "2.1": "61036a060043ebfc4381084d76893b63c43a483f1ead99a7276ac448acd3aaa5",
 }
 
 
@@ -330,6 +333,24 @@ class PluginAPI(Protocol):
     """Runtime-checkable ABI exposed to each extension's ``register(api)``."""
 
     # registration
+
+    def register_realtime_provider(
+        self,
+        name: str,
+        handler: Callable[..., Awaitable[Any]],
+        *,
+        route: RealtimeRoute,
+    ) -> None:
+        """Register an in-process setup provider as ``<skill>:<name>``.
+
+        Requires ``realtime_provider``. The async handler consumes the host's
+        sealed RealtimeInput (contracts/realtime.py), with observe, execute,
+        expected_wire_sha256, probe and optional injected connect keyword args,
+        and reports response usage in host axes (``USAGE_AXES``). ``route``
+        declares its accounting provider, endpoint and model prefix. Selection,
+        fitting, task authority, tools and spending remain host-owned.
+        """
+        ...
 
     def register_tool(
         self,

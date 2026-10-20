@@ -12,12 +12,15 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 import pathlib
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from types import ModuleType
 from typing import Any, Callable, Dict, List, Optional, Sequence
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -29,6 +32,7 @@ class _ExtensionRegistrations:
     ws_handlers: List[str] = field(default_factory=list)
     ui_tabs: List[str] = field(default_factory=list)
     settings_sections: List[str] = field(default_factory=list)
+    realtime_providers: List[str] = field(default_factory=list)
     unload_callbacks: List[Callable[[], Any]] = field(default_factory=list)
     event_subscriptions: List[str] = field(default_factory=list)
     companion_names: List[str] = field(default_factory=list)
@@ -59,6 +63,12 @@ class _ExtensionRegistrations:
     # over small current control files, never rehash the publisher's payload.
     loaded_skill: Any = None
     context_snapshot: Optional[Dict[str, str]] = None
+    # A realtime operation owns imports until its coroutine AND teardown return.
+    import_users: int = 0
+    release_imports_when_idle: Optional[Callable[[], Any]] = None
+    import_release_callbacks: List[Callable[[], Any]] = field(default_factory=list)
+    # A reconcile that met those imports draining runs again once they release.
+    reconcile_after_release: Optional[pathlib.Path] = None
 
 
 @dataclass
@@ -126,6 +136,7 @@ class _StagedRegistrations:
     ws_handlers: Dict[str, Any] = field(default_factory=dict)
     ui_tabs: Dict[str, Any] = field(default_factory=dict)
     settings_sections: Dict[str, Any] = field(default_factory=dict)
+    realtime_providers: Dict[str, Any] = field(default_factory=dict)
     unload_callbacks: List[Callable[[], Any]] = field(default_factory=list)
     event_subscriptions: List["_StagedEventSubscription"] = field(default_factory=list)
     companion_names: List[str] = field(default_factory=list)
@@ -182,11 +193,15 @@ _ws_handlers: Dict[str, Any] = {}      # {"ext_<len>_<token>_<message_type>": ha
 _ui_tabs: Dict[str, Any] = {}          # {"<skill>:<tab_id>": tab_spec}
 # Declarative settings sections keyed like UI tabs.
 _settings_sections: Dict[str, Any] = {}
+_realtime_providers: Dict[str, Any] = {}
+# An unloading provider loses dispatch immediately. Reload waits for its old
+# imports to drain; no concurrent generations or speculative duplex IPC.
+_retiring_imports: Dict[str, _ExtensionRegistrations] = {}
 
-# The five surface kinds, each naming the field that carries it on a staged
+# The surface kinds, each naming the field that carries it on a staged
 # snapshot AND on a published bundle, its live registry, and the word used in
 # refusals. Every walk over "all surfaces" — conflict detection, the atomic
-# swap, the child-catalog staging — reads this, so a sixth kind cannot be
+# swap, the child-catalog staging — reads this, so a new kind cannot be
 # added to some walks and forgotten by others.
 SURFACE_KINDS: Sequence[tuple[str, Dict[str, Any], str]] = (
     ("tools", _tools, "tool"),
@@ -194,12 +209,13 @@ SURFACE_KINDS: Sequence[tuple[str, Dict[str, Any], str]] = (
     ("ws_handlers", _ws_handlers, "ws handler"),
     ("ui_tabs", _ui_tabs, "ui tab"),
     ("settings_sections", _settings_sections, "settings section"),
+    ("realtime_providers", _realtime_providers, "realtime provider"),
 )
 
 # Dispatch surfaces: a physical call arrives on these, so each descriptor is
 # stamped with the publication that owns it. UI kinds are read as a snapshot
 # and carry no per-surface provenance.
-DISPATCH_SURFACE_KINDS = frozenset({"tools", "routes", "ws_handlers"})
+DISPATCH_SURFACE_KINDS = frozenset({"tools", "routes", "ws_handlers", "realtime_providers"})
 
 
 def _lifecycle_lock_for(skill_name: str) -> threading.RLock:
@@ -370,7 +386,7 @@ def _record_companion_name(bundle: _ExtensionRegistrations, name: str) -> None:
 
 
 @contextmanager
-def extension_work_scope(spec: Dict[str, Any], work: Any):
+def extension_work_scope(spec: Dict[str, Any], work: Any, *, retain_imports: bool = False):
     """Attach cancellable work to the exact publication already owning dispatch."""
     from ouroboros.contracts.plugin_api import ExtensionRegistrationError
 
@@ -381,6 +397,8 @@ def extension_work_scope(spec: Dict[str, Any], work: Any):
         if bundle is None or name in _unloading or bundle.generation_digest != generation:
             raise ExtensionRegistrationError("extension generation changed before response dispatch")
         bundle.supervised_futures.append(work)
+        if retain_imports:
+            bundle.import_users += 1
     try:
         yield
     finally:
@@ -388,6 +406,79 @@ def extension_work_scope(spec: Dict[str, Any], work: Any):
             # Captured bundle identity: completing old work cannot detach a new
             # generation's resource after unload/reload replaced the registry row.
             bundle.supervised_futures[:] = [item for item in bundle.supervised_futures if item is not work]
+            release = None
+            if retain_imports:
+                bundle.import_users -= 1
+                if not bundle.import_users:
+                    release = bundle.release_imports_when_idle
+                    bundle.release_imports_when_idle = None
+        if release is not None:
+            release()
+
+
+def realtime_load_refusal(skill_name: str) -> str:
+    """Why a realtime provider package cannot load now, or ``""`` when it can."""
+    with _lock:
+        if skill_name in _retiring_imports:
+            return f"skill {skill_name!r} realtime operation is still closing; retry load after it ends"
+        existing = _extensions.get(skill_name)
+        if existing and existing.realtime_providers:
+            return f"skill {skill_name!r} realtime provider is already loaded; unload it before replacement"
+    return ""
+
+
+def retire_extension_imports(skill_name: str, bundle: Optional[_ExtensionRegistrations],
+                             purge: Callable[[], Any]) -> None:
+    """Purge an unloaded publication's imports now, or when its last import user exits.
+
+    A reconcile that met them in use is queued again on the server's ordinary
+    reconcile queue; the wait is never recorded as a load failure.
+    """
+    def release() -> None:
+        with _lifecycle_lock_for(skill_name):
+            purge()
+            for callback in bundle.import_release_callbacks if bundle is not None else ():
+                callback()
+            with _lock:
+                if _retiring_imports.get(skill_name) is bundle:
+                    _retiring_imports.pop(skill_name, None)
+                drive_root = bundle.reconcile_after_release if bundle is not None else None
+        if drive_root is not None:
+            from ouroboros.extension_reconcile_queue import request_extension_reconcile
+
+            try:
+                request_extension_reconcile(drive_root, skill_name, reason="imports_released", source="server")
+            except Exception:  # its health keeps the typed wait; the next reconcile loads it
+                log.warning("could not queue the reconcile of %s after its imports released", skill_name,
+                            exc_info=True)
+
+    with _lock:
+        deferred = bool(bundle and bundle.import_users)
+        if deferred:
+            bundle.release_imports_when_idle = release
+    if not deferred:
+        release()
+
+
+def after_extension_imports_release(skill_name: str, callback: Callable[[], Any]) -> bool:
+    """Run cleanup under the lifecycle lock, after actual import release; True if deferred."""
+    with _lifecycle_lock_for(skill_name):
+        with _lock:
+            bundle = _retiring_imports.get(skill_name)
+            if bundle is not None:
+                bundle.import_release_callbacks.append(callback)
+                return True
+        callback()
+        return False
+
+
+def defer_reconcile_until_imports_release(skill_name: str, drive_root: pathlib.Path) -> bool:
+    """True while an unloaded publication still owns imports; their release reconciles again."""
+    with _lock:
+        bundle = _retiring_imports.get(skill_name)
+        if bundle is not None:
+            bundle.reconcile_after_release = pathlib.Path(drive_root)
+        return bundle is not None
 
 
 def snapshot() -> Dict[str, Any]:
@@ -400,6 +491,7 @@ def snapshot() -> Dict[str, Any]:
             "tools": sorted(_tools.keys()),
             "routes": sorted(_routes.keys()),
             "ws_handlers": sorted(_ws_handlers.keys()),
+            "realtime_providers": sorted(_realtime_providers.keys()),
             "ui_tabs": [
                 dict(copy.deepcopy(value), key=key)
                 for key, value in sorted(_ui_tabs.items())

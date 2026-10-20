@@ -645,6 +645,9 @@ class OuroborosAgent:
             authority_refusal = validate_task_authority_sources(self.env, task)
         if authority_refusal:
             return None, [], {"authority_source_unavailable": authority_refusal}
+        from ouroboros.realtime_turn import recovery_refusal
+        if refusal := recovery_refusal(task, getattr(self, "_realtime_turn", None)):
+            return None, [], {"realtime_refusal": refusal}
         drive_logs = self.env.drive_path("logs")
         task = attach_task_contract(apply_consciousness_authority(task))
         from types import SimpleNamespace
@@ -861,6 +864,8 @@ class OuroborosAgent:
             review_context_builder=lambda: build_review_context(review_env),
             ctx=ctx,
             tool_schemas=initial_tool_schemas(self.tools, context_mode=get_context_mode()),
+            **({"route_resolver": self._realtime_turn.resolve_route}
+               if getattr(self, "_realtime_turn", None) is not None else {}),
         )
         # The second of the three places a reduction must reach (the durable record
         # above is the first, `[SUBTASK_OUTCOME]` the third). It is appended HERE,
@@ -1035,7 +1040,8 @@ class OuroborosAgent:
                 if isinstance(task.get("metadata"), dict)
                 else {}
             )
-            self._accepting_owner_messages = inline_execution(task)
+            # A realtime turn drains no owner mailbox, so it is never a message reader.
+            self._accepting_owner_messages = inline_execution(task) and getattr(self, "_realtime_turn", None) is None
         authority_refusal = validate_task_authority_sources(self.env, task)
         if not authority_refusal:
             _persist_early_origin_stub(self.env.drive_root, task)
@@ -1073,6 +1079,13 @@ class OuroborosAgent:
                 text, usage, llm_trace = _authority_source_terminal(authority_refusal)
             elif str(cap_info.get("executor_blocked_reason") or ""):
                 text, usage, llm_trace = _blocked_executor_terminal(cap_info, task)
+            elif cap_info.get("realtime_refusal"):
+                text = "Realtime transport cannot resume here. Start a fresh room preview and authorize its exact input."
+                usage = {"terminal_origin": TERMINAL_ORIGIN_HOST_NOTICE, "execution_status": "infra_failed",
+                         "reason_code": cap_info["realtime_refusal"]}
+            elif getattr(self, "_realtime_turn", None) is not None:
+                text, usage, llm_trace = self._realtime_turn.run(
+                    ctx, messages, self.tools, task=task, initial_effort=initial_effort)
             elif task_type_str == "deep_self_review":
                 # Deep self-review bypasses the tool loop: review_change(subject=system,
                 # surface=system) on the row the request named, else Main (decision 3A).

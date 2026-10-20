@@ -57,6 +57,10 @@ def test_every_client_envelope_has_a_field_identical_browser_twin():
             cls = getattr(module, name)
             assert re.search(rf"@typedef \{{Object\}} {name}\b", text), f"client_contract_types.js lacks {name}"
             assert _js_typedef_fields(text, name) == set(typing.get_type_hints(cls, include_extras=True)), name
+    for name in ("RealtimeExecuteInbound", "RealtimePreparedOutbound", "RealtimeAuthorizedOutbound",
+                 "RealtimeRefusedOutbound", "RealtimeFinishedOutbound"):
+        cls = contract_typed_dict(name)
+        assert _js_typedef_fields(text, name) == set(typing.get_type_hints(cls, include_extras=True)), name
     index = (REPO / "web" / "modules" / "api_types.js").read_text(encoding="utf-8")
     assert "./client_contract_types.js" in index.splitlines()[0]
     assert "import('./client_contract_types.js').ServedUiState" in index

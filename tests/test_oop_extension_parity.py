@@ -63,8 +63,10 @@ def test_capability_available_per_mode():
     assert available_capabilities(ExecutionMode.IN_PROCESS) == MATRIX_CAPABILITIES
     oop = available_capabilities(ExecutionMode.OUT_OF_PROCESS)
     assert oop == MATRIX_CAPABILITIES - OUT_OF_PROCESS_UNAVAILABLE_CAPABILITIES
-    # The exact post-parity contract: only these two need a companion_process.
-    assert OUT_OF_PROCESS_UNAVAILABLE_CAPABILITIES == {"subscribe_event", "register_supervised_task"}
+    # Realtime providers retain in-process imports for their actual lifetime.
+    assert OUT_OF_PROCESS_UNAVAILABLE_CAPABILITIES == {
+        "subscribe_event", "register_supervised_task", "register_realtime_provider",
+    }
     assert {"on_unload", "send_ws_message", "register_companion_process"} <= oop
 
 

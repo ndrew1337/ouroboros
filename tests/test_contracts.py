@@ -1333,6 +1333,7 @@ def test_plugin_api_surface_is_frozen():
         "register_companion_process",
         "subscribe_event",
         "get_skill_token",
+        "register_realtime_provider",  # 2.1, additive and in-process only
     }
     members = {
         m for m in dir(PluginAPI)
@@ -1346,7 +1347,7 @@ def test_plugin_api_surface_is_frozen():
 def test_plugin_api_version_matches_documented_surface():
     from ouroboros.contracts.plugin_api import PLUGIN_API_VERSION, VALID_EXTENSION_PERMISSIONS
 
-    assert PLUGIN_API_VERSION == "2.0"
+    assert PLUGIN_API_VERSION == "2.1"
     assert "presence" in VALID_EXTENSION_PERMISSIONS
     # Additive (owner A4=A, 2026-10-03): a granted skill may leave the owner a signed System row.
     assert "notify_owner" in VALID_EXTENSION_PERMISSIONS
@@ -1361,6 +1362,10 @@ def test_plugin_api_version_matches_documented_surface():
 
     assert LEGACY_PLUGIN_API_GENERATION == "1.3"
     assert PLUGIN_API_SURFACE_FINGERPRINTS[PLUGIN_API_VERSION] == plugin_api_surface_fingerprint()
+    # Additive 2.1 (realtime providers) keeps 2.0 declarations negotiable on their recorded surface.
+    assert PLUGIN_API_SURFACE_FINGERPRINTS["2.0"] == (
+        "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca")
+    assert "realtime_provider" in VALID_EXTENSION_PERMISSIONS
 
 
 def test_extension_route_methods_contract_matches_server_dispatch():

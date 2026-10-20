@@ -330,9 +330,13 @@ async def _accept_chat_after(websocket: WebSocket, previous: asyncio.Task | None
         await asyncio.wait((previous,))  # its failure was its own notice
     try:
         await run_sync_to_completion(accept)
-    except Exception:
+    except Exception as exc:
         try:
-            await websocket.send_text(_initialization_notice(client_message_id, chat_id))
+            from ouroboros.contracts.realtime import RealtimeSetupError
+
+            await websocket.send_text(json.dumps({
+                "type": "realtime_refused", "code": exc.code, "detail": str(exc),
+            }) if isinstance(exc, RealtimeSetupError) else _initialization_notice(client_message_id, chat_id))
         except Exception:
             log.debug("WebSocket closed before its chat failure notice", exc_info=True)
 
@@ -358,6 +362,16 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                 continue
 
             msg_type = str(msg.get("type", "") or "")
+            if msg_type == "realtime_execute":
+                from ouroboros.gateway.realtime import authorize_realtime
+                from ouroboros.contracts.realtime import RealtimeSetupError
+
+                try:
+                    result = await asyncio.to_thread(authorize_realtime, msg)
+                except RealtimeSetupError as exc:
+                    result = {"type": "realtime_refused", "code": exc.code, "detail": str(exc)}
+                await websocket.send_text(json.dumps(result))
+                continue
             if await _dispatch_extension_message(websocket, msg, msg_type):
                 continue
 
@@ -424,6 +438,17 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                             chat_id=thread_id,
                             project_id=str(msg.get("project_id", "") or ""),
                         )
+                        if "execution_transport" in msg:
+                            from ouroboros.gateway.realtime import realtime_dispatch
+                            from ouroboros.contracts.realtime import RealtimeSetupError
+
+                            try:
+                                send_kwargs["dispatch"] = realtime_dispatch(bridge, msg, broadcast_ws_sync, task_metadata)
+                            except RealtimeSetupError as exc:
+                                await websocket.send_text(json.dumps({
+                                    "type": "realtime_refused", "code": exc.code, "detail": str(exc),
+                                }))
+                                continue
                         if str(payload).strip().lower() == "/restart":
                             from ouroboros.server_control import dispatch_accepted_restart
 

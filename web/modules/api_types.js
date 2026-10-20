@@ -243,12 +243,18 @@
  * @property {number=} chat_id     // multi-project thread routing (v6.32.0); main chat = 1
  * @property {string=} project_id  // per-project memory scope (v6.32.0)
  * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
+ * @property {Object=} execution_transport  // Internal realtime preview; no visible composer change.
  */
 /**
  * @typedef {Object} CommandInbound
  * @property {"command"} type
  * @property {string} cmd
  */
+/** @typedef {import('./client_contract_types.js').RealtimeExecuteInbound} RealtimeExecuteInbound */
+/** @typedef {import('./client_contract_types.js').RealtimePreparedOutbound} RealtimePreparedOutbound */
+/** @typedef {import('./client_contract_types.js').RealtimeAuthorizedOutbound} RealtimeAuthorizedOutbound */
+/** @typedef {import('./client_contract_types.js').RealtimeRefusedOutbound} RealtimeRefusedOutbound */
+/** @typedef {import('./client_contract_types.js').RealtimeFinishedOutbound} RealtimeFinishedOutbound */
 /**
  * @typedef {Object} ChatOutbound
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
@@ -1446,6 +1452,7 @@
  * @property {string=} content_hash
  * @property {string=} deleted_payload_root
  * @property {boolean=} deleted_state
+ * @property {boolean=} state_delete_pending
  * @property {string=} extension_action
  * @property {string=} extension_reason
  * @property {string=} error

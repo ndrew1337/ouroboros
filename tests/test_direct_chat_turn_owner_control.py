@@ -89,6 +89,14 @@ def _live_chat_agent(monkeypatch, task_id=TURN_ID, *, accepting=True):
     return agent
 
 
+def _turn_released(agent, task_id=TURN_ID):
+    """The turn's end as its runner performs it: the actor stops, then releases custody."""
+    from supervisor.active_activity import get_direct_activity_registry
+
+    agent._busy = False
+    get_direct_activity_registry().unregister(task_id)
+
+
 def _mailbox_kinds(tmp_path, task_id=TURN_ID):
     from ouroboros.owner_mailbox import _mailbox_path
 
@@ -167,6 +175,59 @@ def test_closed_conversation_admission_is_not_owner_addressable(tmp_path, monkey
     assert task_has_live_ownership(TURN_ID) is False
 
 
+def test_stop_keeps_custody_of_activity_with_closed_message_admission(tmp_path, monkeypatch):
+    """Preparation/teardown still owns the actor after message admission closes."""
+    from ouroboros.cancel_intents import active_intent
+
+    _isolate_queue(monkeypatch, tmp_path)
+    _live_chat_agent(monkeypatch, accepting=False)
+    write_task_result(tmp_path, TURN_ID, "running", chat_id=0)
+    with _client(tmp_path) as client:
+        response = client.post(f"/api/tasks/{TURN_ID}/cancel", json={"stop_policy": "immediate"})
+    assert response.status_code == 202, response.text
+    assert response.json()["cancel_state"] == "pending"
+    assert load_task_result(tmp_path, TURN_ID)["status"] == "running"
+    assert active_intent(tmp_path, TURN_ID)
+
+
+def test_stop_keeps_custody_when_admission_closes_after_capture_until_release(tmp_path, monkeypatch):
+    """Stop captures a LIVE turn; the turn then closes message admission (its final
+    delivery, a transport turn's run) while its runner still owns execution. Custody
+    answers 202 and keeps the row and intent; once the runner releases the actor, the
+    next custody pass settles the stop as usual."""
+    import ouroboros.config as config
+    from ouroboros.cancel_intents import active_intent
+    from supervisor import task_reaper
+    from supervisor.workers import direct_chat_turn, get_direct_chat_agent
+
+    _isolate_queue(monkeypatch, tmp_path)
+    agent = _live_chat_agent(monkeypatch)
+    write_task_result(tmp_path, TURN_ID, "running", chat_id=0, description="modify yourself")
+    _write_snapshot(tmp_path, running_ids=())
+    monkeypatch.setattr(config, "get_direct_turn_stop_wait_sec", lambda: 5.0)
+    real_request = task_reaper.request_finalization_grace
+
+    def _control_then_close_admission(task_drive, task_id, reason, **kwargs):
+        msg_id = real_request(task_drive, task_id, reason, **kwargs)
+        agent._accepting_owner_messages = False  # still busy, still registered
+        return msg_id
+
+    monkeypatch.setattr(task_reaper, "request_finalization_grace", _control_then_close_admission)
+    with _client(tmp_path) as client:
+        first = client.post(f"/api/tasks/{TURN_ID}/cancel", json={"stop_policy": "immediate"})
+        assert first.status_code == 202, first.text
+        assert first.json()["cancel_state"] == "pending"
+        assert direct_chat_turn(TURN_ID) is None and get_direct_chat_agent(TURN_ID) is agent
+        assert load_task_result(tmp_path, TURN_ID)["status"] == "running"
+        assert active_intent(tmp_path, TURN_ID)["request_id"] == first.json()["request_id"]
+        assert "finalize_now" in _mailbox_kinds(tmp_path)
+        _turn_released(agent)  # its runner exits without a terminal of its own
+        second = client.post(f"/api/tasks/{TURN_ID}/cancel", json={"stop_policy": "immediate"})
+    assert second.status_code == 200, second.text
+    assert load_task_result(tmp_path, TURN_ID)["status"] == "cancelled"
+    assert not active_intent(tmp_path, TURN_ID)
+
+
 def test_stop_now_finalizes_the_direct_turn_cooperatively_and_answers_ok(tmp_path, monkeypatch):
     """Immediate stop: custody writes the finalize control to the canonical
     mailbox, the turn reaches its next round boundary and publishes its own
@@ -188,7 +249,7 @@ def test_stop_now_finalizes_the_direct_turn_cooperatively_and_answers_ok(tmp_pat
         # turn ends and the pipeline publishes its own terminal result.
         msg_id = real_request(task_drive, task_id, reason, **kwargs)
         write_task_result(tmp_path, TURN_ID, "completed", chat_id=0, description="modify yourself")
-        agent._busy = False
+        _turn_released(agent)
         return msg_id
 
     monkeypatch.setattr(task_reaper, "request_finalization_grace", _control_then_yield)
@@ -322,7 +383,7 @@ def test_stop_now_on_a_turn_that_dies_without_a_terminal_publishes_cancelled(tmp
 
     def _control_then_crash(task_drive, task_id, reason, **kwargs):
         msg_id = real_request(task_drive, task_id, reason, **kwargs)
-        agent._busy = False  # the turn raised past the pipeline: no terminal written
+        _turn_released(agent)  # the turn raised past the pipeline: no terminal written
         return msg_id
 
     monkeypatch.setattr(task_reaper, "request_finalization_grace", _control_then_crash)
@@ -356,7 +417,7 @@ def test_stop_now_on_a_turn_that_already_ended_arms_nothing_and_answers_already_
         reads["n"] += 1
         if reads["n"] == 2:  # custody capture, then the lane's re-check (no pre-probe: the row is unsettled)
             write_task_result(tmp_path, TURN_ID, "completed", chat_id=0, description="modify yourself")
-            agent._busy = False
+            _turn_released(agent)
         return real_reader(task_id)
 
     monkeypatch.setattr(workers, "direct_chat_turn", _turn_ends_after_custody_captured)
@@ -429,6 +490,8 @@ def test_settled_row_does_not_hide_a_still_busy_direct_turn_from_custody(tmp_pat
         assert first.json()["cancel_state"] == "pending"
         assert "finalize_now" in _mailbox_kinds(tmp_path)
         agent._busy = False                                    # the turn ends; no synthesis in flight
+        from supervisor.active_activity import get_direct_activity_registry
+        get_direct_activity_registry().unregister(TURN_ID)  # its runner has released custody
         second = client.post(f"/api/tasks/{TURN_ID}/cancel", json={"stop_policy": "immediate"})
     assert second.status_code == 404, second.text              # already settled, honestly
     assert load_task_result(tmp_path, TURN_ID)["status"] == "completed"
@@ -615,6 +678,8 @@ def test_stop_now_during_the_inflight_synthesis_is_accepted_and_stops_the_remain
             synthesis.release.set()
             synthesis.thread.join(30)
             assert not synthesis.thread.is_alive()
+            from supervisor.active_activity import get_direct_activity_registry
+            get_direct_activity_registry().unregister(TURN_ID)  # its runner has released custody
             second = client.post(f"/api/tasks/{TURN_ID}/cancel", json={"stop_policy": "immediate"})
     finally:
         synthesis.release.set()

@@ -457,6 +457,14 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
     image_data = incoming.get("image_data")
     task_constraint = incoming.get("task_constraint")
     task_metadata = incoming.get("task_metadata")
+    # A process-local value minted by the authenticated WS transport, after
+    # canonical message acceptance. JSON/API metadata cannot construct it.
+    from ouroboros.realtime_turn import RealtimeTurn
+
+    task_metadata = dict(task_metadata or {})
+    realtime_turn = task_metadata.pop("_realtime_turn", None)
+    if realtime_turn is not None and not isinstance(realtime_turn, RealtimeTurn):
+        raise ValueError("invalid realtime transport authority")
     from ouroboros.contracts.task_constraint import normalize_task_constraint
 
     normalized_constraint = normalize_task_constraint(task_constraint)
@@ -619,7 +627,7 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
             event["origin_suppressed"] = True
         _handle_promote_chat_to_task(event, ctx)
         return
-    if project_id and not task_metadata.get("late_answer"):
+    if project_id and realtime_turn is None and not task_metadata.get("late_answer"):
         routed_to_task = _route_project_chat_to_running_task(
             ctx,
             chat_id,
@@ -672,6 +680,7 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
             image_data,
             task_constraint=task_constraint,
             task_metadata=task_metadata,
+            **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
         )
 
     threading.Thread(target=_run_direct, daemon=True).start()

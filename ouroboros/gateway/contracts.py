@@ -63,6 +63,7 @@ class ChatInbound(TypedDict):
     project_id: NotRequired[str]
     reply_to: NotRequired[str]  # Host resolves the selected row/card at acceptance.
     client_surface: NotRequired[dict]
+    execution_transport: NotRequired[dict]  # Internal realtime preview; host validates the closed shape.
 
 
 class TaskConstraintInbound(TypedDict, total=False):
@@ -79,6 +80,50 @@ class CommandInbound(TypedDict):
 
     type: Literal["command"]
     cmd: str
+
+
+class RealtimeExecuteInbound(TypedDict):
+    """One explicit funded attempt against a waiting admitted room actor."""
+
+    type: Literal["realtime_execute"]
+    task_id: str
+    chat_id: int
+    wire_sha256: str
+    reservation_usd: float
+
+
+class RealtimePreparedOutbound(TypedDict):
+    type: Literal["realtime_prepared"]
+    task_id: str
+    chat_id: int
+    client_message_id: str
+    source_ref: Dict[str, Any]
+    input_sha256: str
+    wire_sha256: str
+    mode: str
+    output_allowance_tokens: int
+    provider_generation: str
+
+
+class RealtimeAuthorizedOutbound(TypedDict):
+    type: Literal["realtime_authorized"]
+    task_id: str
+    chat_id: int
+
+
+class RealtimeRefusedOutbound(TypedDict):
+    type: Literal["realtime_refused"]
+    code: str
+    detail: str
+
+
+class RealtimeFinishedOutbound(TypedDict):
+    type: Literal["realtime_finished"]
+    task_id: str
+    chat_id: int
+    client_message_id: str
+    reason: str
+    execution_status: str
 
 
 class ExtensionInbound(TypedDict, total=False):
@@ -894,6 +939,7 @@ class SkillDeleteResponse(TypedDict, total=False):
     content_hash: str
     deleted_payload_root: str
     deleted_state: bool
+    state_delete_pending: bool
     extension_action: str
     extension_reason: str
     error: str
@@ -1382,6 +1428,7 @@ from ouroboros.gateway.endpoint_index import HTTP_ENDPOINTS
 from ouroboros.gateway.client_contracts import FileBrowserListResponse, ServedUiState  # noqa: E402,F401
 
 WS_MESSAGE_TYPES: tuple[str, ...] = (
+    "realtime_execute", "realtime_prepared", "realtime_authorized", "realtime_refused", "realtime_finished",
     "chat",
     "command",
     "photo",
@@ -1407,6 +1454,8 @@ WS_MESSAGE_TYPES: tuple[str, ...] = (
 __all__ = [
     "CostPresentation",
     "ChatInbound", "TaskConstraintInbound", "CommandInbound", "ExtensionInbound",
+    "RealtimeExecuteInbound", "RealtimePreparedOutbound", "RealtimeAuthorizedOutbound",
+    "RealtimeRefusedOutbound", "RealtimeFinishedOutbound",
     "TransportMetadata",
     "ChatOutbound",
     "PhotoOutbound", "VideoOutbound", "DocumentOutbound",

@@ -155,12 +155,14 @@ def handle_chat_direct(
     image_data: Optional[Union[Tuple[str, str], Tuple[str, str, str]]] = None,
     task_constraint: Optional[dict] = None,
     task_metadata: Optional[dict] = None,
+    realtime_turn: Any = None,
 ) -> None:
     if not owner_conversation_admitted(chat_id, str((task_metadata or {}).get("client_message_id") or "")):
         return
     _handle_chat_direct_locked(
         chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
+        realtime_turn=realtime_turn,
     )
 
 
@@ -170,6 +172,7 @@ def _handle_chat_direct_locked(
     image_data: Optional[Union[Tuple[str, str], Tuple[str, str, str]]] = None,
     task_constraint: Optional[dict] = None,
     task_metadata: Optional[dict] = None,
+    realtime_turn: Any = None,
 ) -> None:
     from supervisor.state import budget_remaining, load_state
     failure_meta = _host_operation_failure(task_metadata)
@@ -188,6 +191,7 @@ def _handle_chat_direct_locked(
     _run_chat_task(
         None, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
+        realtime_turn=realtime_turn,
     )
 
 
@@ -240,6 +244,7 @@ def _run_chat_task(
     image_data: Optional[Union[Tuple[str, str], Tuple[str, str, str]]] = None,
     task_constraint: Optional[dict] = None,
     task_metadata: Optional[dict] = None,
+    realtime_turn: Any = None,
 ) -> None:
     """Build the direct-chat task and run it on the given agent, draining events.
 
@@ -248,6 +253,7 @@ def _run_chat_task(
     admitted = _admit_chat_task(
         agent, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
+        realtime_turn=realtime_turn,
     )
     if admitted is not None:
         _execute_chat_task(admitted)
@@ -260,6 +266,7 @@ def _admit_chat_task(
     image_data: Optional[Union[Tuple[str, str], Tuple[str, str, str]]] = None,
     task_constraint: Optional[dict] = None,
     task_metadata: Optional[dict] = None,
+    realtime_turn: Any = None,
 ) -> Optional[Dict[str, Any]]:
     """Build and REGISTER one direct turn; ``None`` when it was refused.
 
@@ -316,6 +323,16 @@ def _admit_chat_task(
             agent = _pool()._get_chat_agent()
             activity.actor = agent
             admitted["agent"] = agent
+        if realtime_turn is not None:
+            from ouroboros.realtime_turn import RealtimeTurn
+
+            if not isinstance(realtime_turn, RealtimeTurn):
+                raise ValueError("realtime transport requires a host-admitted request")
+            agent._realtime_turn = realtime_turn
+            task["model"] = realtime_turn.model
+            task["use_local_model"] = False
+            # This bounded transport operation authorizes no paid post-task work.
+            task["_skip_post_task_synthesis"] = True
         from ouroboros.consciousness_authority import apply_consciousness_authority
         from ouroboros.contracts.task_contract import attach_task_contract
 

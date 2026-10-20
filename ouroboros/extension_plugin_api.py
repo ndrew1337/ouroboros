@@ -56,6 +56,8 @@ from ouroboros.extension_registry_state import (
     _lock,
     _record_companion_name,
     _routes,
+    _realtime_providers,
+    _retiring_imports,
     _settings_sections,
     _tools,
     _ui_tabs,
@@ -266,7 +268,8 @@ class PluginAPIImpl:
             )
 
     def _require_open_locked(self) -> None:
-        if self._registration_closed or self._runtime_closing or self._runtime_closed or self._skill in _unloading:
+        if (self._registration_closed or self._runtime_closing or self._runtime_closed
+                or self._skill in _unloading or self._skill in _retiring_imports):
             raise ExtensionRegistrationError(
                 f"skill {self._skill!r} cannot register after unload has started"
             )
@@ -355,6 +358,22 @@ class PluginAPIImpl:
         staged_registry[key] = value
 
     # --- registration ---
+
+    def register_realtime_provider(self, name: str, handler: Callable[..., Any], *, route: Any) -> None:
+        from ouroboros.contracts.realtime import RealtimeRoute
+
+        _reject_extension_child_side_effect("register_realtime_provider")
+        self._require("realtime_provider")
+        short = _assert_tool_name(name)
+        if not inspect.iscoroutinefunction(handler):
+            raise ExtensionRegistrationError("realtime provider setup handler must be async")
+        if not isinstance(route, RealtimeRoute):
+            raise ExtensionRegistrationError("realtime provider route must be a contracts.realtime.RealtimeRoute")
+        key = f"{self._skill}:{short}"
+        with _lock:
+            self._stage_surface_locked(_realtime_providers, self._staged.realtime_providers, key, {
+                "skill": self._skill, "handler": self._wrap_runtime_handler(handler), "route": route,
+            }, "realtime provider")
 
     def register_tool(
         self,

@@ -800,6 +800,7 @@ calls and runtime behaviours:
 | `ws_handler` | The skill may call `register_ws_handler` and `send_ws_message`. |
 | `route` | The skill may call `register_route`. |
 | `tool` | The skill may call `register_tool`. |
+| `realtime_provider` | The skill may call `register_realtime_provider` (PluginAPI 2.1, in-process only). |
 | `read_settings` | The skill may call `api.get_settings([...])`. |
 | `supervised_task` | The skill may register an in-process host-supervised async task. |
 | `companion_process` | The skill may register a manifest-declared companion subprocess supervised by the host. |
@@ -1212,13 +1213,13 @@ The frozen ABI is documented in
 This section shows the practical shape.
 
 Extensions declare the PluginAPI generation they bind against in the manifest
-(PluginAPI 2.0, ABI 7.0):
+(PluginAPI 2.1; declarations of 2.0 remain supported):
 
 ```yaml
-plugin_api: "2.0"            # major strict; minor = required minimum
+plugin_api: "2.1"            # major strict; minor = required minimum
 # or, with required capabilities (closed set, validated per execution mode):
 # plugin_api:
-#   version: "2.0"
+#   version: "2.1"
 #   capabilities: [register_tool, subscribe_event]
 ```
 
@@ -1226,6 +1227,36 @@ A payload without the field binds the legacy "1.3" generation by
 construction: an already-reviewed payload keeps loading on its existing
 hash-bound review PASS, but a NEW review PASS (LLM review, owner attestation,
 or an install-basis acceptance) is refused until the field is declared.
+
+`register_realtime_provider(name, async_handler, *, route)` publishes a host-only
+provider under `<skill>:<name>`, through the ordinary staged registration transaction.
+`route` is a `contracts.realtime.RealtimeRoute`: the accounting provider that keys
+route evidence and the attempt ledger, the endpoint the provider opens, and the
+prefix that turns a native model id into host model identity. The transport request
+names the registration key; the host names no provider skill.
+The handler receives `contracts.realtime.RealtimeInput` and the keyword arguments
+of `realtime_setup.run_realtime_setup`. Preview must be offline; execution uses
+the exact preview digest. The host supplies the complete ordinary prepared
+message list (including notes appended after plan creation), selected tools,
+normal reply allowance, recorder and deadline. A provider
+may refuse unsupported input, but may not shorten it or change its roles. It
+encodes provider fields itself: OpenAI's session `max_output_tokens` is `"inf"` and
+only the probe response carries an integer bound (1-4096).
+Credential access still uses `get_settings` and existing hash-bound grants.
+The host authorizes and reserves spending before connecting, seals the exact wire
+plan through the ordinary model_send record, then settles the attempt from the
+provider's `observe("usage", ...)` report in `USAGE_AXES` or records an unknown outcome.
+Unload removes dispatch and requests Stop immediately; the loaded import tree
+remains until the handler and transport teardown finish. A reconcile meanwhile
+answers `extension_reload_pending` (reason `imports_retiring`): no load failure is
+recorded, enablement stays, and the release queues the reconcile again; a direct
+`load_extension` call gets a retry-later error. This setup-only seam supplies no device,
+UI, tool-execution, renewal or budget API. See `skills/openai_realtime` for its
+first provider. The owner-room consumer is `realtime_turn.py`: an authenticated
+chat transport choice enters ordinary direct admission and context preparation,
+publishes the source-bound preview, then waits on the same actor for an explicit
+`realtime_execute` funding command. It checks the loaded provider generation again
+before reserving one physical attempt. Providers receive no funding authority.
 
 ```python
 def register(api):

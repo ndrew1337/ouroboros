@@ -242,7 +242,7 @@ answer through §7.
 **Format and liveness.** Open one socket per client; every frame is a JSON text message with a `type`. While clients are connected the core sends `heartbeat` about every 15 seconds (proof the connection is alive, not that work is progressing); after about 45 silent seconds, treat the socket as dead and reconnect. Before restarting, the core closes sockets with code 1012.
 
 **Message types.** `ws.messages` in the contract lists every built-in type with each direction's shape:
-- **Client to core:** `chat` and `command`.
+- **Client to core:** `chat`, `command`, and the internal `realtime_execute` control described below.
 - **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links`, `quiz` and `card` (a living card, §5 "Living cards").
 - **Core to client, signals only:**
   - `quiz_state` updates a question card; history shows the merged state.
@@ -252,6 +252,7 @@ answer through §7.
   - `task_named` gives a card its title; history rows carry `suggested_name`.
   - `projects_changed`, `extension_lifecycle`, `update_status_ready`, `update_progress_changed`, `ui_language_changed` and `ui_i18n_updated` mean "read the named state again".
   - `typing` (transient) and `heartbeat`.
+  - `realtime_prepared`, `realtime_authorized`, `realtime_refused` and `realtime_finished` belong to the internal realtime setup entry below.
 
 Some `chat` frames are transient notices history never shows, for example `system_type: "initialization_notice"` (a message could not be accepted yet) and a repair/admission receipt with `task_id_pending: true` (no proof a durable task is readable yet).
 
@@ -264,7 +265,7 @@ Send `{"type": "chat", "content": "...", "client_message_id": "<unique id>", "ch
 - **Attachments.** Upload each file with `POST /api/chat/upload` (multipart field `file`), then list it in `attachments` as `{filename: <stored id from the upload>, display_name, mime}`; the core measures size and checksum itself.
 - **Replies.** `reply_to: "<row_address>"` (a work card: `task:<task_id>` of its current episode) names the row meant; the core stores its resolved reference on the owner row as a fact for Ouroboros, routing nothing.
 - **What "sent" means.** A socket send only means the socket took the frame; the message is accepted when the core echoes it as a `chat` frame from `role: "user"` with your `client_message_id` and `ingress_accepted: true`. `ingress_pending` and `ingress_dispatched` say what this core process knows of it and are lost on a restart.
-- **Retrying.** The same `client_message_id` with the same words and attachments joins the already accepted message; with different content it is refused.
+- **Retrying.** The same `client_message_id` with the same words, attachments, Reply and execution transport joins the already accepted message; changing these fields is refused.
 - **What is lost.** A frame sent while the socket is down is lost unless your client keeps it: the core keeps no client outbox.
 - **Commands.** Slash commands go as `{"type": "command", "cmd": "/restart"}` and so on, or through `POST /api/command` (§15).
 
@@ -273,6 +274,54 @@ Send `{"type": "chat", "content": "...", "client_message_id": "<unique id>", "ch
 **Origin correlation.** Optional `origin_message_ref` (`{chat_id, client_message_id, ts, text_sha256}`) names the accepted owner row; its hash checks that row's text, not reply text. Match its thread and owner-message id, then track `task_id`; an absent reference establishes no causation.
 
 **Thread filtering.** The socket broadcasts several destinations: apply the merge rules below only to stored-row deliveries of the history view being read, never comparing every frame with Main history, inferring Main from a missing `chat_id` or taking transient notices for missing stored rows.
+
+### Internal realtime setup
+
+An authenticated ordinary `chat` frame may carry `execution_transport`:
+`{"kind":"realtime","provider":"openai_realtime:openai","model":"gpt-realtime-2.1","timeout_s":120,"probe":{"text":"<explicit probe>","max_output_tokens":256}}`.
+`provider` names a loaded realtime provider registration (`<skill>:<name>`); an
+unloaded one is refused with `provider_unavailable` before the message is accepted.
+The model is an explicit native provider id, not a fallback choice. This entry
+supports a text-only setup and one text response; the probe's `max_output_tokens`
+must fit the reply allowance and the provider's field (OpenAI: an integer 1-4096).
+Attachments, slash commands (leading whitespace included) and Swarm are refused.
+It adds no visible composer or device controls.
+
+The host accepts the owner row and admits an ordinary native turn in that room.
+`realtime_prepared` names its `task_id`, `chat_id`, `client_message_id`,
+`input_sha256`, `wire_sha256`, loaded `provider_generation`, mode and reply
+allowance. Its `source_ref` addresses the full prepared messages, memory-view
+capture, fit facts and wire plan in that task's existing artifact store.
+Preview makes no provider connection or credential request.
+The canonical owner row and task metadata retain the transport descriptor.
+An identical message retry rejoins the same intent without another actor,
+deadline extension or funding grant. Adding, removing or changing its transport
+under that message ID returns `realtime_refused` with `transport_identity`.
+
+The actor waits within `timeout_s`, measured from transport admission. To fund
+exactly one attempt on that actor, send
+`{"type":"realtime_execute","task_id":"<prepared task>","chat_id":1,"wire_sha256":"<prepared digest>","reservation_usd":0.5}`.
+The positive amount reserves exposure in the ordinary ledger; it is not a
+provider-enforced dollar cap. Existing global/root/group budget controls still
+apply. `realtime_authorized` confirms the funding handoff, not a successful send.
+Wrong room, digest, expired actor, extra control fields and duplicate funding
+produce `realtime_refused` with `code` and `detail`.
+
+Stop uses the existing task cancellation endpoint. `realtime_finished` reports
+the task and room, `execution_status` and `reason` after actual provider/socket
+teardown and accounting. The ordinary turn terminal follows. Disconnect does
+not authorize spending or end custody; Stop or the deadline ends the actor.
+An immediate Stop may return pending while teardown still owns the activity;
+closed message admission does not permit early cancellation settlement.
+Full events remain in its `realtime-wire.jsonl` artifact. Failed or missing
+usage never establishes a free attempt. There is no automatic retry, resumption,
+live tool execution, audio conversation or three-provider delivery in this entry.
+Pause is refused before writing a fence (`409 realtime_pause_unsupported`):
+this bounded entry has no resumable checkpoint. Stop ends it. Funding and
+the live transport handle are process-local: reconstructed tasks, Continue,
+and retrying an old process's accepted message cannot replay the probe or run
+the intent through the text loop. They refuse with `realtime_restart_required`;
+start a new owner message with a fresh preview and separate funding authorization.
 
 ### History rows
 
@@ -505,7 +554,7 @@ Files produced by tasks are covered in §6.
 - **Grant keys or permissions:** `POST /api/skills/{skill}/grants` (`SkillGrantRequest`). Only what the current manifest requests can be granted; a repeat merges.
 - **Review:** `POST /api/skills/{skill}/review` answers 200 with the review's outcome (`SkillReviewResponse`). A review already running for the same revision answers `status: "pending"` with its `job_id`. `GET /api/skills/{skill}/review-history/{job_id}` renders a finished review.
 - **Attest a review:** `POST /api/owner/skills/{skill}/attest-review` records the owner's verdict: 200 with `ok: true`, otherwise 409.
-- **Delete:** `POST /api/skills/{skill}/delete` removes an external or self-authored skill and its state; a repeat answers 404.
+- **Delete:** `POST /api/skills/{skill}/delete` removes an external or self-authored payload and requests unload; a repeat answers 404. `deleted_state` confirms immediate state removal. `state_delete_pending: true` means a closing provider still owns its imports: state cleanup waits for their release and spares a reinstalled payload. A process exit or cleanup failure can leave that state retained; the response is not proof of later cleanup.
 - **Presence runtime:** `POST /api/owner/skills/{skill}/presence-runtime` changes a presence profile's runtime choice, compare-and-set on `expected_state_fingerprint`.
 - **Publication check:** `POST /api/skills/{skill}/publish-preflight` is read-only; every status answers the same shape, and `state: "hard_block"` is a refusal. An optional body `{destination: {source_id, mode}}` (`SkillPublishPreflightRequest`; mode `origin`, `entry` or `new_entry`) picks where it would go; the answer's `repository` is that destination (default: where the skill came from, else the hub). Missing publication prerequisites may answer `409` before the skill is looked up; read `reason_code`, not an assumed `404` for an unknown name.
 - **Reconcile:** `POST /api/skills/{skill}/reconcile` brings one extension's live state in line with its saved state.

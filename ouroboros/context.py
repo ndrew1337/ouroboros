@@ -1515,6 +1515,7 @@ def build_context_fit_plan(
     preferred_mode: Optional[str] = None,
     ctx: Any = None,
     tool_schemas: Optional[List[Dict[str, Any]]] = None,
+    route_resolver: Optional[Any] = None,
 ) -> ContextFitPlan:
     """Compatibility wrapper over the cohesive context-fit implementation."""
     core = _capture_context_core(env, memory, task, review_context_builder, ctx)
@@ -1523,7 +1524,7 @@ def build_context_fit_plan(
         core,
         task,
         preferred_mode=str(preferred_mode or get_context_mode() or "max"),
-        route_resolver=_context_fit_route,
+        route_resolver=route_resolver or _context_fit_route,
         tool_schemas=tool_schemas,
     )
 
@@ -1553,7 +1554,7 @@ def build_llm_messages(
     task: Dict[str, Any],
     review_context_builder: Optional[Any] = None,
     ctx: Any = None,
-    *, tool_schemas: Optional[List[Dict[str, Any]]] = None,
+    *, tool_schemas: Optional[List[Dict[str, Any]]] = None, route_resolver: Optional[Any] = None,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """The first request of a task: the plan's projection for its starting mode, and the cap info.
 
@@ -1571,6 +1572,7 @@ def build_llm_messages(
         preferred_mode=get_context_mode(),
         ctx=ctx,
         tool_schemas=tool_schemas,
+        route_resolver=route_resolver,
     )
     if ctx is not None:
         ctx.context_fit_plan = plan

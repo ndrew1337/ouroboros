@@ -28,7 +28,8 @@ from ouroboros.gateway._helpers import (
 from ouroboros.task_results import validate_task_id
 
 _REQUEST_ID_MAX = 128
-_CONFLICTS = frozenset({"not_a_root_task", "cancel_pending", "task_terminal", "root_result_missing"})
+_CONFLICTS = frozenset({"not_a_root_task", "cancel_pending", "task_terminal", "root_result_missing",
+                        "realtime_pause_unsupported"})
 
 
 async def api_task_pause(request: Request) -> JSONResponse:

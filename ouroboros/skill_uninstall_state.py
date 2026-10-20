@@ -10,7 +10,7 @@ history, not payload state) and the tombstone itself. A reinstall self-heals:
 the sweep sees a live payload and retires the tombstone instead of sweeping.
 
 Explicit local deletion also lives here. Unlike marketplace uninstall, it
-removes the entire state directory under the owner's specific delete action.
+removes the entire state directory after active imports release.
 """
 
 from __future__ import annotations
@@ -38,6 +38,7 @@ def delete_local_skill(
 ) -> Dict[str, Any]:
     """Delete the exact local external payload after host action admission."""
     from ouroboros import extension_loader
+    from ouroboros.extension_registry_state import _lifecycle_lock_for, after_extension_imports_release
     from ouroboros.skill_loader import discover_skills
 
     def refuse(error: str, status: int = 403) -> Dict[str, Any]:
@@ -64,23 +65,29 @@ def delete_local_skill(
     state_dir = state_root / loaded.name
     if state_root.is_symlink() or state_dir.is_symlink() or not state_dir.is_relative_to(state_root):
         return refuse(f"refusing to delete unsafe state path for {loaded.name!r}", 500)
-    extension_loader.unload_extension(loaded.name)
-    shutil.rmtree(payload_dir)
-    deleted_state = state_dir.exists()
-    if deleted_state:
-        shutil.rmtree(state_dir)
+    def delete_state():
+        # Reinstall may have restored owner state while the old provider closed.
+        if not payload_dir.exists() and state_dir.exists():
+            shutil.rmtree(state_dir)
+
+    with _lifecycle_lock_for(loaded.name):
+        extension_loader.unload_extension(loaded.name)
+        shutil.rmtree(payload_dir)
+        had_state = state_dir.exists()
+        pending = after_extension_imports_release(loaded.name, delete_state)
+        deleted_state = had_state and not pending and not state_dir.exists()
     try:
         from supervisor.queue import sync_skill_schedules
 
         sync_skill_schedules(discover_skills(drive, repo_path=repo_path), drive_root=drive)
     except Exception:
         log.debug("local skill delete schedule sync failed", exc_info=True)
-    if payload_dir.exists() or state_dir.exists():
+    if payload_dir.exists() or (state_dir.exists() and not pending):
         return refuse(f"failed to fully delete local skill {loaded.name!r}", 500)
     return {
         "ok": True, "skill": loaded.name, "source": loaded.source,
         "content_hash": loaded.content_hash, "deleted_payload_root": requested_root,
-        "deleted_state": deleted_state, "extension_action": "extension_unloaded",
+        "deleted_state": deleted_state, "state_delete_pending": pending, "extension_action": "extension_unloaded",
         "extension_reason": "deleted",
     }
 
