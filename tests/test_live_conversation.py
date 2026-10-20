@@ -42,7 +42,6 @@ def packages(tmp_path):
     for name in ['live_conversation', *(name for name, _ in ENGINES)]:
         directory = drive / 'skills/external' / name
         shutil.copytree(ROOT / 'skills' / name, directory)
-        (directory / 'late_identity.py').write_text('VALUE = "synthetic-old-import"\n')
         skill = find_skill(drive, name)
         save_enabled(drive, name, True)
         skill = replace(skill, enabled=True, manifest=replace(skill.manifest, env_from_settings=[]),
@@ -67,10 +66,6 @@ class VoiceWire:
         self.invoked = False
         self.result_received = threading.Event()
         self.closed = False
-        self.closing = threading.Event()
-        self.allow_close = threading.Event()
-        self.allow_close.set()
-        self.after_close = lambda: None
 
     def put(self, value):
         self.events.put_nowait(value)
@@ -147,9 +142,6 @@ class VoiceWire:
         try:
             yield self
         finally:
-            self.closing.set()
-            await asyncio.to_thread(self.allow_close.wait, 10)
-            self.after_close()
             self.closed = True
 
 
