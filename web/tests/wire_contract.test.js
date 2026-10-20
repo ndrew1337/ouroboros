@@ -260,7 +260,8 @@ test('delivered photo, video, and document rows keep their replay wire fields', 
 test('live structured delivery frames keep additive grouping and size fields', () => {
     const bus = repoFile('supervisor/message_bus.py');
     const contracts = repoFile('ouroboros/gateway/contracts.py');
-    const types = moduleFile('api_types.js');
+    const types = moduleFile('api_types.js') + '\n' + moduleFile('decision_types.js');
+    assert.ok(moduleFile('api_types.js').includes("import('./decision_types.js').QuizOutbound"));
 
     for (const className of ['PhotoOutbound', 'VideoOutbound', 'DocumentOutbound', 'LinksOutbound', 'QuizOutbound']) {
         assert.ok(contracts.includes(`class ${className}(ChatReferenceFields):`));

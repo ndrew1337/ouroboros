@@ -402,6 +402,7 @@ D20 = "Presence"
 "ouroboros/owner_hurry.py" = "D09"
 "ouroboros/owner_source.py" = "D09"
 "ouroboros/owner_quiz.py" = "D09"  # F6 sync (#Q-2b): owner quiz cards, structural expiry with the authoring task
+"ouroboros/secret_requests.py" = "D09"  # integration-secret requests: typed metadata on the owner question block
 "ouroboros/owner_mailbox.py" = "D01"
 "ouroboros/peer_roster.py" = "D01"  # the worker-side roster note beside the mailbox that renders its messages
 "ouroboros/live_works.py" = "D01"
@@ -646,6 +647,7 @@ D20 = "Presence"
 "ouroboros/tools/core_artifacts.py" = "D05"
 "ouroboros/tools/cards.py" = "D05"
 "ouroboros/card_store.py" = "D05"
+"ouroboros/tools/secret_hitl.py" = "D05"
 "ouroboros/tools/core_file_tools.py" = "D05"
 "ouroboros/tools/core_secret_paths.py" = "D05"
 "ouroboros/tools/delegate.py" = "D07"
@@ -870,6 +872,7 @@ D20 = "Presence"
 "ouroboros/gateway/endpoint_index.py" = "D11"
 "ouroboros/gateway/routing_decision.py" = "D11"
 "ouroboros/gateway/task_decision.py" = "D11"
+"ouroboros/gateway/secret_decision.py" = "D11"
 "ouroboros/gateway/task_model_wait.py" = "D11"
 "ouroboros/gateway/decision_contracts.py" = "D11"
 "ouroboros/gateway/card_contracts.py" = "D11"
@@ -1148,6 +1151,7 @@ lazy_only = [
   "D09->D12",
   "D09->D14",
   "D09->D15",
+  "D09->D19",
   "D10->D01",
   "D10->D07",
   "D10->D09",

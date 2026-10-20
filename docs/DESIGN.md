@@ -1457,6 +1457,33 @@ control, without a body until hover. The card uses tokens for every
 type size and colour, including pill radius and option gap. Every focusable element shares the 2px `--focus-accent-border` ring
 with 2px offset. Component min/max widths keep local literals, as elsewhere in chat.
 
+**Secret request.** A question asked with `showSecretHitl(pluginName, fields)` is the same
+card with the same head, status and waiting line; its question is the host's sentence
+(`Secret required: <plugin> — <fields>…`). It has no options, no free answer and no ×: a
+field list (each id in `--text-primary` at 600, then `Saved as <KEY> in Settings` in meta ink)
+and two actions, `Enter secret…` (primary) and `Cancel request`. The form is the shared
+modal on the content-modal layer, under the reconnect shade: title `<plugin>: secret
+required`, one sentence that the value goes straight to Settings and is shown to neither
+Ouroboros, the chat nor logs, then one masked `.ui-control.secret-input` per field labelled
+by its id with `Saved as <KEY>` help, and `Close` / `OK`. OK is enabled only when every
+field has a value; Enter presses it. The panel centers when it fits; overflow stays
+reachable by scrolling, and the app's keyboard-open state top-aligns it. Close, Escape and a click outside hide the form,
+leaving the same request and button open; only the card's `Cancel request` cancels it.
+Live arrivals, history, reload, navigation and Main copies open only from `Enter secret…`,
+always empty. Dismissal preserves pending/unknown save status. Saving shows `Saving…` with read-only fields, and while a save is in flight or unknown the
+head's mark is neutral, as for any answer in flight; a
+refusal is one `--status-error-fg` line of fixed copy under the fields (never the reply's own
+text), keeps the entries and retries with the same request until an entry changes. An
+unknown outcome — no reply, an unconfirmed attempt, or a value written but not verified or
+not recorded — disables OK and offers `Check status`; status decides the next press: nothing
+saved re-enables OK, an unconfirmed earlier attempt offers `Save again` (a new request that
+replaces whatever it may have stored), a recorded result settles the card. Success closes
+the form and the card says `Saved to Settings: <fields>. Saving is not a connection`; a
+cancel shows the closure line, which says the earlier save is unknown when one was
+interrupted. Values live only in the dialog's controls (never a draft,
+storage, toast or the card), and every close empties them. Transport skills are not
+offered the card.
+
 **Project question mirror.** Main is the list of what needs the owner; nothing waits in a section of its own. A Project question's Main copy is the Project's own `buildQuizCard` card, whole as anatomized above, in an assistant bubble at its ask time in the feed; the Project reference beside `Question` opens the exact original, and answers, materials and recovery controls work in Main. It uses the shared ring and `--project` tints; names ellipsize (full titles) before status; narrow heads wrap. History, live pointers and the census share one task/quiz card and lifecycle wording; the canonical current questions only confirm or settle copies the feed holds, never mount them, and an incomplete read withholds only what its typed gaps name. Optional, resumed and terminal-author questions stay answerable until answered or closed; no display/history cap drops them. Replaced questions stay read-only. The owner closes from the card; a model closes its own or a host-proven continued task line's question, or a finished task's, always with its own reason. Closure records a reason, never an answer/approval. A late answer left delivery-unknown by a restart offers Remove from pending (no resend, never marked delivered). Publication destination stays fixed across Project conversion; current room membership controls display. Explicit materials use registered task artifacts and the existing reader.
 
 A task that cannot continue without the owner is one System message in the feed, stamped when first seen: the task, one sentence, its own controls (revision-bound model access, Resume/Stop, children's included; activity counts each work once, its helpers within it). Sign-in, unobservable automatic access, disabled automatic continuation, budget pauses and Resume-only holds qualify; viable automatic account/quota recovery, queues, self-waking sleep, background scope verification and own Pause stay quiet. Deduplicate the same quiz/wait identity, not all waits on a task; the message leaves when a complete census drops the row. Missing action evidence stays unavailable; visibility never authorizes login, budget changes or automatic Resume.

@@ -118,3 +118,95 @@ class DecisionResponse(TypedDict, total=False):
     card_id: str
     revision: int
     winner: Dict[str, Any]
+
+
+class SecretRequestField(TypedDict):
+    """One asked field: the manifest's public id and the Settings key it writes."""
+
+    id: str
+    setting_key: str
+
+
+class SecretRequestMeta(TypedDict):
+    """An integration-secret request's metadata on its quiz block and card (no value, ever).
+
+    ``plugin_name`` is the installed skill; ``fields`` come from its reviewed ``secret_fields``
+    manifest mapping; ``content_hash`` binds the request to the skill revision that declared it."""
+
+    plugin_name: str
+    fields: list[SecretRequestField]
+    content_hash: str
+
+
+class SecretOutcome(TypedDict):
+    """The host's typed completion of a secret request: ``secret_filled`` after Settings kept the
+    values, or ``secret_cancelled`` with nothing saved. ``grant_missing`` names saved keys the
+    skill's current grant does not cover (saving grants nothing); ``interrupted_save`` marks a
+    cancel after an earlier attempt whose result is unknown."""
+
+    event: Literal["secret_filled", "secret_cancelled"]
+    pluginName: str
+    fields: list[str]
+    at: str
+    settings_keys: list[str]
+    grant_missing: NotRequired[list[str]]
+    grant_unknown: NotRequired[bool]
+    grant_unsupported: NotRequired[bool]
+    interrupted_save: NotRequired[bool]
+
+
+class SecretEvent(TypedDict):
+    """The screenshot's event payload: the plugin and field ids, never a value."""
+
+    pluginName: str
+    fields: list[str]
+
+
+class SecretDecisionRequest(TypedDict):
+    """POST /api/decisions/secret body — the browser's ``saveSecretToken``.
+
+    ``decision_id`` is the request's question identity ``quiz:{task_id}:{quiz_id}``.
+    ``values`` maps EXACTLY the asked field ids to the owner's entries and exists only on
+    ``save`` (the default); ``action: "cancel"`` carries none. ``request_id`` is reused only
+    for the same values: a changed entry is a new request."""
+
+    request_id: str
+    decision_id: str
+    action: NotRequired[Literal["save", "cancel"]]
+    values: NotRequired[Dict[str, str]]
+
+
+class SecretDecisionResponse(TypedDict, total=False):
+    """Secret form reply; ``saved`` is present on BOTH sides of the Settings commit.
+
+    200 carries the recorded lifecycle: ``secret_filled`` or ``secret_cancelled`` (plugin and
+    field ids), ``settings_keys``, the grant facts and the question delivery. A refusal says
+    ``saved: false`` with ``reason_code`` and the request's current facts, so a losing tab
+    settles on the winner. ``saved: true`` with ``secret_save_unverified`` or
+    ``secret_completion_unrecorded`` is a written value not reported filled; ``saved: null``
+    with ``secret_save_unconfirmed`` is an attempt of unknown outcome, never repeated under its
+    own request. Either way read status first; only a new request saves again.
+    ``save_unconfirmed`` marks an interrupted earlier attempt whose result is unknown."""
+
+    ok: bool
+    saved: Optional[bool]
+    decision_id: str
+    state: str
+    duplicate: bool
+    secret_filled: SecretEvent
+    secret_cancelled: SecretEvent
+    secret_outcome: SecretOutcome
+    settings_keys: list[str]
+    grant_missing: list[str]
+    grant_unknown: bool
+    grant_unsupported: bool
+    interrupted_save: bool
+    save_unconfirmed: bool
+    closed_reason: str
+    closed_at: str
+    closed_actor: str
+    closed_request_id: str
+    closed_by_task_id: str
+    question_delivery: Dict[str, Any]
+    error: str
+    reason_code: str

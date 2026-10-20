@@ -171,6 +171,14 @@ def refresh_budget_limit(new_limit: Optional[float]) -> None:
         pass
 
 
+def _secret_question(task_id: str, quiz_id: str) -> bool:
+    """A secret request's lifecycle stays off the extension bus (its form is the web dialog).
+    An unreadable block reads as ordinary: ``send_quiz`` never offered a listener its card."""
+    from ouroboros.owner_quiz import quiz_states
+
+    return bool((quiz_states(DATA_DIR, task_id).get(quiz_id) or {}).get("secret_request"))
+
+
 class LocalChatBridge:
     """Local Queue-backed message bus."""
 
@@ -946,6 +954,9 @@ class LocalChatBridge:
         if delivery := question_delivery_projection(block):
             lifecycle["question_delivery"] = delivery
         materials = list(block.get("materials") or [])
+        # An integration-secret request's typed metadata (no value ever exists here); its form is
+        # the web dialog alone, so transport skills are not offered a card they could answer.
+        secret = {"secret_request": dict(block["secret_request"])} if isinstance(block.get("secret_request"), dict) else {}
         ts = utc_now_iso()
         msg = {
             "type": "quiz",
@@ -961,7 +972,7 @@ class LocalChatBridge:
             "chat_id": int(chat_id or 0),
             "task_id": str(task_id or ""),
         }
-        msg.update(lifecycle)
+        msg.update(lifecycle, **secret)
         if materials:
             msg["materials"] = materials
         if host_facts:
@@ -995,6 +1006,7 @@ class LocalChatBridge:
                 "assumption": payload["assumption"],
                 "state": str(state or "open"),
                 **({"host_facts": str(host_facts)} if host_facts else {}),
+                **secret,
             },
         )
         if stored:
@@ -1010,23 +1022,24 @@ class LocalChatBridge:
         if self._broadcast_fn:
             self._broadcast_fn(msg)
         quiz_transport = self.chat_transport(chat_id)
-        publish_event(CHAT_QUIZ, {
-            "chat_id": int(chat_id or 0),
-            "transport": quiz_transport,
-            "wait_for_answer": bool(wait_for_answer),
-            "quiz_id": qid,
-            "task_id": str(task_id or ""),
-            "question": payload["question"],
-            "options": payload["options"],
-            "stake": payload["stake"],
-            "assumption": payload["assumption"],
-            "state": str(state or "open"),
-            "ts": ts,
-            **lifecycle,
-            **({"materials": materials} if materials else {}),
-            **({"host_facts": str(host_facts)} if host_facts else {}),
-            **({"project_name": str(project["name"])} if project and project.get("name") else {}),
-        })
+        if not secret:
+            publish_event(CHAT_QUIZ, {
+                "chat_id": int(chat_id or 0),
+                "transport": quiz_transport,
+                "wait_for_answer": bool(wait_for_answer),
+                "quiz_id": qid,
+                "task_id": str(task_id or ""),
+                "question": payload["question"],
+                "options": payload["options"],
+                "stake": payload["stake"],
+                "assumption": payload["assumption"],
+                "state": str(state or "open"),
+                "ts": ts,
+                **lifecycle,
+                **({"materials": materials} if materials else {}),
+                **({"host_facts": str(host_facts)} if host_facts else {}),
+                **({"project_name": str(project["name"])} if project and project.get("name") else {}),
+            })
         if self._broadcast_fn and msg.get("project_thread"):
             try:
                 from ouroboros.owner_quiz import quiz_states
@@ -1047,7 +1060,8 @@ class LocalChatBridge:
                     # The complete pointer row (ChatOutbound mirrors): present only when known.
                     for key in ("question", "options", "option_details", "stake", "assumption", "recommended_index",
                                 "answered_index", "comment", "wait_for_answer", "wait_ended_at",
-                                "owner_wait_resume_reason", "host_facts", "materials", "closed_reason", "question_delivery"):
+                                "owner_wait_resume_reason", "host_facts", "materials", "closed_reason", "question_delivery",
+                                "secret_request", "secret_outcome", "secret_save"):
                         if key in pointer:
                             frame[key] = pointer[key]
                     frame.update(projection_fields(stored))
@@ -1073,6 +1087,7 @@ class LocalChatBridge:
         closed_request_id: Optional[str] = None,
         closed_by_task_id: Optional[str] = None,
         question_delivery: Optional[Dict[str, str]] = None,
+        secret_outcome: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Broadcast a quiz lifecycle update to already-rendered cards.
 
@@ -1103,6 +1118,8 @@ class LocalChatBridge:
             msg["closed_by_task_id"] = str(closed_by_task_id)
         if question_delivery:
             msg["question_delivery"] = dict(question_delivery)
+        if isinstance(secret_outcome, dict) and secret_outcome:
+            msg["secret_outcome"] = dict(secret_outcome)  # metadata only: event, plugin, fields, keys
         if answered_index is not None:
             msg["answered_index"] = int(answered_index)
         if str(comment or ""):
@@ -1119,7 +1136,10 @@ class LocalChatBridge:
             except Exception:
                 log.debug("quiz_state broadcast failed", exc_info=True)
         # The WebSocket reaches only the SPA. Transport skills need the same
-        # lifecycle fact to edit an already delivered card without a reload.
+        # lifecycle fact to edit an already delivered card without a reload —
+        # except a secret request's, which no extension listener ever received.
+        if secret_outcome or _secret_question(str(task_id or ""), str(quiz_id or "")):
+            return
         quiz_transport = self.chat_transport(chat_id)
         publish_event(CHAT_QUIZ_STATE, {**msg, "transport": quiz_transport})
 

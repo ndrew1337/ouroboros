@@ -433,6 +433,16 @@ export const apiClient = {
         { cache: 'no-store' }),
     /** @param {{key: string}|{mcp_server_id: string, header_name?: string}} selector @returns {Promise<{value: string}>} */
     revealSettingsSecret: (selector) => jsonPost('/api/settings/secret', selector),
+    /**
+     * The integration-secret form's save (showSecretHitl's popup): the owner's values go in
+     * this one body to Settings and nowhere else. Reuse `request_id` only for unchanged values.
+     * @param {import('./decision_types.js').SecretDecisionRequest} payload
+     * @returns {Promise<import('./decision_types.js').SecretDecisionResponse>}
+     */
+    saveSecretToken: (payload, options = {}) => jsonPost('/api/decisions/secret', payload, options),
+    /** Cancel the same request: nothing is saved and the waiting task learns secret_cancelled. */
+    cancelSecretRequest: ({ request_id, decision_id }, options = {}) => jsonPost('/api/decisions/secret',
+        { request_id, decision_id, action: 'cancel' }, options),
     /** @returns {Promise<import('./api_types.js').UiPreferencesResponse>} */
     uiPreferences: (init = {}) => fetchJson('/api/ui/preferences', { cache: 'no-store', ...init }),
     saveUiPreferences: (payload) => jsonPost('/api/ui/preferences', payload),

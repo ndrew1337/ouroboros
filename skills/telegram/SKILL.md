@@ -1,7 +1,7 @@
 ---
 name: telegram
 description: Owner-only Telegram text bridge and Mini App gateway for the existing Ouroboros interface.
-version: 1.3.4
+version: 1.3.5
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -9,11 +9,13 @@ runtime: python3
 os: any
 permissions: [net, read_settings, widget, route, supervised_task, subscribe_event, inject_chat, subprocess, companion_process]
 env_from_settings: [TELEGRAM_BOT_TOKEN]
+secret_fields:
+  botToken: TELEGRAM_BOT_TOKEN
 subscribe_events: [chat.outbound, chat.typing, chat.photo, chat.video, chat.document, chat.links, chat.quiz, chat.quiz_state]
 conflicts: [telegram-bridge, telegram-miniapp-poc]
 when_to_use: The owner wants to communicate with and control Ouroboros through Telegram.
 model_experience:
-  what_model_sees: No new tools; Telegram owner text, photos and files enter normal chat. Replies to mirrored messages carry host reply references for the mind to interpret, never routing instructions. Quiz answers use the web card's decision ingress. Answers to earlier owner messages use native Telegram replies.
+  what_model_sees: Setup uses showSecretHitl('telegram', ['botToken']); enter the token only in its protected form. Saving does not grant or connect. Telegram text, photos and files enter normal chat; replies carry host references, not routing instructions. Quiz answers use the web decision ingress; earlier owner messages get native replies.
   token_effect: Near-zero while idle — no per-round schema cost; incoming Telegram media arrive as ordinary attachments and cost what any chat attachment costs.
 timeout_sec: 60
 companion_processes:
@@ -62,6 +64,11 @@ reference their work, not an authored answer shown only in Main.
 Version 1.3.3 gives a finished root task's notice the task card's cost words for
 its whole tree: `$3.42` when final, `up to $3.42` while costs may still arrive,
 `Tracked:` when some step has no price; an unknown cost adds nothing.
+Version 1.3.5 declares `secret_fields` (`botToken` → `TELEGRAM_BOT_TOKEN`), so setup can
+ask for the bot token with `showSecretHitl('telegram', ['botToken'])`: the owner types it
+into Ouroboros's protected in-chat form, it goes straight to Settings, and the agent learns
+only `secret_filled`. Saving grants, enables and connects nothing; the bridge reads the
+token once the owner grants it, and the request is not mirrored to this chat.
 
 Version 1.2.1 marks questions that wait for an owner answer and clears the
 waiting line after an answer submitted through Telegram.

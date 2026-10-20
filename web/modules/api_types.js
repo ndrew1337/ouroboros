@@ -259,6 +259,9 @@
  * @property {string=} closed_actor
  * @property {string=} closed_request_id
  * @property {Array<Object>=} materials Validated existing artifact references with task_id, name, sha256, size and download_url.
+ * @property {import('./decision_types.js').SecretRequestMeta=} secret_request A mirrored secret request's metadata.
+ * @property {import('./decision_types.js').SecretOutcome=} secret_outcome
+ * @property {Object=} secret_save An attempt's claim; state "writing" is an unconfirmed save.
  * @property {string=} quiz_id
  * @property {string=} quiz_state
  * @property {number=} project_chat_id
@@ -568,69 +571,9 @@
  * @property {string=} kind
  */
 
-/**
- * @typedef {Object} QuizOption
- * @property {string} label
- * @property {string=} detail
- * @property {boolean=} recommended
- */
-
-/**
- * @typedef {Object} QuizOutbound
- * @property {Array<Object>=} materials Validated existing artifact references.
- * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
- * @property {string=} closed_reason
- * @property {string=} closed_at
- * @property {string=} closed_by_task_id
- * @property {string=} closed_actor
- * @property {string=} closed_request_id
- * @property {"quiz"} type
- * @property {"assistant"} role
- * @property {string} quiz_id
- * @property {string} question
- * @property {QuizOption[]} options
- * @property {string} stake
- * @property {string} assumption
- * @property {boolean=} wait_for_answer
- * @property {string} state
- * @property {string} ts
- * @property {number=} answered_index
- * @property {string=} comment
- * @property {string=} host_facts
- * @property {number=} chat_id
- * @property {string=} task_id
- * @property {boolean=} project_thread
- * @property {Object=} transport
- * @property {string=} row_address
- * @property {Object=} reply_to
- * @property {Object=} relay
- * @property {string=} reply_to_relay
- * @property {string=} kind
- */
-
-/**
- * Lifecycle update for an already-rendered quiz card (WS "quiz_state") —
- * a separate discriminator so a state change never dedupes as (or spawns)
- * a second card. answered_index rides only with state "answered".
- * @typedef {Object} QuizStateOutbound
- * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
- * @property {string=} closed_reason
- * @property {string=} closed_at
- * @property {string=} closed_by_task_id
- * @property {string=} closed_actor
- * @property {string=} closed_request_id
- * @property {"quiz_state"} type
- * @property {string} quiz_id
- * @property {string} task_id
- * @property {string} state
- * @property {string} ts
- * @property {number=} answered_index
- * @property {string=} comment
- *   The owner's recorded free-text answer, when one was recorded.
- * @property {boolean=} wait_for_answer
- *   False once a bounded wait closed and the task resumed; the card stays open and answerable.
- * @property {number=} chat_id
- */
+/** @typedef {import('./decision_types.js').QuizOption} QuizOption */
+/** @typedef {import('./decision_types.js').QuizOutbound} QuizOutbound */
+/** @typedef {import('./decision_types.js').QuizStateOutbound} QuizStateOutbound */
 
 /** @typedef {import('./decision_types.js').DecisionRequest} DecisionRequest */
 /** @typedef {import('./decision_types.js').DecisionResponse} DecisionResponse */

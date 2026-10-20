@@ -408,6 +408,12 @@ def row_author(row: Mapping[str, Any], *, pos: int | None = None, lineage_epoch:
     ``pos`` such a row raises ``TypeError``. Without an epoch (the chain was
     empty at activation, or the chronicle is not active) ``pos`` is not needed.
     """
+    quiz = row.get("quiz") if isinstance(row.get("quiz"), Mapping) else {}
+    if quiz.get("secret_request") and isinstance(quiz.get("secret_outcome"), Mapping):
+        # Both outcomes are host reports. closed_actor retains who pressed Cancel, but the
+        # technical reason is not that person's speech and must not become a human quotation.
+        if row.get("type") in {"quiz_answer", "quiz_closed"}:
+            return {"kind": "host", "label": _with_transport("host", row), "type": row["type"], "via": "secret_request"}
     if row.get("type") == "quiz_answer" or (row.get("type") == "quiz_closed"
             and (row.get("quiz") or {}).get("closed_actor") == "owner"):
         return {"kind": "human", "label": "Owner", "via": "quiz"}

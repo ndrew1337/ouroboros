@@ -102,7 +102,8 @@ scripts:                            # type=script only
     description: Fetch and render
 permissions: [net, tool, route, widget, read_settings, companion_process, supervised_task] # see "Permissions"
 conflicts: [legacy-weather]            # optional incompatible installed skill names
-env_from_settings: [OPENROUTER_API_KEY]                  # core keys require an owner grant
+env_from_settings: [OPENROUTER_API_KEY, WEATHER_API_KEY] # core keys require an owner grant
+secret_fields: {apiKey: WEATHER_API_KEY}  # optional: form field id -> a custom secret key listed above ("Asking the owner for a secret")
 when_to_use: User asks for the weather forecast.
 model_experience:                   # optional prose (CPL-7); a bare string is also accepted
   what_model_sees: One weather tool joins the tool list; results come back as compact JSON.
@@ -875,6 +876,34 @@ unrelated parties — never the breadth of control it exposes. The capability is
 gated by the host (token + fresh review + enablement + content-hash grants) and
 by core owner/chat binding, not by withholding control from the skill. See
 `docs/CHECKLISTS.md` → "Transport and control skills are first-class".
+
+### Asking the owner for a secret (`secret_fields`)
+
+A skill that needs a credential the owner creates elsewhere (a bot token, a service API
+key) declares which protected-form fields write which Settings keys:
+
+```yaml
+env_from_settings: [TELEGRAM_BOT_TOKEN]
+secret_fields:
+  botToken: TELEGRAM_BOT_TOKEN   # field id (a letter, then letters/digits/_) -> a key listed in env_from_settings
+```
+
+The parser checks the shape and that each key is listed in `env_from_settings`; the host
+then admits only an owner-defined custom Settings secret (uppercase, not a built-in setting,
+no `OUROBOROS_` prefix), so a plugin name can never front a provider, network or core
+credential. The declaration is part of the reviewed manifest: changing it changes the
+release digest. During setup the agent calls `showSecretHitl(pluginName, fields)` (for
+example `showSecretHitl('telegram', ['botToken'])`); the owner sees the plugin name and one
+chat button opening masked fields with OK / Close; dismissal keeps the request, while
+`Cancel request` on the card cancels it. The value goes from that form
+straight to Settings (`POST /api/decisions/secret`). The agent only learns
+`secret_filled {pluginName, fields}` or `secret_cancelled`; the value never enters a tool
+result, the chat, history, logs or an event. Saving is not a connection and grants
+nothing: the skill still needs the owner's key grant for its current release digest (the
+outcome names keys the grant does not cover yet), enablement, and whatever reload its own
+code requires. A request whose skill changed or whose asking task finished writes nothing.
+Secret requests are not published on `chat.quiz`/`chat.quiz_state`: a transport skill never
+receives a card on which the owner could reply with the secret.
 
 ### Presence behavior profiles and transport ingress
 

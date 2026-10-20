@@ -173,6 +173,9 @@ def _quiz_text(row: dict) -> str:
     if row.get("type") == "quiz_closed":
         actor = "owner" if quiz.get("closed_actor") == "owner" else f"task {quiz.get('closed_by_task_id')}"
         return f"[question closed without answer {qid}] by {actor}: {quiz.get('closed_reason') or ''}. No approval recorded."
+    if row.get("type") == "quiz_answer" and quiz.get("secret_request") and isinstance(quiz.get("secret_outcome"), dict):
+        outcome = quiz["secret_outcome"]  # host metadata: plugin and field ids, never a value
+        return f"[secret request {qid}] {outcome.get('event')}: {outcome.get('pluginName')}, {', '.join(outcome.get('fields') or [])}"
     if row.get("type") == "quiz_answer":
         index = quiz.get("answered_index")
         chosen = (f"chose ({index + 1}) {options[index]}" if isinstance(index, int) and 0 <= index < len(options)

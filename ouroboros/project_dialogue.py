@@ -164,6 +164,9 @@ def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
         **({"assumption": assumption} if assumption else {}),
         **({"host_facts": host_facts} if host_facts else {}),
         **({"recommended_index": recommended} if recommended is not None else {}),
+        # A secret request's copy is its protected form too, never a free-text answer field.
+        **{key: dict(source[key]) for key in ("secret_request", "secret_outcome", "secret_save")
+           for source in (quiz, block) if isinstance(source.get(key), dict)},
         **facts,
         **({"source_status": "unavailable"} if not known else {}),
     }

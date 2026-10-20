@@ -850,7 +850,8 @@ def _collect_chat_rows(
                         if delivery := question_delivery_projection(_live):
                             quiz["question_delivery"] = delivery
                         quiz["state"] = str(_live.get("state") or quiz.get("state") or "open")
-                        for key in ("answered_index", "comment", "wait_ended_at", *CLOSURE_FIELDS, "materials"):
+                        for key in ("answered_index", "comment", "wait_ended_at", *CLOSURE_FIELDS, "materials",
+                                    "secret_request", "secret_outcome", "secret_save"):
                             if key in _live:
                                 quiz[key] = _live[key]
                         if _live.get("host_facts") and not quiz.get("host_facts"):

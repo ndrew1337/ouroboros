@@ -71,6 +71,9 @@ from ouroboros.gateway.contracts import (
     VideoOutbound,
 )
 from ouroboros.gateway.contracts import ClaudexorPassiveReadError, ClaudexorQuotaResponse
+from ouroboros.gateway.contracts import (
+    SecretDecisionRequest, SecretDecisionResponse, SecretEvent, SecretOutcome, SecretRequestField, SecretRequestMeta,
+)
 from ouroboros.gateway.router import collect_routes
 from ouroboros.gateway.widgets import WidgetTab, WidgetsResponse
 
@@ -225,7 +228,7 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     assert "import('./task_activity_types.js').ActiveChatActivity" in text
     text += "\n" + (modules / "task_activity_types.js").read_text(encoding="utf-8")
     # The owner-decision ingress twin (gateway/decision_contracts.py) is re-exported the same way.
-    for name in ("DecisionRequest", "DecisionResponse"):
+    for name in ("DecisionRequest", "DecisionResponse", "QuizOption", "QuizOutbound", "QuizStateOutbound"):
         assert f"import('./decision_types.js').{name}" in text
     text += "\n" + (modules / "decision_types.js").read_text(encoding="utf-8")
     version = (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
@@ -313,6 +316,9 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
                 # #1539: the optional root starting effort joins the request mirror field by field.
                 UploadResponse, TaskCreateRequest, TaskCreateResponse, AttachmentManifestEntry,
                 DecisionRequest, DecisionResponse, LinkAction, LinksOutbound, QuizOption, QuizOutbound, QuizStateOutbound,
+                # The integration-secret form (showSecretHitl / saveSecretToken) and its metadata.
+                SecretDecisionRequest, SecretDecisionResponse, SecretEvent, SecretOutcome, SecretRequestField,
+                SecretRequestMeta,
                 # widgets-lifecycle W1b: the owner's per-card start-mode override is checked field by field.
                 UiPreferencesResponse, DesktopAutostartResponse,
                 ActiveDirectTurn, ActiveChatActivity, TypingOutbound,
@@ -736,7 +742,7 @@ def test_decision_comment_limit_and_optional_index_pinned_across_python_and_js()
     # The settled quiz card replayed from history carries the recorded answer:
     # the chosen index when there was one, and the owner's verbatim words —
     # which, with no index, ARE the answer.
-    quiz_decl = re.search(r"@typedef \{Object\} QuizOutbound\b([\s\S]*?)\*/", text)
+    quiz_decl = re.search(r"@typedef \{Object\} QuizOutbound\b([\s\S]*?)\*/", decisions)
     assert quiz_decl
     assert "@property {number=} answered_index" in quiz_decl.group(1)
     assert "@property {string=} comment" in quiz_decl.group(1)
@@ -770,6 +776,7 @@ def test_quiz_option_recommendation_is_an_additive_optional_field_in_both_langua
     text = (pathlib.Path(__file__).resolve().parent.parent / "web" / "modules" / "api_types.js").read_text(
         encoding="utf-8"
     )
+    text += "\n" + (pathlib.Path(__file__).resolve().parent.parent / "web" / "modules" / "decision_types.js").read_text(encoding="utf-8")
     option_decl = re.search(r"@typedef \{Object\} QuizOption\b([\s\S]*?)\*/", text)
     assert option_decl and "@property {boolean=} recommended" in option_decl.group(1)
 

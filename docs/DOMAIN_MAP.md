@@ -12,13 +12,13 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D02 | LLM client, routing & providers | 43 | 0 |
 | D03 | Context assembly, fit & compaction | 22 | 0 |
 | D04 | Tool execution: registry, access & typed results | 22 | 0 |
-| D05 | Tool surfaces: files, code, shell, media, external | 41 | 0 |
+| D05 | Tool surfaces: files, code, shell, media, external | 42 | 0 |
 | D06 | Review stack | 91 | 0 |
 | D07 | Delegation, subagents & Claudexor | 72 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 69 | 0 |
-| D09 | Cancellation, owner control & process custody | 23 | 0 |
+| D09 | Cancellation, owner control & process custody | 24 | 0 |
 | D10 | Git, update & release machinery | 33 | 0 |
-| D11 | Gateway, server & Web UI | 98 | 0 |
+| D11 | Gateway, server & Web UI | 99 | 0 |
 | D12 | Settings & configuration | 21 | 0 |
 | D13 | Safety, guards & runtime mode | 9 | 0 |
 | D14 | Skills & extensions | 72 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 30 | 0 |
 | D19 | Frozen contracts (ABI) | 12 | 0 |
 | D20 | Presence | 13 | 0 |
-| **total** | | **817** | **0** |
+| **total** | | **820** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **117**
+- lazy-only cross-domain pairs: **118**
   - D01->D10
   - D01->D11
   - D02->D05
@@ -120,6 +120,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D09->D12
   - D09->D14
   - D09->D15
+  - D09->D19
   - D10->D01
   - D10->D07
   - D10->D09
@@ -375,6 +376,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/tools/query_data.py`
 - `ouroboros/tools/recent_tasks.py`
 - `ouroboros/tools/search.py`
+- `ouroboros/tools/secret_hitl.py`
 - `ouroboros/tools/services.py`
 - `ouroboros/tools/shell.py`
 - `ouroboros/tools/shell_audit.py`
@@ -641,6 +643,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/process_lifeline.py`
 - `ouroboros/process_overload.py`
 - `ouroboros/process_scope.py`
+- `ouroboros/secret_requests.py`
 - `ouroboros/server_control.py`
 - `ouroboros/test_parallelism.py`
 - `supervisor/cancel_publication.py`
@@ -740,6 +743,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/schedule_contracts.py`
 - `ouroboros/gateway/schedules.py`
 - `ouroboros/gateway/schema.py`
+- `ouroboros/gateway/secret_decision.py`
 - `ouroboros/gateway/settings.py`
 - `ouroboros/gateway/settings_secrets.py`
 - `ouroboros/gateway/skill_my_skills.py`

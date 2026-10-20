@@ -125,6 +125,7 @@ Every path-addressed `/api/files/*` operation resolves its requested `path` and 
 | POST | `/api/tasks/{task_id}/continue` | (§6 Owner Continue after a technical interruption) |
 | POST | `/api/tasks/{task_id}/resume` | |
 | POST | `/api/decisions` | |
+| POST | `/api/decisions/secret` | |
 | GET | `/api/cards/{card_id}` | a living card's current body and presses |
 | GET | `/api/cards/{card_id}/app` | app HTML as `text/plain`, `nosniff`, `no-store` |
 | POST | `/api/cards/{card_id}/pin` | keep a component card on Widgets |
