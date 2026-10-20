@@ -83,6 +83,8 @@ def register(api):
         if request.method == "POST":
             try:
                 config = validate(await request.json())
+                if not config.provider:
+                    raise RealtimeSetupError("configuration", "Choose an engine.")
                 if config.enabled:
                     catalog = next((catalog for key, catalog, _ in catalogs if key == config.provider), None)
                     if catalog is None:
@@ -99,15 +101,17 @@ def register(api):
 
     api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir))
     api.register_route("config", settings, methods=["GET", "POST"])
-    api.register_settings_section("conversation", title="Live Conversation", schema={"components": [
-        {"type": "markdown", "text": "Calls (beta). Choose and enable an engine skill, grant its API key, then select its registration and native model here. Audio goes to that vendor. Calls use this room's ordinary context and tools."},
+    api.register_settings_section("conversation", title="Calls (beta)", schema={"components": [
+        {"type": "markdown", "text": "Choose an enabled voice engine. Calls use this room's ordinary memory and tools."},
         {"type": "form", "route": "config", "method": "POST", "fields": [
             {"name": "enabled", "type": "checkbox", "label": "Calls (beta)", "default": False},
-            {"name": "provider", "type": "select", "label": "Engine", "default": "gemini_live:gemini", "options": [
-                {"value": "gemini_live:gemini", "label": "Gemini · Google"},
-                {"value": "grok_realtime:grok", "label": "Grok · xAI"},
-                {"value": "openai_realtime:openai", "label": "OpenAI"}]},
-            {"name": "model", "type": "text", "label": "Native model", "default": ""},
-            {"name": "voice", "type": "text", "label": "Voice", "default": ""},
+            {"name": "provider", "type": "select", "label": "Engine", "default": DEFAULTS["provider"], "options": []},
+            {"name": "model", "type": "select", "label": "Model", "options": []},
+            {"name": "voice", "type": "select", "label": "Voice", "options": []},
+            {"name": "instructions", "type": "textarea", "label": "Instructions for calls"},
+            {"name": "pause", "type": "select", "label": "Pause before answering", "options": []},
+            {"name": "interruptions", "type": "checkbox", "label": "Speaking interrupts Ouroboros"},
+            {"name": "thinking", "type": "select", "label": "Thinking", "options": []},
+            {"name": "search", "type": "checkbox", "label": "Built-in search"},
         ]},
     ]})

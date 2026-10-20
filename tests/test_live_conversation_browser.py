@@ -6,6 +6,7 @@ or runtime is used. Run with the unchanged safe_test launcher and UI opt-in.
 from __future__ import annotations
 
 import json
+import importlib
 import os
 from pathlib import Path
 from urllib.parse import urlparse
@@ -53,7 +54,11 @@ FAKES = r"""(() => {
             fixture.tracks.push(track);
             return { getTracks: () => [track], getAudioTracks: () => [track], getVideoTracks: () => [] };
         },
-        async enumerateDevices() { return []; },
+        async enumerateDevices() { return [
+            {kind:'audioinput',deviceId:'test-mic',label:'Synthetic microphone'},
+            {kind:'audiooutput',deviceId:'test-speaker',label:'Synthetic speaker'},
+            {kind:'videoinput',deviceId:'test-camera',label:'Synthetic camera'},
+        ]; },
         addEventListener() {}, removeEventListener() {},
     };
     Object.defineProperty(navigator, 'mediaDevices', { value: media, configurable: true });
@@ -63,9 +68,16 @@ FAKES = r"""(() => {
         resume() { return Promise.resolve(); }
         close() { this.state = 'closed'; return Promise.resolve(); }
         createMediaStreamSource() { return { connect() {}, disconnect() {} }; }
+        createAnalyser() { return {fftSize:512,getFloatTimeDomainData(samples) { samples.fill(.05); }}; }
+        createOscillator() { return {frequency:{value:0},connect() { return {connect() {}}; },start() {},stop() {}}; }
+        createGain() { return {gain:{value:0}}; }
+        get currentTime() { return 0; }
         setSinkId() { return Promise.resolve(); }
     }
     window.AudioContext = Context;
+    Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {configurable:true,
+        get() {return this.__testStream || null;}, set(stream) {this.__testStream = stream;}});
+    HTMLMediaElement.prototype.play = async function() {};
     window.AudioWorkletNode = class {
         constructor() { this.port = { postMessage() {}, close() {}, onmessage: null }; }
         connect() {} disconnect() {}
@@ -89,7 +101,7 @@ FAKES = r"""(() => {
 })();"""
 
 
-def open_call_ui(ui, monkeypatch, *, width, scheme, engine="openai", enabled=True, projects=(), refusal=""):
+def open_call_ui(ui, monkeypatch, *, width, scheme, engine="openai", enabled=True, offered=True, projects=(), refusal=""):
     state = {"whisper": True, "voice": {"stt": "whisper-voice:stt", "tts": "", "tts_voice": ""}}
     projection = voice.projection
     include_call = False
@@ -104,9 +116,29 @@ def open_call_ui(ui, monkeypatch, *, width, scheme, engine="openai", enabled=Tru
     monkeypatch.setattr(voice, "FAKES", FAKES)
     page = voice.open_app(ui, width=width, scheme=scheme, state=state)
     posts = []
-    config = {"enabled": enabled, "provider": engine, "model": "synthetic-only", "voice": ""}
+    from skills.live_conversation.plugin import DEFAULTS, model_json, register
+    registrations = [('gemini_live','gemini'),('grok_realtime','grok'),('openai_realtime','openai')]
+    catalogs = []
+    for skill, name in registrations:
+        catalog = importlib.import_module(f'skills.{skill}.plugin').CATALOG
+        catalogs.append({'id':f'{skill}:{name}', 'label':catalog.label, 'privacy':catalog.privacy,
+                         'models':[model_json(model) for model in catalog.models]})
+    selected = next(item for item in catalogs if item['id'].endswith(':' + engine))
+    config = {**DEFAULTS, "enabled": enabled, "offered": offered and enabled, "provider": selected['id'],
+              "catalogs":catalogs, "selected_model": next(model for model in selected['models'] if model['default'])}
     ui["call_config"] = config
     ui["call_reads"] = []
+    ui['call_saves'] = []
+    sections = []
+    class API:
+        def get_state_dir(self): return '/tmp/synthetic-call-state-unused'
+        def register_route(self, *_args, **_kwargs): pass
+        def register_live_conversation(self, *_args, **_kwargs): pass
+        def register_settings_section(self, section_id, title, *, schema):
+            sections.append({'skill':'live_conversation','section_id':section_id,'title':title,'render':schema})
+    register(API())
+    page.route('**/api/extensions', lambda route: route.fulfill(content_type='application/json',
+        body=json.dumps({'live':{'settings_sections':sections}, 'skills':[]})))
 
     def extension(route):
         path = urlparse(route.request.url).path
@@ -118,6 +150,16 @@ def open_call_ui(ui, monkeypatch, *, width, scheme, engine="openai", enabled=Tru
                           body=source.read_text())
         elif path == "/api/extensions/live_conversation/config":
             ui["call_reads"].append(route.request.method)
+            if route.request.method == 'POST':
+                ui['call_saves'].append(route.request.post_data_json)
+                if ui.get('call_save_error'):
+                    route.fulfill(status=500,content_type='application/json',body=json.dumps({'error':'Synthetic save failed'}))
+                    return
+                config.update(route.request.post_data_json)
+                selected = next(item for item in catalogs if item['id'] == config['provider'])
+                config['selected_model'] = next(model for model in selected['models']
+                    if (model['id'] == config['model'] if config['model'] else model['default']))
+                config['offered'] = config['enabled'] and offered
             route.fulfill(status=503 if ui.get("call_read_error") else 200,
                           content_type="application/json", body=json.dumps(config))
         else:
@@ -236,6 +278,16 @@ def test_beta_off_has_no_talk_or_media(subscription_ui, monkeypatch):
     assert page.locator("[data-call-entry='talk']").count() == 0
     page.locator("#chat-input").press("Enter")
     assert not posts and page.evaluate("window.__callFixture.microphones") == 0
+
+
+def test_unavailable_offer_has_no_talk_until_server_confirms_it(subscription_ui, monkeypatch):
+    page, posts = open_call_ui(subscription_ui, monkeypatch, width=360, scheme='light', offered=False)
+    page.wait_for_timeout(500)
+    assert page.locator("[data-call-entry='talk']").count() == 0
+    assert not posts and page.evaluate('__callFixture.microphones') == 0
+    subscription_ui['call_config']['offered'] = True
+    page.evaluate("window.dispatchEvent(new Event('ouro:settings-updated'))")
+    page.locator("[data-call-entry='talk']").wait_for()
 
 
 def start_call(page, room="#page-chat"):
@@ -381,3 +433,62 @@ def test_composer_inserted_text_restores_send(subscription_ui, monkeypatch, widt
     assert not posts
     page.locator("#chat-input").fill("")
     expect(talk).to_be_visible()
+
+
+def navigate(page, name):
+    target = page.locator(f'[data-nav-page="{name}"]')
+    if page.viewport_size['width'] < 980 and not page.locator('body').evaluate("node => node.classList.contains('nav-drawer-open')"):
+        page.locator('[data-mobile-nav-toggle]:visible').first.click()
+    target.click()
+
+
+@pytest.mark.parametrize('width', [360, 1280])
+def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, width):
+    from playwright.sync_api import expect
+    page, _ = open_call_ui(subscription_ui, monkeypatch, width=width, scheme='light', engine='gemini')
+    navigate(page, 'settings')
+    page.locator('[data-settings-tab="advanced"]').click()
+    form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
+    expect(form.locator('[name="provider"] option')).to_have_count(3)
+    expect(form.locator('[name="model"] option')).to_have_count(3)
+    expect(form.locator('[name="voice"] option')).to_have_count(31)
+    expect(form.locator('[name="thinking"]')).to_have_count(0)
+    expect(form.locator('[data-call-memory]')).to_contain_text('92,000')
+    form.locator('[name="model"]').select_option('gemini-3.8-live-extended-thinking')
+    form.locator('[name="thinking"]').select_option('high')
+    form.locator('[name="provider"]').select_option('grok_realtime:grok')
+    expect(form.locator('[name="pause"], [name="thinking"], [name="interruptions"], [name="search"]')).to_have_count(0)
+    expect(form.locator('[data-call-knob-note="pause"]')).to_contain_text('decides itself')
+    expect(form.locator('[data-call-privacy]')).to_have_text('Call audio goes to xAI.')
+    expect(form.locator('[data-call-memory]')).to_contain_text('90,000')
+    form.locator('[name="provider"]').select_option('openai_realtime:openai')
+    expect(form.locator('[data-call-memory]')).to_contain_text('not yet measured')
+    form.locator('[name="instructions"]').fill('Speak briefly in this synthetic call.')
+    form.locator('[data-call-device="mic"]').select_option('test-mic')
+    form.locator('[data-call-processing="echoCancellation"]').uncheck()
+    assert page.evaluate("JSON.parse(localStorage.getItem('ouroboros.call.devices')).mic") == 'test-mic'
+    form.locator('[data-call-test="mic"]').click()
+    expect(form.locator('[data-call-meter]')).to_be_visible()
+    form.locator('[data-call-test="mic"]').click()
+    expect(form.locator('[data-call-meter]')).to_be_hidden()
+    form.locator('[data-call-test="camera"]').click()
+    expect(form.locator('[data-call-camera-preview]')).to_be_visible()
+    form.locator('[data-call-test="camera"]').click()
+    form.locator('[data-call-test="speaker"]').click()
+    expect(form.locator('[data-call-device-status]')).to_contain_text('soft note')
+    browser.capture(page, f'call-settings-{width}')
+    voice.no_page_scroll(page)
+    page.evaluate("window.__settingsSignals=[]; window.addEventListener('ouro:settings-updated', e => __settingsSignals.push(e.detail))")
+    subscription_ui['call_save_error'] = True
+    form.locator('[name="enabled"]').uncheck()
+    form.locator('button[type="submit"]').click()
+    expect(form.locator('[data-extension-settings-status]')).to_contain_text('Synthetic save failed')
+    assert page.evaluate('__settingsSignals.length') == 0
+    subscription_ui['call_save_error'] = False
+    form.locator('button[type="submit"]').click()
+    page.wait_for_function('__settingsSignals.length === 1')
+    assert subscription_ui['call_saves'][-1]['instructions'] == 'Speak briefly in this synthetic call.'
+    assert not any('device' in key or key == 'echoCancellation' for key in subscription_ui['call_saves'][-1])
+    navigate(page, 'chat')
+    assert page.locator("[data-call-entry='talk']").count() == 0
+    assert not subscription_ui['errors']

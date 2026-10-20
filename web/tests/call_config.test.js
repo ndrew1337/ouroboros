@@ -16,6 +16,7 @@ async function fixture() {
     };
     const source = readFileSync(new URL('../../skills/live_conversation/ui/index.js', import.meta.url), 'utf8')
         .replace(/import .*mountCall.*;\n/, 'const { mountCall } = globalThis.__callConfig;\n')
+        .replace(/import .*mountCallSettings.*;\n/, 'const mountCallSettings = () => ({dispose() {}});\n')
         .replace(/import .*fetchJson.*;\n/, 'const { fetchJson } = globalThis.__callConfig;\n');
     const { mount } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}#${Math.random()}`);
     const handle = mount({ skill: 'live_conversation', signal: controller.signal, providers: {

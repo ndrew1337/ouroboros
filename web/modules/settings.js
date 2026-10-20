@@ -278,6 +278,7 @@ export async function renderExtensionSettingsSections(root, sections, { isCurren
     const items = Array.isArray(sections) ? sections : [];
     if (!items.length) {
         host.innerHTML = '<div class="muted">No extension settings registered.</div>';
+        globalThis.window?.dispatchEvent(new CustomEvent('ouro:extension-settings-mounted'));
         return;
     }
     const hydrated = new Map();
@@ -391,6 +392,9 @@ export async function renderExtensionSettingsSections(root, sections, { isCurren
             }
         });
     });
+    // Already-granted page modules may enhance their own declared forms. The
+    // schema, hydration, write route and Save outcome remain host-owned.
+    globalThis.window?.dispatchEvent(new CustomEvent('ouro:extension-settings-mounted'));
 }
 
 function collectSecretValue(id, body) {

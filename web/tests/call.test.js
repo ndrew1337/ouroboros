@@ -188,7 +188,7 @@ function fixture({ open } = {}) {
             connect() { this.readyState = 1; this.onopen(); } };
         sockets.push(sock); return sock;
     };
-    const session = new CallSession({ chatId: 71, env, socket, open: async body => {
+    const session = new CallSession({ chatId: 71, env, socket, model: () => ({ vision: true }), open: async body => {
         requests.push(body); return open ? open(body) : { call_id: 'c', ws_path: '/ws/call/c', vision: true };
     }, changed: view => views.push(view), caption: msg => captions.push(msg), level: data => levels.push(data),
     settled: view => settled.push(view), notice: words => notices.push(words) });
@@ -222,6 +222,15 @@ test('feature detection names why a surface cannot call, and Telegram hides Talk
     assert.equal(mediaFailure({ name: 'NotFoundError' }), 'no_microphone');
     assert.equal(mediaFailure({ name: 'NotReadableError' }), 'microphone_unreadable');
     assert.equal(mediaFailure(new Error('anything else')), 'call_failed');
+});
+
+test('vision comes from the selected catalog model, even if admission disagrees', async () => {
+    const f = fixture();
+    f.session.model = () => ({ vision: false });
+    try {
+        await f.session.start();
+        assert.equal(f.session.supportsVision, false);
+    } finally { f.session.end(); }
 });
 
 test('a call shows its own phases: permission, admission, then every server phase it reports', async () => {
