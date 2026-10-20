@@ -1047,9 +1047,7 @@ class OuroborosAgent:
                 if isinstance(task.get("metadata"), dict)
                 else {}
             )
-            transport = getattr(self, "_realtime_turn", None)
-            self._accepting_owner_messages = inline_execution(task) and (
-                transport is None or getattr(transport, "accepts_owner_messages", False))
+            self._accepting_owner_messages = inline_execution(task)
         authority_refusal = validate_task_authority_sources(self.env, task)
         if not authority_refusal:
             _persist_early_origin_stub(self.env.drive_root, task)
@@ -1094,8 +1092,7 @@ class OuroborosAgent:
             elif getattr(self, "_realtime_turn", None) is not None:
                 text, usage, llm_trace = self._realtime_turn.run(
                     ctx, messages, self.tools, task=task, initial_effort=initial_effort,
-                    **({"incoming_messages": self._incoming_messages, "event_queue": self._event_queue}
-                       if getattr(self._realtime_turn, "accepts_owner_messages", False) else {}))
+                    incoming_messages=self._incoming_messages, event_queue=self._event_queue)
             elif task_type_str == "deep_self_review":
                 # Deep self-review bypasses the tool loop: review_change(subject=system,
                 # surface=system) on the row the request named, else Main (decision 3A).

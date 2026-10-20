@@ -2,6 +2,19 @@
  *  `api_types.js` indexes: the served main interface, the setup bootstrap, the settings writers' refusal,
  *  the auth gate's JSON login and the `GET /api/contract` document. */
 /**
+ * @typedef {Object} ChatInbound
+ * @property {string=} reply_to
+ * @property {"chat"} type
+ * @property {string} content
+ * @property {string=} sender_session_id
+ * @property {string=} client_message_id
+ * @property {boolean=} force_plan
+ * @property {Array<Object>=} attachments  // [{filename, display_name, mime}] — image uploads become native blocks (v6.26.0)
+ * @property {number=} chat_id     // multi-project thread routing (v6.32.0); main chat = 1
+ * @property {string=} project_id  // per-project memory scope (v6.32.0)
+ * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
+ */
+/**
  * @typedef {Object} CommandInbound
  * @property {Object=} client_surface
  * @property {"command"} type

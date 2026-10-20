@@ -82,3 +82,18 @@ def test_new_work_cannot_attach_to_a_replaced_publication(publication):
             pytest.fail("stale call work was admitted")
     with registry.extension_work_scope({**spec, "extension_generation": "generation-two"}, Work()):
         assert registry.realtime_load_refusal(spec["skill"]) == "live_call_active"
+
+
+def test_direct_load_refuses_only_live_calls(publication, monkeypatch, tmp_path):
+    from ouroboros import extension_loader as loader
+
+    name, bundle, spec = publication
+    loaded = []
+    monkeypatch.setattr(loader, "_load_extension_locked", lambda *a, **kw: loaded.append(a[0]) or None)
+    subject = SimpleNamespace(name=name)
+    work = Work()
+    with registry.extension_work_scope(spec, work):
+        assert loader.load_extension(subject, lambda: {}, drive_root=tmp_path) == "live_call_active"
+        assert registry._extensions[name] is bundle and not work.cancelled and not loaded
+    assert loader.load_extension(subject, lambda: {}, drive_root=tmp_path) is None
+    assert loaded == [subject]
