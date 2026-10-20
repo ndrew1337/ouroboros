@@ -421,7 +421,6 @@ ouroboros/ — agent core and shared runtime (§6)
     router.py — Starlette route collector for /api/* and /ws (§4)
     ws.py — WS manager, extension WS dispatch off the ASGI loop, broadcast (§4 WebSocket protocol)
     call_ws.py, host_call.py, call_contracts.py — Owner/companion call admission, shared peer parser and media contract (§12)
-    realtime.py — owner chat `execution_transport` admission and `realtime_execute` funding of one waiting actor (§13)
     state.py — /api/health, /api/contract and /api/state
     reply_preparation.py — awaited replies active now, projected from existing live owners to destination chats; no store, scheduler or public census fields (§6)
     tasks.py — Headless task create/list/get/cancel/events; cancel accepts `stop_policy` (`finalize_then_cancel` → supervisor/owner_stop.py) (CLI / Headless Boundary below)

@@ -244,15 +244,9 @@
  * @property {number=} chat_id     // multi-project thread routing (v6.32.0); main chat = 1
  * @property {string=} project_id  // per-project memory scope (v6.32.0)
  * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
- * @property {Object=} execution_transport  // Internal realtime preview; no visible composer change.
  */
 /** @typedef {import('./client_contract_types.js').CommandInbound} CommandInbound */
 /** @typedef {import('./client_contract_types.js').PanicAcceptedOutbound} PanicAcceptedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeExecuteInbound} RealtimeExecuteInbound */
-/** @typedef {import('./client_contract_types.js').RealtimePreparedOutbound} RealtimePreparedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeAuthorizedOutbound} RealtimeAuthorizedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeRefusedOutbound} RealtimeRefusedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeFinishedOutbound} RealtimeFinishedOutbound */
 /** @typedef {import('./client_contract_types.js').CallOpenRequest} CallOpenRequest */
 /** @typedef {import('./client_contract_types.js').CallOpenResponse} CallOpenResponse */
 /** @typedef {import('./client_contract_types.js').CallRefusal} CallRefusal */

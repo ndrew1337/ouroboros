@@ -57,13 +57,21 @@ def test_every_client_envelope_has_a_field_identical_browser_twin():
             cls = getattr(module, name)
             assert re.search(rf"@typedef \{{Object\}} {name}\b", text), f"client_contract_types.js lacks {name}"
             assert _js_typedef_fields(text, name) == set(typing.get_type_hints(cls, include_extras=True)), name
-    for name in ("RealtimeExecuteInbound", "RealtimePreparedOutbound", "RealtimeAuthorizedOutbound",
-                 "RealtimeRefusedOutbound", "RealtimeFinishedOutbound"):
-        cls = contract_typed_dict(name)
-        assert _js_typedef_fields(text, name) == set(typing.get_type_hints(cls, include_extras=True)), name
     index = (REPO / "web" / "modules" / "api_types.js").read_text(encoding="utf-8")
     assert "./client_contract_types.js" in index.splitlines()[0]
     assert "import('./client_contract_types.js').ServedUiState" in index
+
+
+def test_contract_exposes_calls_without_diagnostic_probe_frames():
+    from ouroboros.gateway.contracts import ChatInbound
+
+    retired = {"realtime_execute", "realtime_prepared", "realtime_authorized",
+               "realtime_refused", "realtime_finished"}
+    assert not retired.intersection(endpoint_index.WS_SHAPES)
+    assert "execution_transport" not in typing.get_type_hints(ChatInbound)
+    assert "POST /api/call/open" in endpoint_index.HTTP_SHAPES
+    assert "conversation_finished" in endpoint_index.WS_SHAPES
+    assert not validate_ingress({"type": "chat", "content": "Hello"}, ChatInbound)
 
 
 def test_shapes_bind_only_indexed_routes_with_valid_bodies_that_resolve():

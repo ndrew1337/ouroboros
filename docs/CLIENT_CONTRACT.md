@@ -238,7 +238,7 @@ answer through §7.
 **Format and liveness.** Open one socket per client; every frame is a JSON text message with a `type`. While clients are connected the core sends `heartbeat` about every 15 seconds (proof the connection is alive, not that work is progressing); after about 45 silent seconds, treat the socket as dead and reconnect. Before restarting, the core closes sockets with code 1012.
 
 **Message types.** `ws.messages` in the contract lists every built-in type with each direction's shape:
-- **Client to core:** `chat`, `command`, and the internal `realtime_execute` control described below.
+- **Client to core:** `chat` and `command`.
 - **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links`, `quiz` and `card` (a living card, §5 "Living cards").
 - **Core to client, signals only:**
   - `panic_accepted` confirms the emergency latch, not process exit (§15).
@@ -321,54 +321,6 @@ the existing call capsule and collapsed transcript. Empty Enter does not call.
 Dictation hides during a call and returns without losing the draft. Browser
 capture uses shared audio/visual leases and releases them on End, Panic,
 hidden room or contribution disposal.
-
-### Internal realtime setup
-
-An authenticated ordinary `chat` frame may carry `execution_transport`:
-`{"kind":"realtime","provider":"openai_realtime:openai","model":"gpt-realtime-2.1","timeout_s":120,"probe":{"text":"<explicit probe>","max_output_tokens":256}}`.
-`provider` names a loaded realtime provider registration (`<skill>:<name>`); an
-unloaded one is refused with `provider_unavailable` before the message is accepted.
-The model is an explicit native provider id, not a fallback choice. This entry
-supports a text-only setup and one text response; the probe's `max_output_tokens`
-must fit the reply allowance and the provider's field (OpenAI: an integer 1-4096).
-Attachments, slash commands (leading whitespace included) and Swarm are refused.
-It adds no visible composer or device controls.
-
-The host accepts the owner row and admits an ordinary native turn in that room.
-`realtime_prepared` names its `task_id`, `chat_id`, `client_message_id`,
-`input_sha256`, `wire_sha256`, loaded `provider_generation`, mode and reply
-allowance. Its `source_ref` addresses the full prepared messages, memory-view
-capture, fit facts and wire plan in that task's existing artifact store.
-Preview makes no provider connection or credential request.
-The canonical owner row and task metadata retain the transport descriptor.
-An identical message retry rejoins the same intent without another actor,
-deadline extension or funding grant. Adding, removing or changing its transport
-under that message ID returns `realtime_refused` with `transport_identity`.
-
-The actor waits within `timeout_s`, measured from transport admission. To fund
-exactly one attempt on that actor, send
-`{"type":"realtime_execute","task_id":"<prepared task>","chat_id":1,"wire_sha256":"<prepared digest>","reservation_usd":0.5}`.
-The positive amount reserves exposure in the ordinary ledger; it is not a
-provider-enforced dollar cap. Existing global/root/group budget controls still
-apply. `realtime_authorized` confirms the funding handoff, not a successful send.
-Wrong room, digest, expired actor, extra control fields and duplicate funding
-produce `realtime_refused` with `code` and `detail`.
-
-Stop uses the existing task cancellation endpoint. `realtime_finished` reports
-the task and room, `execution_status` and `reason` after actual provider/socket
-teardown and accounting. The ordinary turn terminal follows. Disconnect does
-not authorize spending or end custody; Stop or the deadline ends the actor.
-An immediate Stop may return pending while teardown still owns the activity;
-closed message admission does not permit early cancellation settlement.
-Full events remain in its `realtime-wire.jsonl` artifact. Failed or missing
-usage never establishes a free attempt. There is no automatic retry, resumption,
-live tool execution, audio conversation or three-provider delivery in this entry.
-Pause is refused before writing a fence (`409 realtime_pause_unsupported`):
-this bounded entry has no resumable checkpoint. Stop ends it. Funding and
-the live transport handle are process-local: reconstructed tasks, Continue,
-and retrying an old process's accepted message cannot replay the probe or run
-the intent through the text loop. They refuse with `realtime_restart_required`;
-start a new owner message with a fresh preview and separate funding authorization.
 
 ### History rows
 

@@ -829,50 +829,6 @@
  * @property {string=} pinned_at
  */
 
-// Internal admitted realtime room transport (gateway/contracts.py).
-/**
- * @typedef {Object} RealtimeExecuteInbound
- * @property {"realtime_execute"} type
- * @property {string} task_id
- * @property {number} chat_id
- * @property {string} wire_sha256
- * @property {number} reservation_usd
- */
-/**
- * @typedef {Object} RealtimePreparedOutbound
- * @property {"realtime_prepared"} type
- * @property {string} task_id
- * @property {number} chat_id
- * @property {string} client_message_id
- * @property {Object} source_ref
- * @property {string} input_sha256
- * @property {string} wire_sha256
- * @property {string} mode
- * @property {number} output_allowance_tokens
- * @property {string} provider_generation
- */
-/**
- * @typedef {Object} RealtimeAuthorizedOutbound
- * @property {"realtime_authorized"} type
- * @property {string} task_id
- * @property {number} chat_id
- */
-/**
- * @typedef {Object} RealtimeRefusedOutbound
- * @property {"realtime_refused"} type
- * @property {string} code
- * @property {string} detail
- */
-/**
- * @typedef {Object} RealtimeFinishedOutbound
- * @property {"realtime_finished"} type
- * @property {string} task_id
- * @property {number} chat_id
- * @property {string} client_message_id
- * @property {string} reason
- * @property {string} execution_status
- */
-
 /**
  * @typedef {Object} CallOpenRequest
  * @property {number} chat_id
