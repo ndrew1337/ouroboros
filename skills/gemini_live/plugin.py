@@ -1,27 +1,43 @@
 """Gemini Live layout, captions, usage and renewal over the common host port.
 
-Recovered from the retained Gemini driver. The 90-second fresh-context boundary
-and history-in-system layout belong here: observed Gemini audio eviction is not
-an ordinary-memory policy. Protocol: https://ai.google.dev/api/live (2026-10-20).
+The held-audio boundary and history-in-system layout belong here: observed
+Gemini audio eviction is not an ordinary-memory policy. The host refits on a
+fresh renewal. Protocol: https://ai.google.dev/api/live (read 2026-10-21).
 """
 from __future__ import annotations
 import asyncio
 import base64
+import copy
 import json
 import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs, Video
+from websockets.exceptions import ConnectionClosed
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
-                                          RouteFacts, canonical_json)
+                                          RouteFacts, USAGE_AXES, canonical_json)
 from ouroboros.realtime_session import JsonSession
 
 ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 ROUTE = RealtimeRoute('gemini_live', ENDPOINT, 'google::')
-RENEW_AFTER_SECONDS = 90
+# Measured 2026-10-18 in #1964: four ordinary-model sessions at ~92k
+# instruction tokens dropped spoken history at 2.5–2.9k held AUDIO tokens.
+# Extended thinking uses the family hypothesis until separately measured.
+HELD_AUDIO_TOKENS = 2_500
+# Process-local route evidence; observed drops can only lower the initial span.
+# No call text, keys or context selection lives in this map.
+HELD_AUDIO_SPANS = {}
+# Only reconnecting sessions leave a capsule, consumed by the next connection.
+# Google's handles expire two hours after termination (session-management docs,
+# read 2026-10-21). Prune on construction; no timer, disk state or socket is kept.
+RESUMPTIONS = {}
+RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
+                 'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
+                 'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final',
+                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth')
 
 # Google's prebuilt voices with the one-word style its speech docs give each
-# (ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-17).
+# (https://ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-21).
 VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
     ('Zephyr', 'Bright'), ('Puck', 'Upbeat'), ('Charon', 'Informative'), ('Kore', 'Firm'), ('Fenrir', 'Excitable'),
     ('Leda', 'Youthful'), ('Orus', 'Firm'), ('Aoede', 'Breezy'), ('Callirrhoe', 'Easy-going'), ('Autonoe', 'Bright'),
@@ -34,26 +50,60 @@ VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
 # held audio tokens (18.10.2026); the endpoint documents a 131,072-token input. The
 # reserve is a planning margin for in-session growth.
 FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='provider',
-                   source='spoken retention held under a ~92k-token instruction (owner probes); documented input 131,072',
+                   source='spoken retention held under a ~92k-token instruction, owner probes 2026-10-18; '
+                          '10k reserve is a planning margin; input 131,072 provider tokens documented at '
+                          'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live (read 2026-10-21)',
                    observed='2026-10-18')
+THINKING_FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='provider',
+    source='hypothesis: use the ordinary model retention margin until this route is measured; '
+           'input 131,072 provider tokens documented at '
+           'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking (read 2026-10-21)',
+    observed='2026-10-21')
 CATALOG = ProviderCatalog(
     label='Gemini \u00b7 Google', credential_settings=('GEMINI_API_KEY',),
     privacy='Call audio and the frames you show go to Google.',
     models=(
         CatalogModel('gemini-3.8-live', 'gemini-3.8-live \u2014 Google\u2019s live voice model', FACTS, default=True,
                      vision=True, voices=VOICES, honours=frozenset({'pause', 'interruptions', 'search', 'languages'}),
-                     notes=(('thinking', 'Only the extended-thinking model thinks before it answers.'),)),
+                     notes=(('thinking', 'This model uses interleaved reasoning without a configurable thinking level.'),)),
         CatalogModel('gemini-3.8-live-extended-thinking', 'gemini-3.8-live-extended-thinking \u2014 thinks before it answers',
-                     FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
+                     THINKING_FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
                      honours=frozenset({'pause', 'interruptions', 'thinking', 'search', 'languages'})),
     ))
+
+
+def unique_tools(tools):
+    result = {}
+    for tool in tools:
+        if tool.get('type') != 'function' or set(tool) - {'type', 'function', 'cache_control'}:
+            raise RealtimeSetupError('tools', 'Gemini Live accepts host function tools only')
+        result[tool['function']['name']] = tool
+    return tuple(result.values())
+
+
+def normalize_usage(raw):
+    """Map only reported modalities; absent axes remain unknown, never zero."""
+    usage = {}
+    for field, direction in (('promptTokensDetails', 'input'), ('responseTokensDetails', 'output')):
+        for detail in raw.get(field) or ():
+            key = f"{detail.get('modality', '').lower()}_{direction}_tokens"
+            count = detail.get('tokenCount')
+            if key in USAGE_AXES and type(count) is int and count >= 0:
+                usage[key] = usage.get(key, 0) + count
+    for field, key in (('cachedContentTokenCount', 'cached_input_tokens'), ('thoughtsTokenCount', 'thinking_tokens')):
+        count = raw.get(field)
+        if type(count) is int and count >= 0:
+            usage[key] = count
+    if 'cached_input_tokens' not in usage and raw.get('cacheTokensDetails'):
+        counts = [detail.get('tokenCount') for detail in raw['cacheTokensDetails']]
+        if all(type(count) is int and count >= 0 for count in counts):
+            usage['cached_input_tokens'] = sum(counts)
+    return usage
 
 
 def declarations(tools):
     result = []
     for tool in tools:
-        if tool.get('type') != 'function' or set(tool) - {'type', 'function', 'cache_control'}:
-            raise RealtimeSetupError('tools', 'Gemini Live accepts host function tools only')
         function = tool['function']
         result.append({**{k: function[k] for k in ('name', 'description') if k in function},
                        'parametersJsonSchema': function.get('parameters', {}), 'behavior': 'NON_BLOCKING'})
@@ -79,6 +129,8 @@ def layout(selected, options):
     if any(p.get('type') != 'text' for p in parts):
         raise RealtimeSetupError('system', 'Gemini system content requires text')
     system = [{'text': p['text']} for p in parts]
+    if options.instructions:
+        system.append({'text': options.instructions})
     # Full ordered role records, not a summary or an operative memory exception.
     # Keep the actual system directives outside the explicitly untrusted archive.
     history, images = [], []
@@ -104,15 +156,27 @@ def layout(selected, options):
     generation = {'responseModalities': ['AUDIO'], 'maxOutputTokens': selected.output_allowance_tokens}
     if options.voice:
         generation['speechConfig'] = {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': options.voice}}}
-    if 'extended-thinking' in selected.model:
-        generation['thinkingConfig'] = {'thinkingLevel': 'high'}
+    if selected.model.removeprefix('models/') == 'gemini-3.8-live-extended-thinking':
+        generation['thinkingConfig'] = {'thinkingLevel': options.thinking or 'low'}
     setup = {'model': selected.model if selected.model.startswith('models/') else 'models/' + selected.model,
              'systemInstruction': {'parts': system}, 'generationConfig': generation,
-             'tools': declarations(json.loads(selected.tools_json)),
-             'inputAudioTranscription': {}, 'outputAudioTranscription': {}}
+             'tools': declarations(unique_tools(json.loads(selected.tools_json))),
+             **{key: {'languageCodes': list(options.languages)} if options.languages else {}
+                for key in ('inputAudioTranscription', 'outputAudioTranscription')}}
+    setup['sessionResumption'] = {'handle': options.resume_handle} if options.resume_handle else {}
+    if options.search:
+        setup['tools'].append({'googleSearch': {}})
+    turn_taking = {}
+    silence_ms = {'short': 500, 'normal': 0, 'long': 1600}[options.pause]
+    if silence_ms:
+        turn_taking['automaticActivityDetection'] = {'silenceDurationMs': silence_ms}
+    if not options.interruptions:
+        turn_taking['activityHandling'] = 'NO_INTERRUPTION'
+    if turn_taking:
+        setup['realtimeInputConfig'] = turn_taking
     # No sliding-window compression: the host refits on renewal instead.
     events = [{'setup': setup}]
-    if images:
+    if images and not options.resume_handle:
         events.append({'clientContent': {'turns': [{'role': 'user', 'parts': images}], 'turnComplete': False}})
     return events
 
@@ -124,23 +188,38 @@ class GeminiSession(JsonSession):
         self.wire = {'model': selected.model, 'input_sha256': selected.sha256, 'events': self.events}
         self.output_bound_tokens = selected.output_allowance_tokens
         self.pending, self.calls, self.text = [], {}, {}
-        self.tools = tuple(json.loads(selected.tools_json))
+        self.tools = unique_tools(json.loads(selected.tools_json))
         self.response = self.item = ''
+        self.native_response = ''
+        self.completed_responses = set()
+        self.last_done = None
+        self.seen_calls, self.tool_results = {}, {}
+        self.caption_offsets = set()
         self.response_complete = False
         self.input_pending = self.input_final = self.input_boundary = False
         self.output_pending = self.output_final = False
         self.usage = {}
-        self.renewed = False
         self.renewal_announced = False
-        self.completed_turns = 0
+        self.held_audio = self.audio_growth = 0
+        self.interrupted = False
         self.turn_busy = False
         self.held_context = []
         self.read_task = None
         self.pending_event = asyncio.Event()
+        self.resume_handle = options.resume_handle
+        self.resume_requested = bool(options.resume_handle)
+        now = time.monotonic()
+        for key, (expiry, _) in tuple(RESUMPTIONS.items()):
+            if expiry <= now:
+                del RESUMPTIONS[key]
+        saved = RESUMPTIONS.pop((selected.model, options.resume_handle), None) if options.resume_handle else None
+        if saved:
+            for name, value in saved[1].items():
+                setattr(self, name, value)
 
     @property
     def renewal_ready(self):
-        return not (self.input_pending or self.output_pending or self.turn_busy or self.held_context)
+        return not (self.input_pending or self.output_pending or self.turn_busy or self.calls or self.held_context)
 
     def queue_events(self, *events):
         self.pending.extend(events)
@@ -154,25 +233,27 @@ class GeminiSession(JsonSession):
     async def open(self):
         await self.connect_wire()
         await self.write(self.events[0])
-        while 'setupComplete' not in await self.read():
-            pass
+        handshake = []
+        while True:
+            event = await self.read()
+            handshake.extend(await self.convert(event))
+            if 'setupComplete' in event:
+                break
         for event in self.events[1:]:
             await self.write(event)
-        self.renew_at = time.monotonic() + RENEW_AFTER_SECONDS
-        self.queue_events(LiveEvent('ready', {'input_rate': 16000, 'output_rate': 24000, 'vision': True}))
+        self.resume_requested = False
+        self.queue_events(LiveEvent('ready', {'input_rate': 16000, 'output_rate': 24000, 'vision': True}), *handshake)
 
     async def receive(self):
         if self.pending:
             return self.take_pending()
-        # Retain exactly one receive through timer expiry; do not cancel a socket
+        # Retain exactly one receive through local wakeups; do not cancel a socket
         # read that may already have taken a final usage/caption event.
         if self.read_task is None:
             self.read_task = asyncio.create_task(self.read())
-        timeout = None if self.renewed else max(0, self.renew_at - time.monotonic())
         wake = asyncio.create_task(self.pending_event.wait())
         try:
-            done, _ = await asyncio.wait([self.read_task, wake], timeout=timeout,
-                                         return_when=asyncio.FIRST_COMPLETED)
+            await asyncio.wait([self.read_task, wake], return_when=asyncio.FIRST_COMPLETED)
         finally:
             wake.cancel()
             await asyncio.gather(wake, return_exceptions=True)
@@ -180,24 +261,66 @@ class GeminiSession(JsonSession):
             # Leave the one socket read owned, including when it is already
             # complete. The next receive consumes it without dropping a frame.
             return self.take_pending()
-        if not done:
-            self.renewed = True
-            # Recovered SessionRenewal.due: an idle connection has no new
-            # transcript to carry. Reopening it would only replay and rebill
-            # the same selected input. The first completed turn can renew it.
-            if self.completed_turns:
-                self.renewal_announced = True
-                return [LiveEvent('renew', {'within_s': 30})]
-            return []
-        event, self.read_task = self.read_task.result(), None
+        reading, self.read_task = self.read_task, None
+        try:
+            event = reading.result()
+        except (OSError, ConnectionClosed):
+            self.resume_requested = bool(self.resume_handle)
+            result = []
+            if self.response and not self.response_complete and not self.resume_requested:
+                result.append(LiveEvent('response_done', {'response_id': self.response,
+                    'usage': normalize_usage(self.usage), 'raw_usage': dict(self.usage),
+                    'status': 'incomplete', 'continues': False}))
+                self.response_complete = True
+            return [*result, LiveEvent('closed', {'reason': 'transport_lost', 'resumable': self.resume_requested})]
         return await self.convert(event)
+
+    def retention_renewal(self, usage):
+        """Port #1964's held-audio/drop rule; the host owns total-window growth."""
+        audio = usage.get('audio_input_tokens')
+        if audio is None:
+            return []
+        model = self.selected.model.removeprefix('models/')
+        span = HELD_AUDIO_SPANS.get(model, HELD_AUDIO_TOKENS)
+        dropped = self.held_audio > audio
+        if dropped:
+            span = HELD_AUDIO_SPANS[model] = min(span, self.held_audio)
+        else:
+            self.audio_growth = max(self.audio_growth, audio - self.held_audio)
+        self.held_audio = audio
+        if not self.renewal_announced and (dropped or audio and audio + self.audio_growth >= span):
+            self.renewal_announced = True
+            return [LiveEvent('renew', {'within_s': 30, 'reason': 'audio_drop' if dropped else 'audio_span',
+                                        'resume': False})]
+        return []
 
     async def convert(self, event):
         result = []
         content = event.get('serverContent', {})
-        calls = event.get('toolCall', {}).get('functionCalls', [])
-        if 'usageMetadata' in event:
-            self.usage = dict(event['usageMetadata'])
+        calls = []
+        for call in event.get('toolCall', {}).get('functionCalls', []):
+            cid, identity = call['id'], canonical_json(call)
+            if cid in self.seen_calls:
+                if self.seen_calls[cid] != identity:
+                    raise RealtimeSetupError('tool_identity', 'Gemini changed an existing function call')
+                if cid in self.tool_results:
+                    await self.write({'toolResponse': {'functionResponses': [self.tool_results[cid]]}})
+            else:
+                self.seen_calls[cid] = identity
+                calls.append(call)
+        native_response = event.get('responseId', '')
+        replayed_response = native_response and native_response in self.completed_responses
+        if replayed_response:
+            content = {}
+        if event.get('voiceActivity', {}).get('type') == 'ACTIVITY_START':
+            if not self.input_pending:
+                result.append(LiveEvent('input_started'))
+            self.input_pending = True
+            self.input_final = self.input_boundary = False
+        elif event.get('voiceActivity', {}).get('type') == 'ACTIVITY_END':
+            self.input_boundary = True
+        if 'usageMetadata' in event and not replayed_response:
+            self.usage.update(event['usageMetadata'])
         new_output = bool(content.get('modelTurn') or calls)
         if new_output or content.get('outputTranscription'):
             if not self.response or (new_output and self.response_complete):
@@ -206,6 +329,7 @@ class GeminiSession(JsonSession):
                 if 'ouroboros' in self.text:
                     result.append(self.finish_text('ouroboros'))
                 self.response, self.item = 'local_' + uuid4().hex, 'local_' + uuid4().hex
+                self.native_response = native_response
                 self.response_complete = False
                 self.output_pending = self.output_final = False
                 result.append(LiveEvent('response_started', {'response_id': self.response}))
@@ -222,6 +346,19 @@ class GeminiSession(JsonSession):
         for key, speaker in (('inputTranscription', 'owner'), ('outputTranscription', 'ouroboros')):
             if key in content:
                 part = content[key]
+                # Native offsets identify a replay without treating repeated
+                # words in a later utterance as duplicates. No text-only guess.
+                if 'startOffset' in part or 'endOffset' in part:
+                    identity = (speaker, canonical_json(part))
+                    if identity in self.caption_offsets:
+                        continue
+                    self.caption_offsets.add(identity)
+                if speaker == 'owner' and not self.input_pending:
+                    self.input_pending = True
+                    self.input_final = False
+                    result.append(LiveEvent('input_started'))
+                elif speaker == 'ouroboros':
+                    self.output_pending = True
                 if speaker not in self.text:
                     self.text[speaker] = ['local_' + uuid4().hex if speaker == 'owner' else self.item, '']
                 row = self.text[speaker]
@@ -235,20 +372,23 @@ class GeminiSession(JsonSession):
                         self.output_final = True
                     else:
                         self.input_final = True
-                        if self.input_boundary:
-                            self.input_pending = False
+                        self.input_pending = False
+                        result.append(LiveEvent('input_done'))
         for call in calls:
-            if call['id'] not in self.calls:
-                self.calls[call['id']] = call['name']
-                result.append(LiveEvent('tool_call', {'call_id': call['id'], 'name': call['name'],
-                                                     'arguments': canonical_json(call.get('args', {}))}))
+            cid = call['id']
+            self.calls[cid] = call['name']
+            result.append(LiveEvent('tool_call', {'call_id': cid, 'name': call['name'],
+                                                 'arguments': canonical_json(call.get('args', {}))}))
         if 'toolCallCancellation' in event:
             # Ordinary tools may already have effects; cancellation cannot pretend
             # they never ran. Finish the host job, suppress only its stale wire reply.
             for call_id in event['toolCallCancellation'].get('ids', []):
                 self.calls.pop(call_id, None)
+                self.tool_results.pop(call_id, None)
         if content.get('interrupted'):
-            result.append(LiveEvent('speech_started'))
+            self.interrupted = True
+            if self.options.interruptions:
+                result.append(LiveEvent('speech_started'))
         if content.get('turnComplete'):
             # Generation completion may precede outputTranscription. Keep both
             # the response and audio item identity until that caption arrives.
@@ -257,30 +397,49 @@ class GeminiSession(JsonSession):
                 self.input_final = True
             self.input_boundary = True
             if self.input_final:
+                if self.input_pending:
+                    result.append(LiveEvent('input_done'))
                 self.input_pending = False
+            was_busy = self.turn_busy
             self.turn_busy = content.get('interactionStatus') == 'IN_PROGRESS'
-            usage = {'response_id': self.response, 'raw_usage': dict(self.usage)}
-            for raw, key in [('promptTokenCount', 'prompt_tokens'), ('responseTokenCount', 'completion_tokens'),
-                             ('cachedContentTokenCount', 'cached_tokens')]:
-                if type(self.usage.get(raw)) is int:
-                    usage[key] = self.usage[raw]
-            result.append(LiveEvent('response_done', {'usage': usage, 'continues': self.turn_busy}))
-            self.response_complete = not self.turn_busy
-            self.usage = {}
-            self.completed_turns += 1
-            if self.renewed and not self.renewal_announced:
-                self.renewal_announced = True
-                result.append(LiveEvent('renew', {'within_s': 30}))
+            if self.usage and (not self.response or self.response_complete):
+                self.response = 'local_' + uuid4().hex
+                self.native_response = native_response
+                self.response_complete = False
+                result.append(LiveEvent('response_started', {'response_id': self.response}))
+            if self.response and not self.response_complete:
+                usage = normalize_usage(self.usage)
+                self.last_done = {'response_id': self.response, 'usage': usage,
+                    'raw_usage': dict(self.usage), 'status': 'interrupted' if self.interrupted else 'completed',
+                    'continues': self.turn_busy}
+                result.append(LiveEvent('response_done', self.last_done))
+                result.extend(self.retention_renewal(usage))
+                self.response_complete = True
+                self.usage = {}
+                self.interrupted = False
+            elif was_busy and not self.turn_busy and self.last_done:
+                # Background reasoning can end without new output. Close the
+                # interaction using the same settlement id and unchanged usage;
+                # the host deduplicates settlement independently of continues.
+                self.last_done = {**self.last_done, 'continues': False}
+                result.append(LiveEvent('response_done', self.last_done))
+            if self.response_complete and not self.turn_busy and (native_response or self.native_response):
+                self.completed_responses.add(native_response or self.native_response)
             if not self.turn_busy and self.held_context:
                 held, self.held_context = self.held_context, []
                 for command in held:
                     await self.send(command)
+        if 'sessionResumptionUpdate' in event:
+            update = event['sessionResumptionUpdate']
+            self.resume_handle = update.get('newHandle', '') if update.get('resumable') else ''
+            result.append(LiveEvent('resumable', {'handle': self.resume_handle}))
         if 'goAway' in event:
             raw = event['goAway'].get('timeLeft', '0s')
-            seconds = float(raw.removesuffix('s')) if isinstance(raw, str) else float(raw.get('seconds', 0))
-            self.renewed = True
+            seconds = float(raw.removesuffix('s')) if isinstance(raw, str) else (
+                float(raw.get('seconds', 0)) + float(raw.get('nanos', 0)) / 1e9)
+            self.resume_requested = True
             self.renewal_announced = True
-            result.append(LiveEvent('renew', {'within_s': seconds}))
+            result.append(LiveEvent('renew', {'within_s': seconds, 'reason': 'go_away', 'resume': True}))
         return result
 
     def finish_text(self, speaker):
@@ -300,9 +459,8 @@ class GeminiSession(JsonSession):
         if isinstance(command, Audio):
             if command.rate != 16000 or len(command.pcm) % 2:
                 raise RealtimeSetupError('audio_format', 'Gemini expects PCM16 mono at 16000 Hz')
-            if not self.input_pending:
-                self.input_final = self.input_boundary = False
-            self.input_pending = True
+            # Continuous PCM includes silence. Only native VAD/transcription
+            # can open an input boundary; sending a frame says nothing about it.
             await self.write({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
                 'data': base64.b64encode(command.pcm).decode()}}})
         elif isinstance(command, Video):
@@ -317,24 +475,34 @@ class GeminiSession(JsonSession):
                     cid = message['tool_call_id']
                     name = self.calls.pop(cid, None)
                     if name:
-                        responses.append({'id': cid, 'name': name, 'response': {'output': message['content']}})
+                        response = {'id': cid, 'name': name, 'response': {'output': message['content']}}
+                        # Extended thinking rejects scheduling (docs and 2026-10-18 probe).
+                        if 'thinkingConfig' not in self.events[0]['setup']['generationConfig']:
+                            response['scheduling'] = 'SILENT' if cid in command.silent else 'WHEN_IDLE'
+                        self.tool_results[cid] = response
+                        responses.append(response)
                 elif not message.get('tool_calls'):
                     other.append(message)
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
             if other:
                 await self.send(ContextUpdate(tuple(other)))
-            if command.tools != self.tools:
-                self.renewed = True
-                self.renewal_announced = True
-                self.queue_events(LiveEvent('renew', {'within_s': 30}))
-        elif isinstance(command, ContextUpdate):
+            tools = unique_tools(command.tools)
+            if tools != self.tools:
+                self.tools = tools
+                if not self.renewal_announced:
+                    self.renewal_announced = True
+                    self.queue_events(LiveEvent('renew', {'within_s': 30, 'reason': 'tools', 'resume': False}))
+        elif isinstance(command, (ContextUpdate, Respond)):
             if self.turn_busy:
                 self.held_context.append(command)
             else:
                 self.turn_busy = True
+                text = ('[Host fact; not owner words]\n' + command.fact if isinstance(command, Respond) else
+                        'Host context update; preserve each original role and trust boundary:\n' +
+                        canonical_json(command.messages))
                 await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{
-                    'text': 'Host context update; preserve each original role and trust boundary:\n' + canonical_json(command.messages)}]}],
+                    'text': text}]}],
                     'turnComplete': True}})
         else:
             raise RealtimeSetupError('command', 'unsupported Gemini live command')
@@ -347,6 +515,11 @@ class GeminiSession(JsonSession):
             except (Exception, asyncio.CancelledError):
                 pass
             self.read_task = None
+        if self.resume_requested and self.resume_handle:
+            RESUMPTIONS[(self.selected.model, self.resume_handle)] = (
+                time.monotonic() + 2 * 60 * 60,
+                copy.deepcopy({name: getattr(self, name) for name in RESUME_FIELDS}))
+            self.resume_requested = False
         await super().close()
 
 

@@ -62,11 +62,10 @@ def test_openai_changed_live_context_ack_refuses_response(packages):
     assert not any(e.get("type") == "response.create" for e in wire.sent)
 
 
-def test_gemini_idle_timer_does_not_rebill_same_input(packages, monkeypatch):
+def test_gemini_idle_connection_does_not_rebill_same_input(packages):
     from ouroboros.contracts.live_conversation import LiveOptions
     from ouroboros.extension_import_staging import _module_key
     module = importlib.import_module(_module_key("gemini_live"))
-    monkeypatch.setattr(module, "RENEW_AFTER_SECONDS", 0)
     wire = VoiceWire("gemini", None)
     session = module.GeminiSession(selected(), LiveOptions(), connect=wire.connect, observe=lambda *_: None)
 
@@ -74,13 +73,18 @@ def test_gemini_idle_timer_does_not_rebill_same_input(packages, monkeypatch):
         try:
             await session.open()
             assert (await session.receive())[0].kind == "ready"
-            assert await session.receive() == []  # timer alone authorizes no connection
+            receiving = asyncio.create_task(session.receive())
+            await asyncio.sleep(.02)
+            assert not receiving.done()  # No clock-only renewal, even with a live socket read.
             events = await session.convert({"serverContent": {"turnComplete": True},
-                                           "usageMetadata": {"promptTokenCount": 10}})
-            assert [e.kind for e in events] == ["response_done", "renew"]
+                "usageMetadata": {"promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 1300}]}})
+            assert [e.kind for e in events] == ["response_started", "response_done", "renew"]
             assert not any(e.kind == "renew" for e in await session.convert(
                 {"serverContent": {"turnComplete": True}}))
         finally:
+            if 'receiving' in locals():
+                receiving.cancel()
+                await asyncio.gather(receiving, return_exceptions=True)
             await session.close()
     asyncio.run(scenario())
     assert wire.closed and len(wire.sent) == 1
@@ -125,6 +129,7 @@ def test_gemini_expiry_with_untranscribed_audio_is_an_explicit_failure(packages)
             assert host.hub.receive_audio("owner", cp.AudioFrame(
                 cp.FRAME_AUDIO_IN, host.hub.epoch, 0, 24000, 0, b"\x01\x00" * 960))
             await until(lambda: any("realtimeInput" in row for row in wire.sent))
+            wire.put({"voiceActivity": {"type": "ACTIVITY_START"}})
             wire.put({"goAway": {"timeLeft": "0.05s"}})
             with pytest.raises(RealtimeSetupError, match="renewal_pending_work"):
                 await asyncio.wait_for(running, 1)
