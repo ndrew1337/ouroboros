@@ -335,7 +335,7 @@ class ConversationHost:
         return dict(engine=self.turn.route.accounting_provider, model=self.turn.model,
                     call_id=self.turn.spec.call_id, response_key=f"{self.connection_number}:{response_id}",
                     task_id=self.ctx.task_id, rendered_mode=self.plan.initial_mode, drive_root=self.ctx.drive_root,
-                    quote=self.quote)
+                    quote=self.quote, physical_context=self._physical_context)
 
     def response_started(self, response_id):
         from ouroboros.live_usage import reserve_live_response, record_refused_live_response
@@ -344,12 +344,10 @@ class ConversationHost:
         if key in self.responses or key in self.completed:
             return
         try:
-            self.responses[key] = reserve_live_response(**self._response_args(response_id),
-                                                       physical_context=self._physical_context)
+            self.responses[key] = reserve_live_response(**self._response_args(response_id))
         except BudgetExceeded as exc:
-            record_refused_live_response(**self._response_args(response_id), reason="budget_exhausted",
-                                        usage={}, raw_usage={}, status="interrupted")
-            self.completed.add(key)
+            self.responses[key] = record_refused_live_response(**self._response_args(response_id), reason="budget_exhausted",
+                usage={}, raw_usage={}, status="interrupted", pending=True)
             raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
 
     def response_done(self, response_id, *, usage, raw_usage, status):

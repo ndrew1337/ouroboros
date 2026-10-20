@@ -272,22 +272,24 @@ def settle_live_response(attempt: LiveAttempt, *, usage: Mapping, raw_usage: Map
 
 def record_refused_live_response(*, engine: str, model: str, call_id: str, response_key: str, task_id: str,
                                  rendered_mode: str, drive_root, reason: str, usage: Mapping, raw_usage: Mapping,
-                                 status: str, quote=None) -> None:
+                                 status: str, quote=None, physical_context=None, pending=False) -> LiveAttempt:
     """A response the budget refused after the provider started it: the charge stays on the ledger.
 
     Admission cannot veto past provider spend (``record_received_attempt``). With a
     reported receipt the row is priced like any settlement; without one (refused at
     the start event) it carries no counts, unknown cost, and names the refusal.
     """
-    context = accounting.current_physical_attempt_context()
+    quote = copy.deepcopy(quote)
+    context = physical_context or accounting.current_physical_attempt_context()
     if context is not None:
         context = replace(context, rendered_mode=rendered_mode)
     evidence = {"call_id": call_id, "response_key": response_key, "rendered_mode": rendered_mode,
                 "tariff_quote": quote, "budget_refusal": reason}
     normalized, cost = _settlement(quote, evidence, usage, raw_usage, status)
-    accounting.record_received_attempt(accounting.AttemptRequest(
+    reservation = accounting.record_received_attempt(accounting.AttemptRequest(
         model=model, provider=engine, task_id=task_id, drive_root=drive_root, source="live_response_refused",
-        physical_context=context, cost_evidence=evidence), normalized, cost_usd=cost)
+        physical_context=context, cost_evidence=evidence), normalized, cost_usd=cost, pending=pending)
+    return LiveAttempt(reservation, quote, evidence)
 
 
 def abandon_live_response(attempt: LiveAttempt, *, reason: str) -> None:

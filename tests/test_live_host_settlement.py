@@ -33,8 +33,10 @@ def test_response_dedup_pinned_quote_and_shared_limit(host_world):
         with pytest.raises(RealtimeSetupError, match='budget_exhausted'):
             host.response_started('next')
         host.response_started('next')  # duplicate notification creates no second refusal row
+        for _ in range(2):
+            host.response_done('next', usage=token_usage(text_input_tokens=1), raw_usage={}, status='interrupted')
     rows = ua.read_usage_records(host.ctx.drive_root)
-    assert len(rows) == 2 and rows[-1]['cost_usd'] is None
+    assert len(rows) == 2 and sum(row['cost_usd'] for row in rows) == pytest.approx(100.012)
 
 
 def test_connected_watermarks_idle_tail_and_unknown_tariff_survive_close_error(host_world, monkeypatch):

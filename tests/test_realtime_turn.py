@@ -59,4 +59,3 @@ def test_o200k_limits_require_the_declared_counter(monkeypatch):
         input_counter(RouteFacts(conversation_window_tokens=90000, basis='o200k'))
     assert input_counter(RouteFacts(basis='o200k')) is None
     assert input_counter(RouteFacts(conversation_window_tokens=90000, basis='provider')) is None
-

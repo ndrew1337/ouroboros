@@ -1270,12 +1270,11 @@ def _settlement_fields(reservation, usage, cost_usd, cost_final) -> Dict[str, An
                              estimate_cost_optional=estimate_cost_optional)
 
 
-def record_received_attempt(request: AttemptRequest, usage: Dict[str, Any], *, cost_usd=None) -> str:
+def record_received_attempt(request: AttemptRequest, usage: Dict[str, Any], *, cost_usd=None, pending=False) -> AttemptReservation:
     """Record an already billed receipt; admission cannot veto past provider spend.
 
-    Transcription has no start event. Its receipt still traverses the same row
-    states and reducer, without rechecking permission to send something already
-    received. Subsequent reservations see this charge under the ordinary scope.
+    Already-started work can remain dispatched until its final usage arrives.
+    Receipts traverse the ordinary reducer without authorizing another send.
     """
     request, scope = _merge_scope(request)
     root = _drive_root(scope.drive_root)
@@ -1284,17 +1283,17 @@ def record_received_attempt(request: AttemptRequest, usage: Dict[str, Any], *, c
     row = {key: value for key, value in asdict(scope).items() if key != "drive_root"}
     row.update(kind="attempt", attempt_id=reservation.attempt_id, model=request.model, provider=request.provider,
                reservation_upper_bound_usd=None, pricing_known=False, reservation_basis="receipt_already_received",
-               candidate_measurement_kind="opaque",
+               candidate_measurement_kind="opaque", cost_evidence=copy.deepcopy(request.cost_evidence or {}),
                physical_context=asdict(request.physical_context) if request.physical_context else None)
     with _locked(root) as view:
         current = None
-        for state in ("reserved", "dispatched", "settled"):
+        for state in (("reserved", "dispatched") if pending else ("reserved", "dispatched", "settled")):
             row = {**row, "state": state, **(fields if state == "settled" else {})}
             current = view.write(row, current)
     collector = _ATTEMPT_COLLECTOR.get()
     if collector is not None:
         collector.append(reservation.attempt_id)
-    return reservation.attempt_id
+    return reservation
 
 
 def _observe_token_density(request: AttemptRequest, usage: Optional[Dict[str, Any]]) -> None:
