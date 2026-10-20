@@ -915,7 +915,6 @@ class SkillDeleteResponse(TypedDict, total=False):
     content_hash: str
     deleted_payload_root: str
     deleted_state: bool
-    state_delete_pending: bool
     extension_action: str
     extension_reason: str
     error: str

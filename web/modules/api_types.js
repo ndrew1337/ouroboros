@@ -1447,7 +1447,6 @@
  * @property {string=} content_hash
  * @property {string=} deleted_payload_root
  * @property {boolean=} deleted_state
- * @property {boolean=} state_delete_pending
  * @property {string=} extension_action
  * @property {string=} extension_reason
  * @property {string=} error

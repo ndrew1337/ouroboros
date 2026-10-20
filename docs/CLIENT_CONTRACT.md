@@ -249,7 +249,6 @@ answer through §7.
   - `task_named` gives a card its title; history rows carry `suggested_name`.
   - `projects_changed`, `extension_lifecycle`, `update_status_ready`, `update_progress_changed`, `ui_language_changed` and `ui_i18n_updated` mean "read the named state again".
   - `typing` (transient) and `heartbeat`.
-  - `realtime_prepared`, `realtime_authorized`, `realtime_refused` and `realtime_finished` belong to the internal realtime setup entry below.
 
 Some `chat` frames are transient notices history never shows, for example `system_type: "initialization_notice"` (a message could not be accepted yet) and a repair/admission receipt with `task_id_pending: true` (no proof a durable task is readable yet).
 
@@ -554,7 +553,7 @@ Files produced by tasks are covered in §6.
 - **Grant keys or permissions:** `POST /api/skills/{skill}/grants` (`SkillGrantRequest`). Only current manifest requests can be granted; a repeat merges. Optional `enable_after_grant: true` carries an explicit Enable through the same job, even after a pending response. Omission grants only, preserving an existing install-time turn-on request. Terminal `setup_error` means grants succeeded but setup did not; `enabled` reports explicit Enable's result.
 - **Review:** `POST /api/skills/{skill}/review` answers 200 with the review's outcome (`SkillReviewResponse`). A review already running for the same revision answers `status: "pending"` with its `job_id`. `GET /api/skills/{skill}/review-history/{job_id}` renders a finished review.
 - **Attest a review:** `POST /api/owner/skills/{skill}/attest-review` records the owner's verdict: 200 with `ok: true` (possibly pending above), otherwise 409.
-- **Delete:** `POST /api/skills/{skill}/delete` removes an external or self-authored payload and requests unload; a repeat answers 404. `deleted_state` confirms immediate state removal. `state_delete_pending: true` means a closing provider still owns its imports: state cleanup waits for their release and spares a reinstalled payload. A process exit or cleanup failure can leave that state retained; the response is not proof of later cleanup.
+- **Delete:** `POST /api/skills/{skill}/delete` unloads an external or self-authored skill and removes its payload and state; a repeat answers 404. `deleted_state` confirms state removal.
 - **Presence runtime:** `POST /api/owner/skills/{skill}/presence-runtime` changes a presence profile's runtime choice, compare-and-set on `expected_state_fingerprint`.
 - **Publication check:** `POST /api/skills/{skill}/publish-preflight` is read-only; every status answers the same shape, and `state: "hard_block"` is a refusal. An optional body `{destination: {source_id, mode}}` (`SkillPublishPreflightRequest`; mode `origin`, `entry` or `new_entry`) picks where it would go; the answer's `repository` is that destination (default: where the skill came from, else the hub). Missing publication prerequisites may answer `409` before the skill is looked up; read `reason_code`, not an assumed `404` for an unknown name.
 - **Reconcile:** `POST /api/skills/{skill}/reconcile` brings one extension's live state in line with its saved state.

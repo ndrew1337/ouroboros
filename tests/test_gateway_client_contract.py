@@ -69,6 +69,8 @@ def test_contract_exposes_calls_without_diagnostic_probe_frames():
                "realtime_refused", "realtime_finished"}
     assert not retired.intersection(endpoint_index.WS_SHAPES)
     assert "execution_transport" not in typing.get_type_hints(ChatInbound)
+    document = (REPO / "docs" / "CLIENT_CONTRACT.md").read_text(encoding="utf-8")
+    assert not any(frame in document for frame in retired)
     assert "POST /api/call/open" in endpoint_index.HTTP_SHAPES
     assert "conversation_finished" in endpoint_index.WS_SHAPES
     assert not validate_ingress({"type": "chat", "content": "Hello"}, ChatInbound)
