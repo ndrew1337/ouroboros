@@ -707,7 +707,8 @@ def test_an_actual_refusal_narrows_memory_even_when_the_estimate_fits(tmp_path, 
     assert built.projection("max").memory_facts["floor"]["steps"] == {}
     assert _coarsen_memory_view(ctx, fit) is True  # still a strict narrowing: at least one element
     first = ctx.context_fit_plan.projection("max")
-    assert first.memory_facts["floor"]["steps"] and first.estimated_tokens < built.projection("max").estimated_tokens
+    assert first.memory_facts["host_sections_addressed"] and first.memory_facts["floor"]["steps"] == {}
+    assert first.estimated_tokens < built.projection("max").estimated_tokens
     assert ctx.messages[0] == first.system_message() and ctx.tools._ctx.context_fit_plan is ctx.context_fit_plan
     assert [e["checkpoint_kind"] for e in events] == ["context_memory_coarsened"]
     # A measured deficit is saved in full, from the level the refused view showed: nothing it addressed comes back.
