@@ -4,13 +4,12 @@ The obligations stay globally visible (a preserved-and-invisible result is how
 work rots on disk), but only the OWNER task receives each run's line with its
 call-shaped instruction: ``integrate_delegated_patch`` refuses a non-owner with
 ``run_not_owned`` while the owner task is LIVE, and the read acknowledgement
-only credits the owner. Another task's runs fold into ONE line per owner task
-(owner decision Q3=A, 18.10.2026: 223 such lines, ~110k characters, filled one
-task's Health section), with the run ids and a run's exact reader, after the
-authority rule (once the owner is terminal, reject from any root, apply from
-the recorded target) stated once for all of them.
+only credits the owner. All foreign runs share one line with the authority rule
+and a pointer to the exact owner/run list in the existing source store.
 """
 
+import json
+import re
 import types
 
 import ouroboros.context_health as context_health
@@ -43,35 +42,33 @@ def _foreign_runs(monkeypatch):
         custody, "undisposed_patches", lambda root, state=None: [patch])
 
 
-_RULE = "Only the owner reads and acknowledges its results and decides its patches while it lives"
+def _foreign_source(root, text):
+    from ouroboros.tools.query_data import _query_data
+    from ouroboros.tools.registry import ToolContext
+
+    pointer = re.search("query_data\\(op='blob', sha256='([a-f0-9]{64})'\\)", text)
+    assert pointer
+    reply = json.loads(_query_data(ToolContext(repo_dir=root, drive_root=root, task_id="reader"),
+                                  op="blob", sha256=pointer.group(1)))
+    assert reply["status"] == "ok"
+    return reply["data"]
 
 
-def _rule_line(text):
-    """The authority rule all other-task lines share: ONE line, naming no owner of its own."""
-    lines = [line for line in text.splitlines() if _RULE in line]
-    assert len(lines) == 1 and "owner task " not in lines[0], lines
-    return lines[0]
-
-
-def test_non_owner_sees_one_line_per_owner_task_and_no_call_shaped_instruction(tmp_path, monkeypatch):
+def test_foreign_obligations_share_one_line_with_a_readable_exact_list(tmp_path, monkeypatch):
     _foreign_runs(monkeypatch)
     text = context_health.build_health_invariants(_env(tmp_path), task_id="task-other")
-    rows = [line for line in text.splitlines() if "task-owner" in line]
-    assert len(rows) == 1 and "ANOTHER TASK'S DELEGATED WORK — owner task task-owner" in rows[0]
-    assert "results not read to EOF: run-u" in rows[0] and "patches awaiting apply/reject: run-p" in rows[0]
+    rows = [line for line in text.splitlines() if "DELEGATED WORK" in line]
+    assert len(rows) == 1 and "WARNING:" in rows[0]
+    assert _foreign_source(tmp_path, rows[0]) == {
+        "task-owner": {"unread": ["run-u"], "patches": ["run-p"], "yours": []}}
     assert "DELEGATED RESULT NEVER READ" not in text and "DELEGATED PATCH AWAITS DISPOSITION" not in text
-    # The obligation is visible with its rule and reader; the DIRECTLY CALLABLE shape is not.
     assert "integrate_delegated_patch(run_id='run-p'" not in text
-    rule = _rule_line(text)  # stated once, before the owner's line
-    assert text.index(rule) < text.index(rows[0]) and _RULE not in rows[0]
-    assert "once it is terminal, a live top-level task may reject them from any root" in rule
-    assert "apply them from the recorded target" in rule and "disposition row records who acted" in rule
-    assert "query_data(op='json', kind='task_result', ids=['task-owner'])" in rows[0]  # readable from any task
-    assert "or a fresh payload binding" in rule
+    assert "after it ends, a live top-level task may reject from any root" in rows[0]
+    assert "apply from the recorded target or a fresh payload binding" in rows[0]
     assert "read_file" not in text
 
 
-def test_each_owner_task_gets_one_line_and_own_runs_keep_theirs(tmp_path, monkeypatch):
+def test_hundreds_of_foreign_owners_still_get_one_line_and_own_runs_stay_full(tmp_path, monkeypatch):
     import ouroboros.delegate_custody as custody
     from ouroboros.delegate_custody import RunCustody
 
@@ -80,15 +77,15 @@ def test_each_owner_task_gets_one_line_and_own_runs_keep_theirs(tmp_path, monkey
         run.output_artifact = f"delegated/{run_id}.out"
         return run
 
-    runs = [unread(f"run-a{i}", "task-a") for i in range(12)] + [unread("run-b0", "task-b"), unread("run-own", "me")]
+    runs = [unread(f"run-a{i}", f"task-{i}") for i in range(300)] + [unread("run-own", "me")]
     monkeypatch.setattr(custody, "settled_unread_outputs", lambda root, state=None: runs)
     monkeypatch.setattr(custody, "undisposed_patches", lambda root, state=None: [])
     text = context_health.build_health_invariants(_env(tmp_path), task_id="me")
-    folded = [line for line in text.splitlines() if "ANOTHER TASK'S DELEGATED WORK — owner task " in line]
-    assert [line.split("owner task ")[1].split(":")[0] for line in folded] == ["task-a", "task-b"]
-    assert all(f"run-a{i}" in folded[0] for i in range(12))
+    folded = [line for line in text.splitlines() if "DELEGATED WORK" in line]
+    assert len(folded) == 1 and len(folded[0]) < 700 and "INFO:" in folded[0]
+    source = _foreign_source(tmp_path, folded[0])
+    assert len(source) == 300 and all(source[f"task-{i}"]["unread"] == [f"run-a{i}"] for i in range(300))
     assert "DELEGATED RESULT NEVER READ — run run-own" in text and "run-own" not in "".join(folded)
-    assert _rule_line(text) and not any(_RULE in line for line in folded)  # two owners, one rule
 
 
 def test_architecture_states_the_terminal_owner_apply_reject_authority_split():
@@ -164,18 +161,15 @@ def _foreign_patch_targeting(monkeypatch, target_root):
 
 def _patch_row(text):
     return next(line for line in text.splitlines()
-                if "ANOTHER TASK'S DELEGATED WORK" in line and "patches awaiting apply/reject" in line)
+                if "OTHER TASKS' DELEGATED WORK" in line)
 
 
-def test_reader_whose_active_root_is_the_target_gets_the_concrete_call(tmp_path, monkeypatch):
+def test_reader_whose_active_root_is_the_target_keeps_that_fact_in_the_source(tmp_path, monkeypatch):
     target = tmp_path / "target"
     _foreign_patch_targeting(monkeypatch, target)
     text = context_health.build_health_invariants(
         _env(tmp_path), task_id="task-other", active_root=str(target))
-    # The static rule still leads; the call FOLLOWS it.
-    assert (text.index("apply them from the recorded target")
-            < text.index("Your active root matches the target of run-p"))
-    assert "integrate_delegated_patch(run_id='run-p', decision='apply'|'reject')" in text
+    assert _foreign_source(tmp_path, text)["task-owner"]["yours"] == ["run-p"]
 
 
 def test_reader_whose_active_root_contains_a_host_minted_target_gets_the_call(tmp_path, monkeypatch):
@@ -189,7 +183,7 @@ def test_reader_whose_active_root_contains_a_host_minted_target_gets_the_call(tm
     _foreign_patch_targeting(monkeypatch, target)
     text = context_health.build_health_invariants(
         _env(tmp_path), task_id="task-other", active_root=str(parent))
-    assert "integrate_delegated_patch(run_id='run-p', decision='apply'|'reject')" in text
+    assert _foreign_source(tmp_path, text)["task-owner"]["yours"] == ["run-p"]
 
 
 def test_an_unrelated_active_root_keeps_the_static_row_byte_for_byte(tmp_path, monkeypatch):
@@ -203,92 +197,10 @@ def test_an_unrelated_active_root_keeps_the_static_row_byte_for_byte(tmp_path, m
     assert "integrate_delegated_patch(run_id='run-p'" not in unrelated
 
 
-# --- 20.10.2026: the rule once per block, each owner's facts on its own line ---
-#
-# Every other-task line repeated the same authority rule: 258 owners, 76k of one
-# Health section's 128k characters. The rule now leads those lines once; each owner's
-# line keeps its severity, owner, run ids by kind, reader and, where it applies, the call.
-
-
-def test_the_rule_is_stated_once_for_one_owner_and_for_eighteen(tmp_path, monkeypatch):
-    import ouroboros.delegate_custody as custody
-
-    def health(owners):
-        runs = [RunCustody(run_id=f"run-{owner}", task_id=owner) for owner in owners]
-        for run in runs:
-            run.output_artifact = f"delegated/{run.run_id}.out"
-        monkeypatch.setattr(custody, "settled_unread_outputs", lambda root, state=None: runs)
-        monkeypatch.setattr(custody, "undisposed_patches", lambda root, state=None: [])
-        text = context_health.build_health_invariants(_env(tmp_path), task_id="me")
-        rule = _rule_line(text)
-        rows = [line for line in text.splitlines() if "ANOTHER TASK'S DELEGATED WORK — owner task " in line]
-        assert len(rows) == len(owners) and not any(_RULE in row for row in rows)
-        assert text.splitlines().index(rule) + 1 == text.splitlines().index(rows[0])
-        return rows
-
-    many = health([f"task-{i}" for i in range(18)])
-    # A row carries only its own owner's facts: byte-identical among eighteen owners and alone.
-    assert health(["task-0"]) == many[:1]
-    assert many[17] == ("- INFO: ANOTHER TASK'S DELEGATED WORK — owner task task-17: results not read to EOF: "
-                        "run-task-17. The owner's record: query_data(op='json', kind='task_result', ids=['task-17']).")
-
-
-def _put_custody(root, rows):
-    """Custody rows exactly as the reducer stores them: ``put_custody`` and its hold column."""
-    from ouroboros import delegate_custody_current as current
-    from ouroboros import store
-
-    with store.open_store(root, write=True) as txn:
-        for run_id, facts in rows:
-            facts = {"run_id": run_id, **facts}
-            hold = current.HELD if current._held(current._decode(facts)) else current.CLOSED
-            txn.put_custody(run_id, facts, state=hold)
-
-
-def test_a_real_ledger_keeps_every_fact_of_every_owner_under_one_rule(tmp_path):
-    """The reader's own, another task's, terminal, capture-gap and active-target runs, read from custody."""
-    target = tmp_path / "target"
-    target.mkdir()
-    settled = {"settled": True, "terminal_state": "failed", "settled_at": "2026-10-20T00:00:00Z"}
-    unread = {**settled, "output_complete": True}
-    _put_custody(tmp_path, [
-        ("run-me-u", {"task_id": "me", **unread, "output_artifact": "me.out"}),
-        ("run-me-p", {"task_id": "me", **settled, "snapshot_id": "s1", "target_root": "/tmp/t-me",
-                      "patch_captured": True}),
-        ("run-me-gap", {"task_id": "me", **settled, "snapshot_id": "s2", "target_root": "/tmp/t-gap"}),
-        ("run-me-end", {"task_id": "me", **settled, "engine_locator": {"run_dir": "/engine/runs/me"}}),
-        ("run-a1", {"task_id": "task-a", **unread, "output_artifact": "a1.out"}),
-        ("run-a2", {"task_id": "task-a", **unread, "output_artifact": "a2.out"}),
-        ("run-a-p", {"task_id": "task-a", **settled, "snapshot_id": "s3", "target_root": str(target),
-                     "patch_captured": True}),
-        ("run-b-gap", {"task_id": "task-b", **settled, "snapshot_id": "s4", "target_root": "/tmp/elsewhere"}),
-        ("run-c1", {"task_id": "task-c", **unread, "output_artifact": "c1.out"}),
-    ])
-    text = context_health.build_health_invariants(_env(tmp_path), task_id="me", active_root=str(target),
-                                                  attempt_key="1")
-    lines = text.splitlines()
-    rule = _rule_line(text)
-    rows = {line.split("owner task ")[1].split(":")[0]: line for line in lines
-            if "ANOTHER TASK'S DELEGATED WORK — owner task " in line}
-    assert lines.index(rule) + 1 == min(lines.index(row) for row in rows.values())
-    reader = "The owner's record: query_data(op='json', kind='task_result', ids=['{}'])."
-    assert rows == {
-        "task-a": ("- WARNING: ANOTHER TASK'S DELEGATED WORK — owner task task-a: results not read to EOF: run-a1, "
-                   "run-a2; patches awaiting apply/reject: run-a-p. " + reader.format("task-a")
-                   + " Your active root matches the target of run-a-p: once the owner is terminal, "
-                   "integrate_delegated_patch(run_id='run-a-p', decision='apply'|'reject')."),
-        "task-b": ("- WARNING: ANOTHER TASK'S DELEGATED WORK — owner task task-b: patches awaiting apply/reject: "
-                   "run-b-gap. " + reader.format("task-b")),
-        "task-c": ("- INFO: ANOTHER TASK'S DELEGATED WORK — owner task task-c: results not read to EOF: run-c1. "
-                   + reader.format("task-c")),
-    }
-    own = [line for line in lines if "owner task me" in line or "run run-me-end" in line]
-    assert [line.split(" — run ")[1].split()[0] for line in own] == [
-        "run-me-u", "run-me-end", "run-me-gap", "run-me-p"]
-    assert "settled with its work preserved in its private snapshot of /tmp/t-gap (no patch captured yet" in text
-    assert "integrate_delegated_patch(run_id='run-me-p', decision='apply'|'reject')" in text and "read_file" in text
-    assert not any(_RULE in line for line in own)
-    # Nothing is another task's for an unattributed reader: every run keeps its own line, and no rule.
-    unattributed = context_health.build_health_invariants(_env(tmp_path), active_root=str(target), attempt_key="1")
-    assert _RULE not in unattributed and "ANOTHER TASK'S DELEGATED WORK" not in unattributed
-    assert "DELEGATED PATCH AWAITS DISPOSITION — run run-a-p" in unattributed
+def test_failed_foreign_list_retention_discloses_the_gap_and_keeps_the_list(tmp_path, monkeypatch):
+    from ouroboros import observability
+    _foreign_runs(monkeypatch)
+    monkeypatch.setattr(observability, "write_blob", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    text = context_health.build_health_invariants(_env(tmp_path), task_id="task-other")
+    assert "retention unavailable; exact list:" in text
+    assert '"task-owner"' in text and '"run-u"' in text and '"run-p"' in text

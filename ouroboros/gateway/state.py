@@ -267,6 +267,9 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
         project_chat_ids = sorted(reserved_project_chat_ids(request_drive_root(request)))
     except Exception:
         project_chat_ids = []
+    from ouroboros.gateway.ui_preferences import main_room_revision
+
+    main_visible_revision = main_room_revision(request_drive_root(request))
     return {
         "st": st,
         # Resolved here so the checkout file reads stay on the snapshot thread.
@@ -288,6 +291,7 @@ def _state_snapshot(request: Request) -> Dict[str, Any]:
         "github_token_configured": bool(github_token_from_env_or_settings()),
         "projects": projects,
         "project_chat_ids": project_chat_ids,
+        "main_visible_revision": main_visible_revision,
         "task_bindings": task_bindings,
         "active_direct_turns": direct_turns,
         "active_chat_activities": activities,
@@ -357,7 +361,7 @@ def _task_activity_facts(drive_root: Any, task_id: str) -> dict:
         return {}
     memo = _FINALIZING_MEMO.get(memo_id)
     if memo is not None and memo[0] == key:
-        return memo[1]
+        return _with_card(memo[1], hot)
     try:
         data, key = read_document(drive_root, task_id, signed=True)
         if not isinstance(data, dict):
@@ -408,7 +412,15 @@ def _task_activity_facts(drive_root: Any, task_id: str) -> dict:
     if len(_FINALIZING_MEMO) >= _FINALIZING_MEMO_MAX:
         _FINALIZING_MEMO.clear()
     _FINALIZING_MEMO[memo_id] = (key, facts)
-    return facts
+    return _with_card(facts, hot)
+
+
+def _with_card(facts: dict, hot: dict) -> dict:
+    """The card from the hot row this poll read, over a copy of the memoized facts: a row-only card
+    write moves no document signature, so the memo alone would show a stale card."""
+    from ouroboros.store_task_cards import row_values
+
+    return {**facts, "card": {**facts["card"], **row_values(hot)}}
 
 
 def _managed_task_finalizing(drive_root: Any, task_id: str) -> bool:
@@ -553,6 +565,7 @@ def _chat_activities_snapshot_safe(drive_root: Any, task_bindings: Any = None, *
     from ouroboros.post_task_checkpoint import post_task_model_waits
     from ouroboros.store_hot_facts import snapshot
     from supervisor import queue as queue_mod
+    from supervisor.owner_pause_control import warm_paused_member
 
     direct_rows = direct_turns if direct_turns is not None else _direct_turns_snapshot_safe(availability=availability)
     try:
@@ -563,7 +576,8 @@ def _chat_activities_snapshot_safe(drive_root: Any, task_bindings: Any = None, *
             running_rows = [
                 (str(task_id), {**(meta.get("task") or {}), "_attempt": int(meta.get("attempt")
                     or (meta.get("task") or {}).get("_attempt") or 1),
-                    "model_activity": (meta.get("active_llm_call") or {}).get("model_activity")} if isinstance(meta, dict) else {},
+                    "model_activity": (meta.get("active_llm_call") or {}).get("model_activity"),
+                    "_owner_pause_warm": warm_paused_member(meta)} if isinstance(meta, dict) else {},
                  _epoch_or_zero(meta.get("started_at")) if isinstance(meta, dict) else 0.0)
                 for task_id, meta in queue_mod.RUNNING.items()]
     except Exception:
@@ -711,6 +725,8 @@ def _chat_activities_snapshot(drive_root, task_bindings, direct_rows, pending_ro
                                             root=root, can_resume=resume, owner_resumed=interrupted is True))
                 if work_facts is not None:
                     work_facts[task_id] = _raw_work_facts(row)
+        from ouroboros.post_task_checkpoint import post_task_synthesis_in_flight
+        from ouroboros.review_operation import task_has_live_review_operation
         for task_id, row, started_at in running_rows:
             if task_id:
                 root = _is_root(task_id, row)
@@ -730,10 +746,9 @@ def _chat_activities_snapshot(drive_root, task_bindings, direct_rows, pending_ro
                 else:
                     phase = "finalizing" if _managed_task_finalizing(drive_root, task_id) else "working"
                 activities.append(_activity(task_id, row, phase, started_at, root=root))
-                if work_facts is not None:
-                    work_facts[task_id] = _raw_work_facts(row)
-        from ouroboros.post_task_checkpoint import post_task_synthesis_in_flight
-        from ouroboros.review_operation import task_has_live_review_operation
+                if work_facts is not None:  # whether a settling Pause's member still executes, or waits parked warm
+                    warm = {"owner_pause_warm": True} if row.get("_owner_pause_warm") else {}
+                    work_facts[task_id] = {**_raw_work_facts(row), "running": not warm, **warm}
         visible = {row["activity_id"]: row for row in activities}
         for root_id, latch in fence_rows.items():
             # An answered root under the owner's Pause whose late work is the tree's
@@ -759,6 +774,8 @@ def _chat_activities_snapshot(drive_root, task_bindings, direct_rows, pending_ro
                 continue
             row = dict(facts.get("row") or {})
             visible[root_id] = _activity(root_id, row, phase, _epoch_or_zero(row.get("queued_at")))
+            if work_facts is not None and phase == "budget_pausing":  # its late work still runs
+                work_facts[root_id] = {**_raw_work_facts(row), "running": True}
             census_ids.add(root_id)
             activities.append(visible[root_id])
         for owner in late_owners:
@@ -996,6 +1013,7 @@ async def api_state(request: Request) -> JSONResponse:
             },
             "projects": snap["projects"],
             "project_chat_ids": snap["project_chat_ids"],
+            "main_visible_revision": snap.get("main_visible_revision"),
             "task_bindings": snap["task_bindings"],
             "active_direct_turns": snap.get("active_direct_turns") or [],
             "active_chat_activities": snap.get("active_chat_activities") or [],

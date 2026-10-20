@@ -3,7 +3,7 @@
 On synthetic actors of the sizes measured on the owner's copy (Main, a Project room, consciousness, a child
 whose parent is in a Project or in Main, a nanny) every cell of eight windows by three
 preferred modes the capacity-sizing utility identifies a fitting view. Main keeps current
-Max books even when that estimate misses: only actual refusal recovery selects another
+Max books at startup: known-window pressure or actual refusal recovery selects another
 document mode. Memory granularity still fits; unknown capacity supplies no window step.
 An owner-selected Low or Nano target is a second boundary for its own steps
 only; task-local Low and a mode the window lowered have none (only the owner's own choice
@@ -27,7 +27,7 @@ RESERVE = {"max": 65_536, "low": 65_536, "nano": cb.NANO_MIN_HEADROOM_TOKENS}
 
 
 def _start(name, window, preferred, *, ratio=1.0, known=True, snapshot=None):
-    """A capacity-sized view, independent of Main's actual-refusal-only Max book selection."""
+    """A capacity-sized view, independent of Main's Max book selection at startup."""
     snapshot = snapshot or syn.actor(name)
     fixed = syn.FIXED[name]
     minimal = mf.minimal_view_tokens(snapshot, window_tokens=window)
@@ -529,10 +529,11 @@ def test_explicit_post_refusal_low_projection_remains_available(tmp_path, monkey
     tool_ctx = SimpleNamespace(memory_view_facts=shown, _execution_trace={VIEW_TRACE_KEY: dict(shown)})
     ctx = SimpleNamespace(active_context_mode="max", context_fit_plan=built, messages=messages, tool_schemas=[],
                           tools=SimpleNamespace(_ctx=tool_ctx), task_id="t", round_idx=1,
-                          event_queue=None, drive_logs=tmp_path, accumulated_usage={})
+                          event_queue=None, drive_logs=tmp_path, accumulated_usage={},
+                          active_model=built.model, active_effort="")
     events = []
     monkeypatch.setattr(loop, "_emit_checkpoint_event", lambda *_a, **_kw: events.append(_a[-1]))
-    # This helper is entered by the typed-refusal caller, not by a prediction.
+    # Both a known-window prediction and a typed refusal enter this recovery helper.
     _reproject_actual_overflow_low(ctx)
     assert ctx.active_context_mode == tool_ctx.active_context_mode == "low"
     assert ctx.messages[0] == built.projection("low").system_message()

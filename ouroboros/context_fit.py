@@ -100,7 +100,7 @@ class MainFitMeasurement:
     # the send finalizer computes the sent value on the sealed candidate with the same rule.
     reply_allowance_tokens: int = 0
     # Provenance of the estimate (``InputAnchor``): the provider-reported input of the last request this
-    # model accepted in this conversation and its round, or None for a cold chars/4 estimate.
+    # model accepted in this conversation and its round, or None before this task has an anchor.
     anchor_input_tokens: Optional[int] = None
     anchor_round: Optional[int] = None
     anchor_rewritten: bool = False
@@ -160,10 +160,10 @@ class ContextFitPlan:
         ``preferred_mode``). While that mode's request with its reply reserve fits a known fresh window -- a
         smaller one included -- or the window is unknown, every view keeps its bytes: a larger window or a
         shorter tail unfolds nothing (owner decision 2026-10-11, 2A). A request the window cannot hold, or
-        ``refused_tokens`` (an actual size refusal's calibrated deficit, at least 1), narrows each view from the
+        ``refused_tokens`` (size recovery's calibrated deficit, at least 1), narrows each view from the
         level it shows against the window alone (``memory_floor.render_view_for_mode``), from
-        ``core.memory_view_json`` (chronicle and chat not read again). Current Max books stay full until actual
-        refusal recovery selects another mode (``select_mode``: rendered from the level ``start_mode`` shows, never
+        ``core.memory_view_json`` (chronicle and chat not read again). Current Max books stay full until
+        size recovery selects another mode (``select_mode``: rendered from the level ``start_mode`` shows, never
         its own unsent one); lower starts keep their mode. Only the owner's mode carries a target.
         """
         from dataclasses import replace
@@ -573,8 +573,9 @@ def _route_calibration_ratio(
     drive_root: Optional[pathlib.Path],
     route_fp: str,
     model: str,
+    estimate_tokens: Optional[int] = None,
 ) -> float:
-    """Fresh exact-route/model witness, never an event-tail or orphan maximum.
+    """Fresh comparable-input exact-route/model witness, never an orphan maximum.
 
     ``None`` reads the canonical host evidence root (one observation store).
     """
@@ -584,7 +585,7 @@ def _route_calibration_ratio(
         )
 
         root = drive_root if drive_root is not None else canonical_evidence_root()
-        return float(resolve_main_token_density(root, route_fp, model)[0])
+        return float(resolve_main_token_density(root, route_fp, model, estimate_tokens=estimate_tokens)[0])
     except Exception:
         log.debug("Fresh route token calibration unavailable", exc_info=True)
         return 1.0
@@ -622,21 +623,24 @@ def measure_main_fit(
     """Measure one sealed Main candidate against owner target T and route W.
 
     The estimate is this conversation's own: ``anchor`` (``context_anchor.main_input_anchor``) scales the raw
-    estimate by the last accepted request of this model, and without one it is the cold raw
-    estimate. A stated window below ``accepted_input_tokens`` is no window (unknown). The deficits,
+    estimate by the last accepted request of this model. Without one, a fresh same-model witness
+    of comparable input size calibrates it; absent that, it stays cold. A stated window below
+    ``accepted_input_tokens`` is no window (unknown). The deficits,
     the reclaim goal (deficit + ``reclaim_low_water_margin``) and the reply allowance are facts for
-    the round and for refusal recovery; a prediction never starts a pass by itself (owner 7A).
+    the round and recovery. A known window with no tool-result room starts the same refusal
+    passes before sending (owner revision, 20 October 2026); an unknown window never does.
     Both deficits count the reply floor the fit leaves (Nano: ``min(8192, C)``); the reply the
     candidate will actually get is ``reply_allowance_tokens``.
     """
-    from ouroboros.capability_evidence import is_known
+    from ouroboros.capability_evidence import canonical_evidence_root, is_known, resolve_main_token_density
     from ouroboros.context_budget import (
         OWNER_LOW_TARGET_TOKENS, OWNER_NANO_TARGET_TOKENS, NANO_MIN_HEADROOM_TOKENS, reply_allowance_tokens,
     )
 
-    density = float(anchor.density) if anchor is not None else 1.0
-    basis: MeasurementBasis = "fresh_route_usage" if anchor is not None else "cold_estimate"
     raw_input = int(estimate_context_prompt_tokens(messages, tools, provider=plan.provider, reasoning_effort=reasoning_effort))
+    density, basis = ((float(anchor.density), "fresh_route_usage") if anchor is not None else
+                      resolve_main_token_density(canonical_evidence_root(), plan.route_fp, plan.model,
+                                                 estimate_tokens=raw_input))
     estimated_input = int(math.ceil(raw_input * density))
     ceiling = int(plan.output_reserve_tokens or 0)
     nano = profile.endswith("_nano")
@@ -868,24 +872,31 @@ def build_context_fit_plan(
     # duplicating its output reservation.  The lazy import avoids coupling the
     # data-only fit representation to the high-level model loop.
     from ouroboros.capability_evidence import is_known
+    from ouroboros.tool_policy import select_tool_schemas
 
     output_reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local")), evidence=evidence)
-    # One observation store: witnesses are written at settlement into the
-    # canonical host root, so a child task's own drive must not be consulted.
+    known_window = is_known(evidence, require_fresh=True)
+    view_args = dict(
+        preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
+        known_window=known_window, output_reserve=output_reserve)
+    governance = {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}
+    # Size the cold starting view before selecting a witness, just as round one does.
+    contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=1.0)
     ratio = _route_calibration_ratio(
-        None,
+        None,  # canonical host evidence, never a child task's own drive
         str(evidence.route_fp or ""),
         str(route["model"] or ""),
+        estimate_context_prompt_tokens(
+            [{"role": "system", "content": contents[initial_mode][0]},
+             {"role": "user", "content": user_content}, *json.loads(core.supplementary_messages_json)],
+            list(select_tool_schemas(tool_schemas or [], context_mode=initial_mode).schemas),
+            provider=str(route.get("provider") or "")),
     )
-    known_window = is_known(evidence, require_fresh=True)
+    if ratio != 1.0:
+        contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
     input_source = None
-    contents, initial_mode = _view_projections(
-        core, {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}, core.user_content_json,
-        preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
-        known_window=known_window, output_reserve=output_reserve, ratio=ratio)
 
     from ouroboros.context_budget import context_mode_limits
-    from ouroboros.tool_policy import select_tool_schemas
 
     # The task-input pointer is decided on the calibrated Nano request: the schemas it sends and its reply floor.
     nano_sent_tokens = tool_schema_tokens(list(select_tool_schemas(tool_schemas or [], context_mode="nano").schemas))
@@ -944,7 +955,7 @@ def build_context_fit_plan(
     low_projection = _projection("low")
     nano_projection = _projection("nano")
     # Prediction fits memory granularity but never removes current Max books, even when
-    # the shortest estimated view misses the window. Actual refusal recovery selects Low;
+    # the shortest estimated view misses the window. Pre-send or provider size recovery selects Low;
     # owner Low/Nano and already-lowered starts retain their existing sizing behavior.
 
     core_payload = json.dumps(

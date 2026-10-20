@@ -105,7 +105,36 @@ class CardPinResponse(TypedDict):
     pinned_at: NotRequired[str]
 
 
+class UiHold(TypedDict):
+    """One start the page did not outlive: an app card (``app:<card_id>``, ``rev`` its bytes' sha256), a skill's
+    widget (``widget:<skill>:<tab_id>``, ``rev`` its revision) or page module (``module:<contribution key>``)."""
+
+    key: str
+    rev: str
+
+
+class UiHoldsSurface(TypedDict, total=False):
+    """Where the page runs, as raw facts: the desktop shell's bridge, inside the Telegram mini app."""
+
+    pywebview: bool
+    telegram: bool
+
+
+class UiHoldsRequest(TypedDict):
+    """``POST /api/ui/holds``: the holds one page found when it opened (web/modules/holds.js), once per load."""
+
+    holds: List[UiHold]
+    surface: NotRequired[UiHoldsSurface]
+
+
+class UiHoldsResponse(TypedDict):
+    """How many holds were named in a System row now (``0`` when each was named already or is gone)."""
+
+    ok: bool
+    named: int
+
+
 __all__ = [
     "CardAppRef", "CardOutbound", "CardPinResponse", "CardResponse", "CardStateOutbound",
-    "CardSubmissionSummary", "CardWidgetRef",
+    "CardSubmissionSummary", "CardWidgetRef", "UiHold", "UiHoldsRequest", "UiHoldsResponse", "UiHoldsSurface",
 ]

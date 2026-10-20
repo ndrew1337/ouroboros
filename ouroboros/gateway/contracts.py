@@ -791,6 +791,8 @@ class StateResponse(WorkStateFields):
     projects: list
     # COMPLETE (uncapped) registered project chat_ids — the live WS fan-out isolation SSOT, unlike `projects`.
     project_chat_ids: list
+    # Main's room revision (its standalone messages, the kind a Project's visible_revision counts); null while unreadable.
+    main_visible_revision: NotRequired[Optional[int]]
     # Task->project bindings ({task_id: {project_id, chat_id}}) so the frontend
     # can recognise a project-scoped task card: suppress the stray "turn into
     # project" button (v6.33.0 P2) and render a pointer that opens the bound
@@ -916,13 +918,21 @@ class OwnerSkillPresenceRuntimeResponse(TypedDict):
 
 
 class SkillGrantResponse(TypedDict, total=False):
-    """``POST /api/skills/{skill}/grants``; a refusal answers ``SkillActionRefusal``."""
+    """``POST /api/skills/{skill}/grants``; a refusal answers ``SkillActionRefusal``. A grant that
+    turns the skill on may install packages: past the answer bound the body is
+    ``{ok, pending: true, job_id, message}`` (follow the lifecycle queue)."""
 
     ok: bool
+    pending: bool
+    job_id: str
+    message: str
     skill: str
     content_hash: str
     granted_keys: list[str]
     granted_permissions: list[str]
+    turn_on_when_ready: str
+    setup_error: str  # grants succeeded; the requested setup did not
+    enabled: bool  # present when this grant also carried the owner's Enable
     extension_action: str
     extension_reason: str
     load_error: str
@@ -935,6 +945,9 @@ class SkillGrantResponse(TypedDict, total=False):
 
 class SkillDeleteResponse(TypedDict, total=False):
     ok: bool
+    pending: bool  # queued behind a long job past the answer bound: {ok, pending, job_id, message}
+    job_id: str
+    message: str
     skill: str
     source: str
     content_hash: str
@@ -1233,8 +1246,10 @@ class TaskEvent(TypedDict, total=False):
 
 
 class TaskPauseRequest(TypedDict):
-    """Text-free tree Pause; reuse request_id on retry."""
+    """Tree Pause; reuse request_id on retry. ``actor`` (owner|ouroboros) and ``reason`` declare who and why."""
     request_id: str
+    actor: NotRequired[str]
+    reason: NotRequired[str]
 
 
 class TaskPauseResponse(TypedDict, total=False):

@@ -90,7 +90,7 @@ export async function fetchJson(url, init = {}, options = {}) {
 export function jsonPost(url, payload = {}, options = {}) {
     return fetchJson(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...options.headers },
         body: JSON.stringify(payload),
     }, options);
 }
@@ -257,8 +257,11 @@ export function hurryTask(taskId, requestId) {
 }
 
 /**
- * Owner Pause of a whole task tree (Batch4): text-free like hurry — the body is
- * ONLY the stable request_id (the same id on retry is idempotent). The answer
+ * Owner Pause of a whole task tree (Batch4): the body is the stable request_id
+ * (the same id on retry is idempotent) and this client's declaration that the
+ * owner pressed it (`actor: "owner"`, no text), which the card words as "You
+ * paused it" and which grants no power. Every shell that opens the core's own
+ * page (a browser, the desktop window, the Telegram Mini App) sends it here. The answer
  * arrives after the root's durable fence landed; its `state` is `requested`
  * while members still settle, `paused` once saved, or `released` on replay
  * after that action was resumed. A 202 `latch_pending` answer is accepted
@@ -270,7 +273,7 @@ export function hurryTask(taskId, requestId) {
 export function pauseTask(taskId, requestId) {
     return jsonPost(
         `/api/tasks/${encodeURIComponent(taskId)}/pause`,
-        { request_id: String(requestId || '') },
+        { request_id: String(requestId || ''), actor: 'owner' },
         { rejectOkFalse: true },
     );
 }
@@ -455,6 +458,8 @@ export const apiClient = {
     saveUiLanguage: (payload) => jsonPost('/api/ui/i18n/language', typeof payload === 'string' ? { language: payload } : payload),
     /** @param {import('./ui_i18n_types.js').UiI18nMissingRequest} payload */
     reportI18nMissing: (payload) => jsonPost('/api/ui/i18n/missing', payload),
+    /** The holds this page found (holds.js). @param {import('./client_contract_types.js').UiHoldsRequest} payload */
+    reportUiHolds: (payload) => jsonPost('/api/ui/holds', payload),
     importI18n: (memoryDocument) => jsonPost('/api/ui/i18n/import', memoryDocument),
     exportI18nUrl: (language = '') => `/api/ui/i18n/export${language ? `?language=${encodeURIComponent(language)}` : ''}`,
     regenerateI18n: (payload = {}) => jsonPost('/api/ui/i18n/regenerate', payload),
@@ -519,10 +524,11 @@ export const apiClient = {
     deleteSkill: (skill, payloadRoot, expectedContentHash = '') => jsonPost(`/api/skills/${encodeURIComponent(skill)}/delete`, {
         payload_root: payloadRoot,
         ...(expectedContentHash ? { expected_content_hash: expectedContentHash } : {}),
-    }),
-    skillGrants: (skill, items, expectedContentHash = '') => jsonPost(`/api/skills/${encodeURIComponent(skill)}/grants`, {
+    }, { headers: { Prefer: 'respond-async' } }),
+    skillGrants: (skill, items, expectedContentHash = '', enableAfterGrant = false) => jsonPost(`/api/skills/${encodeURIComponent(skill)}/grants`, {
         items, ...(expectedContentHash ? { expected_content_hash: expectedContentHash } : {}),
-    }),
+        ...(enableAfterGrant ? { enable_after_grant: true } : {}),
+    }, { headers: { Prefer: 'respond-async' } }),
     /**
      * @param {string} skill
      * @param {import('./api_types.js').OwnerSkillPresenceRuntimeRequest} payload

@@ -598,6 +598,9 @@ _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
     "card_not_found": (False, "gateway/card_decision.py: a press or read names no stored card; HTTP 404, never a task terminal"),
     "card_stale": (False, "gateway/card_decision.py: the card changed since the press was drawn; HTTP 409, nothing recorded, never a task terminal"),
     "card_write_failed": (False, "gateway/card_decision.py: the press could not be recorded; HTTP 503 (retry), never a task terminal"),
+    "chat_unavailable": (False, "gateway/ui_holds.py: no chat writer serves this data root, so a page's hold report named nothing; HTTP 503 (the next page reports again), never a task terminal"),
+    "in_flight": (False, "gateway/ui_holds.py: another report is naming the same hold now; HTTP 503 (the next page reports again), never a task terminal"),
+    "not_confirmed": (False, "gateway/ui_holds.py: a hold row's write was not confirmed; HTTP 503 (the next page reports again), never a task terminal"),
     "pin_write_failed": (False, "gateway/cards.py: Keep on Widgets could not be saved; HTTP 503, never a task terminal"),
     "revision_required": (False, "gateway/card_decision.py: a press without the card revision it was drawn from; HTTP 400, never a task terminal"),
     "values_invalid": (False, "gateway/card_decision.py: form values the card's form does not accept; HTTP 400, never a task terminal"),
@@ -612,6 +615,7 @@ _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
     "provider_unavailable": (True, "loop.py:3185 reroute + fallback exhausted"),
     "children_unabsorbed": (True, "historical forced terminal; retained for old benchmark records, no longer emitted"),
     "llm_api_error": (True, "loop_llm_call.py:630 transport death; never a fair shot"),
+    "context_overflow": (True, "loop_model_call.py: known-window admission exhausted size recovery; host-stopped, not a capability result"),
     # S3 owner graceful stop ("Wrap up"): the owner ended the attempt, so
     # reward 0 is an owner decision, never a fair-shot capability fact (CF-02:
     # reusing finalization_grace would persist the deadline's false reason).
@@ -714,6 +718,11 @@ _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
         "gateway/task_hurry.py hurry ingress refusal (400, text-free contract); never a task terminal",
     ),
     "task_not_live": (False, "gateway/task_hurry.py hurry ingress refusal (404); never a task terminal"),
+    "pause_reason_invalid": (
+        False,
+        "gateway/task_pause.py refuses a declared Pause reason that is not text or exceeds 400 characters (HTTP 400); "
+        "nothing is written and no task transition happens",
+    ),
     # #Q-2b decision-ingress refusal codes — HTTP replies, never task terminals.
     "unknown_decision_family": (False, "gateway/task_decision.py ingress refusal (400)"),
     "decision_family_not_served": (False, "gateway/task_decision.py ingress refusal (501)"),
@@ -908,6 +917,17 @@ def test_round_capped_and_deadline_stopped_runs_are_disclosed_as_truncated():
     for code in ("round_limit", "deadline_local", "finalization_grace", "children_unabsorbed"):
         disclosed = runtime_terminal_disclosure({"status": "failed", "reason_code": code})
         assert disclosed["truncated"] is True, code
+
+
+def test_context_admission_terminal_is_truncated_without_claiming_provider_failure():
+    from ouroboros.outcomes import derive_loop_outcome
+
+    usage = {"reason_code": "context_overflow", "_last_llm_error_kind": "context_overflow",
+             "execution_status": "infra_failed"}
+    outcome = derive_loop_outcome("", usage, {})
+    assert outcome["failure"]["kind"] == "runtime"
+    assert runtime_terminal_disclosure(outcome)["truncated"] is True
+    assert runtime_terminal_disclosure({"status": "completed", "reason_code": ""})["truncated"] is False
 
 
 def test_the_two_out_of_tree_mirrors_stay_pinned_to_the_derived_vocabulary():

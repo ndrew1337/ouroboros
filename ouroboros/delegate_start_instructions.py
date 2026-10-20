@@ -32,6 +32,17 @@ HOST_FACTS_INSTRUCTION = (
     "PLAYWRIGHT_BROWSERS_PATH the operator's existing browser cache."
 )
 
+# Shared by working and reviewer sessions; actual agreements stay in the assignment.
+SHARED_ENVIRONMENT_INSTRUCTION = (
+    "Your workspace may be private while the machine and its resources may be shared. "
+    "Follow applicable sharing agreements and choose effective execution with the least "
+    "unnecessary interference, preserving the conditions the requested verification needs; "
+    "a hidden, headless or isolated stand-in proves only what it preserves. Pass relevant "
+    "conditions to your delegates before they start. Raise material unresolved conflicts "
+    "through available host dialogue; without an answer, continue unblocked work with stated "
+    "assumptions and explicit verification gaps, without assuming the conflict is settled."
+)
+
 UNPROVEN_BOUNDARY_INSTRUCTION = (
     " An OS-enforced filesystem boundary was REQUESTED for this run but is NOT guaranteed: "
     "your engine applies one only where it has a mechanism for this host, and your host "

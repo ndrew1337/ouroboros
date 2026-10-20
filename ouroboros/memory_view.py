@@ -662,7 +662,7 @@ def _mark_target(target: Any) -> str:
     return f"source {target.get('path') or target.get('kind') or 'not recorded'}{location}"
 
 
-def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str]) -> Dict[str, Any]:
+def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str], *, own_room: bool = True) -> Dict[str, Any]:
     """A host-kept late review (``late_review_marks``): its words, when it settled, its full source and its release."""
     review, target = _mapping(mark.get("review")), _mapping(mark.get("target_ref"))
     read = review.get("source_read")
@@ -670,17 +670,21 @@ def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str]) -> Di
     reader = (f"{read.get('tool')}({json.dumps(read.get('arguments') or {}, ensure_ascii=False, sort_keys=True)})"
               if isinstance(read, Mapping) else
               f"memory_read(source_ref={json.dumps(ref, ensure_ascii=False, sort_keys=True)})")
-    return {"id": mark["id"], "scope": "room", "room": label(mark.get("room_id")), "text": str(mark.get("text") or ""),
+    if not own_room:
+        reader = f"memory_read(node_id={json.dumps(mark['id'])})"  # the full mark carries its retained source reader
+    return {"id": mark["id"], "scope": "room", "room": label(mark.get("room_id")),
+            "text": str(mark.get("text") or "") if own_room else "",
             "by": "host", "date": _minute(mark.get("ts")).split(" ")[0], "target": _mark_target(target), "quote": "",
             "late_review": {"task_id": str(review.get("task_id") or ""), "source": reader,
-                            "sha256": str(target.get("sha256") or "")}}
+                            "sha256": str(target.get("sha256") or ""), "own_room": own_room}}
 
 
 def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., str]) -> List[Dict[str, Any]]:
     """The acting marks a role keeps in view: every room's, or this room's and the global ones.
 
     Late review feedback the host keeps in view belongs to the room of its work whatever the role's
-    mark scope: that room's view and consciousness hold it, another room's turn never does.
+    mark scope: that room holds its words; consciousness gets pointers for foreign rooms.
+    Ordinary foreign-room turns keep omitting it.
     """
     if spec.marks == "none":
         return []
@@ -691,7 +695,7 @@ def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., s
     for mark in marks:
         if is_late_review_mark(mark):
             if spec.role == "consciousness" or str(mark.get("room_id")) == spec.room_id:
-                entries.append(_late_review_entry(mark, label))
+                entries.append(_late_review_entry(mark, label, own_room=str(mark.get("room_id")) == spec.room_id))
             continue
         author = _mapping(mark.get("author"))
         by = _mapping(author.get("focus")).get("role") or (
@@ -949,6 +953,9 @@ def _late_reviews_text(marks: List[Dict[str, Any]], role: str) -> str:
     lines = ["## Late review feedback (host)", "", _LATE_REVIEW_INTRO.format(who=who)]
     for mark in marks:
         late = mark["late_review"]
+        if late.get("own_room") is False:
+            lines.append(f"- [{mark['room']}] Late review of task {late['task_id']}: {late['source']}")
+            continue
         release = "" if helper else f"; memory_mark(release_id='{mark['id']}', reason=…)"
         lines += [f"- [{mark['room']}; kept since {mark['date']}] " + _indented(mark["text"]).lstrip(),
                   f"{INDENT}full source (sha256 {late['sha256'][:12]}): {late['source']}{release}"]

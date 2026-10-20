@@ -26,6 +26,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "POST /api/settings/secret",
     "GET /api/ui/preferences",
     "POST /api/ui/preferences",
+    "POST /api/ui/holds",
     "GET /api/ui/i18n",
     "POST /api/ui/i18n/language",
     "POST /api/ui/i18n/missing",
@@ -238,6 +239,8 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/ui/preferences": Shape("200:UiPreferencesResponse"),
     "GET /api/ui/contributions": Shape("200:UiContributionsResponse", note="live contributions, offers and owner preferences; no-store"),
     "POST /api/ui/preferences": Shape("200:UiPreferencesResponse 400,503:ErrorResponse", "json"),
+    "POST /api/ui/holds": Shape("200:UiHoldsResponse 400,503:ErrorResponse", "UiHoldsRequest",
+                                note="names new holds in one System row per owning chat; a repeat names nothing"),
     "GET /api/ui/i18n": Shape("200:UiI18nResponse"),
     "POST /api/ui/i18n/language": Shape(
         "200:UiI18nResponse 400:ErrorResponse|SettingsWriteRefusal 409,502,503:SettingsWriteRefusal",

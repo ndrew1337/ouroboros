@@ -27,11 +27,13 @@ def _ui_client_routes() -> list[BaseRoute]:
     )
     from ouroboros.gateway.ui_preferences import api_ui_preferences_get, api_ui_preferences_post
     from ouroboros.gateway.contributions import api_ui_contributions
+    from ouroboros.gateway.ui_holds import api_ui_holds_post
 
     return [
         Route("/api/ui/contributions", endpoint=api_ui_contributions, methods=["GET"]),
         Route("/api/ui/preferences", endpoint=api_ui_preferences_get, methods=["GET"]),
         Route("/api/ui/preferences", endpoint=api_ui_preferences_post, methods=["POST"]),
+        Route("/api/ui/holds", endpoint=api_ui_holds_post, methods=["POST"]),
         Route("/api/ui/i18n", endpoint=api_ui_i18n_get, methods=["GET"]),
         Route("/api/ui/i18n/language", endpoint=api_ui_i18n_language_post, methods=["POST"]),
         Route("/api/ui/i18n/missing", endpoint=api_ui_i18n_missing_post, methods=["POST"]),

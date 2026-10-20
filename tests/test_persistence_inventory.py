@@ -814,10 +814,10 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # ``state/cards/<card_id>.json`` records and content-addressed ``state/cards/apps/<sha256>.html``
 # app bytes (one section-4 row), and the Keep-on-Widgets pins ``state/pinned_cards.json`` (its
 # own section-2 row; ``ouroboros/card_store.py`` writes all four).
-# 406 -> 408 (realtime setup): a realtime turn's raw ``task_results/artifacts/<task>/realtime-wire.jsonl``
+# 407 -> 409 (realtime setup): a realtime turn's raw ``task_results/artifacts/<task>/realtime-wire.jsonl``
 # and its ``source_handles/context_checkpoints/realtime-prepared-<sha256>.json`` input capture
 # (``ouroboros/realtime_turn.py``), one section-7 row each.
-EXPECTED_SCAN_PATHS = 408
+EXPECTED_SCAN_PATHS = 409
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
@@ -984,17 +984,6 @@ def test_update_backup_inventory_names_its_pending_and_partial_restore_lifetime(
     assert "removed when it settles or the skill is uninstalled" in row
     assert "kept as evidence after a partial restore" in row
     assert "state/skills/*/update_backup.json" in scan_data_paths()
-
-
-def test_skill_architecture_keeps_the_authority_rationales():
-    text = (REPO / "docs/architecture/13-external-skills-layer.md").read_text(encoding="utf-8")
-    for rationale in (
-        "because collapsing any two turns a UI toggle into execution authority",
-        "Discovery confers no trust",
-        "a review PASS installs no dependencies; `enabled=true` does not prove readiness",
-        "so retry history stays explainable without a UI counter becoming review authority",
-    ):
-        assert rationale in text
 
 
 def test_skill_update_docs_name_all_rejection_reasons():

@@ -784,6 +784,32 @@
  */
 
 /**
+ * One start the page did not outlive (web/modules/holds.js).
+ * @typedef {Object} UiHold
+ * @property {string} key
+ * @property {string} rev
+ */
+
+/**
+ * @typedef {Object} UiHoldsSurface
+ * @property {boolean=} pywebview
+ * @property {boolean=} telegram
+ */
+
+/**
+ * `POST /api/ui/holds`.
+ * @typedef {Object} UiHoldsRequest
+ * @property {Array<UiHold>} holds
+ * @property {UiHoldsSurface=} surface
+ */
+
+/**
+ * @typedef {Object} UiHoldsResponse
+ * @property {boolean} ok
+ * @property {number} named
+ */
+
+/**
  * `POST`/`DELETE /api/cards/{card_id}/pin`.
  * @typedef {Object} CardPinResponse
  * @property {boolean} ok

@@ -357,6 +357,7 @@ def execute_panic_stop(
         from ouroboros.tools.services import kill_all_services
         from ouroboros.tools.shell import kill_all_tracked_subprocesses
         from ouroboros.workspace_executor import kill_all_foreground
+        from supervisor import workers  # noqa: F401 — initialize the facade before its lifecycle leaf in a cold launcher
         from supervisor.worker_pool_lifecycle import kill_worker_tree
 
         # Singleton creation can wait on a startup lock; only already-owned handles
@@ -369,6 +370,14 @@ def execute_panic_stop(
             attempt("daemon", lambda: daemon.panic_stop(request_only=True))
         elif requests.get("daemon") is None:
             requests["daemon"] = {"requested": False, "error": "no captured daemon identity"}
+            # Early tray Panic can precede this process's daemon manager. The
+            # retained installation daemon still has measured ledger custody;
+            # request its stop now, not only after asynchronous CLI settlement.
+            from ouroboros.claudexor_daemon import CUSTODY_PURPOSE
+            from ouroboros.process_custody import stop_ledgered_processes
+
+            attempt("retained-daemon", lambda: stop_ledgered_processes(
+                data_dir, {CUSTODY_PURPOSE}, timeout_sec=0))
         attempt("commands", lambda: kill_all_tracked_subprocesses(request_only=True))
         attempt("executors", lambda: kill_all_foreground(data_dir, request_only=True))
         attempt("services", lambda: kill_all_services(data_dir, request_only=True))

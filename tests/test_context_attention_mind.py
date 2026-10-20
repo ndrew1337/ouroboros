@@ -257,11 +257,11 @@ def test_facts_line_names_room_money_and_tariff_as_known_or_unknown(tmp_path, mo
     assert "model same-model" in line and "mode low" in line
     usage = context.accumulated_usage
     # Free room is the window's (#1727); the target is its own fact, measured with the reply floor.
-    free = 500_000 - usage["_context_prompt_estimate"] - usage["_context_reply_allowance_tokens"]
+    free = 500_000 - usage["_context_prompt_estimate"] - usage["_context_response_reserve_tokens"]
     room = 250_000 - usage["_context_prompt_estimate"] - 65_536
     for part in ("window 500,000", "target 250,000",
                  "input ~120,000 before this line (round 3 accepted 110,000, +10,000 since)",
-                 f"free ~{free:,}", f"target room {room:,} (reply floor 65,536)",
+                 f"predicted free ~{free:,}", f"target room {room:,} (reply floor 65,536)",
                  "largest unit:2:3:", "own cost unknown",
                  "shared wallet $12.50 known headroom (unreserved; shared with other tasks)",
                  "quota 3 of 10 this hour", "tariff unknown", "elapsed unknown (no recorded start)",

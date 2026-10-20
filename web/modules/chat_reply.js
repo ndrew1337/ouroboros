@@ -202,7 +202,8 @@ export function createChatReplies({ chatId, feed, input, key = '', reading, hist
         const role = ROLE_NAMES.find((name) => bubble.classList.contains(name)) || '';
         const words = bubble.querySelector(':scope > .message')?.textContent
             || bubble.querySelector('.chat-quiz-question')?.textContent || bubble.dataset.rowWords || '';
-        return { address, chat_id: chatId, role, author_label: bubble.querySelector(':scope > .sender')?.textContent || '',
+        const sender = bubble.querySelector(':scope > .sender, :scope > .chat-bubble-voice > .sender');
+        return { address, chat_id: chatId, role, author_label: sender?.textContent || '',
             kind: bubble.querySelector('.chat-quiz-card') ? 'question' : 'message', snippet: replySnippet(words),
             ts: bubble.dataset.ts ? new Date(Number(bubble.dataset.ts)).toISOString() : '', task_id: bubble.dataset.taskId || '' };
     }

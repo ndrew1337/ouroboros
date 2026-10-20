@@ -850,7 +850,7 @@ def provider_terminal_fallback_text(
         facts = "; ".join(fact for fact in (f"smallest refused request ~{refused:,} tokens" if refused else "",
                                              f"largest parts: {parts}" if parts else "") if fact)
         return (
-            "⚠️ The context exceeded the selected model window; no further provider call was made. "
+            "⚠️ Context-size recovery ended without a fitting request; no further provider call was made. "
             "The recovery passes, the configured fallback and a renewed view could not make it fit"
             f"{f' ({facts})' if facts else ''}. The exact transcript and any files written so far are preserved."
         )

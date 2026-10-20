@@ -90,6 +90,8 @@ def test_renewal_publishes_the_seed_with_an_exact_source_and_continues_the_same_
     source = json.loads(record["content"].rsplit("rows: ", 1)[1].split("\n", 1)[0].rstrip("."))
     assert json.loads(read_actor_source_bytes(pathlib.Path(tmp_path), "renewal", source)) == original
     assert events and events[0]["checkpoint_kind"] == "context_view_renewed" and events[0]["owner_visible"]
+    assert "context-size recovery" in messages[-1]["content"]
+    assert "provider refused" not in messages[-1]["content"]
 
 
 def test_the_passes_address_records_since_the_newest_note_stay_in_the_seed(tmp_path):

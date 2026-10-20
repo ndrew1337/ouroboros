@@ -343,9 +343,8 @@ def test_the_first_request_after_a_crash_retry_dates_its_health_snapshot(tmp_pat
     assert OWN_LINE not in _system_text(_fresh_messages(tmp_path, successor, attempt=2))
 
 
-# --- D7 for a foreign reader: the owner's unread runs, retained or legacy, on one line ----------
-# Another task's obligations fold into one line per owner task (Q3=A, 18.10.2026): the run ids after
-# the rule, stated once, that only the owner reads and acknowledges, never a read instruction for this reader.
+# Foreign obligations share one pointer; its exact list preserves every owner/run.
+# A foreign reader receives no instruction to read or acknowledge those runs.
 
 def test_a_foreign_reader_sees_the_owners_unread_runs_on_one_line_without_a_read_instruction(geo, monkeypatch):
     from ouroboros.context import build_health_invariants
@@ -361,21 +360,22 @@ def test_a_foreign_reader_sees_the_owners_unread_runs_on_one_line_without_a_read
     env = SimpleNamespace(drive_root=geo.canonical, drive_path=lambda rel="": geo.canonical / rel,
                           repo_path=lambda rel="": geo.repo / rel)
     health = build_health_invariants(env, task_id="intruder", attempt_key="1")
-    rows = [item for item in health.splitlines() if f"owner task {ROOT}" in item]
-    assert len(rows) == 1 and "results not read to EOF: " in rows[0]
-    assert "run-new" in rows[0] and "run-old" in rows[0]
-    rule = [item for item in health.splitlines() if "Only the owner reads and acknowledges its results" in item]
-    assert len(rule) == 1 and health.index(rule[0]) < health.index(rows[0]) and "read_file" not in rows[0]
-    # Review r2 (18.10): the reader the line names resolves from the foreign reader itself.
+    rows = [item for item in health.splitlines() if "OTHER TASKS' DELEGATED WORK" in item]
+    assert len(rows) == 1 and "full owner/run list" in rows[0]
+    assert "Only the owner acknowledges results" in rows[0]
+    assert "read_file" not in rows[0] and "NEVER READ" not in health
+    # Resolve the exact list through the advertised reader as this foreign task.
+    import re
+
     from ouroboros.tools.query_data import _query_data
     from ouroboros.tools.registry import ToolContext
 
-    assert f"query_data(op='json', kind='task_result', ids=['{ROOT}'])" in rows[0]
-    from ouroboros.task_results import write_task_result
-
-    write_task_result(geo.canonical, ROOT, "running")  # every owner task has its row in production
+    pointer = re.search(r"query_data\(op='blob', sha256='([a-f0-9]{64})'\)", rows[0])
+    assert pointer
     intruder = ToolContext(repo_dir=geo.repo, drive_root=geo.canonical, task_id="intruder")
-    record = json.loads(_query_data(intruder, op="json", kind="task_result", ids=[ROOT]))
+    record = json.loads(_query_data(intruder, op="blob", sha256=pointer.group(1)))
     assert record["status"] == "ok", record
+    assert record["data"] == {ROOT: {"unread": ["run-new", "run-old"], "patches": [], "yours": []}}
     owner = build_health_invariants(env, task_id=ROOT, attempt_key="1")
-    assert "NEVER READ — run run-old" in owner and "read_file" in owner  # the owner keeps each run's line
+    assert all(f"NEVER READ — run {run}" in owner for run in ("run-new", "run-old"))
+    assert "read_file" in owner and "OTHER TASKS' DELEGATED WORK" not in owner

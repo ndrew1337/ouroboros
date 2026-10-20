@@ -971,7 +971,7 @@ def _finalize_limit_ctx(
 
 
 # ---------------------------------------------------------------------------
-# Model-free rungs of the refusal ladder (owner decision 7A; walked by
+# Model-free rungs of size recovery (provider refusal or a known-window prediction; walked by
 # ``loop_model_call._recover_context_overflow`` on the round-call context).
 # ---------------------------------------------------------------------------
 
@@ -1043,7 +1043,7 @@ def _run_emergency_address_pass(ctx: Any, disposition: Any, *, rung: str, goal_t
 def _coarsen_memory_view(ctx: Any, fit: Any, *, saving: Optional[int] = None) -> bool:
     """Narrow memory beside the actual transcript without inventing a smaller route window.
 
-    The refusal is the evidence: the view saves the refusal's measured ``saving`` (else the capacity
+    The view saves the measured ``saving`` (else the capacity
     deficit, else at least one element) from the level it shows (no target or working margin
     reapplied, nothing addressed unfolds)."""
     plan = ctx.context_fit_plan
@@ -1055,7 +1055,7 @@ def _coarsen_memory_view(ctx: Any, fit: Any, *, saving: Optional[int] = None) ->
     capacity = measurement.capacity_total_tokens
     rebound = plan.reproject_for_route(
         window_tokens=int(capacity or 0), known_window=capacity is not None,
-        ratio=float(plan.projection(mode).calibration_ratio or 1.0),
+        ratio=measurement.measurement_density,
         output_reserve=int(plan.output_reserve_tokens), tool_schemas=ctx.tool_schemas, start_mode=mode,
         current_messages=ctx.messages,
         refused_tokens=max(1, int(saving or measurement.capacity_deficit_tokens or 0)),

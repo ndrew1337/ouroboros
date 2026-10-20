@@ -282,10 +282,24 @@ export function createChatMedia({
         return bubble;
     }
 
-    function bubbleFrameNode(msg, node) {
+    // A framed node may bring parts for the bubble's two edge lines (docs/DESIGN.md "Quiz card"): `voice` joins the
+    // sender line (a Main question's Project reference beside `Ouroboros`), `foot` the time line (a question's host
+    // facts after its time). Each line stays one line of the bubble, never a second header or meta row.
+    function bubbleFrameNode(msg, node, { voice = [], foot = [] } = {}) {
         const bubble = bubbleFrame(msg, '');
+        // The frame's own sender and time, read before the node joins them.
+        const sender = bubble.querySelector('.sender');
         const time = bubble.querySelector('.msg-time');
-        if (time) bubble.insertBefore(node, time); else bubble.append(node);
+        if (time) time.before(node); else bubble.append(node);
+        // A line wraps the frame's own sender or time, so the bubble keeps one of each.
+        const line = (className, anchor, parts) => {
+            const wrap = document.createElement('div');
+            wrap.className = className;
+            if (anchor) { anchor.before(wrap); wrap.append(anchor); } else bubble.append(wrap);
+            wrap.append(...parts);
+        };
+        if (voice.length) line('chat-bubble-voice', sender, voice);
+        if (foot.length) line('chat-bubble-foot', time, foot);
         return bubble;
     }
 
@@ -996,7 +1010,6 @@ export function createChatMedia({
         isMyThread,
         hideTypingIndicatorOnly,
         syncChatStatus,
-        incrementUnreadIfNeeded,
         seenMessageKeys,
         rememberMessageKey,
         chatMediaMessageKey,
@@ -1087,7 +1100,7 @@ export function createChatMedia({
             if (!isMyThread(msg)) return;
             hideTypingIndicatorOnly();
             syncChatStatus();
-            if (deliverContentMutation(() => append(msg))) incrementUnreadIfNeeded(msg);
+            deliverContentMutation(() => append(msg));
         };
         for (const type of ['photo', 'video']) onWs(type, deliver(appendMediaBubble));
         onWs('document', deliver(appendDocumentBubble));

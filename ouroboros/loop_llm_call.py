@@ -1216,13 +1216,16 @@ def _send_main_candidate(
     deadline_ts: Optional[float],
     physical_context: Optional[PhysicalAttemptContext],
     candidate_predicate: Optional[Callable[[Any], Any]],
+    physical_fit_predicate: Optional[Callable[[Any], Any]] = None,
     send_clock_policy: Any = None, canonical_messages: Optional[List[Dict[str, Any]]] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    binding = (contextlib.nullcontext() if physical_context is None and candidate_predicate is None
-               else bind_physical_attempt_context(physical_context, candidate_predicate=candidate_predicate))
+    predicate = candidate_predicate if candidate_predicate is not None else physical_fit_predicate
+    if candidate_predicate is not None and physical_fit_predicate is not None:
+        predicate = lambda request: candidate_predicate(request) is not False and physical_fit_predicate(request) is not False
+    binding = (contextlib.nullcontext() if physical_context is None and predicate is None else
+               bind_physical_attempt_context(physical_context, candidate_predicate=predicate))
     # Main's clock line per physical send; the consumed one joins ``canonical_messages``.
-    clock = main_send_scope(send_clock_policy, canonical_messages)
-    with model_concurrency.model_call_slot(model, use_local, deadline_ts), binding, clock:
+    with model_concurrency.model_call_slot(model, use_local, deadline_ts), binding, main_send_scope(send_clock_policy, canonical_messages):
         return llm.chat(**kwargs)
 
 
@@ -1335,6 +1338,7 @@ def call_llm_with_retry(
     model_role: str = "main", model_turn_state: Any = None,
     model_account_override: Optional[str] = None, processing_preference: Optional[str] = None,
     send_clock_policy: Any = None, max_tokens: int = MAIN_LOOP_MAX_TOKENS,
+    physical_fit_predicate: Optional[Callable[[Any], Any]] = None,  # every send; candidate_predicate is first-attempt-only
 ) -> Tuple[Optional[Dict[str, Any]], Optional[float]]:
     """Call one model with bounded retries and deadline-aware transport.
 
@@ -1439,7 +1443,7 @@ def call_llm_with_retry(
             msg, usage = _send_main_candidate(
                 llm, kwargs, model=model, use_local=use_local, deadline_ts=deadline_ts,
                 physical_context=physical_context, candidate_predicate=candidate_predicate if attempt == 0 else None,
-                send_clock_policy=send_clock_policy, canonical_messages=messages,
+                physical_fit_predicate=physical_fit_predicate, send_clock_policy=send_clock_policy, canonical_messages=messages,
             )
             from ouroboros.observability import mark_last_answer
             mark_last_answer(accumulated_usage)

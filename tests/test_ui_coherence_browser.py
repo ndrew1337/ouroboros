@@ -203,7 +203,7 @@ def test_settings_footer_controls_are_reachable_at_content_breakpoints(subscript
     for width in [640, 641, 760, 768, 980, 981]:
         page.set_viewport_size({"width": width, "height": 600})
         if width <= 640:
-            page.wait_for_function("document.querySelector('#primary-sidebar').getBoundingClientRect().right<=1")
+            setup_browser.wait_drawer_closed(page)
         for sidebar in [220, 280]:
             page.evaluate("value => document.documentElement.style.setProperty('--sidebar-width',value+'px')", sidebar)
             for name, message, busy, restart in states:
@@ -274,7 +274,7 @@ def test_short_sidebar_bounds_projects_list_and_cost_cards_keep_local_table_over
     for width in [390, 641, 768, 981]:
         page.set_viewport_size({"width": width, "height": 600})
         if width <= 640:
-            page.wait_for_function("document.querySelector('#primary-sidebar').getBoundingClientRect().right<=1")
+            setup_browser.wait_drawer_closed(page)
         for card in page.locator(".costs-stats-grid > .stat-card").all():
             card.scroll_into_view_if_needed()
             box = hit_box(card)
@@ -502,12 +502,15 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
     open_app(ui)
     mirrors = page.locator('#chat-messages .chat-bubble.project-question')
     card = lambda qid: page.locator(f'#chat-messages .project-question-card[data-quiz-id="{qid}"]')
+    # A copy names its Project in its bubble's voice line, beside `Ouroboros` (owner 19.10, A).
+    reference = lambda qid: page.locator('#chat-messages .chat-bubble.project-question').filter(
+        has=page.locator(f'.project-question-card[data-quiz-id="{qid}"]')).locator('.chat-bubble-voice > .chat-quiz-project')
     ids = lambda: mirrors.evaluate_all("els => els.map(el => el.querySelector('.chat-quiz-card').dataset.quizId)")
     card('waiting').wait_for()
     assert ids() == ['second', 'passed', 'finished', 'replaced', 'waiting'], 'an answered question never enters Main'
     forms = page.evaluate("""() => [...document.querySelectorAll('#chat-messages .project-question-card')].map(el => ({
         id: el.dataset.quizId, status: el.querySelector('.chat-quiz-status-text').textContent,
-        chip: el.querySelector('.chat-quiz-project .chat-live-project-name')?.textContent,
+        chip: el.closest('.chat-bubble').querySelector('.chat-bubble-voice > .chat-quiz-project .chat-live-project-name')?.textContent,
         question: el.querySelector('.chat-quiz-question').textContent.trim().slice(0, 24),
         details: [...el.querySelectorAll('.chat-quiz-option-detail')].map(n => n.textContent),
         stake: el.querySelector('.chat-quiz-stake')?.textContent.trim() || '',
@@ -539,8 +542,8 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
         const code = question.querySelector('.md-code-block pre');
         return {overflow: scroller.scrollWidth - scroller.clientWidth, page: document.documentElement.scrollWidth - innerWidth,
             right: Math.max(...cards.map(el => box(el).right)), viewport: innerWidth,
-            chipInside: cards.every(el => box(el.querySelector('.chat-quiz-project')).right <= box(el).right + 0.5),
-            chipCut: (() => { const n = cards[0].querySelector('.chat-quiz-project .chat-live-project-name'); return n.scrollWidth > n.clientWidth; })(),
+            chipInside: cards.every(el => box(el.closest('.chat-bubble').querySelector('.chat-quiz-project')).right <= box(el).right + 0.5),
+            chipCut: (() => { const n = cards[0].closest('.chat-bubble').querySelector('.chat-quiz-project .chat-live-project-name'); return n.scrollWidth > n.clientWidth; })(),
             richHost: question.classList.contains('ui-rich-content'),
             listPadding: getComputedStyle(list).paddingInlineStart,
             nestedOffset: box(list.querySelector('ul').querySelector('li')).left - box(list.querySelector('li')).left,
@@ -554,16 +557,17 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
             codeOverflow: getComputedStyle(code).overflowX,
             codeReachable: code.scrollWidth <= code.clientWidth || getComputedStyle(code).overflowX === 'auto',
             sizes: [...new Set(cards.map(el => getComputedStyle(el.querySelector('.chat-quiz-status')).fontSize))],
-            capsule: [...new Set(cards.map(el => el.querySelector('.chat-quiz-project')).map(el => JSON.stringify([
+            capsule: [...new Set(cards.map(el => el.closest('.chat-bubble').querySelector('.chat-bubble-voice > .chat-quiz-project')).map(el => JSON.stringify([
                 getComputedStyle(el).fontSize, getComputedStyle(el).borderTopWidth, getComputedStyle(el).borderRadius,
-                box(el).height >= parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--touch-target-min'))])))]};
+                Math.round(box(el).height), el.classList.contains('ui-hit-area')])))]};
     }""")
     print(json.dumps({'question_mirror_geometry': geometry, 'viewport': [width, height]}))
     assert geometry['overflow'] <= 1 and geometry['page'] <= 0 and geometry['right'] <= width, geometry
-    # The head's status is meta; its Project reference is the ONE inline capsule (owner 17.10, Q2 C): reading size,
-    # no outline, a capsule's radius and a full target, the same as under a System row or on a receipt line.
+    # The head's status is meta; the Project reference is the ONE inline capsule (owner 17.10, Q2 C) beside
+    # `Ouroboros` in the voice line (owner 19.10, A): no outline, a capsule's radius, the line's 28px row and meta size,
+    # a finger's target through `.ui-hit-area`; it never passes the card's edge.
     assert geometry['chipInside'] and geometry['sizes'] == ['12px'], geometry
-    assert [json.loads(shape) for shape in geometry['capsule']] == [['14px', '0px', '999px', True]], geometry
+    assert [json.loads(shape) for shape in geometry['capsule']] == [['12px', '0px', '999px', 28, True]], geometry
     assert geometry['richHost'] and geometry['listPadding'] == '24px', geometry
     assert geometry['listTextOffset'] >= 20 and geometry['taskListStyle'] == 'none', geometry
     assert geometry['codeHasOverflow'] and geometry['codeReachable'] and geometry['codeOverflow'] == 'auto', geometry
@@ -587,7 +591,7 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
     assert card('second').locator('.chat-quiz-wait-ended').count() == 1
 
     # The chip opens the exact question in its Project: the same form, node for node.
-    card('waiting').locator('.chat-quiz-project').click()
+    reference('waiting').click()
     own = page.locator('.chat-quiz-card[data-task-id="proof-task"][data-quiz-id="waiting"]:not(.project-question-card)')
     own.get_by_text('Publication slips by about a week.', exact=True).wait_for()
     assert own.evaluate(CARD_FORM_JS) == card('waiting').evaluate(CARD_FORM_JS)
@@ -673,7 +677,7 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
     card('late-form').wait_for(timeout=15000)
     assert card('late-form').locator('.chat-quiz-option').count() == 0
     assert card('late-form').locator('.chat-quiz-question').inner_text() == 'Open the original question for its text.'
-    assert card('late-form').locator('.chat-quiz-project').count() == 1
+    assert reference('late-form').count() == 1
     setup_browser.capture(page, f'question-mirror-partial-{width}')
     late.update(state='answered', answered_index=1)
     sockets[-1].send(json.dumps({'type': 'chat', 'content': f"You answered in {project['name']}", 'is_progress': False,
@@ -963,8 +967,8 @@ def test_quiz_dot_and_evolution_facts_keep_their_shape_in_narrow_columns(subscri
         column.append(decision.buildQuizCard({ type: 'quiz', task_id: 'dot', quiz_id: 'expired', state: 'expired_terminal',
             question: 'How broadly should the next step change the interface?', options: ['Keep scope', 'Broaden scope'] }));
     }""")
-    dot = page.locator('.chat-quiz-dot').bounding_box()
-    assert dot['width'] == pytest.approx(8, abs=0.5) and dot['height'] == pytest.approx(8, abs=0.5), dot
+    dot = page.locator('.chat-quiz-mark').bounding_box()  # the shared status mark's 7px fact dot
+    assert dot['width'] == pytest.approx(7, abs=0.5) and dot['height'] == pytest.approx(7, abs=0.5), dot
     page.locator('#page-chat [data-mobile-nav-toggle]').click()  # a phone keeps navigation behind its menu
     page.click('[data-nav-page="dashboard"]')
     page.locator('[data-dashboard-tab="evolution"]').click()

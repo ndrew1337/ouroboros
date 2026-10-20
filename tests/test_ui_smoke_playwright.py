@@ -182,7 +182,7 @@ def test_ui_projects_sidebar_unread_and_keyboard_menu(direct_server_with_data):
                 assert add.is_visible()
                 assert add.get_attribute("aria-label") == "New project"
                 assert page.locator("#nav-projects-count").inner_text() == "1"
-                assert row.locator(".nav-unread-dot").count() == 1
+                assert row.get_attribute("data-unread") == ""
 
                 row.click()
                 page.wait_for_selector('#project-panel:not([hidden])', timeout=30_000)
@@ -720,8 +720,8 @@ def test_ui_smoke_phase3_declarative_widgets_and_settings(direct_server_with_dat
                 callout = card.locator('.widget-callout')
                 assert metric.get_attribute("data-tone") == "ok"
                 assert callout.get_attribute("data-tone") == "warn"
-                assert metric.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(110, 231, 183)"
-                assert callout.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(252, 211, 77)"
+                assert metric.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(130, 234, 185)"
+                assert callout.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(242, 212, 65)"
 
                 emitted = page.evaluate(
                     """async (skill) => {
@@ -2057,9 +2057,10 @@ def _mobile_keyboard_drawer_assertions(page, url: str, screenshot_path: pathlib.
     assert scroll["overflowY"] in {"auto", "scroll"}, scroll
     page.screenshot(path=str(diagnostic_directory(screenshot_path.parent, "ui-smoke") / screenshot_path.name), full_page=True)
 
-    # Exercise the real backdrop click in the visible strip to the right of the
-    # 320px drawer, then require all state/ARIA projections to close together.
-    page.locator("#nav-drawer-backdrop").click(position={"x": 380, "y": 400})
+    # Exercise the real backdrop click on the room's quarter left showing beside
+    # the drawer (all the scrim covers), then require all state/ARIA projections
+    # to close together.
+    page.locator("#nav-drawer-backdrop").click()
     page.wait_for_function(
         "() => !document.body.classList.contains('nav-drawer-open')"
         " && !document.querySelector('#primary-sidebar').classList.contains('open')"
@@ -2495,11 +2496,9 @@ def test_ui_smoke_live_cards_keep_usable_geometry_at_depth_and_in_project_panel(
     def assert_jump_geometry(page, scope_selector, *, require_overflow=True):
         page.evaluate(
             """({scopeSelector, requireOverflow}) => {
-                const scope = document.querySelector(scopeSelector);
-                const messages = scope
-                    .querySelector('.chat-messages, #chat-messages');
-                messages.scrollTop = 0;
-                messages.dispatchEvent(new Event('scroll'));
+                const messages = document.querySelector(scopeSelector).querySelector('.chat-messages, #chat-messages');
+                messages.dispatchEvent(new WheelEvent('wheel', {deltaY: -1}));
+                messages.scrollTop = 0; messages.dispatchEvent(new Event('scroll'));
             }""",
             {"scopeSelector": scope_selector, "requireOverflow": require_overflow},
         )
@@ -3622,7 +3621,7 @@ def test_ui_smoke_cancel_run_button_eligibility_and_cancelled_state(direct_serve
     """v6.82 P5 / S3 Q2: the stop control renders ONLY on live marker-attested
     root cards (never marker-less direct-turn cards, subagent children, or the
     reusable background slot), opens the dropdown, and a cancelled root
-    replays as an honest warn-toned "Stopped" — never a generic "Done"."""
+    replays as an honest neutral "Stopped" — never a generic "Done"."""
     pytest.importorskip("playwright.sync_api", reason="Playwright is not installed")
     from playwright.sync_api import Error as PlaywrightError
     from playwright.sync_api import sync_playwright

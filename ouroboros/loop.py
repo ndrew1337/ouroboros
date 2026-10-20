@@ -258,13 +258,14 @@ def _provider_unavailable_result(
             control_reason=control_reason, wait_cause=wait_cause,
         )
     if is_context_overflow:
+        reason = "context_overflow" if ctx.accumulated_usage.get("reason_code") == "context_overflow" else "llm_api_error"
         text, usage, llm_trace = _forced_fallback_result(
             ctx, llm_trace, fallback, "context_overflow",
             source="context_overflow_local_salvage", host_words=not salvaged,
         )
         usage.update(
             execution_status=RESULT_INFRA_FAILED,
-            reason_code="llm_api_error",
+            reason_code=reason,
             _last_llm_error_kind="context_overflow",
         )
         return with_terminal_notice(text, usage, llm_trace)
@@ -771,7 +772,9 @@ def run_llm_loop(
         # A budget-pause HOLD ended by control rejoins the model-wait rails; else re-raise with evidence.
         return _loop_exit_after_exception(exc, limit_ctx, exit_ctx, llm_trace, transport_wait)
     finally:
-        with timed_phase("cleanup"):
+        from ouroboros.delegate_custody_reconcile import defer_loop_exit_audit
+
+        with timed_phase("cleanup"), defer_loop_exit_audit(accumulated_usage):
             working_checkpoint.save_terminal(limit_ctx)  # a returned result's drained mail: saved, then ACKed
             _delegate_hold_close(tools, drive_logs=drive_logs, task_id=task_id, detail="loop_exit")
             _cleanup_loop_resources(stateful_executor, exit_ctx)

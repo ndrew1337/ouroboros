@@ -1,8 +1,9 @@
 """Optional reviewed extension facts appended at the existing pre-send tail seam.
 
 Only local data files are read. No callback, model, network or refresh belongs
-on this path. The transcript itself is the deduplication ledger: cold Resume
-and authored compaction therefore cannot leave an invisible fresh claim alive.
+on this path. Deduplication reads the visible transcript. A successor replaces obsolete
+full notes with retained-source pointers; metadata renewals remain append-only.
+Renewals keep their latest full base visible; cold Resume needs no separate seen-state.
 """
 from __future__ import annotations
 
@@ -83,6 +84,32 @@ def obsolete_snapshot_positions(messages) -> set[int]:
     return {index for index, message in enumerate(messages)
             if message.get(HOST_CONTEXT_KIND_KEY) == SNAPSHOT_KIND
             and index not in keep}
+
+
+def _address_superseded(messages, ctx) -> None:
+    """Address obsolete full notes only; preserve metadata renewals and any unretained text."""
+    changed = False
+    for index in obsolete_snapshot_positions(messages):
+        text = messages[index].get("content")
+        if not isinstance(text, str) or "\n" not in text:
+            continue
+        try:
+            row = json.loads(text.split("\n", 1)[1])
+            retained = row.get("source", {}).get("retained", {})
+            if not isinstance(row.get("text"), str) or not retained.get("sha256"):
+                continue
+        except (ValueError, TypeError, AttributeError):
+            continue
+        messages[index] = bound_host_row(SNAPSHOT_KIND,
+            f"[Superseded skill snapshot {json.dumps(row['skill'], ensure_ascii=False)}; exact source: "
+            f"query_data(op='blob', sha256='{retained['sha256']}', blob_kind='txt').]")
+        changed = True
+    if changed:
+        from ouroboros.transcript_prefix import sanction_rewrite
+        from ouroboros.usage_accounting import invalidate_task_cache_splits
+
+        sanction_rewrite(ctx, "superseded_skill_snapshot")
+        invalidate_task_cache_splits(getattr(ctx, "task_id", ""))
 
 
 def _read_snapshot(name: str, descriptor: dict, now: float) -> dict:
@@ -171,4 +198,6 @@ def maybe_append_skill_snapshots(ctx, messages, drive_root) -> bool:
                 current["source"]["retention"] = "unavailable; complete selected data remains in this note"
         messages.append(snapshot_note(current))
         changed = True
+    if changed:
+        _address_superseded(messages, ctx)
     return changed

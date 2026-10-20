@@ -952,7 +952,7 @@ def retry_refused_image_round(ctx: Any, failed: Any) -> Optional[Tuple[Any, Any]
     if refusal is None or not _round_capture(ctx, failed):
         return None
     from ouroboros import loop
-    from ouroboros.loop_llm_call import RETRY_ATTEMPTS_SPENT_KEY, RETRY_WALL_EXHAUSTED_KEY
+    from ouroboros.loop_llm_call import REFUSED_CANDIDATE_KEY, RETRY_ATTEMPTS_SPENT_KEY, RETRY_WALL_EXHAUSTED_KEY
     from ouroboros.usage_accounting import PhysicalAttemptPreconditionFailed
 
     from ouroboros.model_slots import task_model_binding
@@ -983,6 +983,11 @@ def retry_refused_image_round(ctx: Any, failed: Any) -> Optional[Tuple[Any, Any]
         pending = (usage.pop(_PENDING_REFUSALS_KEY, None) or {}).get(route) or {}
     if msg is not None:
         usage.setdefault(REFUSED_IMAGES_KEY, {}).setdefault(route, {}).update(pending)
+    elif usage.get(REFUSED_CANDIDATE_KEY):
+        # Main admission refused this candidate before sending. Keep its size
+        # facts for the common recovery path, without claiming an executed retry.
+        sent = False
+        retry = {"error_kind": "context_overflow", "cause": "pre_send_admission"}
     elif sent:
         capture = loop.last_physical_attempt_capture()
         own = capture is not None and getattr(capture, "attempt_id", None) != getattr(failed, "attempt_id", None)

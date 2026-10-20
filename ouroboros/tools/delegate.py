@@ -59,6 +59,7 @@ from ouroboros.delegate_supervision import delegate_wait_entry as _delegate_wait
 from ouroboros.delegate_start_instructions import (
     HOST_FACTS_INSTRUCTION as _HOST_FACTS_INSTRUCTION,
     HOST_INSTRUCTIONS as _HOST_INSTRUCTIONS,
+    SHARED_ENVIRONMENT_INSTRUCTION as _SHARED_ENVIRONMENT_INSTRUCTION,
     UNPROVEN_BOUNDARY_INSTRUCTION as _UNPROVEN_BOUNDARY_INSTRUCTION,
     access_instruction,
     append_coordination_context,
@@ -186,6 +187,7 @@ def _host_instructions(authority: "DelegatedRunShape", assignment: str = "",
     """
     text = payload_host_instructions(_HOST_INSTRUCTIONS, payload_skill) if payload_skill else _HOST_INSTRUCTIONS
     text += _HOST_FACTS_INSTRUCTION  # the engine's host facts, once, for every delegated session
+    text += "\n\n" + _SHARED_ENVIRONMENT_INSTRUCTION
     if authority.delegated:
         text += (
             " No filesystem sandbox is requested; scoped HOME selects native state "

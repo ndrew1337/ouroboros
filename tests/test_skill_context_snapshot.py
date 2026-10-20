@@ -80,7 +80,7 @@ def test_tail_prefix_real_round_and_final_serializers(publisher, monkeypatch):
     owner_corpus = deepcopy(ctx._owner_directives)
     owner_hash = owner_source_sha256(ctx)
     owner_words = directive_owner_rows(ctx)
-    recorder = SimpleNamespace()
+    recorder = ctx
     assert observe_send(recorder, messages, round_idx=1) is None
     round_ctx = _CompactionRoundContext(tools=SimpleNamespace(_ctx=ctx), drive_root=root,
         drive_logs=root / "logs", task_id="root", round_idx=2, event_queue=None, emit_progress=lambda x: None)
@@ -105,7 +105,9 @@ def test_tail_prefix_real_round_and_final_serializers(publisher, monkeypatch):
     assert owner_source_sha256(ctx) == owner_hash and directive_owner_rows(ctx) == owner_words
     _write(path, "B")
     messages = _run_round_compaction(messages, round_ctx)
-    assert observe_send(recorder, messages, round_idx=3) is None
+    changed = observe_send(recorder, messages, round_idx=3)
+    assert changed["sanctioned_by"] == "superseded_skill_snapshot"
+    assert changed["index"] == len(before)
     assert messages[:len(before)] == before
 
 
@@ -209,6 +211,53 @@ def test_superseded_notes_reclaim_only_after_latest_complete_note(publisher):
         _write(path, text)
         maybe_append_skill_snapshots(ctx, messages, root)
     assert _obsolete_host_rows(messages) == {0, 1}
+
+
+def test_successor_addresses_old_full_snapshot_and_retains_exact_source(publisher):
+    import re
+    from ouroboros.tools.query_data import _query_data
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.skill_context_snapshot import snapshot_note
+
+    root, skill, ctx, path = publisher
+    prefix = [{"role": "user", "content": "Owner words remain exact"}]
+    messages = deepcopy(prefix)
+    first = _write(path, "A" * 12_000)
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    original = deepcopy(messages[1])
+    _write(path, "B" * 12_000)
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    pointer = messages[1]["content"]
+    assert "\n" not in pointer and "A" * 100 not in pointer and "Superseded skill snapshot" in pointer
+    sha = re.search("sha256='([a-f0-9]{64})'", pointer).group(1)
+    read = json.loads(_query_data(ToolContext(repo_dir=root, drive_root=root, task_id="root"),
+                                 op="blob", sha256=sha, blob_kind="txt"))
+    assert read["status"] == "ok" and json.loads(read["data"]) == first
+    assert messages[:1] == prefix
+    # Lease renewal names the latest full base, not the superseded A snapshot.
+    latest = visible_snapshots(messages)[skill.name][1]
+    latest["valid_until"] = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    messages[-1] = snapshot_note(latest)
+    assert maybe_append_skill_snapshots(ctx, messages, root)
+    renewal = json.loads(messages[-1]["content"].split("\n", 1)[1])
+    assert renewal["text_ref"]["source_sha256"] == latest["source"]["sha256"]
+    assert renewal["text_ref"]["source_sha256"] != json.loads(original["content"].split("\n", 1)[1])["source"]["sha256"]
+    assert visible_snapshots(messages)[skill.name][1]["text"] == "B" * 12_000
+    assert "B" * 12_000 in messages[-2]["content"]
+
+
+def test_snapshot_without_retained_source_stays_whole_when_superseded(publisher, monkeypatch):
+    from ouroboros import observability
+    root, skill, ctx, path = publisher
+    monkeypatch.setattr(observability, "write_blob", lambda *a, **k: (_ for _ in ()).throw(OSError("disk full")))
+    messages = []
+    _write(path, "source that must survive")
+    maybe_append_skill_snapshots(ctx, messages, root)
+    first = deepcopy(messages[0])
+    _write(path, "successor")
+    maybe_append_skill_snapshots(ctx, messages, root)
+    assert messages[0] == first
+    assert visible_snapshots(messages)[skill.name][1]["text"] == "successor"
 
 
 @pytest.mark.parametrize("path", ["../escape.json", "/tmp/escape.json", "C:\\escape.json", "folder/", ""])

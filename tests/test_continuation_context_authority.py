@@ -424,7 +424,7 @@ def test_context_overflow_skips_cross_model_and_forced_provider_calls(tmp_path, 
         drive_root=tmp_path,
     )
     assert not fallback_calls
-    assert "context exceeded" in result
+    assert "Context-size recovery" in result and "no further provider call" in result
     assert usage["execution_status"] == "infra_failed"
     assert usage["reason_code"] == "llm_api_error"
     assert usage["_last_llm_error_kind"] == "context_overflow"

@@ -637,7 +637,7 @@ MAIN_DENSITY_BASIS = "bounded_proxy_v2"
 COLD_START_TOKEN_DENSITY = 1.65
 MEASURED_DENSITY_SAFETY_FACTOR = 1.05
 
-_DENSITY_MEMO: Dict[str, Tuple[float, str]] = {}
+_DENSITY_MEMO: Dict[str, Tuple[float, str, int]] = {}
 
 
 def _density_observation_seq(pair: Dict[str, Any]) -> int:
@@ -701,6 +701,7 @@ def record_token_density(
     if (
         memo and _age_seconds(memo[1]) < _TOKEN_DENSITY_FRESH_SEC
         and abs(density - memo[0]) <= _TOKEN_DENSITY_DRIFT_TOLERANCE * memo[0]
+        and int(prompt_chars) / 2 <= memo[2] <= int(prompt_chars) * 2
     ):
         return
     try:
@@ -731,8 +732,9 @@ def record_token_density(
                 newest is not None
                 and _age_seconds(str(newest.get("observed_at") or "")) < _TOKEN_DENSITY_FRESH_SEC
                 and abs(density - known) <= _TOKEN_DENSITY_DRIFT_TOLERANCE * known
+                and int(prompt_chars) / 2 <= int(newest["prompt_chars"]) <= int(prompt_chars) * 2
             ):
-                _DENSITY_MEMO[memo_key] = (known, str(newest.get("observed_at") or ""))
+                _DENSITY_MEMO[memo_key] = (known, str(newest.get("observed_at") or ""), int(newest["prompt_chars"]))
                 return
             observed_at = utc_now_iso()
             observation_seq = max(
@@ -767,7 +769,7 @@ def record_token_density(
             ][:_TOKEN_DENSITY_MAX_PAIRS - 1]
             store[fp] = {"pairs": [densest, *newest_rest]}
             if _save(drive_root, data):
-                _DENSITY_MEMO[memo_key] = (density, observed_at)
+                _DENSITY_MEMO[memo_key] = (density, observed_at, int(prompt_chars))
     except Exception:
         log.debug("record_token_density failed", exc_info=True)
 
@@ -800,10 +802,8 @@ def _normalized_density_model(model_id: str) -> str:
 def _fresh_density_pairs(
     store: Dict[str, Any], model_id: str = "", *, basis: str = "",
 ) -> List[Tuple[Dict[str, Any], float]]:
-    # Without ``model_id`` every model's rows are returned — ONLY for the main
-    # resolver's exact-route lookup (a route fingerprint belongs to one model;
-    # the caller filters on it). No resolver reduces over other models' rows:
-    # another tokenizer's density is no evidence about this route.
+    # Exact-route lookup spans storage keys: the local lane records "local-model"
+    # while the route fingerprint binds the configured model name.
     # ``basis`` filters to rows measured on one named basis. The MAIN fit
     # resolver passes MAIN_DENSITY_BASIS — its multiplier must match the fit
     # estimator's own measure: a pre-basis row (no stamp) or a legacy ``raw``
@@ -824,23 +824,35 @@ def _fresh_density_pairs(
     ]
 
 
-def resolve_main_token_density(drive_root: Any, route_fp: str, model_id: str) -> Tuple[float, str]:
-    """Newest fresh exact-route witness, then exact-model witness, then neutral."""
+def resolve_main_token_density(
+    drive_root: Any, route_fp: str, model_id: str, *, estimate_tokens: Optional[int] = None,
+) -> Tuple[float, str]:
+    """Newest fresh witness: exact route across storage keys, then model, else neutral.
+
+    When sizing a candidate, compare raw input with raw input (``prompt_chars / 4``),
+    within a factor of two. A small helper cannot calibrate a large conversation.
+    """
     try:
         store = _load(drive_root).get("token_density", {}) or {}
         route = str(route_fp or "").strip()
+
+        def comparable(item):
+            return estimate_tokens is None or estimate_tokens / 2 <= int(item[0]["prompt_chars"]) / 4 <= estimate_tokens * 2
+
         route_pairs = [
             item for item in _fresh_density_pairs(store, basis=MAIN_DENSITY_BASIS)
-            if route and str(item[0].get("route_fp") or "") == route
+            if route and str(item[0].get("route_fp") or "") == route and comparable(item)
+        ]
+        model_pairs = [
+            item for item in _fresh_density_pairs(
+                store, _normalized_density_model(model_id), basis=MAIN_DENSITY_BASIS)
+            if model_id and comparable(item)
         ]
         if route_pairs:
             return max(
                 enumerate(route_pairs),
                 key=lambda item: (*_density_recency_key(item[1][0]), item[0]),
             )[1][1], "fresh_route_usage"
-        model_pairs = _fresh_density_pairs(
-            store, _normalized_density_model(model_id), basis=MAIN_DENSITY_BASIS,
-        )
         if model_pairs:
             return max(
                 enumerate(model_pairs),

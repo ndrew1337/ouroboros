@@ -659,7 +659,7 @@ def test_only_the_main_window_gets_the_integrated_bar(mac, monkeypatch):
     from ouroboros import launcher_onboarding
 
     monkeypatch.setattr(lb, "indicator_class", lambda: None)
-    background = lb.Background(lambda: None, lambda: 8765, threading.Event())
+    background = lb.Background(lambda: None, lambda: 1, threading.Event())
     main = Window(NSWindow())
     main.events.closing, main.events.shown = Hook(), Hook()
     background.attach(main)
@@ -681,7 +681,7 @@ def test_only_the_main_window_gets_the_integrated_bar(mac, monkeypatch):
     fake.create_window, fake.start = create_window, lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "webview", fake)
     monkeypatch.setitem(sys.modules, "webview.menu", menu)
-    launcher_onboarding.present_first_run_onboarding({}, 8765, open_external_url=lambda url: {"ok": False})
+    launcher_onboarding.present_first_run_onboarding({}, 1, open_external_url=lambda url: {"ok": False})
     assert created["window"].events.before_load.handlers == []
 
 

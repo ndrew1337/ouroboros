@@ -1,4 +1,4 @@
-"""Immutable launcher: bootstrap repo, manage server.py, and optionally host UI."""
+"""Bootstrap the managed source, supervise server.py, and optionally host its UI."""
 
 from __future__ import annotations
 
@@ -13,11 +13,28 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
 from logging.handlers import RotatingFileHandler
 from typing import Optional
+
+
+def _rehome_legacy_handoff() -> None:
+    """Before package adoption can wait: repair a recognized legacy GUI handoff once."""
+    marked, args = os.environ.pop("OUROBOROS_LAUNCHER_HANDOFF", ""), sys.argv[1:]
+    if sys.platform == "win32" and not getattr(sys, "frozen", False) and not marked and "--no-ui" not in args \
+            and any(arg.split("=", 1)[0] == "--seed-bundle" for arg in args):
+        # This existing Windows leaf is stdlib-only; importing its package would run adoption first.
+        import runpy
+
+        runpy.run_path(str(pathlib.Path(__file__).parent / "ouroboros" / "launcher_windows_runtime.py"))[
+            "rehome_legacy_handoff"](args)
+
+
+if __name__ == "__main__":
+    _rehome_legacy_handoff()
 
 # Seal-safe imports: the current interpreter needs the flag before project imports;
 # PYTHONDONTWRITEBYTECODE alone only affects later child interpreters. Bundle writes
@@ -49,7 +66,7 @@ from ouroboros.launcher_bootstrap import (
     check_git as _check_git, launcher_sources_changed, remember_loaded_checkout,
     install_deps as _install_deps_impl,
     embedded_python_env, update_external_host,
-    parse_launch_options, source_handoff_argv,
+    exec_source_launcher, find_embedded_python, macos_source_entry, parse_launch_options, shell_runtime_facts,
     automatic_launch_allowed,
     sync_existing_repo_from_bundle as _sync_existing_repo_from_bundle_impl,
 )
@@ -61,7 +78,7 @@ from ouroboros.launcher_onboarding import (
     setup_recovery_menu,
 )
 from ouroboros.launcher_background import (Background, DesktopApi, activate_running_instance, background_env,
-                                           request_tray_cleanup, stop_tray_before_exit)
+                                           request_tray_cleanup, restore_tray_after_handoff, stop_tray_before_exit)
 from ouroboros.launcher_server_reaper import (
     reap_same_install_strays as _reap_same_install_strays_impl,
 )
@@ -79,13 +96,11 @@ from ouroboros.platform_layer import (
     close_job,
     create_kill_on_close_job,
     current_process_group_id,
-    embedded_python_candidates,
     force_kill_pid,
     git_install_hint,
     install_shutdown_signal_handlers,
     kill_pid_tree,
     kill_process_group_id,
-    kill_process_on_port,
     kill_process_tree,
     merge_hidden_kwargs,
     open_path_external,
@@ -101,10 +116,11 @@ from ouroboros.utils import atomic_write_json, utc_now_iso
 
 MAX_CRASH_RESTARTS = 5
 CRASH_WINDOW_SEC = 120
+# Entry protocol 1: --seed-bundle selects plain Python for the body and its
+# installs; --runtime-venv is retained separately while the shell keeps app identity.
+MACOS_SOURCE_ENTRY_PROTOCOL = 1
 # One bounded visible retry when dependency installation fails.
 _DEPS_RETRY_DELAY_SEC = 5
-_CREATE_SUSPENDED = getattr(subprocess, "CREATE_SUSPENDED", 0x4) if IS_WINDOWS else 0
-_CREATE_NEW_PROCESS_GROUP = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if IS_WINDOWS else 0
 
 # WA6: globally suppress bytecode writes for the launcher process itself and any
 # naive os.environ.copy() child it spawns. A signed+notarized macOS .app must not
@@ -156,33 +172,37 @@ def _server_process_record_path() -> pathlib.Path:
 
 
 def _hidden_run(command, **kwargs):
-    """subprocess.run() with platform-appropriate hidden-window flags."""
-    return subprocess.run(command, **merge_hidden_kwargs(kwargs))
+    """Hidden bootstrap commands keep their own Job/lifeline until cleanup."""
+    from ouroboros.launcher_bootstrap import run_bootstrap_command
+
+    return run_bootstrap_command(command, _shutdown_event, **merge_hidden_kwargs(kwargs))
 
 
-def _hidden_popen(command, **kwargs):
+def _hidden_popen(command, *, bootstrap=False, **kwargs):
     """subprocess.Popen() with platform-appropriate hidden-window flags."""
+    if bootstrap:
+        from ouroboros.launcher_bootstrap import spawn_bootstrap_command
+
+        return spawn_bootstrap_command(command, _shutdown_event, interactive=True, **merge_hidden_kwargs(kwargs))["proc"]
     return subprocess.Popen(command, **merge_hidden_kwargs(kwargs))
-
-def _find_embedded_python() -> str:
-    """Locate the embedded python-build-standalone interpreter."""
-    if getattr(sys, "frozen", False):
-        base = pathlib.Path(sys._MEIPASS)
-    else:
-        base = pathlib.Path(__file__).parent
-    for path in embedded_python_candidates(base):
-        if path.exists():
-            return str(path)
-    return sys.executable
-
-
-EMBEDDED_PYTHON = _find_embedded_python()
 
 
 def _bundle_dir() -> pathlib.Path:
     if getattr(sys, "frozen", False):
         return pathlib.Path(sys._MEIPASS)
     return _external_seed_bundle or pathlib.Path(__file__).parent
+
+
+def _exec_source_launcher() -> None:
+    exec_source_launcher(_bootstrap_context(), _launch_argv, release_lock=release_pid_lock,
+                         acquire_lock=acquire_pid_lock, before_release=lambda: stop_tray_before_exit(lambda: None),
+                         on_failure=restore_tray_after_handoff, desktop=not _external_ui, macos=IS_MACOS,
+                         cancelled=_shutdown_event.is_set)
+
+
+def _shell_facts() -> dict:
+    seed = _bundle_dir() if getattr(sys, "frozen", False) or _external_seed_bundle else None
+    return shell_runtime_facts(REPO_DIR, seed, APP_VERSION, macos=IS_MACOS)
 
 
 def _bootstrap_context() -> BootstrapContext:
@@ -235,6 +255,7 @@ _external_ui = False
 _external_host_update: Optional[pathlib.Path] = None
 _external_host_result: dict = {}
 _external_seed_bundle: Optional[pathlib.Path] = None
+EMBEDDED_PYTHON = find_embedded_python(_bundle_dir(), macos=IS_MACOS)
 _launch_argv: list[str] = []
 _launch_intent = "owner"
 _runtime_venv = None  # runtime_venv.RuntimeVenv selected by --runtime-venv
@@ -427,7 +448,7 @@ def start_agent(port: int = AGENT_SERVER_PORT) -> subprocess.Popen:
     env["OUROBOROS_SERVER_PORT"] = str(port)
     env["OUROBOROS_DATA_DIR"] = str(DATA_DIR)
     env["OUROBOROS_REPO_DIR"] = str(REPO_DIR)
-    env["OUROBOROS_APP_VERSION"] = str(APP_VERSION)
+    env["OUROBOROS_APP_VERSION"] = _shell_facts()["bundle_version"] or str(APP_VERSION)
     env["OUROBOROS_MANAGED_BY_LAUNCHER"] = "1"
     env["OUROBOROS_MANAGED_REPO_DIR"] = str(REPO_DIR.resolve())
     env["OUROBOROS_LAUNCH_INTENT"] = _launch_intent  # this launcher's parsed intent, never an inherited one
@@ -459,15 +480,8 @@ def start_agent(port: int = AGENT_SERVER_PORT) -> subprocess.Popen:
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
     }
-    if IS_WINDOWS:
-        popen_kwargs["creationflags"] = (
-            popen_kwargs.get("creationflags", 0)
-            | _CREATE_NEW_PROCESS_GROUP
-            | _CREATE_SUSPENDED
-        )
-    else:
-        popen_kwargs.update(subprocess_new_group_kwargs())
-
+    popen_kwargs.update(subprocess_new_group_kwargs(suspended=IS_WINDOWS))  # Windows resumes it once its Job owns it
+    # Hidden-window flags: the server starts without a console window (CREATE_NO_WINDOW on Windows).
     proc = _hidden_popen([EMBEDDED_PYTHON, str(server_py)], **popen_kwargs)
     _agent_proc = proc
 
@@ -643,39 +657,10 @@ def _await_generation_endpoint(proc, *, port_file_cleared: bool, abort_event=Non
 
 
 def _kill_orphaned_children(reason: str = "window_close") -> None:
-    """Final safety net: the recorded server, companions and multiprocessing children.
+    """Shared close/Panic final cleanup (not the startup stray sweep)."""
+    from ouroboros.launcher_server_reaper import kill_runtime_orphans
 
-    Module-level so both the window-close handler (_on_closing, main thread) and
-    the panic-stop branch (agent_lifecycle_loop, supervisor thread) tear down the
-    exact same way. ``reason`` names the actual trigger, journalled HERE because
-    stop_agent() usually consumed the recorded-process row already. No port is swept: the main and
-    Host Service listeners end with their server; companion PIDs/ports stay the disclosed exception.
-    """
-    log.info("Tearing down runtime orphans (%s)", reason)
-    _cleanup_recorded_server_process(reason)
-    try:
-        companions = json.loads((DATA_DIR / "state" / "extension_companions.json").read_text(encoding="utf-8"))
-        if isinstance(companions, dict):
-            for item in companions.values():
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    force_kill_pid(int(item.get("pid") or 0))
-                except (TypeError, ValueError, ProcessLookupError, PermissionError, OSError):
-                    pass
-                for companion_port in item.get("ports") or []:
-                    try:
-                        kill_process_on_port(int(companion_port))
-                    except (TypeError, ValueError, OSError):
-                        pass
-    except Exception:
-        pass
-    for child in __import__("multiprocessing").active_children():
-        try:
-            force_kill_pid(child.pid)
-            log.info("Killed orphaned child pid=%d", child.pid)
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
+    kill_runtime_orphans(DATA_DIR, _cleanup_recorded_server_process, reason=reason, log=log)
 
 
 def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
@@ -703,7 +688,6 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
         _external_host_result = update_external_host(_external_host_update, EMBEDDED_PYTHON, log, _shutdown_event)
         if _shutdown_event.is_set():
             break  # Native preparation has reaped its owned processes before returning.
-        remember_loaded_checkout(REPO_DIR)  # the commit this launcher's own modules came from
         proc = start_agent(port)
         if _shutdown_event.is_set():
             stop_agent()
@@ -744,7 +728,7 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
                 close_job(_agent_job)
                 _agent_job = None
 
-        if _shutdown_event.is_set():
+        if _shutdown_event.is_set() and exit_code != PANIC_EXIT_CODE:
             break
 
         if exit_code == PANIC_EXIT_CODE:
@@ -772,6 +756,9 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
 
         time.sleep(2)
 
+        if _shutdown_event.is_set():
+            break
+
         if _agent_restart_requested.is_set():
             # Launcher-requested recycle (first-run configuration): deliberate,
             # so it skips crash accounting exactly like the agent's own code-42
@@ -798,13 +785,8 @@ def agent_lifecycle_loop(port: int = AGENT_SERVER_PORT) -> None:
                         "import them — see the pip output above for the cause.",
                         MAX_CRASH_RESTARTS, CRASH_WINDOW_SEC,
                     )
-            if _external_seed_bundle is not None or launcher_sources_changed(REPO_DIR, bundle_dir=_bundle_dir()):
-                # The interpreter (a --runtime-venv included) carries over; consumed options do not.
-                argv = source_handoff_argv(_launch_argv)
-                if getattr(sys, "frozen", False):
-                    argv += ["--seed-bundle", str(_bundle_dir())]
-                release_pid_lock()
-                os.execv(EMBEDDED_PYTHON, [EMBEDDED_PYTHON, str(REPO_DIR / "launcher.py"), *argv])
+            if launcher_sources_changed(REPO_DIR, bundle_dir=_bundle_dir(), source_root=pathlib.Path(__file__).parent):
+                _exec_source_launcher()  # a refused successor: this launcher starts the next generation itself
             continue
 
         now = time.time()
@@ -926,10 +908,11 @@ def _request_auto_grant_reviewed_skills_change(enabled: bool, confirm_fn) -> dic
     return {"ok": True, "enabled": new_enabled}
 
 
-def _request_skill_key_grant(skill: str, keys: list, confirm_fn) -> dict:
-    from types import SimpleNamespace
+def _request_skill_key_grant(skill: str, keys: list, confirm_fn, *, enable_after_grant: bool = False,
+                             allow_pending: bool = False) -> dict:
+    from ouroboros.config import runtime_setting, SETTINGS_DEFAULTS
     from ouroboros.skill_loader import find_skill
-    from ouroboros.skill_lifecycle_actions import prepare_skill_grant, run_skill_action
+    from ouroboros.skill_lifecycle_actions import prepare_skill_grant
 
     skill_name = str(skill or "").strip()
     items = [str(key or "").strip() for key in (keys or []) if str(key or "").strip()]
@@ -943,33 +926,33 @@ def _request_skill_key_grant(skill: str, keys: list, confirm_fn) -> dict:
     message = (
         f"Grant skill {loaded.name!r} access to these settings keys / host permissions?\n\n"
         + "\n".join([*preview["keys"], *preview["permissions"]])
+        + ("\n\nThen turn this skill on." if enable_after_grant else "")
         + "\n\nOnly grant keys and permissions to reviewed skills you trust."
     )
     if not confirm_fn("Confirm Skill Grant", message):
         return {"ok": False, "error": "Skill grant cancelled."}
-
-    def reconcile_on_server(current):
-        # The immutable launcher never imports or registers the skill locally.
-        # Keep the existing server reconcile transport, after the shared grant
-        # owner has revalidated the revision confirmed above and saved its grant.
-        if not current.manifest.is_extension():
-            return {"action": None, "reason": None}
-        actual_port = _read_port_file() or AGENT_SERVER_PORT
-        req = urllib.request.Request(
-            f"http://127.0.0.1:{actual_port}/api/skills/{urllib.parse.quote(current.name)}/reconcile",
-            method="POST", data=b"{}", headers={"Content-Type": "application/json"},
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            payload = json.loads(resp.read().decode("utf-8") or "{}")
-        return {"action": payload.get("extension_action"), "reason": payload.get("extension_reason"),
-                "load_error": payload.get("load_error"), "live_loaded": payload.get("live_loaded"),
-                "process": payload.get("process"), "server_reconcile": payload.get("server_reconcile")}
-
-    ctx = SimpleNamespace(drive_root=DATA_DIR, repo_dir=REPO_DIR, task_id="", current_chat_id=0)
-    return run_skill_action(
-        ctx, loaded.name, "grant", expected_content_hash=preview["content_hash"], items=items,
-        repo_path=repo_path, _owner_actor="owner_launcher", _reconcile_grant=reconcile_on_server,
+    # The immutable launcher never imports, registers or installs packages for a skill: after its
+    # native confirm the server's grant owner revalidates the revision confirmed above, saves the
+    # grant, turns the skill on when ready and readies its packages (the same POST the browser sends).
+    actual_port = _read_port_file() or AGENT_SERVER_PORT
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{actual_port}/api/skills/{urllib.parse.quote(loaded.name)}/grants", method="POST",
+        data=json.dumps({"items": items, "expected_content_hash": preview["content_hash"],
+                         **({"enable_after_grant": True} if enable_after_grant else {})}).encode("utf-8"),
+        headers={"Content-Type": "application/json", **({"Prefer": "respond-async"} if allow_pending else {})},
     )
+    try:
+        timeout = 20 if allow_pending else float(runtime_setting(
+            "OUROBOROS_SKILL_LIFECYCLE_TIMEOUT_SEC", SETTINGS_DEFAULTS["OUROBOROS_SKILL_LIFECYCLE_TIMEOUT_SEC"]))
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8") or "{}")
+    except urllib.error.HTTPError as exc:  # a typed refusal is the server's answer, not a transport failure
+        try:
+            return json.loads(exc.read().decode("utf-8") or "{}") or {"ok": False, "error": f"HTTP {exc.code}"}
+        except ValueError:
+            return {"ok": False, "error": f"HTTP {exc.code}"}
+    except (OSError, ValueError) as exc:
+        return {"ok": False, "error": f"The server did not answer the grant: {exc}"}
 
 
 def _webview_ready() -> tuple[bool, str]:
@@ -1125,6 +1108,9 @@ def main(argv=()):
     _external_ui = options.no_ui
     _external_host_update = options.host_update.resolve() if options.host_update is not None else None
     _external_seed_bundle = options.seed_bundle.resolve() if options.seed_bundle is not None else None
+    if IS_MACOS and _external_seed_bundle is not None \
+            and pathlib.Path(sys.executable) == macos_source_entry(_external_seed_bundle):
+        EMBEDDED_PYTHON = find_embedded_python(_external_seed_bundle, macos=IS_MACOS)
     if _external_ui:
         _headless = True
     if IS_WINDOWS and not _external_ui:
@@ -1150,14 +1136,9 @@ def main(argv=()):
         if options.launch_intent == "automatic" or (not _headless and activate_running_instance(PID_FILE)):
             return  # a sign-in start stays quiet; a manual launch showed the running window
         if _headless:
-            # The lock loss usually races the FIRST launcher's bootstrap
-            # (repeated Open clicks): the port file may be absent (unlinked
-            # pre-start) or stale from an older run on another port. Poll
-            # briefly for a healthy server, re-reading the file between
-            # probes, so Open during bootstrap lands on the live UI; on
-            # timeout fall back to the last-read port (best-effort notice;
-            # the bound is soft — a probe straddling the deadline may run
-            # its own urlopen timeout, a couple of seconds of overshoot).
+            # A second Open may race bootstrap's absent/stale port. Re-read
+            # between health probes; a final probe can overshoot this soft
+            # deadline by its own urlopen timeout. The last port is best-effort.
             port = _read_port_file()
             deadline = time.time() + 10.0
             while time.time() < deadline and not _wait_for_server(port, timeout=1.0):
@@ -1179,7 +1160,7 @@ def main(argv=()):
             return
         webview.create_window(
             "Ouroboros",
-            html="<html><body style='background:#1a1a2e;color:white;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
+            html="<html><body style='background:#0f0f11;color:#efeff2;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
             "<div style='text-align:center'><h2>Ouroboros is already running</h2><p>Only one instance can run at a time.</p></div></body></html>",
             width=420,
             height=200,
@@ -1188,14 +1169,48 @@ def main(argv=()):
         return
 
     import atexit
-    atexit.register(release_pid_lock)
+    finalizer = lambda: stop_tray_before_exit(release_pid_lock)
+    atexit.register(finalizer)
 
     if not automatic_launch_allowed(options.launch_intent, DATA_DIR, log):
         return
-    # Listen before the long boot: a manual second launch meanwhile is kept and opens the window once it exists.
-    background = None if _headless else Background(lambda: _on_closing(), _read_port_file, _shutdown_event).listen(PID_FILE)
+    # Record the loaded generation before bootstrap can advance the managed checkout.
+    remember_loaded_checkout(REPO_DIR, bundle_dir=_bundle_dir() if getattr(sys, "frozen", False) or pathlib.Path(
+        __file__).resolve() != (REPO_DIR / "launcher.py").resolve() else None)
 
-    if not check_git():
+    git_window = None
+    def _on_closing() -> None:
+        log.info("Window closing — graceful shutdown.")
+        _shutdown_event.set()
+        from ouroboros.launcher_bootstrap import stop_bootstrap_commands
+        stop_bootstrap_commands(include_interactive=False)
+        if background is not None and background.panic.is_set():
+            return  # Panic owns persistence and hard exit, never ordinary teardown over it
+        if _agent_proc is None and _webview_window is None:
+            if git_window is not None:
+                git_window.destroy()
+            return  # boot Quit lets main return to its atexit owner, without stale companion cleanup
+        stop_agent()
+        _kill_orphaned_children()
+        stop_tray_before_exit(release_pid_lock)
+        os._exit(0)
+
+    # Listen before the long boot: a manual second launch meanwhile is kept and opens the window once it exists.
+    from ouroboros.launcher_readiness import owned_server_port
+    background = None if _headless else Background(_on_closing, _read_port_file, _shutdown_event,
+        panic_port=lambda: owned_server_port(_agent_proc, _generation_port, DATA_DIR),
+        panic_child=lambda: (_agent_proc, _agent_job))
+    if background is not None:
+        background.listen(PID_FILE)
+        atexit.unregister(finalizer)  # after CLR's unload registration: dispose the icon while CLR still lives
+        atexit.register(finalizer)
+    if _shutdown_event.is_set():
+        return  # Early Panic owns persistence and exit; bootstrap must not start beside it.
+
+    git_found = check_git()
+    if _shutdown_event.is_set():
+        return
+    if not git_found:
         log.warning("Git not found.")
         if _headless:
             # No headless sudo flows: print the platform hint and stop.
@@ -1223,10 +1238,10 @@ def main(argv=()):
         class GitApi:
             def install_git(self):
                 if IS_MACOS:
-                    subprocess.Popen(["xcode-select", "--install"])
+                    _hidden_popen(["xcode-select", "--install"], bootstrap=True)
                 elif IS_WINDOWS:
                     _hidden_popen(
-                        ["winget", "install", "Git.Git", "--source", "winget", "--accept-source-agreements"]
+                        ["winget", "install", "Git.Git", "--source", "winget", "--accept-source-agreements"], bootstrap=True
                     )
                 else:
                     for cmd in (
@@ -1234,12 +1249,13 @@ def main(argv=()):
                         ["sudo", "dnf", "install", "-y", "git"],
                     ):
                         try:
-                            _hidden_popen(cmd)
+                            _hidden_popen(cmd, bootstrap=True)
                             break
                         except FileNotFoundError:
                             continue
                 for _ in range(300):
-                    time.sleep(3)
+                    if _shutdown_event.wait(3):
+                        return "stopped"
                     if shutil.which("git"):
                         return "installed"
                 return "timeout"
@@ -1247,7 +1263,7 @@ def main(argv=()):
         git_window = webview.create_window(
             "Ouroboros — Setup Required",
             html=(
-                """<html><body style="background:#1a1a2e;color:white;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+                """<html><body style="background:#0f0f11;color:#efeff2;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
             <div style="text-align:center">
                 <h2>Git is required</h2>
                 <p>Ouroboros needs Git to manage its local repository.</p>
@@ -1257,7 +1273,7 @@ def main(argv=()):
                 <p id="status" style="color:#fbbf24;margin-top:12px"></p>
             </div></body></html>"""
                 if IS_MACOS
-                else f"""<html><body style="background:#1a1a2e;color:white;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+                else f"""<html><body style="background:#0f0f11;color:#efeff2;font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
             <div style="text-align:center">
                 <h2>Git is required</h2>
                 <p>Ouroboros needs Git to manage its local repository.</p>
@@ -1273,17 +1289,23 @@ def main(argv=()):
             height=300,
         )
         webview.start(func=_git_page, args=[git_window], private_mode=False)
+        if _shutdown_event.is_set():
+            return
         if not check_git():
             sys.exit(1)
 
+    if _shutdown_event.is_set():
+        return
     if options.runtime_venv is not None:  # under the PID lock, before bootstrap and world generation
         try:
-            _runtime_venv = prepare_runtime_venv(options.runtime_venv, run=_hidden_run, log=log)
+            _runtime_venv = prepare_runtime_venv(options.runtime_venv, run=_hidden_run, log=log,
+                base_python=(EMBEDDED_PYTHON if getattr(sys, "frozen", False)
+                             else getattr(sys, "_base_executable", sys.executable)))
         except RuntimeVenvRefused as refusal:
             log.error("%s", refusal)
             print(f"Ouroboros did not start: {refusal}", file=sys.stderr, flush=True)
             sys.exit(1)
-        EMBEDDED_PYTHON = _runtime_venv.python  # the body, its installs and the source handoff
+        EMBEDDED_PYTHON = _runtime_venv.python  # the body and its installs; the macOS shell keeps app identity
         os.environ["PATH"] = os.pathsep.join([str(_runtime_venv.bin_dir), os.environ.get("PATH", "")])
     if not bootstrap_repo():
         # Disclosed, not fatal: an already-provisioned install with satisfied
@@ -1301,17 +1323,34 @@ def main(argv=()):
             print(f"Ouroboros did not start: {refusal}", file=sys.stderr, flush=True)
             sys.exit(1)
 
-    # D-8: decide here, PRESENT after the gateway is healthy. Everything above
-    # (single-instance lock, Git, managed-repo bootstrap/seed validation) is a
-    # precondition of the server itself and deliberately still precedes it.
+    if _shutdown_event.is_set():
+        return  # Panic during bootstrap must not hand off or start an owner-intent server.
+
+    # Cold handoff includes helpers imported later from the seed. An old macOS app keeps its identity;
+    # a current one uses the signed source entry. Preserve an Open received during boot on every desktop.
+    if IS_MACOS and getattr(sys, "frozen", False) and macos_source_entry(_bundle_dir()) is None:
+        log.warning("This app lacks the macOS source entry; source restarts need a new app installation "
+                    "to preserve the app profile and notification identity.")
+    elif launcher_sources_changed(REPO_DIR, bundle_dir=_bundle_dir(), packaged=True,
+                                  source_root=pathlib.Path(__file__).parent):
+        if background is not None and background._open_pending:
+            _launch_argv += ["--launch-intent", "owner"]
+        _exec_source_launcher()
+
+    if _shutdown_event.is_set():
+        return
+
+    # Decide setup here; present only after the gateway serves. Lock/Git/bootstrap precede the server.
     onboarding_settings, onboarding_required = _prepare_first_run_settings()
+    if _shutdown_event.is_set():
+        return
 
     global _webview_window
     port = _requested_server_port()  # the lifecycle loop clears the previous generation first
 
     # Headless: handlers BEFORE the lifecycle thread spawns server.py — a
     # SIGTERM while the server still boots must reach our teardown.
-    _abort = None
+    _abort = _shutdown_event
     if _headless:
         install_shutdown_signal_handlers(_headless_signal_handler)
         _abort = _shutdown_event
@@ -1334,13 +1373,13 @@ def main(argv=()):
                 "(the blocking onboarding overlay and Settings remain available)."
             )
         if onboarding["restart_required"] and not _shutdown_event.is_set():
-            # The completion changed something this process pinned at boot (its
-            # runtime-mode baseline). The launcher owns the process, so it
-            # recycles it instead of leaving the owner with a restart nag.
+            # Recycle the owned server to adopt boot-pinned settings instead of leaving a restart nag.
             _request_agent_restart()
             server_ready, actual_port = _await_server_ready(port, _abort, lifecycle_thread)
 
-    if (_headless or options.launch_intent == "automatic") and _shutdown_event.is_set():
+    if _shutdown_event.is_set():
+        if background is not None and background.panic.is_set():
+            return  # the non-daemon Panic owner, not a startup-failure window, owns exit
         # Shutdown during startup: same teardown the keep-alive loop performs
         # (an aborted wait, or an automatic start meeting Panic, is no startup failure).
         log.info("Shutdown requested during startup; tearing down.")
@@ -1368,7 +1407,7 @@ def main(argv=()):
         webview.create_window(
             "Ouroboros — Startup Failed",
             html=(
-                "<html><body style='background:#1a1a2e;color:white;font-family:system-ui;"
+                "<html><body style='background:#0f0f11;color:#efeff2;font-family:system-ui;"
                 "display:flex;align-items:center;justify-content:center;height:100vh;margin:0'>"
                 "<div style='text-align:center;max-width:460px;padding:24px'>"
                 "<h2>Ouroboros failed to start</h2>"
@@ -1419,6 +1458,7 @@ def main(argv=()):
 
     class MainApi(DesktopApi):  # alerts, shell facts and system notifications: launcher_background.DesktopApi
         _background = background
+        _shell_facts = _shell_facts()
         @staticmethod
         def _native_confirm(title: str, message: str) -> bool:
             return bool(_webview_window and _webview_window.create_confirmation_dialog(title, message))
@@ -1460,9 +1500,14 @@ def main(argv=()):
                 log.warning("Reviewed-skill auto-grant confirmation failed: %s", exc, exc_info=True)
                 return {"ok": False, "error": f"Native confirmation failed: {exc}"}
 
-        def request_skill_key_grant(self, skill: str, keys: list) -> dict:
+        def request_skill_key_grant_with_job(self, skill: str, keys: list, enable_after_grant: bool = False) -> dict:
+            return self.request_skill_key_grant(skill, keys, enable_after_grant, True)
+
+        def request_skill_key_grant(self, skill: str, keys: list, enable_after_grant: bool = False,
+                                   allow_pending: bool = False) -> dict:
             try:
-                return _request_skill_key_grant(skill, keys, self._native_confirm)
+                return _request_skill_key_grant(skill, keys, self._native_confirm,
+                                               enable_after_grant=enable_after_grant, allow_pending=allow_pending)
             except Exception as exc:
                 log.warning("Skill grant native confirmation failed: %s", exc, exc_info=True)
                 return {"ok": False, "error": f"Native confirmation failed: {exc}"}
@@ -1522,14 +1567,6 @@ def main(argv=()):
         # Never returns: keep-alive loop + teardown + sys.exit inside.
         _run_headless_main(url, actual_port, lifecycle_thread)
 
-    def _on_closing() -> None:
-        log.info("Window closing — graceful shutdown.")
-        _shutdown_event.set()
-        stop_agent()
-        _kill_orphaned_children()
-        stop_tray_before_exit(release_pid_lock)
-        os._exit(0)
-
     window = webview.create_window(
         f"Ouroboros v{APP_VERSION}",
         url=url,
@@ -1537,7 +1574,7 @@ def main(argv=()):
         width=1100,
         height=750,
         min_size=(800, 500),
-        background_color="#0d0b0f",
+        background_color="#0f0f11",
         text_select=True, hidden=background.start_hidden(options.launch_intent),
     )
     _webview_window = attach_media_permissions(background.attach(window), url)  # Persist cookies and website data (ouroboros.theme); rebuild/limits: ARCHITECTURE §3.
@@ -1553,9 +1590,7 @@ if __name__ == "__main__":
     if sys.platform == "darwin":
         try:
             shell_path = subprocess.check_output(
-                ["/bin/bash", "-l", "-c", "echo $PATH"],
-                text=True,
-                timeout=5,
+                ["/bin/bash", "-l", "-c", "echo $PATH"], **merge_hidden_kwargs({"text": True, "timeout": 5}),
             ).strip()
             if shell_path:
                 os.environ["PATH"] = shell_path

@@ -395,7 +395,7 @@ def test_a_proven_survivor_skips_start_agent_for_that_generation(monkeypatch):
     monkeypatch.setattr(launcher, "start_agent", lambda port: started.append(port))
     monkeypatch.setattr(launcher.time, "sleep", lambda seconds: None)
 
-    launcher.agent_lifecycle_loop(8765)
+    launcher.agent_lifecycle_loop(1)
 
     assert started == [], "an unresolved predecessor must suppress start_agent"
 

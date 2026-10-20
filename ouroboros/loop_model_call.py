@@ -588,7 +588,8 @@ def _rebind_context_fit_plan(
     from ouroboros.capability_evidence import is_known
     from ouroboros.context import _context_fit_route
     from ouroboros.context_anchor import main_input_anchor
-    from ouroboros.context_fit import _failed_route_evidence, _route_calibration_ratio, main_output_reserve_tokens
+    from ouroboros.context_fit import (_failed_route_evidence, _route_calibration_ratio,
+                                       estimate_context_prompt_tokens, main_output_reserve_tokens)
     from ouroboros.provider_models import parse_claudexor_model
 
     metadata = getattr(tools._ctx, "task_metadata", {})
@@ -616,6 +617,7 @@ def _rebind_context_fit_plan(
         None,  # canonical evidence root (one observation store)
         str(getattr(evidence, "route_fp", "") or ""),
         str(route.get("model") or model),
+        estimate_context_prompt_tokens(messages, tool_schemas, provider=str(route.get("provider") or "")),
     )
     from ouroboros.context_anchor import floored_window
 
@@ -887,8 +889,32 @@ def _measure_main_context_view(plan, messages, schemas, mode, effort, round_id, 
             **asdict(disposition.measurement)}
 
 
-def _fit_key(fit: Any) -> Tuple[str, str]:
-    return (fit.measurement.route_fp, fit.measurement.round_id)
+@contextlib.contextmanager
+def _presend_context_fit(ctx: _RoundModelCallContext):
+    """Use the final physical candidate for the existing strict-shrink recovery, without a paid send."""
+    from ouroboros.llm_attempt import main_context_fit_refusal
+
+    refused = None
+
+    def admit(request):
+        nonlocal refused
+        refused = main_context_fit_refusal(request)
+        return refused is None
+
+    try:
+        yield admit
+    except PhysicalAttemptPreconditionFailed:
+        if refused is None:
+            raise  # a failed strict-shrink or custody check is not a size prediction
+        ctx.accumulated_usage.update({
+            REFUSED_CANDIDATE_KEY: refused, "_last_llm_error_kind": "context_overflow", "reason_code": "context_overflow",
+            "_last_llm_error": "No result room in the final candidate; pre-send size recovery.",
+            "_last_llm_provider_message": "", "_last_llm_status_code": None, "_last_llm_provider_code": "",
+            "_last_llm_provider_fields": {}, "_last_llm_provider_message_cut": False,
+        })
+        _loop()._emit_checkpoint_event(ctx.event_queue, ctx.task_id, ctx.drive_logs, {
+            "checkpoint_kind": "context_fit_refused", "round": ctx.round_idx, **refused,
+        })
 
 
 def _dispatch_round_model(
@@ -930,7 +956,8 @@ def _dispatch_round_model(
     trace = getattr(ctx.tools._ctx, "_execution_trace", None) or {}
     ctx.tools._ctx._completion_observation = completion_observation(ctx.tools._ctx, trace)
 
-    with contextlib.ExitStack() as binding:
+    result = (None, 0.0)
+    with contextlib.ExitStack() as binding, _presend_context_fit(ctx) as admit:
         deferral = None
         if waiter is not None:
             from ouroboros.loop_llm_call import classify_llm_exception
@@ -951,7 +978,7 @@ def _dispatch_round_model(
             stop_retry_check=(lambda: transport_repeat_stop_requested(ctx.tools._ctx, mailbox_peek=mailbox_peek)) if attempt_cap is None else None,
             allow_server_web_search=_loop()._server_web_allowed_by_task(ctx.tools._ctx),
             physical_context=(_physical_context_for_fit(disposition) if disposition is not None else None),
-            candidate_predicate=candidate_predicate, model_role=role, model_account_override=account,
+            candidate_predicate=candidate_predicate, physical_fit_predicate=admit, model_role=role, model_account_override=account,
             processing_preference=task_processing_preference(
                 {"task_metadata": getattr(ctx.tools._ctx, "task_metadata", {})}, model_role=role),
             # The loop's own active-turn slot: a reprepared send keeps this exact
@@ -1053,8 +1080,7 @@ def _reprepare_waiting_main(ctx: _RoundModelCallContext, kwargs: dict):
         tool_calls=len(trace.get("tool_calls") or []) if isinstance(trace, dict) else 0,
     )
     _project_wake_input(ctx)
-    # Prediction alone never starts a helper pass (owner decision 7A): the measurement is
-    # recorded as facts; only the provider's actual refusal opens the recovery ladder.
+    # The physical pre-send predicate rechecks this newly adopted route before dispatch.
     from ouroboros.loop_messages import append_context_facts
 
     append_context_facts(ctx)
@@ -1089,7 +1115,7 @@ def _reprepare_waiting_main(ctx: _RoundModelCallContext, kwargs: dict):
 
 
 def _reproject_actual_overflow_low(ctx: _RoundModelCallContext) -> None:
-    """An actual overflow lowers Max to task-local Low; Low stays Low and Nano stays Nano (never raised).
+    """Size recovery lowers Max to task-local Low; Low stays Low and Nano stays Nano (never raised).
 
     Only the books change: Low shows my memory from the level the refused Max view showed, never the
     Low view prepared at startup and not sent (``ContextFitPlan.reproject_for_route``, ``select_mode``)."""
@@ -1099,11 +1125,12 @@ def _reproject_actual_overflow_low(ctx: _RoundModelCallContext) -> None:
     from ouroboros.context_anchor import floored_window, main_input_anchor
 
     plan = ctx.context_fit_plan
+    fit = _loop()._measure_round_main_fit(ctx, automatic_pass_used=True)
     window, known = floored_window(int(plan.window_tokens or 0), is_known(plan, require_fresh=True),
                                    main_input_anchor(ctx.accumulated_usage, plan)[1])
     ctx.context_fit_plan = ctx.tools._ctx.context_fit_plan = plan.reproject_for_route(
         window_tokens=window, known_window=known,
-        ratio=float(plan.projection("max").calibration_ratio or 1.0), output_reserve=int(plan.output_reserve_tokens),
+        ratio=fit.measurement.measurement_density, output_reserve=int(plan.output_reserve_tokens),
         tool_schemas=ctx.tool_schemas, start_mode="max", current_messages=ctx.messages, select_mode="low")
     ctx.messages[:] = ctx.context_fit_plan.reproject_transcript(ctx.messages, "low")
     invalidate_task_cache_splits(ctx.task_id)
@@ -1122,7 +1149,7 @@ def _reproject_actual_overflow_low(ctx: _RoundModelCallContext) -> None:
 
 
 def _refused_candidate(facts: Dict[str, Any]) -> Any:
-    """The local lane's pre-dispatch refusal as the comparison candidate of its own round."""
+    """A pre-dispatch size refusal/prediction as this round's own comparison candidate."""
     physical = facts.get("physical_context")
     return SimpleNamespace(**{**facts, "physical_context": PhysicalAttemptContext(**physical) if physical else None,
                               "refused_before_dispatch": True})
@@ -1333,13 +1360,7 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
 
 
 def _call_round_model(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:
-    """Measure, dispatch, and recover one Main round.
-
-    The measurement before the send is recorded as facts (``_remember_main_fit``; the
-    per-round facts line shows them to the actor); a predicted deficit alone never starts
-    a helper pass or a mode downgrade. Only the provider's typed refusal of the actual
-    request opens the ordered recovery (``_recover_context_overflow``).
-    """
+    """Measure, dispatch, and recover a provider refusal or known-window prediction of no result room."""
     from ouroboros.primary_route_observation import observe_primary_route
     observation = observe_primary_route(ctx)
     if observation:
@@ -1359,11 +1380,12 @@ def _call_round_model(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:
         disposition,
         attempt_cap=ctx.attempt_cap,
     )
-    refused = ctx.accumulated_usage.pop(REFUSED_CANDIDATE_KEY, None)  # a local pre-dispatch refusal's own facts
     from ouroboros.vision_routing import retry_refused_image_round  # the capture is read right after the send
     retried = None if msg is not None else retry_refused_image_round(ctx, _loop().last_physical_attempt_capture())
-    if retried is not None:  # the retry ran: success stays on this route; a failure recovers as before
-        return (*retried, ctx.active_context_mode)
+    if retried is not None:
+        msg, retry_cost = retried
+        cost = float(cost or 0.0) + float(retry_cost or 0.0)
+    refused = ctx.accumulated_usage.pop(REFUSED_CANDIDATE_KEY, None)  # includes a pre-send-refused image retry
     if msg is not None or str(ctx.accumulated_usage.get("_last_llm_error_kind") or "") != "context_overflow":
         return msg, cost, ctx.active_context_mode
     ctx.accumulated_usage[CONTEXT_REFUSAL_ROUND_KEY] = ctx.round_idx  # this round's size refusal, passes or not
@@ -1382,17 +1404,16 @@ def _call_round_model(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:
     return _recover_context_overflow(ctx, failed_capture, cost, prepared=prepared)
 
 
-# The refusal path (owner 7A, revised 17.10.2026): the provider's typed refusal of this very request is a
-# measurement (``_refusal_target``). Two model-free passes, each earning one strictly smaller retry: the
+# Size recovery (owner revision, 20.10.2026): a known-window prediction of no result room or the provider's
+# typed size refusal starts two model-free passes, each earning one strictly smaller check/retry: the
 # first replaces superseded host state and bodies a usable turn already showed; the second, only after a
-# further refusal, lowers the granularity of memory (books too when memory falls short of the excess), then
+# further failed check/refusal, lowers memory granularity (books too when memory falls short of the excess), then
 # addresses bodies no turn has shown (disclosed), and books leave last for what remains. Each pass runs once
 # per round whatever the route, so a configured fallback receives the view as applied and walks nothing
 # again. The fallback chain and the end of the path follow in the caller.
 REFUSAL_PASSES: Tuple[Tuple[str, ...], ...] = (("host_copies", "bodies"), ("floor", "unseen_bodies", "books"))
 WAKE_DELIVERY_STEP = "wake_delivery"  # the change applied before the passes, when there was one
-#: The round a provider refused this conversation for size (``context_renewal`` reads it): a configured
-#: fallback that then fails for another reason never cancels the renewal the size refusal earned.
+#: The round needing size recovery (``context_renewal`` reads it); a fallback's other failure cannot cancel it.
 CONTEXT_REFUSAL_ROUND_KEY = "_context_refusal_round"
 
 
@@ -1441,6 +1462,10 @@ def _refusal_target(ctx: _RoundModelCallContext, fit: Any, refused: Any = None) 
     from ouroboros.context_anchor import record_refused_input
 
     measurement = fit.measurement
+    predicted_free = getattr(refused, "predicted_free_tokens", None)
+    if predicted_free is not None:  # a prediction never becomes a provider-refused size in the task's history
+        slack = refused.predicted_slack_tokens
+        return max(0, -predicted_free) + slack, slack
     stated, size, slack, reply = _refusal_window(ctx, fit, refused)
     record_refused_input(ctx.accumulated_usage, ctx.context_fit_plan, size)  # the provider's count when it stated one
     if stated:
@@ -1496,10 +1521,9 @@ def _recover_context_overflow(ctx: _RoundModelCallContext, failed_capture: Any, 
             return _skipped("round_holds_unresolved_attempt")
         # Refused again: the next pass must shrink below THIS candidate, sized by THIS refusal.
         refused = ctx.accumulated_usage.pop(REFUSED_CANDIDATE_KEY, None)
-        latest = _refused_candidate(refused) if refused else _loop().last_physical_attempt_capture()
-        if not _failed_capture_is_comparable(latest):
+        failed_capture = _refused_candidate(refused) if refused else _loop().last_physical_attempt_capture()
+        if not _failed_capture_is_comparable(failed_capture):
             return _skipped("failed_candidate_not_comparable")
-        failed_capture = latest
         fit = _loop()._measure_round_main_fit(ctx, automatic_pass_used=True) or fit
         target, slack = _refusal_target(ctx, fit, failed_capture)
     return None, cost, ctx.active_context_mode

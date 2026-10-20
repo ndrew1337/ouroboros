@@ -6,11 +6,23 @@ import { MAX_DECISION_COMMENT, MAX_QUIZ_OPTIONS } from './api_types.js';
 import { renderRoutingAnnotation, routingOptionLabel } from './routing_receipt.js';
 import { paintAttachmentOutcome } from './chat_attachments.js';
 import { nameProjectReference, projectReference } from './project_reference.js';
-import { ANSWERABLE_QUIZ_STATES, QUIZ_LIFECYCLE, questionPresentation, waitFacts, WAIT_FIELDS,
+import { ANSWERABLE_QUIZ_STATES, QUIZ_LIFECYCLE, questionMark, questionPresentation, waitFacts, WAIT_FIELDS,
     normalizeQuiz, hostFactsLine, appendRecommendedBadge, renderOwnerAnswer, questionDeliveryPending, unknownDeliveryRemovable,
     appendQuestionReplyControls } from './question_presentation.js';
 import { fmt, tr, tx } from './i18n.js';
 import { syncQuestionMaterials } from './result_files.js';
+import { createStatusMark, paintStatusMark } from './status_mark.js';
+
+// A question head's mark: its lifecycle's dot (question_presentation.questionMark), neutral while an answer is in
+// flight (Sending…, checking it, Not confirmed: the owner has moved). The one painter of it, whoever changed the card.
+const HEAD_ROWS = new WeakMap();
+function paintQuestionHead(card, row = HEAD_ROWS.get(card)) {
+    if (!card) return false;
+    if (row) HEAD_ROWS.set(card, row);
+    const inFlight = ['sending', 'unknown', 'checking'].includes(card.dataset.submission);
+    return paintStatusMark(card.querySelector('.chat-quiz-mark'),
+        inFlight ? { shape: 'dot', hue: 'neutral' } : questionMark(row || {}));
+}
 
 // What one observation of a question carries: its identity, lifecycle, recorded answer and wait facts.
 const LIFECYCLE_FIELDS = ['task_id', 'quiz_id', 'state', 'answered_index', 'comment', 'closed_reason', 'closed_at', 'closed_actor', 'closed_request_id', 'question_delivery', ...WAIT_FIELDS];
@@ -33,6 +45,9 @@ const ROUTING_STATUS_TEXT = {
     answered: 'Routed',
     superseded: 'Superseded by a newer attempt',
 };
+// Its head's dot, the question's family: the owner's move while it waits for a destination, ok once routed, the head's
+// disabled ink once superseded, neutral while the chosen route is sent.
+const ROUTING_MARK_HUES = { open: 'owner', answered: 'ok', superseded: 'ink' };
 const ROUTING_TOP_OPTIONS = 8;
 
 export function createChatDecision({
@@ -59,6 +74,8 @@ export function createChatDecision({
     const quizViews = new Map();
     const mirrors = new Map();
     const detailReads = new Map();
+    // Each card's host-facts line: it lives on the bubble's time line, outside the card (DESIGN "Quiz card").
+    const hostFacts = new WeakMap();
     const questionKey = (taskId, quizId) => JSON.stringify([String(taskId || ''), String(quizId || '')]);
     let disposed = false;
     let questionNavigation = 0;
@@ -465,7 +482,7 @@ export function createChatDecision({
         });
     }
 
-    const submissions = createQuizSubmission({ apiFetch, onDomWrite, showToast,
+    const submissions = createQuizSubmission({ apiFetch, onDomWrite, showToast, paintHead: paintQuestionHead,
         canUse: card => !disposed && (!isMain || (connected && card.dataset.authorityStale !== '1')),
         readQuestion: quiz => readQuestion(quiz.taskId, quiz.quizId, quiz.projectId, { fresh: true }),
         accept(card, body) {
@@ -610,6 +627,7 @@ export function createChatDecision({
                 status.textContent = nextStatus;
                 changed = true;
             }
+            if (paintQuestionHead(card, current)) changed = true;
             // An accepted late answer whose delivery became unknown: Main's copy lets the owner
             // stop counting it as pending. Nothing is resent; the answer and its record stay.
             const removable = card.classList.contains('project-question-card') && unknownDeliveryRemovable({ ...current, state });
@@ -670,9 +688,11 @@ export function createChatDecision({
         const wait = waitFacts(current);
         const existing = quizViews.get(key);
         if (existing) {
-            // A narrower first delivery may have lacked the host's sentence; a later one adds it.
-            if (quiz.hostFacts && !existing.querySelector('.chat-quiz-host-facts')) {
-                existing.querySelector('.chat-quiz-question')?.nextElementSibling?.before(hostFactsLine(quiz.hostFacts));
+            // A narrower first delivery may have lacked the host's sentence; a later one fills its line in place.
+            const facts = hostFacts.get(existing);
+            if (quiz.hostFacts && facts && !facts.textContent) {
+                facts.textContent = quiz.hostFacts;
+                facts.hidden = false;
             }
             if (quiz.comment) existing.dataset.ownerComment = quiz.comment;
             else if (Object.hasOwn(current, 'comment')) delete existing.dataset.ownerComment;
@@ -719,17 +739,14 @@ export function createChatDecision({
         chip.textContent = tr('quiz.chip_question', 'Question');
         const status = document.createElement('span');
         status.className = 'chat-quiz-status';
-        const dot = document.createElement('span');
-        dot.className = 'chat-quiz-dot';
         const statusLabel = document.createElement('span');
         statusLabel.className = 'chat-quiz-status-text';
-        status.append(dot, statusLabel);
-        // The status and the card's quiet Close end the head together, so a wrap moves both.
+        status.append(createStatusMark(document, 'chat-quiz-mark'), statusLabel);
+        // One row in every room: the status describes the question, so it sits beside the chip, and the card's
+        // quiet Close alone ends the row. Where the question comes from is the bubble's voice line (frameNode).
         const headEnd = document.createElement('span');
         headEnd.className = 'chat-quiz-head-end';
-        headEnd.append(status);
-        // The mirror's one addition to the Project form: the chip that opens it in its Project.
-        head.append(chip, ...(mirror ? [mirrorChip(mirror)] : []), headEnd);
+        head.append(chip, status, headEnd);
         card.append(head);
 
         // DRY with the chat surface (owner requirement): question and stake go
@@ -742,7 +759,6 @@ export function createChatDecision({
         if (mountMarkdown) mountMarkdown(question, questionText);
         else question.textContent = questionText;
         card.append(question);
-        if (quiz.hostFacts) card.append(hostFactsLine(quiz.hostFacts));
         syncQuestionMaterials(card, quiz.materials, renderMaterial);
 
         if (quiz.stake) {
@@ -817,7 +833,11 @@ export function createChatDecision({
         if (quiz.comment) card.dataset.ownerComment = quiz.comment;
         setCardState(card, quiz.state, quiz.answeredIndex);
         if (complete) submissions.attach(card, quiz);
-        const framed = frameNode(msg, card);
+        // The bubble says who asks and when: a Main copy's Project reference joins its voice line beside
+        // `Ouroboros` (the mirror's one addition to the Project form), the host's sentence its time line.
+        const facts = hostFactsLine(quiz.hostFacts);
+        hostFacts.set(card, facts);
+        const framed = frameNode(msg, card, { voice: mirror ? [mirrorChip(mirror)] : [], foot: [facts] });
         const disposeMarkdown = enhanceMarkdown && mountMarkdown ? enhanceMarkdown(card) : null;
         if (mirror) mirror.disposeMarkdown = disposeMarkdown;
         return framed;
@@ -834,6 +854,8 @@ export function createChatDecision({
                 status.textContent = nextStatus;
                 changed = true;
             }
+            const view = { shape: 'dot', hue: ROUTING_MARK_HUES[state] || 'neutral' };
+            if (paintStatusMark(card.querySelector('.chat-quiz-mark'), view)) changed = true;
             card.querySelectorAll('.chat-quiz-option').forEach((btn, i) => {
                 const disabled = state !== 'open';
                 const chosen = chosenIndex !== null && i === chosenIndex;
@@ -909,11 +931,9 @@ export function createChatDecision({
         chip.textContent = tr('routing.chip_route', 'Route');
         const status = document.createElement('span');
         status.className = 'chat-quiz-status';
-        const dot = document.createElement('span');
-        dot.className = 'chat-quiz-dot';
         const statusLabel = document.createElement('span');
         statusLabel.className = 'chat-quiz-status-text';
-        status.append(dot, statusLabel);
+        status.append(createStatusMark(document, 'chat-quiz-mark'), statusLabel);
         head.append(chip, status);
         card.append(head);
 

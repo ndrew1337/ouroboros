@@ -263,7 +263,7 @@ def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypa
                     # the expanded card (DESIGN "Reviews inside task cards").
                     accepted.locator('[data-live-review-summary]').filter(has_text="Reviews").wait_for()
                     if accepted.get_attribute('data-expanded') != '1':
-                        accepted.locator(':scope > [data-live-summary-button]').click()
+                        accepted.locator('[data-live-disclosure]').click()
                     accepted.locator('[data-review-section-toggle]').click()
                     accepted.get_by_text("Task acceptance", exact=True).wait_for()
                     accepted.locator('[data-review-group-toggle]').click()
@@ -302,7 +302,8 @@ def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypa
                             log_chat("in", project["chat_id"], 1, f"Retained later project note {index}", drive_root=root)
                         project_history = _api(server.base_url, "GET", f"/api/chat/history?chat_id={project['chat_id']}")["messages"]
                         assert not any(row.get("msg_type") == "quiz" for row in project_history)
-                        pointer.locator('.chat-quiz-project').click()
+                        # The Project reference is in the bubble's voice line, beside `Ouroboros`, outside the card.
+                        main_question.locator('.chat-bubble-voice > .chat-quiz-project').click()
                         quiz = page.locator(f'.chat-quiz-card[data-task-id="{task["id"]}"][data-quiz-id="{wait["quiz_id"]}"]'
                                             ':not(.project-question-card)')
                         quiz.get_by_text("Include the independent replication too.", exact=True).wait_for()

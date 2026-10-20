@@ -2,6 +2,7 @@ import { escapeHtmlAttr as escapeHtml } from './utils.js';
 import { bindScrollFade } from './scroll_fade.js';
 import { SHELL_ICONS } from './page_icons.js';
 import { pageLabel } from './pages.js';
+import { statusMarkHtml } from './status_mark.js';
 import { currentLayout, onLayoutChange } from './layout.js';
 
 function classAttr(parts) {
@@ -11,11 +12,12 @@ function classAttr(parts) {
 // The shell's ☰: one of the shell's icon controls (style.css .shell-icon-control), shown in the stack layout. A
 // page's header carries it in its leading slot, where the drawer's × then sits; a room (Main, a Project) carries it
 // as the composer row's first control instead, under the thumb (owner 19.10, 1A), as tall as the capsules beside it
-// with the touch minimum as its finger target (tests/test_shell_drawer_static.py).
+// with the touch minimum as its finger target (tests/test_shell_drawer_static.py). Its status dot says what waits
+// behind it, in the drawer the ☰ opens (app.js paints it and the name's words).
 export function renderMobileNavToggle({ inComposer = false } = {}) {
     const classes = inComposer ? 'shell-icon-control mobile-nav-toggle composer-menu ui-hit-area' : 'shell-icon-control mobile-nav-toggle';
     return `
-        <button class="${classes}" type="button" data-mobile-nav-toggle aria-label="Open navigation" aria-controls="primary-sidebar" aria-expanded="false">${SHELL_ICONS.menu}</button>
+        <button class="${classes}" type="button" data-mobile-nav-toggle aria-label="Open navigation" aria-controls="primary-sidebar" aria-expanded="false">${SHELL_ICONS.menu}${statusMarkHtml()}</button>
     `;
 }
 
@@ -23,10 +25,11 @@ export function renderMobileNavToggle({ inComposer = false } = {}) {
  * The one header of every page AND the Project panel (docs/DESIGN.md "Shell", plan P5): one row, one height,
  * one title style, one close control. `☰ · title · status … actions · ×`: the leading slot holds ☰ (the stack
  * layout shows it), the title row takes the room's status after the title (room_work.js), the toolbar and the
- * trailing slot end the row. A page has no caption line: the sidebar's row and its tabs name it. A tab strip is
- * its own strip under the row, so the row stays one row. `named` says the sidebar's chosen row already names this place: on a desk such a header shows no
- * title (the h2 stays for readers) and, with no actions, no bar at all; a Project keeps its name. No icon anywhere:
- * the place is named by words, never a glyph (owner 5A).
+ * trailing slot end the row. A page has no caption line: the sidebar's row and its tabs name it. `named` says the
+ * sidebar's chosen row already names this place: on a desk such a header shows no title (the h2 stays for readers)
+ * and its lead slot takes the title's place with the page's own navigation (bindPageHeader); a header with nothing
+ * to show draws no bar. A tab strip is written under the row, where the stack layout keeps it. A Project keeps its
+ * name. No icon anywhere: the place is named by words, never a glyph (owner 5A).
  */
 export function renderPageHeader({
     page = '',   // a registry id: the title is its label unless `title` says otherwise
@@ -59,7 +62,7 @@ export function renderPageHeader({
         : '';
     const facts = [
         named ? ' data-sidebar-names' : '',
-        named && !toolbar && !trailing ? ' data-empty' : '',
+        named && !toolbar && !trailing && !tabs ? ' data-empty' : '',
     ].join('');
     const id = titleId ? ` id="${escapeHtml(titleId)}"` : '';
     return `
@@ -68,13 +71,67 @@ export function renderPageHeader({
             <div class="app-page-title-block">
                 <div class="app-page-title-row">
                     <h2 class="app-page-title"${id}>${escapeHtml(words)}</h2>
-                </div>
+                </div>${named ? '<div class="app-page-lead"></div>' : ''}
             </div>
             ${toolbar}
             ${trailing}
         </div>
         ${tabs}
     `;
+}
+
+/**
+ * A page's own navigation in its bar (docs/DESIGN.md "Page header", owner 19.10 A): on a desk the bar of a page the
+ * sidebar names starts with the page's tabs or location, where the hidden title stood, and ends with its actions, so
+ * it has two ends as Main's bar has; in the stack layout the same nodes return under the row, where a phone keeps
+ * them. Navigation sharing a toolbar also returns there when the content column is too narrow (including a
+ * sidebar drag). `lead` defaults to what renderPageHeader wrote under the row (the tab strip); `actions` join the toolbar's
+ * start. Nodes move and are never re-rendered, so their listeners, selection and focus stay theirs; the selected
+ * tab is revealed again by its strip's own observer. Returns the disposer.
+ */
+export function bindPageHeader(header, { lead = null, actions = null } = {}) {
+    const doc = header?.ownerDocument;
+    const under = header?.nextElementSibling?.classList?.contains('app-page-tabs') ? header.nextElementSibling : null;
+    const moves = [[lead || under?.firstElementChild, header?.querySelector('.app-page-lead'), 'append'],
+        [actions, header?.querySelector('.app-page-toolbar'), 'prepend']]
+        .filter(([node, bar]) => node && bar)
+        .map(([node, bar, how]) => {
+            // A mark holds each node's home under the row.
+            const home = doc.createComment('');
+            node.before(home);
+            return { node, bar, how, home };
+        });
+    if (!moves.length) return () => {};
+    const toolbar = header.querySelector('.app-page-toolbar');
+    let docked = null;
+    const place = (layout) => {
+        // Navigation competes with both moved actions (Files) and actions already in the bar (Skills).
+        // A tab-only bar can scroll at any column width; a toolbar needs its own row in a narrow column.
+        const narrow = toolbar && header.clientWidth > 0 && header.clientWidth < 440;
+        const desk = (typeof layout === 'string' ? layout : currentLayout()) === 'docked';
+        header.toggleAttribute('data-narrow', desk && narrow);
+        const next = desk && !narrow;
+        if (next === docked) return;
+        docked = next;
+        const active = doc.activeElement;
+        for (const { node, bar, how, home } of moves) {
+            if (docked) bar[how](node); else home.after(node);
+        }
+        header.toggleAttribute('data-lead', docked);  // the bar's two ends: style.css lays them on one line
+        // An engine drops focus from a node it moves: the owner's place in the page stays where it was.
+        if (active?.isConnected && doc.activeElement !== active) active.focus?.({ preventScroll: true });
+    };
+    place();
+    const offLayout = onLayoutChange(place);
+    const view = doc.defaultView;
+    let frame = 0;
+    // Moving the nodes can change the bar's height. Do that in the next frame, outside observer delivery.
+    const observer = view?.ResizeObserver && toolbar ? new view.ResizeObserver(() => {
+        view.cancelAnimationFrame(frame);
+        frame = view.requestAnimationFrame(place);
+    }) : null;
+    observer?.observe(header);
+    return () => { offLayout(); observer?.disconnect(); if (frame) view.cancelAnimationFrame(frame); };
 }
 
 /** A bar narrower than this (px) cannot hold Restart, Panic, More and the budget on one row with the status. */

@@ -20,8 +20,9 @@ bounded with a disclosed omission (``utils.truncate_within_limit``); the target 
 source itself, read whole from any focus with ``memory_read(source_ref=…)`` unless the writer
 names another reader (``source_read``).
 
-``memory_view`` shows it in its own section to that room's view and to consciousness; only the
-integrating mind releases it, with a reason (``chronicle_store._rule_mark_release``). Showing it,
+``memory_view`` shows its words only in that room; consciousness gets one source-pointer line
+per foreign mark. Only the integrating mind releases it, with a reason
+(``chronicle_store._rule_mark_release``). Showing it,
 a tool read or a mailbox acknowledgement of a notice is not that release.
 
 A publication that could not be placed (``failed``) and every duty only the end of its author's

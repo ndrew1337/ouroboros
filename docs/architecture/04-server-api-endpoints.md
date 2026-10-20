@@ -100,6 +100,7 @@ Every path-addressed `/api/files/*` operation resolves its requested `path` and 
 | GET | `/api/ui/contributions` | live skill controls, speech providers, offers |
 | GET | `/api/ui/preferences` | |
 | POST | `/api/ui/preferences` | |
+| POST | `/api/ui/holds` | |
 | GET | `/api/ui/i18n` | interface language and translation memory; a read never starts generation |
 | POST | `/api/ui/i18n/language` | writes `OUROBOROS_UI_LANGUAGE`; broadcasts `ui_language_changed` |
 | POST | `/api/ui/i18n/missing` | |

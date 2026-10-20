@@ -43,6 +43,14 @@ export const questionDeliveryPending = row => deliveryOwed(row) && row.question_
 export const unknownDeliveryRemovable = row => questionDeliveryPending(row)
     && (row.quiz_state || row.state) === 'answered' && row.question_delivery?.reason_code === 'late_answer_delivery_unknown';
 
+// The lifecycle code of one row: a settled state names itself; an open one says whether the task waits.
+function lifecycleKey(row) {
+    const state = row.quiz_state || row.state || 'unknown';
+    const { waiting, resumed } = waitFacts(row);
+    return !QUIZ_LIFECYCLE.includes(state) ? 'unknown' : state !== 'open' ? state
+        : waiting ? 'waiting' : resumed ? 'resumed' : 'open';
+}
+
 export function questionPresentation(row = {}) {
     if (deliveryOwed(row)) {
         if ((row.quiz_state || row.state) !== 'answered') {
@@ -53,13 +61,22 @@ export function questionPresentation(row = {}) {
             ? tr('question.status.answer_unknown', 'Answer recorded · delivery unknown')
             : tr('question.status.answer_pending', 'Answer recorded · delivery pending') };
     }
-    const state = row.quiz_state || row.state || 'unknown';
-    const { waiting, resumed } = waitFacts(row);
-    const key = !QUIZ_LIFECYCLE.includes(state) ? 'unknown' : state !== 'open' ? state
-        : waiting ? 'waiting' : resumed ? 'resumed' : 'open';
+    const key = lifecycleKey(row);
     // The English words stay the source (and the Python twin's); the install language reads
     // them by the lifecycle code (web/modules/i18n.js).
     return { status: tr(`question.status.${key}`, STATUS[key]) };
+}
+
+// The dot beside that word (DESIGN "Quiz card"): the owner's amber only while the task positively waits for the
+// answer, ok once it is answered, the head's own disabled ink for a replaced or closed question, and neutral for
+// every other lifecycle (unanswered, the task continued or finished, status unavailable).
+const MARK_HUES = { waiting: 'owner', answered: 'ok', superseded: 'ink', closed: 'ink' };
+
+/** The question head's mark as a status-mark view ({ shape, hue }, web/modules/status_mark.js). */
+export function questionMark(row = {}) {
+    // An answer whose late delivery became unknown waits for the owner to stop counting it (Remove from pending).
+    if (unknownDeliveryRemovable(row)) return { shape: 'dot', hue: 'owner' };
+    return { shape: 'dot', hue: MARK_HUES[lifecycleKey(row)] || 'neutral' };
 }
 
 export function normalizeQuiz(msg) {
@@ -106,10 +123,13 @@ export function normalizeQuiz(msg) {
     };
 }
 
+// The host's sentence rides the bubble's time line (docs/DESIGN.md "Quiz card"). The node exists from the first
+// paint and stays hidden until a delivery carries the sentence, so a later, richer one fills it in place.
 export function hostFactsLine(text) {
     const line = document.createElement('div');
     line.className = 'chat-quiz-host-facts';
     line.textContent = text;  // ids, times and counts of one question: a sentence, not a translation key
+    line.hidden = !text;
     return line;
 }
 
@@ -153,17 +173,20 @@ const CLOSE_GLYPH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none"
 // The same answer and explicit no-answer closure controls serve Main and Project. Closing is one
 // quiet × at the end of the card's head (a tall card's foot can be screens away), one tap with no
 // reason to type; it waits while an answer is typed, so a mis-tap never discards the owner's words.
+// The answer is one frame holding its words and its Send, as the composer holds its own.
 export function appendQuestionReplyControls(card, quiz, { submit, close, showToast, onDomWrite }) {
     const box = document.createElement('div');
     box.className = 'chat-quiz-comment-box';
     const field = document.createElement('textarea');
     field.className = 'chat-quiz-comment'; field.rows = 2; field.maxLength = MAX_DECISION_COMMENT;
+    // The placeholder is an example, never the field's only name (DESIGN §3).
+    field.setAttribute('aria-label', tr('quiz.answer_label', 'Your answer'));
     field.placeholder = tr('quiz.answer_placeholder', 'Your answer or comment…');
     const send = document.createElement('button');
-    send.type = 'button'; send.className = 'chat-quiz-send';
+    send.type = 'button'; send.className = 'chat-quiz-send ui-hit-area';
     send.textContent = tr('quiz.send_answer', 'Send my answer'); send.disabled = true;
     const closeButton = document.createElement('button');
-    closeButton.type = 'button'; closeButton.className = 'chat-quiz-close';
+    closeButton.type = 'button'; closeButton.className = 'chat-quiz-close ui-hit-area';
     const closeLabel = tr('quiz.close_question', 'Close question without answering');
     closeButton.setAttribute('aria-label', closeLabel); closeButton.title = closeLabel;
     closeButton.innerHTML = CLOSE_GLYPH;

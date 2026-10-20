@@ -34,6 +34,7 @@ test('the bridge acts only on this frame\'s messages carrying this mount\'s nonc
     const handle = createCardAppBridge({
         nonce: 'n-2', source: () => frame,
         resize: (h) => calls.push(['resize', h]), save: (text) => calls.push(['save', text]), submit: (v, s) => calls.push(['submit', v, s]),
+        fault: (text) => calls.push(['fault', text]),
     });
     const from = (data, source = frame) => handle({ source, data });
     assert.equal(from({ type: 'ouro-card-resize', height: 300, nonce: 'n-2' }, {}), false, 'another window');
@@ -46,8 +47,12 @@ test('the bridge acts only on this frame\'s messages carrying this mount\'s nonc
     assert.equal(from({ type: 'ouro-card-state', state: '{broken', nonce: 'n-2' }), false, 'not JSON');
     assert.equal(from({ type: 'ouro-card-state', state: '{"step":2}', nonce: 'n-2' }), true);
     assert.equal(from({ type: 'ouro-card-submit', value: { total: 42 }, summary: 'Total 42', nonce: 'n-2' }), true);
-    assert.equal(from({ type: 'ouro-card-fetch', url: '/api/state', nonce: 'n-2' }), false, 'three messages, nothing else');
-    assert.deepEqual(calls, [['resize', 300], ['save', '{"step":2}'], ['submit', { total: 42 }, 'Total 42']]);
+    assert.equal(from({ type: 'ouro-card-error', kind: 'error', message: 'x is not defined', nonce: 'n-2' }), true);
+    assert.equal(from({ type: 'ouro-card-error', kind: 'csp', message: 'connect-src', nonce: 'n-2' }), true);
+    assert.equal(from({ type: 'ouro-card-error', kind: 'error', message: 'forged', nonce: 'n-2' }, {}), false, 'another window');
+    assert.equal(from({ type: 'ouro-card-fetch', url: '/api/state', nonce: 'n-2' }), false, 'its messages, nothing else');
+    assert.deepEqual(calls, [['resize', 300], ['save', '{"step":2}'], ['submit', { total: 42 }, 'Total 42'],
+        ['fault', 'App error: x is not defined'], ['fault', "Blocked by the card's policy: connect-src"]]);
 });
 
 test('a submit becomes one draft line: the title, the summary and the value as compact JSON when it is small', () => {

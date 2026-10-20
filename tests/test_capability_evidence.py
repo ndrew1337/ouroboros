@@ -731,7 +731,7 @@ def test_first_successful_call_seeds_density_so_the_next_projection_is_measured(
     model = "anthropic/claude-fable-5"  # Claude-family, routed through OpenRouter
     core = context_fit.ContextCore(
         base_prompt="p", bible_md="b", architecture_md="a", development_md="d",
-        semi_stable_text="s", dynamic_text="y", user_content_json='"u"',
+        semi_stable_text="s", dynamic_text="y", user_content_json=json.dumps("u" * 200_000),  # comparable to the 50k send
         docs_need_development=False,
     )
     env = SimpleNamespace(drive_root=str(tmp_path))

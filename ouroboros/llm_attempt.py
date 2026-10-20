@@ -428,6 +428,59 @@ def effort_request_facts(target: Dict[str, Any], payload: Dict[str, Any]) -> Dic
             "sent_source": "host_candidate", "reported": None, "report_source": None}
 
 
+def _exact_local_measurement(target: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Reuse the serving instance's count only for the input it actually measured.
+
+    The local manager validates the serving identity while measuring, and the lane
+    checks it again before the dispatch predicate. Neither check tokenizes again.
+    """
+    measured = target.get("local_input_measurement") or {}
+    if target.get("provider") == "local" and measured.get("supported") and measured.get("input_is_exact") is True:
+        from ouroboros.local_model_server import input_fingerprint
+
+        if measured.get("native_input_sha256") == input_fingerprint(payload):
+            return measured
+    return {}
+
+
+def refused_candidate_facts(request: AttemptRequest, **measurement: Any) -> Dict[str, Any]:
+    """The same immutable comparison facts for local counts and Main predictions."""
+    return {
+        **{key: getattr(request, key) for key in (
+            "model", "provider", "max_completion_tokens", "candidate_measurement_kind", "candidate_raw_sha256",
+            "candidate_raw_size_bytes", "candidate_context_sha256", "candidate_context_size_bytes")},
+        "physical_context": asdict(request.physical_context) if request.physical_context else None,
+        **measurement,
+    }
+
+
+def main_context_fit_refusal(request: AttemptRequest) -> Optional[Dict[str, Any]]:
+    """Final-candidate W/R/P for Main admission; exact local input outranks density."""
+    from ouroboros.context_budget import context_mode_limits
+    from ouroboros.context_fit import reclaim_low_water_margin
+
+    physical = request.physical_context
+    if physical is None:
+        return None
+    window = request.context_window_tokens_exact or physical.capacity_total_tokens
+    if window is None:
+        return None  # unknown capacity leaves the first full request admissible
+    reserve = context_mode_limits(physical.rendered_mode, "", request.max_completion_tokens)[1]
+    exact = request.prompt_tokens_exact is not None
+    size = request.prompt_tokens_exact if exact else math.ceil(
+        request.prompt_tokens_bounded_estimate * (physical.measurement_density or 1.0))
+    free = window - reserve - size
+    if free > 0:
+        return None  # only physical W gates; the owner target never vetoes a send
+    return refused_candidate_facts(
+        request, capacity_total_tokens=window, response_reserve_tokens=reserve, free_tokens=free,
+        cause="exact_local_count" if exact else "known_window_prediction",
+        **({"input_tokens": size, "context_window_tokens": window} if exact else {
+            "estimated_input_tokens": size, "predicted_free_tokens": free,
+            "predicted_slack_tokens": reclaim_low_water_margin(None, window)}),
+    )
+
+
 def _attempt_request(
     target: Dict[str, Any],
     payload: Dict[str, Any],
@@ -472,6 +525,7 @@ def _attempt_request(
     raw_sha256 = hashlib.sha256(raw).hexdigest()
     record_candidate(raw_sha256, clock_note)
     note_candidate_images(raw_sha256, payload)  # the images it carries, for an image-refusal retry's predicate
+    measured = _exact_local_measurement(target, payload)
     return AttemptRequest(
         model=str(target.get("usage_model") or target.get("resolved_model") or payload.get("model") or ""),
         provider=str(target.get("provider") or "unknown"),
@@ -487,6 +541,8 @@ def _attempt_request(
         physical_context=current_physical_attempt_context(),
         route_is_loopback=is_loopback_base_url(target.get("base_url")),
         prompt_tokens_bounded_estimate=bounded_tokens,
+        prompt_tokens_exact=measured.get("input_tokens"),
+        context_window_tokens_exact=measured.get("context_window"),
         processing_preference=str(target.get("processing_preference") or ""),
         submitted_processing_mode=submitted_processing_mode(target, payload),
         processing_basis=copy.deepcopy(target.get("processing_basis")),
@@ -566,13 +622,10 @@ def bound_reply_allowance(target: Dict[str, Any], payload: Dict[str, Any]) -> Di
         payload = {**payload, field: response_limit_for_target(target).ceiling(payload[field])}
     if context is None or field is None or context.rendered_mode != "nano":
         return payload
-    window, measured, exact = context.capacity_total_tokens, target.get("local_input_measurement") or {}, False
+    window, measured = context.capacity_total_tokens, _exact_local_measurement(target, payload)
+    exact = bool(measured)
     if target.get("provider") == "local":
         window = target.get("context_window_tokens") if target.get("context_window_confirmed") else window
-        if measured.get("supported") and measured.get("input_is_exact") is True:
-            from ouroboros.local_model_server import input_fingerprint
-
-            exact = measured.get("native_input_sha256") == input_fingerprint(payload)
     if exact:
         raw = input_tokens = int(measured["input_tokens"])
         window = measured.get("context_window") or window
@@ -591,11 +644,8 @@ def bound_reply_allowance(target: Dict[str, Any], payload: Dict[str, Any]) -> Di
         error = LocalContextTooLargeError(
             f"the local model's window of {int(window)} tokens leaves {int(window) - input_tokens} for the reply "
             f"after {input_tokens} exact input tokens, below the floor of {min(frame['caller_max_tokens'], 8_192)}")
-        error.refused_candidate = {
-            **{key: getattr(request, key) for key in (
-                "model", "provider", "max_completion_tokens", "candidate_measurement_kind", "candidate_raw_sha256",
-                "candidate_raw_size_bytes", "candidate_context_sha256", "candidate_context_size_bytes")},
-            "physical_context": asdict(context), "input_tokens": input_tokens, "context_window_tokens": int(window)}
+        error.refused_candidate = refused_candidate_facts(
+            request, input_tokens=input_tokens, context_window_tokens=int(window))
         raise error
     return candidate
 

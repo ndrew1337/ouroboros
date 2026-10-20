@@ -589,7 +589,8 @@ export function taskReasonDetail(evt) {
         provider_unavailable: 'acceptance_bypassed_provider_unavailable', context_overflow: 'acceptance_bypassed_context_overflow',
         children_unabsorbed: 'acceptance_bypassed_children_unabsorbed', owner_requested_finalization: 'acceptance_bypassed_owner_requested_finalization' };
     let clause = '';
-    if (taskStoppedWithSummary(evt)) clause = '';
+    if (reason === 'foreign_install_root' && record.reason_detail) clause = String(record.reason_detail);
+    else if (taskStoppedWithSummary(evt)) clause = '';
     else if (severity === "cancelled" && origin && typeof origin === "object"
         && !Array.isArray(origin) && Object.keys(origin).length) {
         clause = joinCauseClauses(cancelCauseClauses(origin, record));
@@ -1056,7 +1057,7 @@ export function summarizeLogEvent(evt) {
     if (t === 'task_checkpoint' || t === 'context_reclaim') {
         return view(['context_fit_low_retry', 'service_finalization_error'].includes(evt.checkpoint_kind) ? 'warn' : 'thinking', taskCheckpointLabel(evt), {
             meta: taskMeta(evt.model ? compactModel(evt.model) : '', evt.round ? `r${evt.round}` : '',
-                evt.checkpoint_kind === 'context_fit_low_retry' ? 'same-model retry' : '', evt.context_tokens ? `~${evt.context_tokens} tok` : '',
+                evt.context_tokens ? `~${evt.context_tokens} tok` : '',
                 formatLogMoney(evt.task_cost)),
         });
     }
@@ -1436,7 +1437,7 @@ function summarizeChatLiveEventView(evt) {
         const lowRetry = evt.checkpoint_kind === 'context_fit_low_retry';
         return chatView({
             phase: lowRetry || evt.checkpoint_kind === 'service_finalization_error' ? 'warn' : 'thinking',
-            headline: taskCheckpointLabel(evt) + (lowRetry ? ' — retrying the same model once' : ''),
+            headline: taskCheckpointLabel(evt),
             visible: !checkpointHasProgressRow(evt),
             dedupeKey: key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
         });

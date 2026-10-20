@@ -33,7 +33,7 @@ function fakeEl(name) {
 }
 function withStyle(el) { el.style = { setProperty: (k, v) => el.styleProps.set(k, v), removeProperty: (k) => el.styleProps.delete(k) }; return el; }
 
-function world({ open = false, stack = true, coarse = true, enabled = DRAWER_DRAG, blockers = null } = {}) {
+function world({ open = false, stack = true, coarse = true, enabled = DRAWER_DRAG, blockers = null, also = null } = {}) {
     const winL = listenerMap();
     const docL = listenerMap();
     const rootL = listenerMap();
@@ -62,6 +62,7 @@ function world({ open = false, stack = true, coarse = true, enabled = DRAWER_DRA
         onLayout: (fn) => { env.layoutHandlers.add(fn); return () => env.layoutHandlers.delete(fn); },
         isField: (el) => flags.field.has(el), isSideways: (el) => flags.sideways.has(el),
         ...(blockers ? {} : { isBlocked: () => flags.blocked }), hasSelection: () => flags.selection,
+        ...(also ? { also } : {}),
     });
     // A touch event is dispatched at the element the touch started on; it bubbles to the root element and the
     // document only while that element is still in the page.
@@ -441,5 +442,64 @@ test('a finger that latches the drawer open or closed snaps once (the haptic); a
     w.touch('touchcancel', { x: 112 + 200, y: 300 });
     assert.deepEqual(w.state.set.at(-1), true, 'the system took the touch and the drawer opened…');
     assert.deepEqual(w.state.snaps, [true, false], '…but that was not the finger\'s latch');
+    w.dispose();
+});
+
+test('what moves with the drawer (the room card, its veil) follows its number and settles with it, read when a drag takes hold', () => {
+    const card = withStyle(fakeEl('card'));
+    const veil = withStyle(fakeEl('veil'));
+    let moving = [card];
+    const w = world({ also: () => moving });
+    moving = [card, veil, null];  // a room opened since the bind joins at the next drag; nothing is skipped quietly
+    open(w, { to: 200, up: false });
+    for (const el of [card, veil]) {
+        assert.ok(el.classList.contains('dragging'), el.name);
+        assert.equal(el.styleProps.get('--drawer-p'), w.sidebar.styleProps.get('--drawer-p'), el.name);
+    }
+    assert.ok(w.progress() > 0 && w.progress() < 1, 'halfway');
+    w.touch('touchend', { x: 200, y: 300 });
+    for (const el of [card, veil]) {
+        assert.equal(el.classList.contains('dragging'), false, el.name);
+        assert.equal(el.styleProps.has('--drawer-p'), false, el.name);
+        assert.match(el.styleProps.get('--drawer-settle'), /^\d+ms$/, el.name);
+    }
+    w.runTimers();
+    for (const el of [card, veil]) assert.equal(el.styleProps.has('--drawer-settle'), false, el.name);
+    // A touch that never takes hold (the page scrolls) moves nothing, the card included.
+    w.touch('touchstart', { x: 100, y: 300 });
+    w.touch('touchmove', { x: 102, y: 340 });
+    w.touch('touchend', { x: 102, y: 340 });
+    assert.equal(card.classList.contains('dragging'), false);
+    assert.equal(card.styleProps.has('--drawer-p'), false);
+    w.dispose();
+});
+
+test('a finger that rested longer than the sample window before it lifted has no speed: where it stopped decides', () => {
+    // Quickly to 30% open, then still: under half, it springs back closed (no fling read from moves long gone).
+    let w = world();
+    open(w, { from: 100, to: 100 + 12 + 96, steps: 4, dt: 16, up: false });  // 24px per 16ms, p = 0.3
+    w.touch('touchend', { x: 208, y: 300, dt: DRAG.sampleWindow + 300 });
+    assert.deepEqual(w.state.set, [], 'rested under half: springs back');
+    w.dispose();
+    // The open drawer quickly 12% of the way closed, then still: less than 30% gone, it stays open.
+    w = world({ open: true });
+    w.scrim.hidden = false;
+    w.touch('touchstart', { x: 300, y: 300, target: w.sidebar });
+    w.touch('touchmove', { x: 288, y: 300 });
+    w.touch('touchmove', { x: 268, y: 300 });
+    w.touch('touchmove', { x: 250, y: 300 });
+    w.touch('touchend', { x: 250, y: 300, dt: DRAG.sampleWindow + 300 });
+    assert.deepEqual(w.state.set, [], 'rested open: stays open');
+    w.dispose();
+    // The system taking a rested finger reads its place too.
+    w = world();
+    open(w, { from: 100, to: 100 + 12 + 96, steps: 4, dt: 16, up: false });
+    w.touch('touchcancel', { x: 208, y: 300, dt: DRAG.sampleWindow + 300 });
+    assert.deepEqual(w.state.set, [], 'taken after a rest under half: back closed');
+    w.dispose();
+    // Lifted while still moving (within the window), the same drag keeps the finger's speed: a fling.
+    w = world();
+    open(w, { from: 100, to: 100 + 12 + 96, steps: 4, dt: 16 });
+    assert.deepEqual(w.state.set, [true], 'lifted moving: a fling opens');
     w.dispose();
 });

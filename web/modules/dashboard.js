@@ -1,4 +1,4 @@
-import { bindTabStrip, renderPageHeader, renderTabStrip } from './page_header.js';
+import { bindPageHeader, bindTabStrip, renderPageHeader, renderTabStrip } from './page_header.js';
 
 // By importance and expected use (docs/DESIGN.md §5): the log first and by default, then what
 // runs now and what it costs, then updates, the owner-measured Storage and Evolution (off by default).
@@ -50,6 +50,8 @@ export function initDashboard({ state }) {
         dataAttr: 'data-dashboard-tab',
         onChange: activateTab,
     });
+    // On a desk the six tabs are the bar's start (docs/DESIGN.md "Page header").
+    const disposeBar = bindPageHeader(page.querySelector('.app-page-header'));
 
     function activateTab(tabName) {
         const name = tabName || 'logs';
@@ -69,6 +71,6 @@ export function initDashboard({ state }) {
     return {
         page,
         activateTab,
-        destroy: tabStrip.destroy,
+        destroy() { tabStrip.destroy(); disposeBar(); },
     };
 }

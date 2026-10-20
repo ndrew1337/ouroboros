@@ -324,6 +324,9 @@ class AttemptRequest:
     effort: Optional[Dict[str, Any]] = None
     allow_live_fetch: bool = True  # False only for a price display: cached tariffs, never a fetch
     provider_receipt_binding: Optional[Dict[str, str]] = None
+    # The local serving tokenizer's observation of this candidate, never a density forecast.
+    prompt_tokens_exact: Optional[int] = None
+    context_window_tokens_exact: Optional[int] = None
 @dataclass(frozen=True)
 class AttemptReservation:
     attempt_id: str

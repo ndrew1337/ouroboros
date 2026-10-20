@@ -152,7 +152,8 @@ def test_an_escaped_unasked_log_keeps_its_eighth_beside_a_plain_chosen_page(tmp_
 def test_a_chosen_page_the_window_cannot_hold_fills_it_at_its_own_density(tmp_path, page, log):
     messages, receipt, sent = _mixed(tmp_path, page, log, window=65_000)
     assert receipt["status"] == "projected" and _view_json(messages[0]["content"])["omitted_ranges"]
-    assert 65_000 * 0.97 <= sent <= 65_000  # only the window cut it, not the neighbour's density
+    working_limit = 65_000 - math.ceil(65_000 / RECLAIM_LOW_WATER_DIVISOR)
+    assert working_limit * 0.97 <= sent <= working_limit  # a physical cut leaves W/8 for next-turn host rows
     assert _view_json(messages[1]["content"])["shown_ranges"] == []
 
 
@@ -179,9 +180,14 @@ def test_the_facts_line_names_window_room_and_target_excess_apart(monkeypatch):
     assert "window unknown" in unknown and "free unknown" in unknown and "over target 115,536" in unknown
     nano = _facts(monkeypatch, **{**base, "_context_prompt_estimate": 60_000, "_context_response_reserve_tokens": 8_192,
                                   "_context_target_total_tokens": 85_000}, _context_capacity_total_tokens=200_000)
-    assert "free ~74,464" in nano and "target room 16,808 (reply floor 8,192)" in nano
+    assert "predicted free ~131,808 (reply floor 8,192)" in nano and "target room 16,808 (reply floor 8,192)" in nano
     cold = _facts(monkeypatch, **{**base, "_context_anchor_input_tokens": None}, _context_capacity_total_tokens=500_000)
-    assert "free unknown" in cold and "cold chars/4 estimate" in cold  # a cold estimate states no free room
+    assert "predicted free ~134,464" in cold and "cold chars/4 estimate" in cold
+    assert "reply reservation 65,536" in cold
+    witness = _facts(monkeypatch, **{**base, "_context_anchor_input_tokens": None,
+                                   "_context_measurement_basis": "fresh_model_usage"},
+                     _context_capacity_total_tokens=500_000)
+    assert "predicted free ~134,464" in witness and "fresh same-model" in witness
 
 
 # --- #1728: a technical rebind keeps the sent view while it fits -----------------------------------
@@ -724,13 +730,10 @@ def test_an_actual_refusal_narrows_memory_even_when_the_estimate_fits(tmp_path, 
     assert tool_ctx.memory_view_facts is kept and trace[VIEW_TRACE_KEY] == kept
 
 
-def test_a_low_retry_after_memory_narrowing_keeps_every_address_the_refused_max_request_showed(
+def test_a_presend_low_fold_keeps_every_address_narrowed_from_the_max_view(
         main_call, monkeypatch, tmp_path):
-    """#1728 on the production refusal passes, owner Max with rich memory. The owner's long words while the task
-    ran take the request past the window; the provider refuses it by size; nothing shown is addressable, so the
-    second pass narrows the shown Max view by the deficit and, memory alone not saving it, drops the books in
-    the same pass. The Low request the gateway receives shows my memory as the refused Max request did -- the
-    Low view prepared at startup and never sent does not come back -- and every turn is resent."""
+    """The production pre-send passes preserve continuity: narrow Max's memory before lowering its books,
+    keep those addresses in Low instead of resurrecting the startup view, and send every owner word."""
     from ouroboros import context_fit, memory_floor as mf
     from ouroboros.memory_inventory import shortage_from_trace
     from ouroboros.memory_view import snapshot_from_json, snapshot_json
@@ -751,16 +754,15 @@ def test_a_low_retry_after_memory_narrowing_keeps_every_address_the_refused_max_
     full_low = built.reproject_transcript(ctx.messages, "low")
     assert context_fit.estimate_context_prompt_tokens(full_low, initial_tool_schemas(tools, context_mode="low")) + \
         built.output_reserve_tokens <= window  # after dropping books the original, uncut memory would fit
-    refusal = result(outcome="failed", problem={"code": "context_length_exceeded", "message": "This model's maximum "
-                     f"context length is {window} tokens. However, your messages resulted in {window + 20_000} tokens."})
-    gateway.results = [refusal, _answer(ROUTE, {"role": "assistant", "content": "Kept."})]
-    gateway.dispatch = ["response_received"] * 2
+    first = copy.deepcopy(ctx.messages)
+    gateway.results = [_answer(ROUTE, {"role": "assistant", "content": "Kept."})]
+    gateway.dispatch = ["response_received"]
     tools._ctx.memory_view_facts = mf.trace_facts(built.projection("max").memory_facts)  # as the start records it
     text, _usage, trace = _run(ctx, tools, events, built)
 
-    first, low = (payload["messages"] for payload, _key in gateway.uploads)
+    [low] = [payload["messages"] for payload, _key in gateway.uploads]
     kinds = [row.get("checkpoint_kind") for row in _drained(events)]
-    assert text == "Kept." and len(gateway.creates) == 2 and tools._ctx.active_context_mode == "low"
+    assert text == "Kept." and len(gateway.creates) == 1 and tools._ctx.active_context_mode == "low"
     assert kinds.index("context_memory_coarsened") < kinds.index("context_fit_low_retry")  # one pass: memory, then books
 
     def shows(sent, whole):
@@ -771,7 +773,8 @@ def test_a_low_retry_after_memory_narrowing_keeps_every_address_the_refused_max_
     assert {step for step, _ident in narrowed} >= {"F1", "F1b"}  # the deficit took more than one element
     # Max sends [books, handbook, story, rooms notice, turns...]; Low [book navigation, story, rooms notice, turns...].
     assert len(json.dumps(low[0])) < len(json.dumps(first[0]))
-    assert low[3:-2] == first[4:-1]  # every turn resent; one facts line appended, the clock row replaced
+    from ouroboros.transcript_prefix import message_digest
+    assert {message_digest(first[1]), message_digest(owner)} <= {message_digest(row) for row in low}
     note = low[2]["content"]
     assert f"This Low view retains memory cuts for the window ({window} tokens)." in note
     assert "does not hold all of my memory" not in note and "cannot hold" not in note
@@ -790,6 +793,99 @@ def test_a_low_retry_after_memory_narrowing_keeps_every_address_the_refused_max_
     assert rebound.low_projection.system_content_json == after.low_projection.system_content_json
     assert rebound.low_projection.memory_facts == after.low_projection.memory_facts
     assert _addressed(rebound, "low") == _addressed(after, "low")
+
+
+@pytest.mark.parametrize("owner_mode", ["low", "nano"])
+def test_a_chosen_read_above_target_reaches_the_model_inside_the_known_window(
+        main_call, monkeypatch, tmp_path, owner_mode):
+    """A real requested read crosses batch delivery and the next physical admission unchanged."""
+    from ouroboros.context_anchor import REFUSED_INPUTS_KEY
+    from ouroboros.context_budget import OWNER_LOW_TARGET_TOKENS
+
+    task_text = "Read giant.txt whole and report its LAST line verbatim. Keep the old API alive."
+    ctx, gateway, tools, events, plan, windows = _native(
+        main_call, monkeypatch, tmp_path, task_text=task_text, owner_mode=owner_mode)
+    windows["account-a"] = 1_000_000
+    built = plan(windows["account-a"])
+    ctx.messages[:] = built.messages_for(owner_mode)
+    giant = "".join(f"row {n:07d} of the giant module: payload payload payload\n" for n in range(20_000))
+    giant += "LAST LINE: keep the old API alive\n"
+    (ctx.drive_root / "giant.txt").write_text(giant, encoding="utf-8")
+    read = {"id": "chosen-read", "type": "function", "function": {"name": "read_file", "arguments": json.dumps(
+        {"path": "giant.txt", "start_line": 1, "max_lines": 30_000})}}
+    gateway.results = [
+        _answer(ROUTE, {"role": "assistant", "content": "Reading it.", "tool_calls": [read]}),
+        _answer(ROUTE, {"role": "assistant", "content": "LAST LINE: keep the old API alive"})]
+    gateway.dispatch = ["response_received"] * 2
+    text, usage, trace = _run(ctx, tools, events, built)
+
+    assert text == "LAST LINE: keep the old API alive" and len(gateway.creates) == 2
+    assert OWNER_LOW_TARGET_TOKENS < usage["_context_prompt_estimate"] < 1_000_000 - built.output_reserve_tokens
+    second = gateway.uploads[1][0]["messages"]
+    shown = next(row["content"] for row in second if row.get("tool_call_id") == "chosen-read")
+    header, *rows = shown.rstrip("\n").split("\n")
+    assert "lines 1–20001 of 20001" in header
+    assert "".join(row.split("\t", 1)[1] + "\n" for row in rows) == giant
+    assert all(any(task_text in json.dumps(row, ensure_ascii=False) for row in payload["messages"])
+               for payload, _key in gateway.uploads)
+    assert [call["tool"] for call in trace["tool_calls"]] == ["read_file"]
+    assert not usage.get(REFUSED_INPUTS_KEY)
+    assert not any(row.get("checkpoint_kind") == "context_reclaim_emergency" for row in _drained(events))
+    assert tools._ctx.active_context_mode == owner_mode
+
+
+@pytest.mark.parametrize("owner_mode,window", [("low", 300_000), ("nano", 300_000), ("max", 400_000)])
+def test_a_window_bounded_chosen_read_survives_next_host_rows_and_source_shrink(
+        main_call, monkeypatch, tmp_path, owner_mode, window):
+    import functools
+
+    from ouroboros.context_anchor import REFUSED_INPUTS_KEY
+    from ouroboros.context_fit import bounded_prompt_tokens_for_payload
+    from ouroboros.send_clock import CLOCK_NOTE_PREFIX
+
+    ctx, gateway, tools, events, plan, windows = _native(main_call, monkeypatch, tmp_path, owner_mode=owner_mode,
+                                                       task_text="Read giant.txt whole, including its last line.")
+    windows["account-a"] = window
+    built = plan(window)
+    ctx.messages[:] = built.messages_for(owner_mode)
+    giant = "".join(f"row {n:07d}: payload payload payload payload payload\n" for n in range(20_000))
+    giant += "LAST LINE: keep the old API alive\n"
+    path = ctx.drive_root / "giant.txt"
+    path.write_text(giant, encoding="utf-8")
+    read_file, originals = tools._entries["read_file"].handler, []
+
+    @functools.wraps(read_file)
+    def shrinking_source(*args, **kwargs):
+        answer = read_file(*args, **kwargs)
+        originals.append(str(answer))
+        path.write_text("The source has since shrunk.\n", encoding="utf-8")
+        return answer
+
+    tools.override_handler("read_file", shrinking_source)
+    read = {"id": "chosen-read", "type": "function", "function": {"name": "read_file", "arguments": json.dumps(
+        {"path": "giant.txt", "start_line": 1, "max_lines": 30_000})}}
+    gateway.results = [
+        _answer(ROUTE, {"role": "assistant", "content": "Reading.", "tool_calls": [read]}),
+        _answer(ROUTE, {"role": "assistant", "content": "Read the bounded view."})]
+    gateway.dispatch = ["response_received"] * 2
+    text, usage, trace = _run(ctx, tools, events, built)
+    assert text == "Read the bounded view." and len(gateway.creates) == 2
+    sent = gateway.uploads[1][0]
+    shown = next(row["content"] for row in sent["messages"] if row.get("tool_call_id") == "chosen-read")
+    view = _view_json(shown)
+    assert view["shown_ranges"] and view["omitted_ranges"]
+    assert "row 0000000" in shown and "LAST LINE: keep the old API alive" in shown
+    assert artifacts.read_actor_source_bytes(ctx.drive_root, ctx.task_id, _source_ref(shown)).decode() == originals[0]
+    assert len(originals) == 1 and len(path.read_text()) < 100
+    assert any(str(row.get("content", "")).startswith("[CONTEXT_FACTS]") for row in sent["messages"])
+    assert any(str(row.get("content", "")).startswith(CLOCK_NOTE_PREFIX) for row in sent["messages"])
+    delivery = trace["tool_result_delivery"][0]
+    assert bounded_prompt_tokens_for_payload(sent, 0) + delivery["reserve_tokens"] < window
+    assert delivery["whole_tokens"] + delivery["reserve_tokens"] > window
+    assert not usage.get(REFUSED_INPUTS_KEY)
+    assert not any(row.get("checkpoint_kind") in {"context_reclaim_emergency", "context_fit_low_retry"}
+                   for row in _drained(events))
+    assert tools._ctx.active_context_mode == owner_mode
 
 
 def test_a_giant_chosen_read_on_an_unknown_window_recovers_from_the_providers_size_refusal_by_its_exact_source(

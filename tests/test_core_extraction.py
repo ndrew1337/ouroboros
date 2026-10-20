@@ -153,8 +153,13 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # catalog without show_card still hashes to 6d10eac1...). Rolled again after review: show_card's
     # description says an app cannot fetch or load resources and that loading another page closes
     # it, and that a press after the task ended arrives as the owner's message replying to the card.
+    # Rolled for the infrastructure-under-load PR: forward_to_worker also writes into a requested
+    # child's mailbox (read when it starts, or kept as unread mail), so its description and `task_id`
+    # description say "running, queued or requested"; nothing else in the catalog changed.
+    # Rolled for the start ledger: show_card's description adds one sentence (on most devices an app
+    # shares the owner's page thread, so heavy computation belongs in a blob: Worker); nothing else changed.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "e1c9048c553f1aba16838e91f767a27851f47ffa3f69b3a6176160eaeac6fe7a"
+        "77bf2ec02eb5a03bcaa415791f4deb864ad402caf966a5054a8defe0cb19091f"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

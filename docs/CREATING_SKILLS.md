@@ -204,10 +204,10 @@ grants, dependencies and publication must remain eligible. Revocation/expiry emi
 one withdrawal; it does not resend old facts. A changed material value appends a
 full note; timestamp-only renewal waits until the visible lease expires, then
 references that exact full text's source/text hashes with new dates. No delta
-chain or hidden memo is authority: reclaim keeps the required visible base, and
-an absent base after compaction/cold Resume causes a complete current note. This preserves the
-existing prefix, not a promise of provider cache hits. Source bytes are retained
-through observability; earlier notes remain historical, not current authority.
+chain or hidden memo is authority: reclaim keeps the visible base; its absence
+causes a full current note. Observability retains exact sources. Superseded full
+notes become pointers with an explicit prefix break; metadata renewals append.
+Earlier notes are historical, never current authority.
 
 Manifest refusals teach: every `SkillManifestError` carries the problem plus,
 where the parser knows the repair, a `fix_hint` rendered into the message
@@ -371,13 +371,16 @@ unregistered and the owner sees one notice naming the skill. It stays off
 until the page reloads or the skill's revision changes; the other modules and
 the page keep working.
 
-Recovery never depends on the modules. While modules start, the host keeps a
-boot marker in the page's storage; a page that finds one (the last start froze
-or crashed, however long ago) starts without page modules and offers Start
-with plugins, which alone clears it. Opening the page with `?plugins=off` does the same
-on purpose; Main's More menu (Restart without plugins) and the macOS app's
-Help menu (Start without plugins) reload it that way. Declarative contributions
-stay available in both cases.
+Recovery never depends on the modules. A module runs on the page's own thread,
+so one that loops or blows up in its start takes the page with it. Before the
+import the host writes the module's start to the page's start ledger
+(`web/modules/holds.js`, this device's storage) and clears it a second after
+`mount` settled; a module whose last start with this revision the page did not
+outlive is not imported again by itself: one notice names it with Start it, and
+the skill's next revision starts as usual. A page opened with `?hold=all` holds
+every module (and every widget and app frame) for that load. Declarative
+contributions stay available in both cases. A hang that begins later than that
+second is not held; the Skills switch turns the skill's code off live.
 
 ## Lifecycle: install → review → enable → execute
 
@@ -419,7 +422,9 @@ flowchart LR
   through import, handler waits and cleanup. The async form polls
   cooperatively, so it never blocks the ASGI loop; nested scopes and
   unwrapped child work remain unsupported rather than inheriting a lease.
-- **Enable** flips `enabled.json` after current executable-review authority + grants + deps. The
+- **Enable** flips `enabled.json` after current executable-review authority + grants, installing
+  the declared packages itself when they are missing, failed or stale (idempotent: Enable on an
+  enabled skill repairs it; a refusal is typed, `code` + one sentence + `detail`). The
   Skills UI surfaces a toggle; agents can also call `toggle_skill`.
   A self-authored skill's first enablement can follow
   `OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS`; otherwise enabling requires the owner
@@ -471,9 +476,10 @@ install:
 ```
 
 Bare `dependencies` entries are treated as Python packages. `pip`,
-`pipx`, `uv`, `npm`, and `node` specs are installed only after a fresh
-executable review (bytes accepted without a review, such as a trusted source's
-release, count, so they need no model review) and only under the skill's `.ouroboros_env` directory.
+`pipx`, `uv`, `npm`, and `node` specs are installed once the review gate admits the exact
+bytes (a reviewer verdict, a trusted release, the owner's skip or edit, Cyber Pro) by one owner
+(`skill_dependencies.ensure_skill_dependencies`: at enable, review end, install, author finish
+and startup; no new paid review is required) and only under the skill's `.ouroboros_env` directory.
 Global package-manager specs remain manual setup guidance. Exact resources and
 explicit build actions use the same isolated install owner:
 
@@ -839,8 +845,8 @@ consent. The desktop launcher's owner-grant bridge records these grants.
 
 The Skills UI surfaces missing grants on the skill card. The agent
 can also call `toggle_skill enabled=true` only after grants are
-approved (the tool returns `SKILL_TOGGLE_ERROR: cannot enable until
-requested key and permission grants are approved`). Self-authored markers alone
+approved (the tool returns `SKILL_TOGGLE_ERROR` with `code: "grants"` and the sentence
+`Grant it the keys and permissions it asks for first.`). Self-authored markers alone
 do not authorize grants or enablement. Automatic grants and first enablement
 follow the setting below; an explicitly authorized task toggle remains separate.
 
@@ -1646,7 +1652,17 @@ Rules every module author follows:
   card's mode from the card; that choice is stored in
   `ui_preferences.widget_start_mode` (`"<skill>:<tab_id>"` → mode) and
   overrides your declaration. Stop is always available and wins over every
-  mode; do not build your own keep-alive or restart logic against it.
+  mode, on that device across reloads until Start or a change to Auto / Keep
+  running; do not build your own keep-alive or restart logic against it.
+- **A start the page did not outlive is not repeated by itself.** On WebKit
+  (the macOS app, iPhone, Telegram on iOS), Android WebView and Firefox your
+  frame shares the page's thread: a top-level loop or a synchronous blow-up
+  freezes the whole page. The host records each frame's start before it runs
+  and clears it a second after the frame loaded; a card whose last start with
+  this revision the page did not outlive rests as its facade with Start and one
+  line, and your next revision starts as usual. Keep heavy computation in a
+  `blob:` Worker (the module CSP allows `worker-src blob:`), never in a long
+  synchronous loop.
 - **The view is disposable — durable state lives in the skill.** Treat the
   frame like an editor tab (VS Code's `getState`/`setState` model): autosave
   through your own `/api/extensions/<skill>/...` routes while running, and
@@ -2161,7 +2177,7 @@ def register(api):
 | Symptom | Likely cause |
 |---------|--------------|
 | `SKILL_EXEC_BLOCKED: review status is 'pending'` | Run `skill_review` for this skill. |
-| `SKILL_TOGGLE_ERROR: dependency fingerprint is stale` | Re-run `skill_review`; post-review deps reconciliation will reinstall. |
+| `SKILL_TOGGLE_ERROR` with `code: "dependencies_failed"` | The installer's words are in `detail` (network, platform); `toggle_skill enabled=true` again retries; packages never need a review. |
 | `EXTENSION_NOT_LIVE` on tool dispatch | The skill is disabled or the loader had a load_error — check the Skills UI. |
 | `SKILL_REPAIR_STALE: ...` | The selected payload or its admission revision changed; inspect the current state and the reported conflict before continuing. |
 | `PluginAPI.register_*` raises `ExtensionRegistrationError` | Usually the skill is missing the matching permission in its manifest. For `register_companion_process` the name must also be alnum/underscore and declared under `companion_processes` — see "Declaring a companion process". |

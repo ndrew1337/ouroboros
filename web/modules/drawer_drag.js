@@ -13,7 +13,8 @@
  * If the system still takes the touch, the drawer settles from where the finger left it, never stranded halfway.
  *
  * Motion is transform-only and driven by one number (`--drawer-p`, 0 closed … 1 open) that the scrim's opacity
- * follows. On release the drawer settles at the finger's speed (`--drawer-settle`). The owner of the drawer's state
+ * follows, and with it whatever else moves with the drawer (`also`: on a phone the room, pushed aside as a card, and
+ * the veil over its words). On release the drawer settles at the finger's speed (`--drawer-settle`). The owner of the drawer's state
  * commits the result, so history, focus and inert stay the layer stack's, and a gesture that does not commit leaves
  * no trace. The drag is a shortcut: every gesture has a visible control (☰ and ×). One constant switches it off in
  * one line: DRAWER_DRAG. */
@@ -27,7 +28,7 @@ export const DRAG = Object.freeze({
     flingVelocity: 0.3,  // px/ms
     openPast: 0.5,       // a slow release opens past this progress
     closePast: 0.3,      // a slow release closes once this much of the drawer has gone
-    sampleWindow: 100,   // ms of velocity samples
+    sampleWindow: 100,   // ms of velocity samples; a finger that rests longer before it lifts has no speed
     clickGuard: 400,     // ms after a drag during which the click that ends it is not a tap
     // The settle (style.css's curve starts at 2.25× its average speed): a fling keeps the finger's speed, a slow
     // release moves at least `settleSpeed`, within `settleMin`…`settleMax` (Ionic's iOS menu takes 400 ms).
@@ -94,6 +95,9 @@ export function bindDrawerDrag({
     // A finger's release latched the drawer open or closed (haptics.js `snap`); a spring back to where it was is no
     // change, and the system taking the touch is not the finger's.
     onSnap = () => {},
+    // What else follows the finger (the room card and its veil): read when a drag takes hold, so a room opened since
+    // is in it; each gets the same --drawer-p, the dragging class and the settle.
+    also = () => [],
     win = globalThis.window, doc = globalThis.document, enabled = DRAWER_DRAG,
     // The eligibility of a start, injectable for tests; the defaults read the real DOM.
     isField = (el) => Boolean(el?.closest?.(FIELD_SELECTOR)),
@@ -123,13 +127,13 @@ export function bindDrawerDrag({
         return !target?.closest?.('input, textarea, select, [role="slider"]');
     }
 
+    let moving = [sidebar, scrim];  // the drawer, its scrim, and what moves with them (set when a drag takes hold)
     const setProgress = (p) => {
-        sidebar.style.setProperty('--drawer-p', String(p));
-        scrim.style.setProperty('--drawer-p', String(p));
+        for (const el of moving) el.style.setProperty('--drawer-p', String(p));
         g.p = p;
     };
     const paint = (on) => {
-        for (const el of [sidebar, scrim]) {
+        for (const el of moving) {
             el.classList.toggle('dragging', on);
             if (!on) el.style.removeProperty('--drawer-p');
         }
@@ -137,9 +141,10 @@ export function bindDrawerDrag({
     // The settle runs at the finger's speed; a tap on ☰ or × keeps style.css's own duration.
     function settle(ms) {
         cancel(settleTimer);
-        for (const el of [sidebar, scrim]) el.style.setProperty('--drawer-settle', `${ms}ms`);
+        const settling = moving;
+        for (const el of settling) el.style.setProperty('--drawer-settle', `${ms}ms`);
         settleTimer = later(ms + 60, () => {
-            for (const el of [sidebar, scrim]) el.style.removeProperty('--drawer-settle');
+            for (const el of settling) el.style.removeProperty('--drawer-settle');
         });
     }
     // A scrim that faded out with a closed drawer leaves the page (unless the drawer opened meanwhile).
@@ -201,7 +206,9 @@ export function bindDrawerDrag({
             g.width = sidebar.getBoundingClientRect?.().width || 320;
             cancel(settleTimer);
             cancel(scrimTimer);
-            for (const el of [sidebar, scrim]) el.style.removeProperty('--drawer-settle');
+            for (const el of moving) el.style.removeProperty('--drawer-settle');
+            moving = [sidebar, scrim, ...(also() || []).filter(Boolean)];
+            for (const el of moving) el.style.removeProperty('--drawer-settle');
             onGrab();
             if (!g.startOpen) scrim.hidden = false;
             paint(true);
@@ -219,17 +226,19 @@ export function bindDrawerDrag({
     function onEnd(event) {
         if (!g) return;
         const touch = touchIn(event.changedTouches, g.id);
-        if (touch) release(touch.clientX, true);
+        if (touch) release(touch.clientX, true, event.timeStamp);
     }
 
-    /** The finger left at `x` (an end, or the system taking the touch): settle at the nearest state the finger's
-     * speed points to, never stranded halfway. */
-    function release(x, byFinger = false) {
+    /** The finger left at `x` at time `at` (an end, or the system taking the touch): settle at the nearest state the
+     * finger's speed points to, never stranded halfway. A finger that rested longer than the sample window before it
+     * left has no speed: where it stopped decides. */
+    function release(x, byFinger = false, at = now()) {
         const gg = end();
         if (!gg || gg.mode !== 'drag') return;  // a tap, not a drag
         const first = gg.samples[0];
         const last = gg.samples[gg.samples.length - 1];
-        const velocity = first && last && last[0] > first[0] ? (last[1] - first[1]) / (last[0] - first[0]) : 0;
+        const moving = Boolean(last) && at - last[0] <= DRAG.sampleWindow;
+        const velocity = moving && last[0] > first[0] ? (last[1] - first[1]) / (last[0] - first[0]) : 0;
         const travel = Math.abs((Number.isFinite(x) ? x : gg.lastX ?? gg.x0) - gg.x0);
         let open;
         if (Math.abs(velocity) >= DRAG.flingVelocity && travel >= DRAG.minTravel) open = velocity > 0;
@@ -249,7 +258,7 @@ export function bindDrawerDrag({
     function onCancel(event) {
         if (!g) return;
         const touch = touchIn(event.changedTouches, g.id);
-        if (touch) release(touch.clientX ?? g.lastX);
+        if (touch) release(touch.clientX ?? g.lastX, false, event.timeStamp);
     }
 
     /** A second finger or a new width: back to the start, no history change. */

@@ -1,12 +1,13 @@
 // Producer census: loop_model_call/round_limits/nudges/budget, task_pacing,
 // transcript_prefix, loop_forced_finalization, owner_pause and agent budget-pause events.
 export const CHECKPOINT_LABELS = {
-    context_fit_low_retry: 'Books shown as chapter navigation after a size refusal',
+    context_fit_low_retry: 'Books shown as chapter navigation during context-size recovery',
+    context_fit_refused: 'Context-size check found no room for results',
     context_fit_route_rebound: 'Context fit rebound the route',
     context_fit_physical_mode: 'Context starts in a smaller mode (window too small)',
     context_view: 'Context inspected',
-    context_reclaim_emergency: 'Context shrunk after a size refusal (no model)',
-    context_memory_coarsened: 'Memory shown coarser after a size refusal',
+    context_reclaim_emergency: 'Context shrunk during context-size recovery (no model)',
+    context_memory_coarsened: 'Memory shown coarser during context-size recovery',
     context_view_renewed: 'Working view renewed: same task, fresh window',
     context_reclaim_manual: 'Context reclaimed on request',
     context_reclaim_automatic: 'Context reclaimed automatically',

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ouroboros.deadline_utils import bounded_seconds
-from ouroboros.delegate_start_instructions import HOST_FACTS_INSTRUCTION
+from ouroboros.delegate_start_instructions import HOST_FACTS_INSTRUCTION, SHARED_ENVIRONMENT_INSTRUCTION
 from ouroboros.triad_review import default_output_contract, request_output_shape
 
 
@@ -26,6 +26,7 @@ def render_review_session_prompt(request: Any, slot: Any, task: str) -> str:
          f"You are an independent Ouroboros reviewer slot running as an agent session with {access} "
          "technical access in a private checking folder.")
         + HOST_FACTS_INSTRUCTION,  # an agent session has a shell HOME; the raw API reviewer prompt does not
+        SHARED_ENVIRONMENT_INSTRUCTION,
         f"Surface: {request.surface}", f"Role hint: {slot.role_hint or 'general reviewer'}", "", task, "",
         "OUTPUT CONTRACT (your host parses this structurally):",
         contract + "\nThis contract governs the unwrapped substantive deliverable; emit any host-required transport metadata outside it exactly as separately instructed.",
