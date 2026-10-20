@@ -122,12 +122,16 @@ def test_renewal_waits_for_a_quiet_boundary_and_greets_only_once(reason):
             first.emit('resumable', handle='old-handle')
             first.emit('resumable', handle='latest-handle')
             first.renewal_ready = False
+            if reason == 'closed':
+                first.emit('audio', item_id='tail', rate=24000, pcm=b'\0' * 48000)
             if reason == 'host': host.due = True
             elif reason == 'closed': first.emit('closed', reason='rotate', resumable=True)
             else: first.emit('renew', within_s=2, reason='rotate', resume=reason == 'resume')
             await asyncio.sleep(.05)
             assert len(host.sessions) == 1
             first.renewal_ready = True
+            if reason == 'closed':
+                host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'tail', 'played_ms':1000}))
             await until(lambda: len(host.sessions) == 2)
             assert host.options[1].resume_handle == ('latest-handle' if reason in {'resume','closed'} else '')
             assert any(state[0] == cp.STATE_RECONNECTING for state in host.hub.states)
@@ -139,6 +143,32 @@ def test_renewal_waits_for_a_quiet_boundary_and_greets_only_once(reason):
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_resumable_close_ends_native_work_and_refit_discards_the_old_handle():
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        first.emit('ready', input_rate=24000, output_rate=24000)
+        first.emit('resumable', handle='old-conversation')
+        first.emit('input_started')
+        first.renewal_ready = False
+        first.emit('closed', resumable=True, reason='rotate')
+        try:
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            second.emit('renew', within_s=2, resume=False, reason='refit')
+            await until(lambda: len(host.sessions) == 3)
+            assert host.options[2].resume_handle == ''
+            host.sessions[2].emit('closed', resumable=True, reason='lost-before-new-handle')
+            with pytest.raises(RealtimeSetupError, match='provider_closed'):
+                await asyncio.wait_for(task, 2)
+            assert len(host.sessions) == 3
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
 
 
@@ -244,3 +274,15 @@ def test_end_call_is_silent_and_waits_until_goodbye_audio_was_played(tmp_path):
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('honoured', [False, True])
+def test_options_only_forward_honoured_knobs(honoured):
+    from skills.live_conversation.driver import session_options
+    host = Host()
+    host.state['languages'] = ('ru-RU',)
+    host.model = CatalogModel('fixture','Fixture', thinking_levels=('low','high') if honoured else (),
+        honours=frozenset({'pause','interruptions','thinking','search','languages'}) if honoured else frozenset())
+    options = session_options(host)
+    assert (options.pause,options.interruptions,options.thinking,options.search,options.languages) == (
+        ('long',False,'high',True,('ru-RU',)) if honoured else ('normal',True,'',False,()))

@@ -71,3 +71,5 @@ def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config
         assert status == 400 and data['error']
     assert {tool.name for tool in api.feature['call_tools']} == {'end_call','set_call_languages'}
     assert all(tool.silent for tool in api.feature['call_tools'])
+    from ouroboros.extension_ui_validation import validate_settings_schema
+    validate_settings_schema(api.sections[0][1]['schema'])

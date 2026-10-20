@@ -136,6 +136,8 @@ async def run(host: LiveHost, *, state_dir=None):
         if host.hub.closed or host.hub.ended_by_owner or host.hub.ended_by_ouroboros:
             return
         host.state.pop("refit", None)
+        if not resume_handle:
+            host.state.pop("resume_handle", None)
         result = await host.session(lambda session: consume(host, session), session_options(host, resume_handle))
         if result is None:
             return
@@ -172,7 +174,7 @@ async def consume(host: LiveHost, session):
         unheard = any(item not in interrupted and played.get(item, 0) < int(duration)
                       for item, duration in audio_ms.items())
         return (not response_open and not input_open and not tools_running and tool_queue.empty()
-                and not pending_spoken and not unheard and session.renewal_ready)
+                and not pending_spoken and not unheard and (provider_closed or session.renewal_ready))
 
     async def finish_spoken(item, *, interrupted=False, completed=False):
         text = pending_spoken.pop(item, None)
@@ -293,7 +295,12 @@ async def consume(host: LiveHost, session):
                     if not data.get("resumable") or not host.state.get("resume_handle"):
                         raise RealtimeSetupError("provider_closed", "provider ended the live connection")
                     provider_closed = True
+                    response_open = response_active = input_open = False
+                    for item in tuple(pending_spoken):
+                        if item not in audio_ms:
+                            await finish_spoken(item, interrupted=True)
                     request_renewal(resuming=True)
+                    hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     await ended.wait()
                     return
 
