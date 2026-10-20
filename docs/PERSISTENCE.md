@@ -1,12 +1,6 @@
 # PERSISTENCE.md — durable data-plane inventory
 
-Durable entities under `DATA_DIR` (default `~/Ouroboros/data/`): schema,
-migration, retention and reset consequences (deletion with the server stopped).
-Entity-local contracts; no generic persistence framework.
-
-`tests/test_persistence_inventory.py` scans constructors in `ouroboros/`,
-`supervisor/`, `server.py` and `launcher.py`: every data-relative path needs a
-row here, count-anchored both ways.
+`DATA_DIR` entities: schema, retention and stopped-server deletion effects. The constructor scan in `tests/test_persistence_inventory.py` pins paths against these rows in both directions.
 
 ## Shared idioms (the vocabulary the rows use)
 
@@ -130,6 +124,7 @@ row here, count-anchored both ways.
 | `state/switch_receipt.json` | `ouroboros/store_switch.py` (also mirrored into the store's `meta.switch_receipt`) | `{intent, attempts, steps: {facts, money, handles}, export, switched, abandonment: {status, …}}`: every step is recorded `started` before its first rename and `completed` with the names and sha256 of the files it wrote or retired (the per-drive facts plan lives in each store's `meta.export_manifest`, the money plan in the usage store's `meta.export` mark); an abandonment is itself a `started`/`completed` step | [bounded] overwritten per step; outlives the switch so the way back recognises its own journal by digest and reports a switch that never ran | a receipt lost mid-switch leaves the per-store marks as the only plan: the money mark still names the retired store and the journal it wrote, so the next boot still refuses typed rather than exporting twice |
 | `state/switch_progress.json` | `ouroboros/store_switch.py` (restart seam and next-boot resume; `store_switch.startup_notice` after publication and owner binding) | `{phase, at, ..., outcomes: [{phase, at, intent, reason/message, reported}]}`; terminal failures retain the door/target and a durable reported timestamp after `send_with_budget` succeeds | [bounded] latest phase overwritten; outcomes retained across phases and later intents, mirrored as `storage_switch` supervisor rows; interrupted send-before-mark may repeat the notice | diagnostic progress and once-per-outcome owner notices; loss cannot authorize a switch |
 | `state/skill_starter.json` | `ouroboros/skill_starter.py` (`classify_first_start` before the built-in startup work, then the one-time starter installer: requested catalog ids and one result per id) | own `schema_version: 1` | [bounded] overwrite; `state` is fresh, upgrade, running, pending or done, and a done or upgrade marker never runs the installer again; a pending hub item is retried at a later start | a lost marker is classified again: with skill state present the data root reads as an upgrade and nothing is installed |
+| `state/panic_source.json` | `ouroboros/panic_source.py`; causal ids also append to `logs/events.jsonl` | diagnostic JSON; explicit PID basis, `record_id` binds enrichment | [bounded] latest published Panic; late enrichment replaces only its own id | snapshot evidence lost; journal may retain source; stop/resume authority unchanged |
 | `state/panic_stop.flag`, `state/owner_restart_no_resume.flag` | `ouroboros/server_control.py`, `server.py` (atomic pair) | none — not needed (one-shot flags, consumed on boot) | [bounded] consumed | absence is the default; no heuristic continuation. Only a retained verification record authorizes restart verification; stop flags are consumed only after the applicable holds persist. Legacy flag bytes have no generation identity. |
 
 ## 3. `state/` — append-only ledgers

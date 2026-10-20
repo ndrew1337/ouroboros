@@ -888,13 +888,14 @@ class CommandRequest(TypedDict):
     adds a system row; the same ``visible_task_id`` within 5 seconds is answered as deduped."""
 
     cmd: str
+    client_surface: NotRequired[Dict[str, Any]]
     visible_text: NotRequired[str]
     visible_task_id: NotRequired[str]
     task_constraint: NotRequired[Dict[str, Any]]
 
 
 class CommandResponse(TypedDict, total=False):
-    """``{status: "ok"}``: queued, not done. ``{ok, deduped, task_id}`` for a deduped repeat."""
+    """``{status: "ok"}``: queued, except Panic acknowledges its latch. ``{ok, deduped, task_id}`` for a deduped repeat."""
 
     status: str
     ok: bool

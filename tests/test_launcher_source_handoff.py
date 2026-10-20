@@ -22,6 +22,7 @@ import pytest
 
 import ouroboros.launcher_bootstrap as bootstrap_module
 from ouroboros import platform_layer
+from tests.test_launcher_handoff_stop import native_guard  # noqa: F401
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 MARK = bootstrap_module.LAUNCHER_HANDOFF_ENV
@@ -161,6 +162,9 @@ class Log:
     def error(self, *args, **kwargs):
         self.lines.append(("error", args[0], bool(kwargs.get("exc_info"))))
 
+    def exception(self, *args, **kwargs):
+        self.error(*args, **kwargs, exc_info=True)
+
 
 def context(tmp_path):
     return bootstrap_module.BootstrapContext(
@@ -171,9 +175,14 @@ def context(tmp_path):
 
 
 @pytest.fixture
-def hand_over(tmp_path, monkeypatch):
+def hand_over(native_guard, tmp_path, monkeypatch):
     """``exec_source_launcher`` with every effect recorded in ``calls``; ``os._exit`` raises ``Exited``."""
     calls = []
+    import contextlib
+
+    # Keep the console/argv contract tests independent of native handle creation.
+    monkeypatch.setattr(platform_layer, "inheritable_self_handle", lambda: contextlib.nullcontext((
+        501, {"startupinfo": object(), "close_fds": True})))
     monkeypatch.setattr(bootstrap_module, "source_launcher_importable", lambda *a, **kw: True)
 
     def run(argv, *, windows, frozen=False, acquired=True, spawn_error=None, console_clients=0,
@@ -183,6 +192,7 @@ def hand_over(tmp_path, monkeypatch):
                 calls.append("refused")
                 raise spawn_error
             calls.append(("popen", args, kwargs))
+            return types.SimpleNamespace(pid=9990001)
 
         def execve(executable, args, env):
             if spawn_error:
@@ -205,6 +215,7 @@ def hand_over(tmp_path, monkeypatch):
         monkeypatch.setattr(bootstrap_module.os, "_exit", leave)
         monkeypatch.setattr(bootstrap_module.sys, "frozen", frozen, raising=False)
         ctx = context(tmp_path)
+        run.log = ctx.log
         bootstrap_module.exec_source_launcher(
             ctx, argv, release_lock=lambda: calls.append("release"),
             acquire_lock=lambda: calls.append("acquire") or acquired,
@@ -234,6 +245,21 @@ def test_windows_starts_the_successor_quoted_after_the_lock_then_leaves(hand_ove
     assert flags == (0 if console_clients else NO_WINDOW), "hidden only without a console to inherit"
     assert not flags & (NEW_GROUP | BREAKAWAY | DETACHED | NEW_CONSOLE), "never a group, breakaway or console change"
     assert kwargs["close_fds"] is True and kwargs["env"][MARK] == "1" and kwargs["env"]["PATH"] == os.environ["PATH"]
+
+
+def test_unavailable_parent_handle_keeps_compatible_source_handoff_but_discloses_gap(hand_over, monkeypatch):
+    def unavailable():
+        raise OSError("fake handle inheritance unavailable")
+
+    monkeypatch.setattr(platform_layer, "inheritable_self_handle", unavailable)
+    with pytest.raises(Exited) as exited:
+        hand_over(["--launch-intent", "owner"], windows=True)
+    _, _, (_, args, kwargs), _ = hand_over.calls
+    assert exited.value.code == 0 and args[2:] == ["--launch-intent", "owner"]
+    assert "startupinfo" not in kwargs
+    assert "OUROBOROS_PLANNED_RESTART_PARENT_HANDLE" not in kwargs["env"]
+    assert ("error", "Restart parent handle unavailable; the successor cannot prove its continuation",
+            True) in hand_over.log.lines
 
 
 @pytest.mark.parametrize("windows", [True, False])

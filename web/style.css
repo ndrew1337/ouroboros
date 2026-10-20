@@ -5133,7 +5133,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     position: fixed;
     inset: 0;
     background: rgba(var(--shell-rgb), 0.95);
-    z-index: 1000;
+    z-index: var(--z-reconnect);
     align-items: center;
     justify-content: center;
     flex-direction: column;
@@ -5143,6 +5143,9 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     font-weight: 500;
 }
 #reconnect-overlay.visible { display: flex; }
+/* Feedback from the overlay's own Panic action stays readable above it. */
+#reconnect-overlay.visible ~ .toast-stack { z-index: var(--z-emergency-feedback); }
+#reconnect-panic[hidden] { display: none; }
 #reconnect-overlay .spinner {
     width: 32px;
     height: 32px;

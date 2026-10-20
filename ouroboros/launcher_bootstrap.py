@@ -11,6 +11,7 @@ import shutil
 import logging
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from dataclasses import dataclass
@@ -31,11 +32,60 @@ DEFAULT_MANAGED_REMOTE_STABLE_BRANCH = "ouroboros-stable"
 _BOOTSTRAP_COMMANDS = []  # live invocation owners only; never a scan of historical work
 
 
+class _SourceHandoff:
+    """Keep a Windows successor owned until transfer or Panic has won termination.
+
+    The lock covers only publication and the terminal decision, never Popen or
+    stopping a child. Panic never waits for spawn: a compatible successor observes
+    the inherited parent handle before startup, even before Popen returns here.
+    """
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.stopped = False
+        self.successor = None
+
+    def claim_stop(self):
+        with self.lock:
+            self.stopped = True
+
+    def begin(self, cancelled):
+        with self.lock:
+            if self.stopped or cancelled():
+                return False
+            return True
+
+    def stop(self):
+        from ouroboros.platform_layer import request_process_tree_kill
+
+        with self.lock:
+            self.stopped = True
+            proc = self.successor
+        return request_process_tree_kill(proc) if proc is not None else None
+
+    def spawned(self, proc, cancelled):
+        with self.lock:
+            self.successor = proc
+            stopping = self.stopped or cancelled()
+        if stopping:
+            self.stop()
+
+    def leave(self, code, cancelled):
+        with self.lock:
+            if not self.stopped and not cancelled():
+                os._exit(code)  # terminal commit, with no intervening spawn or I/O
+
+
+source_handoff = _SourceHandoff()
+
+
 def stop_bootstrap_commands(*, include_interactive=True) -> list[dict]:
     """Request captured bootstrap children before early tray Panic hard-exits."""
     from ouroboros.platform_layer import request_process_tree_kill
 
-    return [request_process_tree_kill(owner["proc"], job_handle=getattr(owner["container"], "_job", None))
+    successor_stop = source_handoff.stop()
+    return ([successor_stop] if successor_stop is not None else []) + [
+            request_process_tree_kill(owner["proc"], job_handle=getattr(owner["container"], "_job", None))
             for owner in list(_BOOTSTRAP_COMMANDS) if owner["proc"] is not None
             and (include_interactive or owner["container"] is not None)]
 
@@ -893,7 +943,20 @@ def exec_source_launcher(context: BootstrapContext, argv: list[str], *, release_
             return  # the Panic owner must finish even if another launcher took the lock
         if not IS_WINDOWS:
             os.execve(command[0], command, env)  # returns only by raising
-        subprocess.Popen(command, env=env, close_fds=True, **inherited_console_kwargs())
+        from ouroboros.server_control import _windows_restart_handoff
+
+        # Use the direct-restart parent handle/stdio contract. A current source
+        # launcher refuses its parent's Panic before startup; old source still
+        # imports/runs, but cannot guarantee this pre-Popen-return stop boundary.
+        with _windows_restart_handoff(env, context.log) as (_, inheritance):
+            if not source_handoff.begin(cancelled):
+                return
+            successor = None
+            try:
+                successor = subprocess.Popen(command, env=env, **inherited_console_kwargs(),
+                                             **{"close_fds": True, **inheritance})
+            finally:
+                source_handoff.spawned(successor, cancelled)
     except Exception:
         context.log.error("The checkout's launcher did not start", exc_info=True)
         if acquire_lock():
@@ -902,8 +965,9 @@ def exec_source_launcher(context: BootstrapContext, argv: list[str], *, release_
         if cancelled():
             return  # a failed spawn cannot hard-exit over Panic's pending stop/writes
         context.log.error("Another launcher took the single-instance lock meanwhile; this one exits")
-        os._exit(1)
-    os._exit(0)  # no atexit release over the successor's PID lock
+        source_handoff.leave(1, cancelled)
+        return
+    source_handoff.leave(0, cancelled)  # no atexit release over the successor's PID lock
 
 
 def source_launcher_importable(context: BootstrapContext, *, desktop: bool, python: str | None = None,

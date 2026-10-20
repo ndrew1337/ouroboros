@@ -228,6 +228,9 @@ def test_gateway_contract_endpoint_index_matches_router_and_types(tmp_path):
     for name in ("DecisionRequest", "DecisionResponse"):
         assert f"import('./decision_types.js').{name}" in text
     text += "\n" + (modules / "decision_types.js").read_text(encoding="utf-8")
+    for name in ("CommandInbound", "PanicAcceptedOutbound"):
+        assert f"import('./client_contract_types.js').{name}" in text
+    text += "\n" + (modules / "client_contract_types.js").read_text(encoding="utf-8")
     version = (pathlib.Path(__file__).resolve().parent.parent / "VERSION").read_text(encoding="utf-8").strip()
     assert f"GATEWAY_CONTRACT_VERSION = '{version}'" in text
     settings_meta_fields = {

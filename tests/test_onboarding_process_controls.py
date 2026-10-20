@@ -8,6 +8,7 @@ import pytest
 from starlette.applications import Starlette
 from starlette.routing import Route, WebSocketRoute
 from starlette.testclient import TestClient
+from tests.test_launcher_handoff_stop import native_guard  # noqa: F401
 
 pytestmark = pytest.mark.serial
 
@@ -36,7 +37,7 @@ def test_runtime_branch_defaults_preserve_managed_choices_and_fallback(monkeypat
 
 
 @pytest.fixture
-def startup_controls(tmp_path, monkeypatch):
+def startup_controls(native_guard, tmp_path, monkeypatch):
     import server
     from ouroboros.gateway.control import api_command
     from ouroboros.gateway.ws import ws_endpoint
@@ -49,6 +50,12 @@ def startup_controls(tmp_path, monkeypatch):
     monkeypatch.setattr(server, '_supervisor_thread', None)
     monkeypatch.setattr(server, '_supervisor_ready', threading.Event())
     monkeypatch.setattr(server, '_consciousness', None)
+    # Every routing test gets an inert stop, including the startup fallback
+    # when a ready fake bridge has no .panic. safe_test alone cannot stop os._exit.
+    execute_panic = server._execute_panic_stop
+    panic_requested = threading.Event()
+    monkeypatch.setattr(server, '_execute_panic_stop', lambda *a: panic_requested.set())
+    monkeypatch.setattr('ouroboros.panic_source.record_source', lambda *a, **kw: None)
     monkeypatch.setattr(server, '_restart_requested', threading.Event())
     monkeypatch.setattr(server, '_owner_restart_requested', threading.Event())
     from ouroboros import server_process, server_restart
@@ -64,12 +71,15 @@ def startup_controls(tmp_path, monkeypatch):
         monkeypatch.setattr(git_ops, name, getattr(git_ops, name))
     app = Starlette(routes=[Route('/api/command', api_command, methods=['POST']), WebSocketRoute('/ws', ws_endpoint)])
     app.state.startup_owner_command = server._startup_owner_command
-    with TestClient(app) as client:
-        yield SimpleNamespace(server=server, client=client, app=app, data=data, repo=repo)
-    for thread in threading.enumerate():
-        if thread.name == 'startup-owner-restart':
-            thread.join(timeout=5)
-            assert not thread.is_alive()
+    try:
+        with TestClient(app) as client:
+            yield SimpleNamespace(server=server, client=client, app=app, data=data, repo=repo,
+                                  panic_requested=panic_requested, execute_panic=execute_panic)
+    finally:
+        for thread in threading.enumerate():
+            if thread.name in {'startup-owner-restart', 'panic-ingress'}:
+                thread.join(timeout=5)
+                assert not thread.is_alive()
 
 
 @pytest.fixture(params=['absent', 'initializing_at_admission', 'initializing_after_admission', 'dead_with_stale_bridge'])
@@ -191,9 +201,15 @@ def test_restart_during_initialization_does_not_queue_to_published_bridge(
 def test_onboarding_panic_runs_real_panic_marker_and_exit_99(startup_without_consumer, monkeypatch):
     obj = startup_without_consumer
     exits, stops = [], []
+    panic_finished = threading.Event()
     from ouroboros import server_control
     from ouroboros.startup_historical_audit import audit
     monkeypatch.setattr(audit, 'stop', lambda: None)
+    monkeypatch.setattr('ouroboros.maintenance.child.stop', lambda: None)
+    monkeypatch.setattr('ouroboros.storage.count.stop', lambda: None)
+    monkeypatch.setattr('ouroboros.storage_free.free.stop', lambda: None)
+    monkeypatch.setattr('ouroboros.process_scope.panic_scope_census', lambda *a: [])
+    monkeypatch.setattr(server_control, 'stop_restart_successor', lambda: [])
     monkeypatch.setattr('ouroboros.tools.shell.kill_all_tracked_subprocesses', lambda **kw: [])
     monkeypatch.setattr('ouroboros.workspace_executor.kill_all_foreground', lambda *a, **kw: [])
     monkeypatch.setattr('ouroboros.tools.services.kill_all_services', lambda *a, **kw: [])
@@ -211,13 +227,17 @@ def test_onboarding_panic_runs_real_panic_marker_and_exit_99(startup_without_con
                             panic_stop=lambda *, request_only: stops.append(('daemon_request', request_only)) or [],
                             stop_outcome=lambda: stops.append(('daemon',))))
     monkeypatch.setattr('supervisor.workers.kill_workers', lambda **kw: stops.append(('workers', kw)))
-    monkeypatch.setattr(server_control.os, '_exit', lambda code: exits.append(code))
+    monkeypatch.setattr(server_control.os, '_exit', lambda code: (exits.append(code), panic_finished.set()))
+    # Only this coordinator test opts back in, after all native owners and exit
+    # are inert. The outer native_guard also catches swallowed OS calls/aliases.
+    monkeypatch.setattr(obj.server, '_execute_panic_stop', obj.execute_panic)
     before = set(threading.enumerate())
     try:
         response = obj.client.post('/api/command', json={'cmd': '/panic'})
     finally:
-        # Production hard-exits without waiting for helpers. This test retains
-        # its fake owners until their independent settlement threads finish.
+        # Wait for the coordinator to finish starting its inert helpers before
+        # enumerating: Thread.enumerate also exposes threads still in start().
+        assert panic_finished.wait(5), 'Panic did not reach the inert exit boundary'
         for thread in set(threading.enumerate()) - before:
             if thread.name.startswith('panic-'):
                 thread.join(timeout=5)
@@ -243,22 +263,28 @@ def test_onboarding_panic_runs_real_panic_marker_and_exit_99(startup_without_con
 def test_unknown_commands_are_not_accepted_without_a_consumer(startup_controls, command):
     obj = startup_controls
     response = obj.client.post('/api/command', json={'cmd': command})
-    assert response.status_code == 409
-    assert 'provider setup' in response.json()['error']
+    assert response.status_code == (503 if command.startswith('/panic') else 409)
+    assert ('Panic emergency owner' if command.startswith('/panic') else 'provider setup') in response.json()['error']
+    assert not obj.panic_requested.is_set()
     assert not obj.server._restart_requested.is_set()
     assert not (obj.data / 'state/panic_stop.flag').exists()
 
 
 @pytest.mark.parametrize('command', ['/panic', '/restart', 'ordinary chat'])
-def test_configured_commands_keep_the_existing_bus_path(startup_controls, monkeypatch, command):
+def test_configured_commands_use_emergency_owner_only_for_panic(startup_controls, monkeypatch, command):
     calls = []
     monkeypatch.setattr(startup_controls.server, '_supervisor_thread', SimpleNamespace(is_alive=lambda: True))
     startup_controls.server._supervisor_ready.set()
     monkeypatch.setattr('supervisor.message_bus._BRIDGE', SimpleNamespace(ui_send=lambda *a, **kw: calls.append((a, kw))))
     response = startup_controls.client.post('/api/command', json={'cmd': command})
     assert response.status_code == 200
-    assert len(calls) == 1 and calls[0][0] == (command,)
-    assert calls[0][1]['task_metadata']['client_surface'] == {'channel': 'api_command'}
+    if command == '/panic':
+        assert startup_controls.panic_requested.wait(3)
+        assert calls == [], 'Panic must never enter ordinary admission'
+    else:
+        assert len(calls) == 1 and calls[0][0] == (command,)
+        assert calls[0][1]['task_metadata']['client_surface'] == {'channel': 'api_command'}
+        assert not startup_controls.panic_requested.is_set()
     assert not startup_controls.server._restart_requested.is_set()
 
 
@@ -272,7 +298,8 @@ def test_onboarding_finishing_before_background_dispatch_reuses_live_consumer(st
     bridge = message_bus.LocalChatBridge()
     monkeypatch.setattr(message_bus, 'log_chat', lambda *a, **kw: None)
     panic = []
-    monkeypatch.setattr(obj.server, '_execute_panic_stop', lambda *a: panic.append('requested'))
+    monkeypatch.setattr(obj.server, '_execute_panic_stop',
+                        lambda *a: (panic.append('requested'), obj.panic_requested.set()))
     monkeypatch.setattr(obj.server, '_perform_owner_restart', lambda *a: pytest.fail('duplicate direct Restart'))
 
     def admit(cmd, **kwargs):
@@ -291,6 +318,7 @@ def test_onboarding_finishing_before_background_dispatch_reuses_live_consumer(st
         if command == '/panic':
             # The authenticated emergency door must not wait for the later
             # ordinary consumer to come online or enqueue a duplicate command.
+            assert obj.panic_requested.wait(3)
             assert panic == ['requested'] and updates == []
         else:
             assert panic == [] and len(updates) == 1 and updates[0]['message']['text'] == command

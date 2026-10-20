@@ -411,6 +411,9 @@ def prepare(claimed: Dict[str, Any]) -> Dict[str, Any]:
 
     Always resolved fresh (room folder, explicit folder, usability, Project basis); a
     deferred preparation of the same claim and fingerprint only lends its fork, once."""
+    from supervisor.queue_schedules import load_schedule_store
+    restart = (load_schedule_store(_queue().DRIVE_ROOT).get("followup_restart") or {}).get("control_id", "")
+    claimed = {**claimed, "prepared_restart_episode": restart}
     key = _occurrence_key(claimed)
     if claimed.get("stored_task") or (_DEFERRED.get(key) or {}).get("fingerprint") != claimed["fingerprint"]:
         _DEFERRED.pop(key, None)
@@ -435,6 +438,10 @@ def _prepare(claimed: Dict[str, Any]) -> Dict[str, Any]:
         return {**claimed, "task": {}, "hold": ("followup_binding_unavailable", str(exc))}
     if task.get("chat_id") is None:
         return {**claimed, "task": task, "hold": ("owner_chat_unknown", "the owner destination is not currently known")}
+    task["metadata"]["schedule_basis"] = {
+        "author": (record.get("followup_relation") or {}).get("declared_by") or record.get("source") or "unknown",
+        "origin": copy.deepcopy(record.get("followup_origin") or {}),
+    }
     task["metadata"]["schedule_occurrence"] = {
         "schedule_id": claimed["schedule_id"], "token": occ["token"],
         "due_at": str(occ.get("due_at") or ""), "claimed_at": str(occ.get("claimed_at") or ""),
@@ -666,6 +673,10 @@ def admit(prepared: List[Dict[str, Any]], *, stop: Optional[Callable[[], bool]] 
             if item.get("hold"):
                 set_hold(record, *item["hold"])
                 continue
+            if ("prepared_restart_episode" in item and item["prepared_restart_episode"] !=
+                    (data.get("followup_restart") or {}).get("control_id", "")):
+                record["followup_wait"] = "owner_restart_in_progress"
+                continue  # Retain the exact owed claim; re-prepare next pass, without a future hold.
             from supervisor.followup_policy import control_guard, refresh_policy
             prepared_task, enqueued = item["task"], False
             try:

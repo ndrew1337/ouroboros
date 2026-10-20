@@ -65,8 +65,8 @@ def _perform_owner_restart(ctx: Any, reply=None) -> tuple[bool, str]:
                 record_restart(DATA_DIR, new=True)
             except Exception:
                 # The marker keeps final admission closed; boot must persist
-                # the restriction before consuming it. Restart still proceeds.
-                log.exception("Restart follow-up restriction awaits boot persistence")
+                # the episode before consuming it. Restart still proceeds.
+                log.exception("Restart episode awaits boot persistence")
     except Exception:
         resume_admission()  # first: the Restart does not happen, even if the cleanup below fails too
         owner_restart_flag.unlink(missing_ok=True)

@@ -1,3 +1,4 @@
+import { isPanicFrame, panicWithoutSocket } from './panic.js';
 import { apiFetch, openSignIn } from './api_client.js';
 /** WebSocket manager; connect after modules register listeners.
  *
@@ -6,6 +7,7 @@ import { apiFetch, openSignIn } from './api_client.js';
  * the next open; `send(..., {queue: false})` skips the queue. A watchdog checks
  * every 10 s and closes a socket that has delivered no inbound message for 45 s,
  * which enters the normal reconnect path.
+ * Panic returns `intercepted`: an emergency control, never a sent chat or queued submission.
  */
 
 // Consecutive healthy /api/state probes tolerated while the socket stays down
@@ -329,6 +331,7 @@ export class WS {
         const queued = [...this._pendingMessages];
         this._pendingMessages = [];
         for (const msg of queued) {
+            if (isPanicFrame(msg)) continue;
             try {
                 this.ws.send(JSON.stringify(msg));
                 this.emit('outbound_sent', {
@@ -411,6 +414,12 @@ export class WS {
 
     send(msg, options = {}) {
         const payload = { ...msg };
+        if (isPanicFrame(payload)) {
+            void panicWithoutSocket({ ...payload.client_surface, input: payload.type === 'chat' ? 'typed_chat' : 'command' },
+                this.ws, options.onPanicAccepted);
+            return { status: 'intercepted', clientMessageId: '' };
+        }
+
         if (!payload.client_message_id && payload.type === 'chat') {
             payload.client_message_id = `msg-${Date.now()}-${this._nextClientMessageId++}`;
         }

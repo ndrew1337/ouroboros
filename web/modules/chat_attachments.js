@@ -1,3 +1,4 @@
+import { isPanicFrame } from './panic.js';
 // Owner attachments inside the owner's own chat bubble (docs/DESIGN.md "Chat
 // attachments"): one message, attachments above the caption, whole images
 // (one at its own ratio, several in the shared contain grid), the existing
@@ -351,6 +352,7 @@ export function createComposerAttachments({ preview, attachBtn, fileInput, input
 const KEPT_FRAME_KEYS = ['type', 'content', 'client_message_id', 'sender_session_id', 'force_plan', 'chat_id', 'project_id', 'reply_to'];
 
 function keptFrame(frame) {
+    if (isPanicFrame(frame)) return null;
     if (frame?.type !== 'chat' || typeof frame.content !== 'string' || !frame.client_message_id) return null;
     return { ...Object.fromEntries(KEPT_FRAME_KEYS.filter((key) => key in frame).map((key) => [key, frame[key]])),
         attachments: Array.from(Array.isArray(frame.attachments) ? frame.attachments : [], (item) => ({
@@ -497,6 +499,7 @@ export function createUnconfirmedSends({ send, root, onDomWrite, showToast, comp
 
     return {
         track(frame, { views = [], ts = '', queued = false } = {}) {
+            if (isPanicFrame(frame)) return;
             const id = String(frame?.client_message_id || '');
             if (!id) return;
             frames.set(id, { frame, views: attachmentViews(views), ts, queued });

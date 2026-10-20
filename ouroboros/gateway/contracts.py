@@ -80,6 +80,13 @@ class CommandInbound(TypedDict):
 
     type: Literal["command"]
     cmd: str
+    client_surface: NotRequired[dict]
+
+
+class PanicAcceptedOutbound(TypedDict):
+    """The emergency owner accepted this connection's request; exit is unproved."""
+
+    type: Literal["panic_accepted"]
 
 
 class RealtimeExecuteInbound(TypedDict):
@@ -1448,6 +1455,7 @@ WS_MESSAGE_TYPES: tuple[str, ...] = (
     "realtime_execute", "realtime_prepared", "realtime_authorized", "realtime_refused", "realtime_finished",
     "chat",
     "command",
+    "panic_accepted",  # immediate acceptance only, not proof of process exit
     "photo",
     "video",
     "document",
@@ -1470,7 +1478,7 @@ WS_MESSAGE_TYPES: tuple[str, ...] = (
 
 __all__ = [
     "CostPresentation",
-    "ChatInbound", "TaskConstraintInbound", "CommandInbound", "ExtensionInbound",
+    "ChatInbound", "TaskConstraintInbound", "CommandInbound", "PanicAcceptedOutbound", "ExtensionInbound",
     "RealtimeExecuteInbound", "RealtimePreparedOutbound", "RealtimeAuthorizedOutbound",
     "RealtimeRefusedOutbound", "RealtimeFinishedOutbound",
     "TransportMetadata",

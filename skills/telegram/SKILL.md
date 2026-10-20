@@ -1,7 +1,7 @@
 ---
 name: telegram
 description: Owner-only Telegram text bridge and Mini App gateway for the existing Ouroboros interface.
-version: 1.3.4
+version: 1.3.5
 type: extension
 entry: plugin.py
 plugin_api: "2.0"
@@ -40,8 +40,12 @@ answered by tapping an option or by replying to the card with a free-form
 answer; both reach the same host decision ingress as the web UI. The bridge speaks
 the install's interface language (Settings → Appearance → Language, or `/language`
 here): its own lines are English source translated by the install's translation
-memory, so the bot ships no dictionary and follows any language the owner chooses. Slash commands
-keep their ordinary command-mode rules even in replies; quote a literal command
+memory, so the bot ships no dictionary and follows any language the owner chooses. Owner `/panic`
+is available in every command mode, including strict: it sends once through the emergency door,
+never queues or replays. Telegram dates before the host's whole-second import time are refused;
+their previous outcome is unknown. This assumes aligned clocks: a host ahead rejects fresh Panic
+until Telegram reaches that second; a host behind can accept retained commands. Dates in the
+boundary second are accepted. Other slash commands keep their command-mode rules even in replies; quote a literal command
 as code or include it inside an explanation to send it as a quiz answer.
 
 Version 1.3 remembers every mirrored part, including media and completion

@@ -73,14 +73,14 @@ export function bindDialogFocus(dialog, {
  * with keyCode 229. A held key sends once. The touch keyboard labels the key
  * Send. The listener lives on the field; dispose only if the field outlives it.
  */
-export function bindEnterSubmit(field, button) {
+export function bindEnterSubmit(field, button, submit = () => { if (!button.disabled) button.click(); }) {
     const hint = field.enterKeyHint;
     field.enterKeyHint = 'send';
     const onKey = (event) => {
         if (event.key !== 'Enter' || event.shiftKey || event.defaultPrevented || event.isComposing
             || event.keyCode === 229 || !field.isConnected || field.disabled || field.readOnly) return;
         event.preventDefault();
-        if (!event.repeat && button.isConnected && !button.disabled) button.click();
+        if (!event.repeat && button.isConnected) submit();
     };
     field.addEventListener('keydown', onKey);
     return () => {

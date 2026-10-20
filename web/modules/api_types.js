@@ -246,11 +246,8 @@
  * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
  * @property {Object=} execution_transport  // Internal realtime preview; no visible composer change.
  */
-/**
- * @typedef {Object} CommandInbound
- * @property {"command"} type
- * @property {string} cmd
- */
+/** @typedef {import('./client_contract_types.js').CommandInbound} CommandInbound */
+/** @typedef {import('./client_contract_types.js').PanicAcceptedOutbound} PanicAcceptedOutbound */
 /** @typedef {import('./client_contract_types.js').RealtimeExecuteInbound} RealtimeExecuteInbound */
 /** @typedef {import('./client_contract_types.js').RealtimePreparedOutbound} RealtimePreparedOutbound */
 /** @typedef {import('./client_contract_types.js').RealtimeAuthorizedOutbound} RealtimeAuthorizedOutbound */

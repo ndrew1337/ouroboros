@@ -230,8 +230,6 @@ def upsert_scheduled_task(record: Dict[str, Any], *, drive_root: pathlib.Path | 
         if incoming.get("followup_origin"):
             incoming["task"]["metadata"]["objective_author"] = {
                 "kind": "task", "task_id": incoming["followup_origin"]["task_id"]}
-        if existing is None and not (root / "state/owner_restart_no_resume.flag").exists():
-            incoming["followup_restart_seen"] = (data.get("followup_restart") or {}).get("control_id", "")
         if new_resource_intent is not None:
             # The producer may describe a NEW row. Editing an old followup cannot
             # turn absent intent into self-work; preserve its current evidence.

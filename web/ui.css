@@ -289,6 +289,8 @@
     --z-row-reply-mark: 62;
     --z-drawer-scrim: 68;
     --z-header-menu: 90;
+    --z-reconnect: 1000;
+    --z-emergency-feedback: 1001;
     --z-popover: 1200;
     /* Quote panel glass (DESIGN "Replies"): the shell colour at one alpha, so a quote reads lighter than the bubble it sits in. */
     --quote-glass: rgba(var(--shell-rgb), 0.7);

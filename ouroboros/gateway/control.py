@@ -180,6 +180,12 @@ async def api_command(request: Request) -> JSONResponse:
     try:
         body = await request.json()
         cmd = body.get("cmd", "")
+        if str(cmd).strip().lower().startswith("/panic"):
+            from ouroboros.panic_source import source_evidence
+            surface = body.get("client_surface")
+            kind = "web_ui_http" if isinstance(surface, dict) else "other_http"
+            panic_evidence = source_evidence(request, kind, client_surface=surface)
+
         if not isinstance(body.get("reply_to", ""), str):
             return json_error("reply_to must be an address string", 400)
         if cmd:
@@ -189,6 +195,13 @@ async def api_command(request: Request) -> JSONResponse:
                 bridge = get_bridge()
             except AssertionError:
                 bridge = None
+            if str(cmd).strip().lower().startswith("/panic"):
+                from ouroboros.server_control import request_panic
+
+                if request_panic(bridge, cmd, evidence=panic_evidence,
+                                 startup_owner_command=getattr(request.app.state, "startup_owner_command", None)):
+                    return JSONResponse({"status": "ok"})
+                return json_error("Panic emergency owner is unavailable.", 503)
             visible_text = str(body.get("visible_text") or "").strip()
             task_constraint = body.get("task_constraint") if isinstance(body.get("task_constraint"), dict) else None
             visible_task_id = str(body.get("visible_task_id") or "").strip()

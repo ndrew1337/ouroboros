@@ -170,7 +170,8 @@ def test_skills_and_widgets_use_inner_scroll_regions():
     widgets = _read("web/modules/widgets.js")
     css = _read("web/style.css")
     assert 'class="skills-scroll scroll-fade-y"' in skills
-    assert 'class="widgets-scroll scroll-fade-y"' in widgets
+    # The board's live cards keep crisp edges: no shared scroll fade (DESIGN "Widgets board").
+    assert 'class="widgets-scroll"' in widgets and "scroll-fade" not in widgets
     assert ".skills-scroll" in css and "overflow-y: auto" in css
     assert ".widgets-scroll" in css and "overflow-y: auto" in css
 

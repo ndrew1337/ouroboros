@@ -1103,6 +1103,9 @@ def _run_headless_main(url: str, port: int, lifecycle_thread: threading.Thread) 
 def main(argv=()):
     global _headless, _external_ui, _external_host_update, _external_seed_bundle, _launch_argv, _launch_intent, \
         _runtime_venv, EMBEDDED_PYTHON
+    from ouroboros.delegate_recovery import observe_restart_parent
+    if IS_WINDOWS and observe_restart_parent().get("exit_code") == PANIC_EXIT_CODE:
+        return  # source handoff may be running before its parent's Popen returns
     options = parse_launch_options(argv)
     _launch_argv, _launch_intent = list(argv), options.launch_intent
     _external_ui = options.no_ui
@@ -1178,7 +1181,6 @@ def main(argv=()):
     remember_loaded_checkout(REPO_DIR, bundle_dir=_bundle_dir() if getattr(sys, "frozen", False) or pathlib.Path(
         __file__).resolve() != (REPO_DIR / "launcher.py").resolve() else None)
 
-    git_window = None
     def _on_closing() -> None:
         log.info("Window closing — graceful shutdown.")
         _shutdown_event.set()
@@ -1186,19 +1188,21 @@ def main(argv=()):
         stop_bootstrap_commands(include_interactive=False)
         if background is not None and background.panic.is_set():
             return  # Panic owns persistence and hard exit, never ordinary teardown over it
-        if _agent_proc is None and _webview_window is None:
-            if git_window is not None:
-                git_window.destroy()
-            return  # boot Quit lets main return to its atexit owner, without stale companion cleanup
+        if _webview_window is None:
+            if _agent_proc is not None:
+                stop_agent()
+                _cleanup_recorded_server_process("startup_quit")
+            if not _headless:
+                for window in list(webview.windows):
+                    window.destroy()  # release Git/setup's webview.start before main returns
+            return  # startup owns its return; no stale companion rows or hard exit
         stop_agent()
         _kill_orphaned_children()
         stop_tray_before_exit(release_pid_lock)
         os._exit(0)
 
     # Listen before the long boot: a manual second launch meanwhile is kept and opens the window once it exists.
-    from ouroboros.launcher_readiness import owned_server_port
     background = None if _headless else Background(_on_closing, _read_port_file, _shutdown_event,
-        panic_port=lambda: owned_server_port(_agent_proc, _generation_port, DATA_DIR),
         panic_child=lambda: (_agent_proc, _agent_job))
     if background is not None:
         background.listen(PID_FILE)
@@ -1380,13 +1384,11 @@ def main(argv=()):
     if _shutdown_event.is_set():
         if background is not None and background.panic.is_set():
             return  # the non-daemon Panic owner, not a startup-failure window, owns exit
-        # Shutdown during startup: same teardown the keep-alive loop performs
-        # (an aborted wait, or an automatic start meeting Panic, is no startup failure).
+        # Startup shutdown is no failure; stop owned/proven servers, never stale companion rows.
         log.info("Shutdown requested during startup; tearing down.")
         stop_agent()
-        _kill_orphaned_children(reason="startup_abort")
-        # atexit owns release_pid_lock on sys.exit (a second release would
-        # unlink a newer launcher's lock).
+        _cleanup_recorded_server_process("startup_abort")
+        # atexit releases on sys.exit; a second release could unlink a newer launcher's lock.
         sys.exit(0)
 
     if not server_ready:
@@ -1395,12 +1397,10 @@ def main(argv=()):
         stop_agent()
         lifecycle_thread.join(timeout=5)
         if _headless:
-            _kill_orphaned_children(reason="startup_failure")
+            _cleanup_recorded_server_process("startup_failure")
             print(
-                "Ouroboros failed to start: the local agent server did not "
-                "become ready.\n"
-                f"See {_log_dir / 'launcher.log'} and "
-                f"{_log_dir / 'agent_stdout.log'} for details.",
+                "Ouroboros failed to start: the local agent server did not become ready.\n"
+                f"See {_log_dir / 'launcher.log'} and {_log_dir / 'agent_stdout.log'} for details.",
                 file=sys.stderr,
             )
             sys.exit(1)

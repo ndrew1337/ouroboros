@@ -814,10 +814,12 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # ``state/cards/<card_id>.json`` records and content-addressed ``state/cards/apps/<sha256>.html``
 # app bytes (one section-4 row), and the Keep-on-Widgets pins ``state/pinned_cards.json`` (its
 # own section-2 row; ``ouroboros/card_store.py`` writes all four).
-# 407 -> 409 (realtime setup): a realtime turn's raw ``task_results/artifacts/<task>/realtime-wire.jsonl``
+# 407 -> 408: ``state/panic_source.json`` is diagnostic latest-source evidence
+# (section 2); causal observations also use the existing ``logs/events.jsonl``.
+# 408 -> 410 (realtime setup): a realtime turn's raw ``task_results/artifacts/<task>/realtime-wire.jsonl``
 # and its ``source_handles/context_checkpoints/realtime-prepared-<sha256>.json`` input capture
 # (``ouroboros/realtime_turn.py``), one section-7 row each.
-EXPECTED_SCAN_PATHS = 409
+EXPECTED_SCAN_PATHS = 410
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

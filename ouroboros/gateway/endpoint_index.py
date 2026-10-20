@@ -412,8 +412,8 @@ HTTP_SHAPES: dict[str, Shape] = {
                                                       "ScheduleActionRequest"),
     "DELETE /api/schedules/{schedule_id}": Shape("200:ScheduleActionResponse 400:ErrorResponse"),
     "POST /api/command": Shape(
-        "200:CommandResponse 400,409:ErrorResponse", "CommandRequest",
-        note="queued, not done; /panic and /restart may end the connection before or after the answer"),
+        "200:CommandResponse 400,409,503:ErrorResponse", "CommandRequest",
+        note="queued, not done, except /panic: accepted immediately, never queued; /panic and /restart may end the connection before or after the answer"),
     "POST /api/reset": Shape("200:ResetResponse 409:ErrorResponse",
                              note="irreversible: deletes data and settings, then restarts; never resend"),
     "GET /api/git/log": Shape("200:GitLogResponse 500:ErrorResponse"),
@@ -528,6 +528,7 @@ WS_SHAPES: dict[str, tuple[str, str]] = {
     "realtime_refused": ("", "RealtimeRefusedOutbound"),
     "realtime_finished": ("", "RealtimeFinishedOutbound"),
     "conversation_finished": ("", "ConversationFinishedOutbound"),
+    "panic_accepted": ("", "PanicAcceptedOutbound"),
     "photo": ("", "PhotoOutbound"),
     "video": ("", "VideoOutbound"),
     "document": ("", "DocumentOutbound"),

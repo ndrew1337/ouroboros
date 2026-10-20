@@ -650,6 +650,7 @@
 /**
  * @typedef {Object} CommandRequest
  * @property {string} cmd
+ * @property {Object=} client_surface
  * @property {string=} visible_text
  * @property {string=} visible_task_id
  * @property {Object=} task_constraint

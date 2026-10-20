@@ -49,13 +49,11 @@ _json_error = lambda message, status=500: JSONResponse({"ok": False, "error": me
 DEFAULT_HOST_SERVICE_HOST = "127.0.0.1"
 DEFAULT_HOST_SERVICE_PORT = 8767
 AUTH_TOKEN_FILENAME = "auth_token.json"
-# ``/identity`` advertises the owner-notice route (``POST /notify``, host_notify.py)
-# so a skill degrades on an older host without a side-effecting probe.
+# /identity advertises POST /notify for side-effect-free compatibility checks.
 NOTIFY_VERSION = 1
 
-# The out-of-process WS progress relay (``POST /ui/ws-message``) is the one token-bucket lane: a
-# 60-message burst reserve that refills one message per second (owner decision 2026-09-06: a burst
-# must not silence a widget for the rest of a minute). Every other lane keeps the sliding window.
+# Owner decision 2026-09-06: a burst must not silence a widget. WS relay alone
+# uses a 60-message token bucket refilling at 1/s; other lanes keep sliding windows.
 
 
 class HostServiceAuthError(Exception):
@@ -489,12 +487,18 @@ async def _api_chat_inject(request: Request) -> JSONResponse:
         return _json_error(str(exc), 403)
     try:
         payload = await request.json()
-        panic = getattr(ctx.bridge_getter(), "panic", None)
-        if panic is not None and panic.request(
-            str(payload.get("text") or payload.get("image_caption") or ""), source=f"skill:{skill_name}",
+        panic_text = str(payload.get("text") or payload.get("image_caption") or "")
+        is_panic = panic_text.strip().lower().startswith("/panic")
+        from ouroboros.panic_source import source_evidence
+        from ouroboros.server_control import request_panic
+        if is_panic and request_panic(
+            ctx.bridge_getter(), panic_text, source=f"skill:{skill_name}",
             user_id=int(payload.get("user_id") or 0), chat_id=int(payload.get("chat_id") or 0),
+            evidence=source_evidence(request, "telegram" if skill_name == "telegram" else "host_service", skill_name=skill_name),
         ):
             return JSONResponse({"ok": True, "status": "accepted"}, status_code=202)
+        if is_panic:
+            return _json_error("Panic emergency owner unavailable or sender not authorized.", 503)
     except json.JSONDecodeError:
         return _json_error("invalid json", 400)
     except Exception as exc:
@@ -1160,14 +1164,9 @@ async def _api_ws_message(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "type": full}, status_code=202)
 
 
-# --- A2A operation correlation (#667) ---------------------------------------
-#
-# An accepted inbound message is identified by the (chat_id, client_message_id)
-# pair the caller supplied; ``operation_ref`` is that pair spelled
-# ``"<chat_id>:<client_message_id>"``, so a caller can address the operation
-# before its own inject wait has returned. The host keeps NO new record: the
-# canonical inbound source, actual task origin and in-flight turn registry
-# are the authorities. Annotation/outbound ids only help discover candidates.
+# A2A operation_ref is caller-known "<chat_id>:<client_message_id>" (#667).
+# Canonical inbound source, task origin and in-flight registry remain authoritative;
+# annotation/outbound IDs only discover candidates. No new record is kept.
 
 
 def operation_ref(chat_id: int, client_message_id: str) -> str:

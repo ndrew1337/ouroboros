@@ -882,6 +882,15 @@ gated by the host (token + fresh review + enablement + content-hash grants) and
 by core owner/chat binding, not by withholding control from the skill. See
 `docs/CHECKLISTS.md` → "Transport and control skills are first-class".
 
+`POST /chat/inject` treats text beginning with `/panic` (case-insensitive, surrounding whitespace ignored,
+trailing text included) as emergency intent. Only the positively bound owner/chat pair can stop.
+Unavailable or unauthorized Panic returns `503 {ok:false,error}` and never falls through to ordinary
+chat; this refusal of command-looking text is intentional. Accepted Panic returns `202 {ok:true,status:"accepted"}`,
+without a correlated operation or delivery replay, even with `client_message_id`. Telegram exposes owner
+Panic in every command mode, including strict; it sends once. Its clock-dependent rejection of old messages
+and boundary-second limits are defined in `CLIENT_CONTRACT.md` §15. A rejected message's previous outcome
+is unknown, not definitely undelivered.
+
 ### Presence behavior profiles and transport ingress
 
 Presence separates two ordinary reviewed skills: a **behavior skill** declares

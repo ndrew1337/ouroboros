@@ -292,29 +292,17 @@ def test_tray_quit_is_a_plain_exit_without_panic(settings, monkeypatch, tmp_path
     assert not (tmp_path / "state" / "panic_stop.flag").exists()
 
 
-def test_tray_panic_leaves_the_running_servers_emergency_stop_in_charge(settings, monkeypatch, make):
-    sent = []
-
-    class Response:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
-    def urlopen(request, timeout):
-        sent.append((request.full_url, request.get_method(), json.loads(request.data)))
-        return Response()
-
-    monkeypatch.setattr(lb.urllib.request, "urlopen", urlopen)
+def test_tray_panic_needs_neither_server_reply_nor_registered_fallback(settings, monkeypatch, make):
+    from ouroboros import server_control
     background, window = make()
-    background.panic_port = lambda: 1
+    stopped = threading.Event()
+    monkeypatch.setattr(lb.urllib.request, "urlopen", lambda *a, **kw: pytest.fail("Panic must not connect"))
+    monkeypatch.setattr(server_control, "execute_panic_stop", lambda *a, **kw: stopped.set())
+    assert not hasattr(background, "panic_fallback")
     background.request_panic()
-    wait_for(lambda: len(sent) == 1)
-    assert sent[0] == ("http://127.0.0.1:1/api/command", "POST", {"cmd": "/panic"})
+    assert stopped.wait(2)
     assert background.events == [] and window.calls == []
     assert background.shutdown.is_set() and background.quit.is_set()
-    assert not (settings.parent / "state" / "panic_stop.flag").exists()
 
 
 @pytest.mark.parametrize("failed_writer", [None, "flag", "controls"])
@@ -643,7 +631,9 @@ def test_main_owns_one_windows_icon_before_bootstrap_and_early_quit_is_callable(
         monkeypatch.setattr(launcher, "_prepare_first_run_settings",
                             lambda: (owners[0].request_quit(), ({}, False))[1])
     monkeypatch.setattr(atexit, "register", finalizers.append)
-    monkeypatch.setitem(sys.modules, "webview", types.ModuleType("webview"))
+    webview = types.ModuleType("webview")
+    webview.windows = []  # pywebview's real registry exists before the first window
+    monkeypatch.setitem(sys.modules, "webview", webview)
     monkeypatch.setattr(launcher.os, "_exit", leave)
     for name in ("_headless", "_external_ui", "_external_host_update", "_external_seed_bundle", "_launch_argv",
                  "_launch_intent"):

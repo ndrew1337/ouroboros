@@ -383,25 +383,11 @@ export function isForegroundLiveCard(record) {
     );
 }
 
-export function shouldFirePanic(dialogResult) {
-    return dialogResult === true;
-}
-
-export async function confirmAndSendPanic(deps) {
-    const decision = await deps.openConfirmDialog({
-        title: 'Panic — stop all workers',
-        body: 'Kill all workers immediately?',
-        confirmLabel: 'Kill all workers',
-        cancelLabel: 'Keep running',
-        danger: true,
-    });
-    if (shouldFirePanic(decision)) {
-        deps.ws.send({ type: 'command', cmd: '/panic' });
-        // Only after the stop is on its way: the page's own work (skills' page modules) stops with it.
-        globalThis.dispatchEvent?.(new CustomEvent('ouro:panic'));
-        return true;
-    }
-    return false;
+export function sendPanic({ ws, frame = { type: 'command', cmd: '/panic' }, onAccepted }) {
+    const result = ws.send(frame, { onPanicAccepted: onAccepted });
+    // Send first, then stop the page's own work (skills' page modules).
+    globalThis.dispatchEvent?.(new CustomEvent('ouro:panic'));
+    return result;
 }
 
 // A root still settling its pause (the durable row says ``pausing``): its

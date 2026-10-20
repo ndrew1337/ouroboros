@@ -12,6 +12,34 @@ from tests.test_budget_pause_holds import _fenced_member, _idle_worker, _source_
 pytestmark = pytest.mark.serial
 
 
+@pytest.mark.parametrize("saved_pause,selected", [(True, True), (False, True), (True, False), (False, False)])
+def test_new_saved_pause_does_not_rearm_historic_selected_panic(tmp_path, monkeypatch, saved_pause, selected):
+    from supervisor.events_budget import BUDGET_HOLD_KEY, HOLD_PANIC
+    from ouroboros import budget_pause
+    queue, state, workers = _install_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(state, "budget_remaining", lambda *_a, **_k: 5.0)
+    task, _ = _parked(tmp_path, monkeypatch, task_id="root", scope="root")
+    if not saved_pause:
+        task.pop("_budget_pause")
+    task[BUDGET_HOLD_KEY] = {"hold_id": "historic-panic", "reason": HOLD_PANIC,
+                            "selected": selected, "selected_by": "owner", "fence_id": "older-fence",
+                            "root_task_id": "root"}
+    before = copy.deepcopy(task)
+    saved = budget_pause.budget_pause_row(tmp_path, "root")
+    sent = []
+    _idle_worker(workers, sent)
+    workers.assign_tasks()
+    assert not sent
+    assert budget_pause.budget_pause_row(tmp_path, "root") == saved
+    if saved_pause or not selected:
+        assert task[BUDGET_HOLD_KEY] == before[BUDGET_HOLD_KEY]
+        assert task.get("_budget_pause") == before.get("_budget_pause")
+    else:
+        assert task[BUDGET_HOLD_KEY]["reason"] == HOLD_PANIC
+        assert task[BUDGET_HOLD_KEY]["selected"] is False
+        assert task[BUDGET_HOLD_KEY]["detail"] == "root_resume_generation_stale"
+
+
 @pytest.mark.parametrize("late_carrier", ["none", "before_assignment", "before_root_resume"])
 def test_new_root_pause_invalidates_child_selection_until_selected_again(tmp_path, monkeypatch, late_carrier):
     queue, state, workers = _install_queue(tmp_path, monkeypatch)

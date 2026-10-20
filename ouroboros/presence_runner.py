@@ -1095,8 +1095,16 @@ def _log_dialogue(
     from ouroboros import dialogue_store
 
     # An inbound row is a named acceptance (its source event id): a re-run that logs again rejoins
-    # the row it landed, never a second one.
-    written = dialogue_store.append_quietly(drive_root, "chat", row)
+    # the row it landed, never a second one. It is a required acceptance, so it waits for the store
+    # (``dialogue_store``'s rule); only the reply row is best effort and joins the retry buffer.
+    if direction == "in":
+        try:
+            written = dialogue_store.append(drive_root, "chat", row)
+        except (StoreError, OSError, ValueError):
+            log.warning("Presence inbound row not stored in %s", drive_root, exc_info=True)
+            written = None
+    else:
+        written = dialogue_store.append_quietly(drive_root, "chat", row)
     if direction == "in" and written is None:
         # A re-run of a lost attempt relies on the inbound row having landed, so a turn whose row
         # cannot be written fails here, before the model runs; the transport retries.

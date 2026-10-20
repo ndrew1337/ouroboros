@@ -7,7 +7,8 @@
 // namespaces its ids and shows in its feed what was sent.
 import { bindComposerFileTargets, cleanupUploadedAttachments } from './chat_media.js';
 import { composerText, createComposerAttachments } from './chat_attachments.js';
-import { loadChatInputHistory, saveChatInputHistory } from './chat_activity.js';
+import { loadChatInputHistory, saveChatInputHistory, sendPanic } from './chat_activity.js';
+import { isPanicFrame } from './panic.js';
 import { clientSurfaceField } from './client_surface.js';
 import { apiClient, apiFetch } from './api_client.js';
 import { bindEnterSubmit, bindMenu } from './ui_interactions.js';
@@ -249,12 +250,32 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
     }
 
     async function sendMessage(planMode = false) {
+        let text = input.value.trim();
+        if (isPanicFrame({ type: 'chat', content: text })) {
+            // Emergency input precedes settings saves, uploads and their disabled Send state.
+            const frame = { type: 'chat', content: text, ...clientSurfaceField() };
+            const sentDraft = input.value;
+            sendPanic({ ws, frame, onAccepted: () => {
+                // Only the accepted command text is consumed. Replies, files and
+                // any newer edit belong to the next message.
+                if (input.value !== sentDraft) return;
+                if (!destroyed) {
+                    input.value = inputDraft = '';
+                    inputHistoryIndex = inputHistory.length;
+                    resizeChatInput();
+                }
+                try {
+                    if (sessionStorage.getItem(storeKey(CHAT_DRAFT_KEY)) === sentDraft) clearInputDraft();
+                } catch {}
+            } });
+            return;
+        }
         if (sendBtn.disabled) return;  // guard against Enter re-entry during async upload
         if (ownerControls.hasPendingSave()) {  // both room settings land before the next message
             setSendBusy(true, 'Saving');
             try { if (!(await ownerControls.pendingSave())) return; } finally { setSendBusy(false); }
         }
-        let text = input.value.trim();
+        text = input.value.trim();
         const hasAttachments = attachments.count > 0;
         let uploadedAttachments = [];
         if (!text && !hasAttachments) return;
@@ -349,7 +370,8 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
 
     // Do not pass MouseEvent as planMode.
     sendBtn.addEventListener('click', () => sendMessage(swarmArmed()));
-    bindEnterSubmit(input, sendBtn);
+    // The send path admits Panic even while an ordinary upload/save disables Send.
+    bindEnterSubmit(input, sendBtn, () => sendMessage(swarmArmed()));
     input.addEventListener('keydown', (e) => {
         if (e.key === 'ArrowUp' && !e.shiftKey) {
             restoreInputHistory(-1);

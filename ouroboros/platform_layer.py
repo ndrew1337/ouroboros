@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from typing import Any, Callable, List, Optional
+from ouroboros.platform_peer import local_connection_peer  # noqa: F401 — platform facade
 
 log = logging.getLogger(__name__)
 

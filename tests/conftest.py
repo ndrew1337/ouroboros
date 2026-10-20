@@ -712,11 +712,12 @@ def _launcher_no_real_network(request):
 def _isolate_restart_generation(monkeypatch):
     """Panic and parent observation belong to one process generation, not later tests;
     so do a returning stop's named queue and the launch/schedule process memory."""
-    from ouroboros import delegate_recovery, server_control
+    from ouroboros import delegate_recovery, launcher_bootstrap, server_control
     from supervisor import queue, schedule_occurrence, worker_assignment
 
     monkeypatch.setattr(server_control, "_restart_successors", [])
     monkeypatch.setattr(server_control, "_restart_stop_requested", False)
+    monkeypatch.setattr(launcher_bootstrap, "source_handoff", launcher_bootstrap._SourceHandoff())
     monkeypatch.setattr(delegate_recovery, "_restart_parent", None)
     monkeypatch.setattr(queue, "RETURNS_NAMED", {})
     monkeypatch.setattr(schedule_occurrence, "_DEFERRED", {})

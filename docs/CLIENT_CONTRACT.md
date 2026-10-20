@@ -1,13 +1,8 @@
 # Ouroboros client contract
 
-This document is for anyone writing a complete client of an Ouroboros core: a replacement interface, a script, or a separately hosted copy of the builtin one. It covers setup, sign-in, conversation and history, projects and tasks, questions, Stop, settings, files, skills and widgets, skill sources and the catalog, agent accounts, local models, MCP, updates and Panic. A client needs only this document, [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) for module widgets, and the core's HTTP and WebSocket endpoints. Nothing here requires reading Ouroboros source or importing its packages.
+A complete client needs this contract, [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) for widgets, and the core's HTTP/WebSocket endpoints; no source imports are needed.
 
-There are two sources of truth, and each has its own job:
-
-- **`GET /api/contract`** is the machine-readable part. It lists every route, its path parameters, the query parameters and request headers it reads, its request and response bodies by HTTP status, every WebSocket message type, and a JSON Schema for every named shape. Every route publishes its shapes (`typed: true`). The core derives this document from its route and type declarations. Tests check structural coverage across the catalogue and actual responses for selected handlers, producers and consumers, not every response branch. Fetch it from the core you talk to. A copy taken from another version can be wrong for this one.
-- **This document** explains how to use those shapes: which call comes first, what a status means for whether something happened, which value identifies an operation, and when a retry is safe.
-
-Where the two seem to disagree, the live `GET /api/contract` is right about shapes and this document is right about meaning. Report the disagreement as a defect. §17 lists what is still described only partly.
+`GET /api/contract` publishes routes, parameters, headers, statuses, WebSocket types and named JSON Schemas from the running core. The live API is authoritative about shapes; this document is authoritative about meaning: ordering, outcomes, identities and safe retries. Fetch that core's contract; versions differ. Report disagreements as defects. Tests cover structural completeness and selected producer/consumer behavior; §17 lists gaps.
 
 ## 1. Compatibility rules
 
@@ -246,6 +241,7 @@ answer through §7.
 - **Client to core:** `chat`, `command`, and the internal `realtime_execute` control described below.
 - **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links`, `quiz` and `card` (a living card, §5 "Living cards").
 - **Core to client, signals only:**
+  - `panic_accepted` confirms the emergency latch, not process exit (§15).
   - `quiz_state` updates a question card; history shows the merged state.
   - `card_state` says a shown living card changed: read it again (§5 "Living cards").
   - `log` carries one runtime event row in `data` (`data.type` names the event) for live activity displays; the task's durable facts come from §6.
@@ -800,8 +796,8 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
 **Reset.** `POST /api/reset` deletes the data folders and the settings, then restarts. It is irreversible: ask the person first, and never resend after a dropped connection.
 
 **Commands, restart and Panic.** `POST /api/command` (`CommandRequest`) or a WebSocket `command` frame sends a slash command (`/restart`, `/panic`, `/review`, `/evolve`, `/bg`, `/status`); any other text becomes an owner message in Main.
-- **What `200` means:** `{status: "ok"}` means the command was queued, not that it ran. The same `visible_task_id` within 5 seconds answers `{ok, deduped, task_id}`. Either `/restart` or `/panic` can end the connection before or after the answer, so a dropped connection is not a failure.
-- **Panic:** it stops the core's work and processes and exits (code 99). The desktop launcher does not start it again.
+- **What `200` means:** `{status: "ok"}` means queued, except Panic acknowledges its immediate emergency latch, not completed shutdown. The same `visible_task_id` within 5 seconds answers `{ok, deduped, task_id}`. Either `/restart` or `/panic` can end the connection before or after the answer, so a dropped connection is not a failure.
+- **Panic:** stops owned work and exits 99; the launcher never restarts it. Never queue, reconnect-flush or offer resend, including chat frames. Desktop uses `pywebview.api.panic_stop()` first; the reconnect overlay offers Panic only with that bridge. Panic bypasses confirmations, composer saves/uploads and Telegram command-mode translation. Intercepted typed Panic creates no chat bubble. Only bridge `{status: "stopping"}` or `panic_accepted` clears unchanged sent command text; unknown/refused delivery keeps it. Newer edits, replies and attachments stay. If the room is closed and reopened before acceptance, the replacement field can retain accepted text even after its saved draft is cleared; this remount edge remains unresolved. Browser uses its captured open socket with no buffered output; `panic_accepted` means emergency latch, not exit. Missing acceptance says “Panic was not confirmed”: desktop points to its tray/menu bar, browser to the host computer. No clock agreement or preflight request is required; transmitted bytes can arrive later on that connection. `client_surface` is diagnostic, never owner identity. Unavailable HTTP Panic returns `503:ErrorResponse`; WS sends a declared `log` warning. Unbound external owners never enter ordinary admission. Telegram sends once without an age expiry; its whole-second message date is compared with the host clock at plugin import. Earlier dates are refused, with previous outcome unknown. This assumes aligned clocks: a host ahead rejects fresh Panic until Telegram reaches the import second; a host behind can accept retained commands. Old/fresh messages in the boundary second are indistinguishable and accepted.
 - **Restart:** a restarted core comes back on its own; reconnect and resynchronize (§5).
 
 **Spend.** `GET /api/cost-breakdown` reports spend from the physical-attempt ledger. A `503` means the ledger cannot be read: spend is unknown, not zero.

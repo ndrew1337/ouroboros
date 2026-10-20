@@ -52,7 +52,7 @@ function pageTemplate() {
             ${renderPageHeader({
                 page: 'widgets',
             })}
-            <div class="widgets-scroll scroll-fade-y">
+            <div class="widgets-scroll">
                 <div id="widgets-list-error" class="skills-load-error" hidden><span data-widget-list-error></span> <button type="button" class="btn btn-default btn-sm" data-widget-list-retry>Retry</button></div>
                 <div id="widgets-list" class="widgets-list"></div>
                 <div class="widgets-arrange-status ui-status" data-tone="neutral" data-widget-arrange-status role="status" aria-live="polite"></div>

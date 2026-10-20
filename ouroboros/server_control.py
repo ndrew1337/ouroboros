@@ -91,7 +91,7 @@ class PanicIngress:
     def invalidate_owner(self) -> None:
         self._owner = [False, None]
 
-    def request(self, text: str, *, source="web", user_id=0, chat_id=0) -> bool:
+    def request(self, text: str, *, source="web", user_id=0, chat_id=0, evidence=None) -> bool:
         if self._stop is None or not str(text).strip().lower().startswith("/panic"):
             return False
         pair = self._owner[1]
@@ -101,6 +101,15 @@ class PanicIngress:
         # Claim termination before the callback is scheduled: the restart
         # watcher must leave Panic time to persist its stop even if it runs first.
         _restart_stop_requested = True
+        try:
+            from ouroboros.config import resolve_data_dir
+            from ouroboros.panic_source import record_source
+            record_source(resolve_data_dir(), **(evidence or {
+                "ingress": "chat_command" if source == "web" else "host_service",
+                "owner_surface": "unknown", "skill_name": source.removeprefix("skill:") if source != "web" else None}))
+        except Exception:
+            import logging
+            logging.getLogger(__name__).exception("Panic source recording unavailable")
         import threading
 
         # Do not wait for the supervisor, the chat ingress lock, a fresh state
@@ -111,6 +120,23 @@ class PanicIngress:
             # Acceptance is irrevocable: the restart watcher already yields to us.
             self._stop()
         return True
+
+
+def request_panic(bridge, text: str, *, startup_owner_command=None, evidence=None,
+                  source="web", user_id=0, chat_id=0) -> bool:
+    """Accept an emergency through its owner, never ordinary command admission.
+
+    Only authenticated web ingress may use the startup callback. External
+    senders need the bridge's positively bound owner pair even during startup.
+    """
+    panic = getattr(bridge, "panic", None)
+    identity = {"source": source, "user_id": user_id, "chat_id": chat_id}
+    if panic is not None and panic.request(text, evidence=evidence, **identity):
+        return True
+    if source != "web" or not callable(startup_owner_command):
+        return False
+    action = startup_owner_command(text, send_kwargs={"broadcast": False})
+    return action is not None and PanicIngress(action).request(text, evidence=evidence)
 
 
 def restart_current_process(
@@ -230,7 +256,7 @@ def restart_current_process(
 
 @contextlib.contextmanager
 def _windows_restart_handoff(env: dict, log: Any):
-    """Let a Windows successor observe this generation's exit (42, or Panic's 99).
+    """Let a Windows successor observe this generation's exit (handoff 0/42, Panic 99).
 
     It inherits a handle to this process. The platform context owns the parent and stdio handles
     until Popen has inherited them, retaining absent streams as absent.
@@ -462,7 +488,8 @@ def _bounded(fn, timeout_sec: float) -> bool:
 def _write_panic_flag(data_dir: pathlib.Path) -> None:
     panic_flag = data_dir / "state" / "panic_stop.flag"
     panic_flag.parent.mkdir(parents=True, exist_ok=True)
-    panic_flag.write_text("panic", encoding="utf-8")
+    from ouroboros.utils import write_text_atomic
+    write_text_atomic(panic_flag, "panic")
 
 
 def _persist_panic_controls(data_dir: pathlib.Path) -> None:

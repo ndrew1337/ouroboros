@@ -202,19 +202,65 @@ def test_pause_is_transient_wait_and_resume_preserves_eligibility(world):
     assert len(pending) == 2
 
 
-def test_restart_marker_blocks_before_restriction_write_and_new_generation_invalidates_restore(world):
+def test_restart_marker_temporarily_fences_but_does_not_hold_healthy_schedules(world):
     _, root, pending = world
     related = register(world)
     marker = root / 'state/owner_restart_no_resume.flag'
-    marker.write_text('owner_restart')  # crash before restriction persistence
+    marker.write_text('owner_restart')
     queue.check_scheduled_tasks()
     assert pending == []
     record_restart(root)
     marker.unlink()
     queue.check_scheduled_tasks()
-    held = row(root, related['id'])['followup_hold']['hold_id']
+    assert [task['metadata']['schedule_id'] for task in pending] == [related['id']]
+    assert not row(root, related['id']).get('followup_hold')
     record_restart(root, new=True)
-    assert restore(root, related['id'], held)['status'] == 'stale_hold'
+    assert not observed_store(root, schedules.load_schedule_store(root))['tasks'][0].get('followup_hold')
+
+
+def test_legacy_restart_hold_clears_once_through_audited_refresh(world):
+    from supervisor.followup_policy import refresh_policy
+    _, root, _ = world
+    related = register(world)
+    with schedules.schedule_transaction(root):
+        data = schedules.load_schedule_store(root)
+        record = next(r for r in data['tasks'] if r['id'] == related['id'])
+        record['followup_hold'] = {'hold_id': 'old', 'reason': 'origin_stopped', 'controls': {'restart': 'old'}}
+        claim = {'token': 'owed', 'task_id': 'not-admitted', 'phase': 'claimed'}
+        record['occurrence'] = copy.deepcopy(claim)
+        schedules._write_scheduled_tasks(data, root)
+        refresh_policy(root, data, record)
+        assert not record.get('followup_hold')
+        assert record['occurrence'] == claim
+        before = copy.deepcopy(record)
+        refresh_policy(root, data, record)
+        assert record == before
+
+
+@pytest.mark.parametrize('wait', ['origin_owner_paused', 'work_deadline_passed',
+                                  'followup_authority_unavailable', 'pending_binding_unavailable'])
+@pytest.mark.parametrize('controls', [{}, {'restart': 'old'}, {'restart': 'old', 'stop:root-1': 'stop'}])
+def test_refresh_audit_names_restart_only_when_retiring_its_hold(tmp_path, monkeypatch, wait, controls):
+    from supervisor.followup_policy import refresh_policy
+
+    record = {'id': 'schedule', 'followup_wait': wait, 'followup_relation': {'kind': 'related'}}
+    if controls:
+        record['followup_hold'] = {'hold_id': 'old', 'reason': 'origin_stopped', 'controls': controls}
+    audits, writes = [], []
+    monkeypatch.setattr(schedules, '_audit_schedule_mutation', lambda **kw: audits.append(kw) or True)
+    monkeypatch.setattr(schedules, '_write_scheduled_tasks', lambda *a: writes.append(copy.deepcopy(record)))
+    data = {'tasks': [record]}
+    view = {'hold': None, 'wait': ''}
+    refresh_policy(tmp_path, data, record, observed=view)
+    reason = 'origin_stopped' if 'stop:root-1' in controls else 'restart_history' if controls else ''
+    assert [(a['phase'], a['reason']) for a in audits] == [('intent', reason), ('outcome', reason)]
+    assert len(writes) == 1 and record['followup_wait'] == ''
+    if 'stop:root-1' in controls:
+        assert record['followup_hold']['controls'] == {'stop:root-1': 'stop'}
+    else:
+        assert not record.get('followup_hold')
+    refresh_policy(tmp_path, data, record, observed=view)
+    assert len(audits) == 2 and len(writes) == 1, 'no repeated retirement audit'
 
 
 def test_template_forgery_and_edit_cannot_replace_host_binding(world):

@@ -301,6 +301,98 @@ def test_page_bars_hold_their_navigation_on_a_desk_and_keep_it_under_the_row_on_
         page.close()
 
 
+# A board taller than the window: a route iframe (the skill's own page) the owner keeps running, then declarative
+# cards. One load of its page means the frame never reloaded.
+FRAME = ('<!doctype html><body style="margin:0;padding:16px;font:15px system-ui;color:#fff;background:#3a6ea5">'
+         '<b>Cache Efficiency Snapshot</b><p>94.12% of 3.81 B input tokens were cache reads.</p></body>')
+BOARD = [dict(skill='gate_skill', tab_id='cache', title='Cache Efficiency Snapshot',
+              render={'kind': 'iframe', 'route': 'cache', 'height': 360, 'start': 'retain'})] + [dict(
+    skill='gate_skill', tab_id=f'quota-{index}', title=f'Weekly quota {index}', render={
+        'kind': 'declarative', 'schema_version': 1, 'components': [
+            {'type': 'metric', 'label': 'Of 17 accounts', 'value': f'{index}.95'},
+            {'type': 'markdown', 'text': '11 restricted · next reset Wed 21 Oct 09:00 · +0.24 if unused.'}]})
+    for index in range(10)]
+
+BOARD_EDGES = """() => {
+    const page = document.querySelector('#page-widgets'), band = page.querySelector('.app-page-header');
+    const list = page.querySelector('.widgets-scroll'), style = getComputedStyle(list);
+    const b = band.getBoundingClientRect(), l = list.getBoundingClientRect();
+    // Every point of the band across the board lands on the plain strip, never on a card or its frame.
+    const missed = [];
+    for (let y = b.top + 1; y < b.bottom; y += 10) for (let x = l.left + 1; x < l.right; x += 20) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit !== band) missed.push([x, y, hit ? hit.className || hit.tagName : '']);
+    }
+    return {scrolled: list.scrollTop, room: list.scrollHeight - list.clientHeight, mask: style.maskImage,
+        webkitMask: style.webkitMaskImage, band: b.height, empty: band.hasAttribute('data-empty'),
+        cursor: getComputedStyle(band).cursor, listTop: l.top, missed: missed.length, first: missed.slice(0, 4),
+        frame: page.querySelector('[data-widget-key="gate_skill:cache"] iframe')?.__kept === true,
+        page: document.scrollingElement.scrollWidth - innerWidth};
+}"""
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_the_widgets_board_scrolls_with_crisp_edges_under_its_plain_band(engine_ui, theme):
+    """The owner's window (1100 × 750, macOS band): scrolled, the board's live cards keep crisp edges where the list
+    cuts them, with no fade (DESIGN "Widgets board"), while other scroll bodies keep `.scroll-fade-y`. The band
+    stays a plain strip above the board, and a frame the owner keeps running is the same frame, never reloaded,
+    across scrolling, another page and a phone width."""
+    engine = engine_ui['engine']
+    settle = '() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))'
+    loads = []
+
+    def frame_page(route):
+        loads.append(route.request.url)
+        route.fulfill(content_type='text/html', body=FRAME)
+
+    page = _open(engine_ui, 1100, 750)
+    try:
+        page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
+        page.unroute('**/api/widgets')
+        page.route('**/api/widgets', lambda r: r.fulfill(json={'ui_tabs': BOARD}))
+        page.route('**/api/extensions/gate_skill/cache', frame_page)
+        _band(page)
+        _goto(page, 'widgets')
+        frame = page.locator('[data-widget-key="gate_skill:cache"] iframe')
+        frame.wait_for()
+        frame.evaluate("el => { el.__kept = true; }")
+        child = frame.element_handle().content_frame()
+        child.wait_for_load_state()
+        child.evaluate("() => { window.__kept = 'same window'; }")
+        page.wait_for_function("n => document.querySelectorAll('#widgets-list .widgets-card').length === n", arg=len(BOARD))
+        page.locator('#page-widgets .widgets-scroll').evaluate("el => { el.scrollTop = 300; }")
+        page.evaluate(settle)
+        edges = page.evaluate(BOARD_EDGES)
+        print(json.dumps({'widgets_board_edges': edges, 'engine': engine, 'theme': theme, 'viewport': [1100, 750]}))
+        setup_browser.capture(page, f'widgets-board-scrolled-{engine}-{theme}-1100')
+        assert edges['scrolled'] == 300 and edges['room'] > 300, edges
+        assert edges['mask'] in (None, 'none') and edges['webkitMask'] in (None, 'none'), 'no fade over the cards'
+        assert edges['empty'] and edges['band'] == 52 and edges['listTop'] == 52 and edges['cursor'] == 'auto', edges
+        assert not edges['missed'] and edges['frame'] and edges['page'] <= 0, edges
+        # Another page's scroll body keeps the shared fade.
+        _goto(page, 'settings')
+        settings = page.locator('#page-settings .settings-scroll').element_handle()
+        page.wait_for_function("el => el.scrollHeight - el.clientHeight > 200", arg=settings)
+        settings.evaluate("el => { el.scrollTop = 200; }")
+        page.wait_for_function("el => el.hasAttribute('data-scroll-above')", arg=settings)
+        assert 'gradient' in settings.evaluate("el => getComputedStyle(el).webkitMaskImage")
+        # Back on the board, then a phone width without the band: the same frame and window, one load, no fade.
+        _goto(page, 'widgets')
+        page.evaluate("() => { delete document.documentElement.dataset.windowChrome; }")
+        page.set_viewport_size({'width': 390, 'height': 844})
+        page.wait_for_function("document.documentElement.dataset.layout === 'stack'")
+        page.locator('#page-widgets .widgets-scroll').evaluate("el => { el.scrollTop = 300; }")
+        page.evaluate(settle)
+        phone = page.evaluate(BOARD_EDGES)
+        print(json.dumps({'widgets_board_phone': phone, 'engine': engine, 'theme': theme, 'loads': len(loads)}))
+        setup_browser.capture(page, f'widgets-board-scrolled-{engine}-{theme}-390')
+        assert phone['scrolled'] == 300 and phone['mask'] in (None, 'none') and phone['webkitMask'] in (None, 'none'), phone
+        assert phone['frame'] and phone['page'] <= 0, phone
+        assert child.evaluate("() => window.__kept") == 'same window' and len(loads) == 1, loads
+    finally:
+        page.close()
+
+
 # Locations as the gateway writes them (ouroboros/gateway/files.py): the root's absolute path, then one crumb per
 # folder. Nine deep, and two deep with a name longer than a narrow bar holds.
 CURRENT = 'review-ledger-primary-builder-response-change-coupling'

@@ -5,7 +5,8 @@ import { apiFetch, fetchJson } from './modules/api_client.js';
 import { loadVersion } from './modules/utils.js';
 import { bindScrollFade } from './modules/scroll_fade.js';
 import { initChat, createChatInstance } from './modules/chat.js';
-import { createStateSnapshotSequencer } from './modules/chat_activity.js';
+import { createStateSnapshotSequencer, sendPanic } from './modules/chat_activity.js';
+import { hasDesktopPanic } from './modules/panic.js';
 import { IDLE_SUMMARY, buildProjectActivityIndex, markWords, reconcileProjectRooms } from './modules/project_activity.js';
 import { createStatusMark, markView, paintStatusMark } from './modules/status_mark.js';
 import { bindRowMenuGesture } from './modules/row_menu_gesture.js';
@@ -67,6 +68,20 @@ const state = {
 
 // Connect only after modules register listeners.
 const ws = createWS();
+// The overlay has no live socket; only a desktop bridge can stop from here.
+const reconnectPanic = document.getElementById('reconnect-panic');
+function refreshReconnectPanic() {
+    if (!reconnectPanic) return;
+    reconnectPanic.hidden = !hasDesktopPanic();
+    // This overlay is deliberately outside the automatic i18n traversal.
+    reconnectPanic.textContent = fmt('Panic');
+    reconnectPanic.title = fmt('Stop all workers');
+}
+reconnectPanic?.addEventListener('click', () => sendPanic({ ws }));
+window.addEventListener('pywebviewready', refreshReconnectPanic);
+window.addEventListener('ouro:language-changed', refreshReconnectPanic);
+ws.on('close', refreshReconnectPanic);
+refreshReconnectPanic();
 // Loopback-only debug hook: the Playwright leak test counts live ws listeners
 // through this handle (the module-scoped `ws` is unreachable from page.evaluate).
 window.__ouroWs = ws;

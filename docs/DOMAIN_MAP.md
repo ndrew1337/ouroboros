@@ -8,7 +8,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 
 | domain | name | modules | proposed |
 |---|---|---:|---:|
-| D01 | Agent core & main loop | 52 | 0 |
+| D01 | Agent core & main loop | 53 | 0 |
 | D02 | LLM client, routing & providers | 44 | 0 |
 | D03 | Context assembly, fit & compaction | 22 | 0 |
 | D04 | Tool execution: registry, access & typed results | 22 | 0 |
@@ -25,10 +25,10 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D15 | Memory, knowledge, consciousness & self-evolution | 29 | 0 |
 | D16 | Observability, usage accounting & cost | 22 | 0 |
 | D17 | Projects, workspaces & task results | 46 | 0 |
-| D18 | Launcher, packaging, platform & shared substrate | 30 | 0 |
+| D18 | Launcher, packaging, platform & shared substrate | 32 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
 | D20 | Presence | 14 | 0 |
-| **total** | | **831** | **0** |
+| **total** | | **834** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -236,6 +236,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/primary_route_observation.py`
 - `ouroboros/realtime_setup.py`
 - `ouroboros/realtime_turn.py`
+- `ouroboros/schedule_continuation.py`
 - `ouroboros/sleep_custody.py`
 - `ouroboros/synthesis_cost_text.py`
 - `ouroboros/task_activity_facts.py`
@@ -1039,7 +1040,9 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/node_runtime.py`
 - `ouroboros/packaged_cli.py`
 - `ouroboros/packaged_cli_install.py`
+- `ouroboros/panic_source.py`
 - `ouroboros/platform_layer.py`
+- `ouroboros/platform_peer.py`
 - `ouroboros/platform_win32_abi.py`
 - `ouroboros/reference_books.py`
 - `ouroboros/runtime_venv.py`
