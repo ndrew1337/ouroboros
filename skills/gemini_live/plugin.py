@@ -11,13 +11,41 @@ import json
 import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Playback, ToolOutputs, Video
-from ouroboros.contracts.realtime import RealtimeRoute, RealtimeSetupError, RealtimeSetupResult, canonical_json, sha256
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs, Video
+from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
+                                          RouteFacts, canonical_json)
 from ouroboros.realtime_session import JsonSession
 
 ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 ROUTE = RealtimeRoute('gemini_live', ENDPOINT, 'google::')
 RENEW_AFTER_SECONDS = 90
+
+# Google's prebuilt voices with the one-word style its speech docs give each
+# (ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-17).
+VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
+    ('Zephyr', 'Bright'), ('Puck', 'Upbeat'), ('Charon', 'Informative'), ('Kore', 'Firm'), ('Fenrir', 'Excitable'),
+    ('Leda', 'Youthful'), ('Orus', 'Firm'), ('Aoede', 'Breezy'), ('Callirrhoe', 'Easy-going'), ('Autonoe', 'Bright'),
+    ('Enceladus', 'Breathy'), ('Iapetus', 'Clear'), ('Umbriel', 'Easy-going'), ('Algieba', 'Smooth'),
+    ('Despina', 'Smooth'), ('Erinome', 'Clear'), ('Algenib', 'Gravelly'), ('Rasalgethi', 'Informative'),
+    ('Laomedeia', 'Upbeat'), ('Achernar', 'Soft'), ('Alnilam', 'Firm'), ('Schedar', 'Even'), ('Gacrux', 'Mature'),
+    ('Pulcherrima', 'Forward'), ('Achird', 'Friendly'), ('Zubenelgenubi', 'Casual'), ('Vindemiatrix', 'Gentle'),
+    ('Sadachbia', 'Lively'), ('Sadaltager', 'Knowledgeable'), ('Sulafat', 'Warm')))
+# Spoken turns held at ~92k o200k of instruction (18.10.2026); the endpoint documents
+# a 131,072-token input. The reserve is a planning margin for in-session growth.
+FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
+                   source='spoken retention held at ~92k o200k instruction (owner probes); documented input 131,072',
+                   observed='2026-10-18')
+CATALOG = ProviderCatalog(
+    label='Gemini \u00b7 Google', credential_settings=('GEMINI_API_KEY',),
+    privacy='Call audio and the frames you show go to Google.',
+    models=(
+        CatalogModel('gemini-3.8-live', 'gemini-3.8-live \u2014 Google\u2019s live voice model', FACTS, default=True,
+                     vision=True, voices=VOICES, honours=frozenset({'pause', 'interruptions', 'search', 'languages'}),
+                     notes=(('thinking', 'Only the extended-thinking model thinks before it answers.'),)),
+        CatalogModel('gemini-3.8-live-extended-thinking', 'gemini-3.8-live-extended-thinking \u2014 thinks before it answers',
+                     FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
+                     honours=frozenset({'pause', 'interruptions', 'thinking', 'search', 'languages'})),
+    ))
 
 
 def declarations(tools):
@@ -279,8 +307,8 @@ class GeminiSession(JsonSession):
         elif isinstance(command, Video):
             await self.write({'realtimeInput': {'video': {'mimeType': command.mime,
                 'data': base64.b64encode(command.data).decode()}}})
-        elif isinstance(command, (Interrupt, Playback)):
-            pass  # Gemini's VAD owns interruption; host playback evidence stays local.
+        elif isinstance(command, Interrupt):
+            pass  # Gemini's VAD owns interruption.
         elif isinstance(command, ToolOutputs):
             responses, other = [], []
             for message in command.messages:
@@ -335,12 +363,4 @@ def register(api):
     def session(selected, options, *, observe, connect=None):
         return GeminiSession(selected, options, observe=observe, connect=connect or connect_gemini)
 
-    async def setup(selected, *, observe, execute=False, **kwargs):
-        from ouroboros.contracts.live_conversation import LiveOptions
-        wire = canonical_json(session(selected, LiveOptions(), observe=observe).wire)
-        if execute:
-            raise RealtimeSetupError('live_consumer_required', 'Use the admitted Live Conversation consumer')
-        return RealtimeSetupResult('prepared', selected.sha256, sha256(wire), wire)
-
-    session.supports_images = True
-    api.register_realtime_provider('gemini', setup, route=ROUTE, session=session)
+    api.register_realtime_provider('gemini', route=ROUTE, session=session, catalog=CATALOG)

@@ -6,7 +6,7 @@ type: extension
 runtime: python3
 entry: plugin.py
 plugin_api:
-  version: "2.2"
+  version: "2.1"
   capabilities: [register_live_conversation, register_route, register_settings_section]
 permissions: [live_conversation, route, widget, page_module]
 contributes:
