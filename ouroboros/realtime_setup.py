@@ -71,20 +71,17 @@ class _LoopWork:
             self.task.cancel()
 
 
-def input_counter(facts):
-    """Resolve the declared counter before entering the call's audio loop.
-
-    o200k measurements never borrow chars/4 or a native-token label. Provider
-    token facts retain the ordinary estimator's labelled density until reported.
-    """
-    if facts.basis != "o200k" or facts.conversation_window_tokens is None:
-        return None
-    try:
-        import tiktoken
-        encoding = tiktoken.get_encoding("o200k_base")
-    except (ImportError, OSError, ValueError) as exc:
-        raise RealtimeSetupError("measurement_unavailable", "This route needs the o200k tokenizer to fit its context.") from exc
-    return lambda value: len(encoding.encode(canonical_json(value), disallowed_special=()))
+def text_input_estimate(messages, tools):
+    """The ordinary chars/4 basis, with media blocks excluded from a text witness."""
+    from ouroboros.context_fit import estimate_context_prompt_tokens
+    rows = []
+    for message in messages:
+        row = dict(message)
+        if isinstance(row.get("content"), list):
+            row["content"] = [part for part in row["content"]
+                              if isinstance(part, dict) and part.get("type") == "text"]
+        rows.append(row)
+    return estimate_context_prompt_tokens(rows, tools)
 
 
 def session_candidate(host, factory, options):
@@ -94,8 +91,9 @@ def session_candidate(host, factory, options):
     fit. The physical guard checks the provider's final envelope. A failed fit
     asks the existing ladder for that measured deficit; unchanged bytes refuse.
     """
+    import math
     from dataclasses import asdict, replace
-    from ouroboros.capability_evidence import is_known
+    from ouroboros.capability_evidence import is_known, resolve_main_token_density
     from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
     from ouroboros.llm_attempt import main_context_fit_refusal
     from ouroboros.loop_model_call import _physical_context_for_fit
@@ -108,11 +106,13 @@ def session_candidate(host, factory, options):
     plan = replace(plan, window_tokens=window, status="confirmed" if known else "unprobeable", stale=False,
                    output_reserve_tokens=reserve)
     extra = [{"role": "system", "content": options.instructions}] if options.instructions else []
-    # A measured density converts the ladder's estimator into the route's units.
-    # It is measured again on each resulting envelope, never learned from mixed audio usage.
     rows = [*host.messages, *extra]
     raw = estimate_context_prompt_tokens(rows, host.schemas)
-    ratio = host.count_input({"messages": rows, "tools": host.schemas}) / max(1, raw) if host.count_input else 1.0
+    def density(estimate):
+        return (resolve_main_token_density(host.ctx.drive_root, plan.route_fp, plan.model,
+                                           estimate_tokens=estimate)
+                if facts.basis == "provider" else (1.0, "cold_estimate"))
+    ratio, basis = density(raw)
     deficit, previous = 0, None
     while True:
         plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
@@ -130,14 +130,15 @@ def session_candidate(host, factory, options):
             raise RealtimeSetupError("output_bound", "provider output bound must be positive or unknown")
         wire = canonical_json(session.wire)
         raw = estimate_context_prompt_tokens(rows, host.schemas)
-        measured = host.count_input(session.wire) if host.count_input else fit.measurement.estimated_input_tokens
-        ratio = measured / max(1, raw)
+        # Budget the sealed envelope as well as the ordinary selection. This
+        # includes provider-added instructions/language sentences without core
+        # knowing provider field names. The ordinary ladder reclaims any deficit.
+        raw = max(raw, estimate_context_prompt_tokens([session.wire]))
+        ratio, basis = density(raw)
+        measured = math.ceil(raw * ratio)
         working = max(reserve, bound or 0)
-        # The shared ledger's basis says whether native usage calibrated the
-        # estimator. o200k is a local counter, not native usage; its units and
-        # measured conversion are named in the sealed candidate evidence below.
         measurement = replace(fit.measurement, estimated_input_tokens=measured, raw_input_tokens=raw,
-            measurement_density=ratio, measurement_basis="cold_estimate" if host.count_input else fit.measurement.measurement_basis,
+            measurement_density=ratio, measurement_basis=basis,
             response_reserve_tokens=working, capacity_total_tokens=window if is_known(plan) else None)
         fit = replace(fit, measurement=measurement)
         request = AttemptRequest(model=host.turn.model, provider=host.turn.route.accounting_provider,
@@ -149,12 +150,15 @@ def session_candidate(host, factory, options):
             candidate_measurement_kind="canonical_json_v1", physical_context=_physical_context_for_fit(fit))
         refusal = main_context_fit_refusal(request)
         if refusal is None:
+            host._session_instructions = options.instructions
+            host._selected_text_estimate = text_input_estimate(rows, host.schemas)
+            host._selected_raw_estimate = raw
             host.plan = host.ctx.context_fit_plan = plan
             host.messages[:] = current
             host.ctx.active_context_mode = plan.initial_mode
             return session, request, {"fit": asdict(fit), "route_facts": asdict(facts),
                 "input_sha256": selected.sha256, "wire_sha256": sha256(wire),
-                "counter": "o200k" if host.count_input else measurement.measurement_basis}
+                "units": facts.basis}
         if previous is not None and measured >= previous:
             raise RealtimeSetupError("context_capacity", "This room's context and working reserve do not fit this engine's window.")
         previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)

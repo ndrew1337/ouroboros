@@ -2,7 +2,6 @@
 import time
 from dataclasses import replace
 
-import pytest
 
 
 def wait_for(predicate, timeout=10):
@@ -33,12 +32,12 @@ def test_route_facts_store_acceptance_without_raising_window(tmp_path):
     from ouroboros.capability_evidence import record_route_facts, probe
     from ouroboros.contracts.realtime import RouteFacts
     route = dict(provider="fixture_live", model="fixture::voice", base_url="wss://example.invalid/live")
-    facts = RouteFacts(90000, 231828, 10000, "o200k", "fixture retention probe", "2026-10-21")
+    facts = RouteFacts(80000, 231828, 10000, "estimator", "fixture retention probe", "2026-10-21")
     record_route_facts(tmp_path, **route, facts=facts)
     observed = probe(tmp_path, **route, allow_fetch=False)
-    assert observed.window_tokens == 90000
+    assert observed.window_tokens == 80000
     assert observed.route_facts["accepted_input_tokens"] == 231828
-    assert observed.route_facts["basis"] == "o200k"
+    assert observed.route_facts["basis"] == "estimator"
     record_route_facts(tmp_path, **route, facts=RouteFacts())
     assert probe(tmp_path, **route, allow_fetch=False).window_tokens == 0
 
@@ -48,14 +47,3 @@ def test_metadata_does_not_recreate_process_local_call_authority():
     task = {"metadata": {"execution_transport": {"kind": "live_conversation", "call_id": "call"}}}
     assert recovery_refusal(task, None) == "realtime_restart_required"
     assert recovery_refusal({"metadata": {}}, None) == ""
-
-
-def test_o200k_limits_require_the_declared_counter(monkeypatch):
-    import sys
-    from ouroboros.realtime_setup import input_counter
-    from ouroboros.contracts.realtime import RouteFacts, RealtimeSetupError
-    monkeypatch.setitem(sys.modules, 'tiktoken', None)
-    with pytest.raises(RealtimeSetupError, match='measurement_unavailable'):
-        input_counter(RouteFacts(conversation_window_tokens=90000, basis='o200k'))
-    assert input_counter(RouteFacts(basis='o200k')) is None
-    assert input_counter(RouteFacts(conversation_window_tokens=90000, basis='provider')) is None

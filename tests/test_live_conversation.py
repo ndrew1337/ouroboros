@@ -150,7 +150,7 @@ class FakeSession:
     def __init__(self, selected, options, *, observe):
         self.selected, self.options = selected, options
         self.wire = {'messages': json.loads(selected.messages_json), 'tools': json.loads(selected.tools_json),
-                     'instructions': options.instructions}
+                     'instructions': options.instructions + (' Speech recognition should expect: ' + ', '.join(options.languages) + '.' if options.languages else '')}
         self.opened = self.closed = False
 
     async def open(self):
@@ -281,31 +281,75 @@ def canonical(value):
     return json.dumps(value, ensure_ascii=False)
 
 
-def test_physical_dispatch_minus_one_refits_or_refuses_and_positive_passes(host_world, monkeypatch):
+def test_physical_dispatch_minus_one_refuses_and_positive_passes(host_world, monkeypatch):
+    from ouroboros.context_fit import ContextFitPlan
     from ouroboros.contracts.live_conversation import LiveOptions
     from ouroboros.contracts.realtime import RealtimeSetupError
+    from ouroboros.realtime_setup import session_candidate
     host = host_world.host
-    host.model = replace(host.model, facts=replace(host.model.facts, basis='o200k',
-        conversation_window_tokens=20000, working_reserve_tokens=10000))
-    host.count_input = lambda wire: 10001
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='estimator'))
+    # An irreducible ordinary projection: the physical guard must still refuse.
+    monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', lambda plan, **kw: plan)
+    _, request, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    raw = request.prompt_tokens_bounded_estimate
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=raw + 10000 - 1))
     async def consume(session):
         pytest.fail('known overflowing physical request was dispatched')
     with pytest.raises(RealtimeSetupError, match='context_capacity'):
         asyncio.run(host.session(consume, LiveOptions()))
     assert not any(session.opened for session in host_world.sessions)
-    host.count_input = lambda wire: 9999
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=raw + 10000 + 1))
     async def allowed(session):
         assert session.opened
         host.response_started('fits')
         host.response_done('fits', usage={}, raw_usage={}, status='completed')
     asyncio.run(host.session(allowed, LiveOptions()))
-    assert host_world.sessions[-1].opened
     from ouroboros.usage_accounting import read_usage_records
     row, = read_usage_records(host.ctx.drive_root)
-    assert row['physical_context']['capacity_total_tokens'] == 20000
-    assert row['physical_context']['measurement_density'] > 0
-    prepared = [json.loads(line) for line in host.wire_path.read_text().splitlines()]
-    assert any(json.loads(row['raw']).get('counter') == 'o200k' for row in prepared if row['direction'] == 'host')
+    assert row['physical_context']['capacity_total_tokens'] == raw + 10001
+    assert row['physical_context']['measurement_density'] == 1.0
+
+
+def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_world):
+    from ouroboros.capability_evidence import resolve_main_token_density
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    options = LiveOptions(instructions='Feature instructions', languages=('ru-RU', 'en-US'))
+    _, cold, _ = session_candidate(host, host_world.provider['session'], options)
+    assert cold.physical_context.measurement_density == 1.0
+    host.response_started('density')
+    estimate = host._response_text_estimates[(0, 'density')]
+    host.response_done('density', usage={'text_input_tokens': estimate * 2,
+        'audio_input_tokens': 99999, 'image_input_tokens': 88888, 'video_input_tokens': 77777},
+        raw_usage={'input_tokens_details': {'text_tokens': estimate * 2, 'audio_tokens': 99999}}, status='completed')
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+    _, warm, _ = session_candidate(host, host_world.provider['session'], options)
+    assert warm.physical_context.measurement_density == 2
+    assert warm.prompt_tokens_estimate == warm.prompt_tokens_bounded_estimate * 2
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='estimator'))
+    _, raw, _ = session_candidate(host, host_world.provider['session'], options)
+    assert raw.physical_context.measurement_density == 1
+    assert raw.prompt_tokens_estimate == raw.prompt_tokens_bounded_estimate
+    host.response_started('grok')
+    host.response_done('grok', usage={'text_input_tokens': estimate * 3}, raw_usage={}, status='completed')
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='provider'))
+    host.response_started('audio-only')
+    host.response_done('audio-only', usage={'audio_input_tokens': estimate * 4}, raw_usage={}, status='completed')
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+
+
+def test_instructions_and_provider_language_sentence_are_inside_fit(host_world):
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    _, plain, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    _, instructed, _ = session_candidate(host, host_world.provider['session'], LiveOptions(instructions='Owner instructions ' * 200))
+    _, language, _ = session_candidate(host, host_world.provider['session'], LiveOptions(
+        instructions='Owner instructions ' * 200, languages=('ru-RU', 'en-US')))
+    assert plain.prompt_tokens_bounded_estimate < instructed.prompt_tokens_bounded_estimate < language.prompt_tokens_bounded_estimate
 
 
 def test_call_tool_silent_replay_and_existing_row_change_receipt(host_world):

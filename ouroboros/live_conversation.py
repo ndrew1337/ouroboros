@@ -139,7 +139,7 @@ class LiveConversationTurn(RealtimeTurn):
                 raise RealtimeSetupError("owner_ingress", "call requires a canonical admitted owner turn")
             host = ConversationHost(self, ctx, messages, tools, task, initial_effort, hub)
             host.incoming, host.event_queue = incoming_messages, event_queue
-            host.warm()  # catalog and tokenizer I/O finish before the audio loop exists
+            host.warm()  # catalog I/O finishes before the audio loop exists
             asyncio.run(owned())
         except BudgetExceeded:
             reason, status = "budget_exhausted", "failed"
@@ -202,13 +202,13 @@ class ConversationHost:
         self.incoming = self.event_queue = None
         self.owner_seen = set()
         self.rounds = 0
-        self.count_input = None
         self.quote = None
         self.responses, self.completed = {}, set()
         self._physical_context = None
         self._held_input = self._growth = 0
-        self._held_density = None
-        self._opening_input = 0
+        self._selected_text_estimate = self._selected_raw_estimate = 0
+        self._session_instructions = ""
+        self._response_text_estimates = {}
         self._meter_started = None
         self._meter_watermark = 0.0
         self._meter_reported = False
@@ -269,10 +269,8 @@ class ConversationHost:
 
     def warm(self):
         from ouroboros.live_usage import warm_quote
-        from ouroboros.realtime_setup import input_counter
         self.quote = warm_quote(engine=self.turn.route.accounting_provider, model=self.turn.model,
                                 drive_root=self.ctx.drive_root)
-        self.count_input = input_counter(self.model.facts)
 
     async def session(self, consume, options: LiveOptions):
         """Refit and seal one physical connection; response starts own the money."""
@@ -299,9 +297,7 @@ class ConversationHost:
                 self.connection_number += 1
                 session, request, evidence = session_candidate(self, provider["session"], options)
                 self._physical_context = request.physical_context
-                self._opening_input = request.prompt_tokens_estimate
                 self._held_input = self._growth = 0
-                self._held_density = None
                 self._meter_watermark = 0.0
                 self._meter_reported = False
                 receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
@@ -343,6 +339,7 @@ class ConversationHost:
         key = (self.connection_number, response_id)
         if key in self.responses or key in self.completed:
             return
+        self._response_text_estimates[key] = self._text_estimate()
         try:
             self.responses[key] = reserve_live_response(**self._response_args(response_id))
         except BudgetExceeded as exc:
@@ -376,22 +373,40 @@ class ConversationHost:
         self.completed.add(key)
         self.observe("usage", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
+        self._record_text_density(key, usage)
         held = [usage.get(axis) for axis in ("text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens")]
-        if any(value is not None for value in held) and all(value is None or type(value) is int and value >= 0 for value in held):
-            total = sum(value or 0 for value in held)
-            if total:
-                if self._held_density is None:
-                    self._held_density = self._opening_input / total if self.count_input else 1.0
-                    if self.count_input:
-                        self.observe("host", canonical_json({"type": "call.usage_density", "basis": "o200k",
-                            "opening_input": self._opening_input, "reported_input": total, "density": self._held_density}))
-                measured = math.ceil(total * self._held_density)
-                if self._held_input:
-                    self._growth = max(self._growth, measured - self._held_input)
-                self._held_input = measured
+        measured = 0
+        if self.model.facts.basis == "estimator":
+            # This route's native usage omits instructions. Its canonical text,
+            # including provider-envelope overhead, stays in estimator units.
+            measured = self._selected_raw_estimate + max(0, self._text_estimate() - self._selected_text_estimate)
+        elif any(value is not None for value in held) and all(value is None or type(value) is int and value >= 0 for value in held):
+            measured = sum(value or 0 for value in held)
+        if measured:
+            if self._held_input:
+                self._growth = max(self._growth, measured - self._held_input)
+            self._held_input = measured
         if self._caption_dirty:
             self.checkpoint("ready")
             self._caption_dirty = False
+
+    def _text_estimate(self):
+        from ouroboros.realtime_setup import text_input_estimate
+        extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
+        return text_input_estimate([*self.messages, *extra], self.schemas)
+
+    def _record_text_density(self, key, usage):
+        from ouroboros.capability_evidence import record_token_density, MAIN_DENSITY_BASIS
+        from ouroboros.provider_models import normalize_model_identity
+        estimate = self._response_text_estimates.pop(key, self._selected_text_estimate)
+        text = usage.get("text_input_tokens")
+        # The adapter's text axis is a modality witness; aggregate prompt usage
+        # and audio/image/video axes never teach the text estimator a density.
+        if (self.model.facts.basis == "provider" and estimate > 0
+                and type(text) is int and text > 0):
+            record_token_density(self.ctx.drive_root, normalize_model_identity(self.turn.model),
+                prompt_chars=estimate * 4, prompt_tokens=text, source="live_text_usage",
+                route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS)
 
     def _settle_tail(self):
         from ouroboros.pricing_catalog import rate

@@ -1250,7 +1250,7 @@ provider as `<skill>:<name>`, with the `realtime_provider` permission. `Realtime
 names its accounting provider, socket endpoint and model prefix. `ProviderCatalog`
 names models, default, voices, vision, honoured settings and credential setting names;
 `RouteFacts` carries the conversation window, accepted-input evidence, working reserve,
-counter basis, source and date. Acceptance never raises the conversation window.
+units (`provider` or `estimator`), source and date. Acceptance never raises or invalidates the window.
 An unknown window stays unknown. Credentials use ordinary `get_settings` grants.
 
 `register_live_conversation(name, handler, *, configure, call_tools=())` registers the
@@ -1266,9 +1266,11 @@ mailbox, accounting and Stop. The feature owns call state, media, captions, lang
 choices and session renewal. It calls `session(consume, LiveOptions(...))`; every reopen
 refits current rows and schemas through the ordinary window ladder. Feature instructions
 then owner instructions are included in the fit. Known overflow refuses with a typed
-sentence if the ladder cannot fit it. o200k limits use the o200k counter; a labelled
-measured density connects that counter to the shared estimator. Provider-native limits
-retain ordinary density evidence. The final physical guard honours the route reserve.
+sentence if the ladder cannot fit it. Provider windows use the route's ordinary density
+(cold 1.0); split text-input usage calibrates selected text only, never media. Estimator
+windows use raw chars/4; Grok usage excludes instructions and never teaches density.
+The sealed wire, including provider language additions, is budgeted before opening.
+The final physical guard honours the route reserve.
 
 The session factory receives immutable `RealtimeInput`, options and a wire recorder.
 It declares its native output bound or `None`; the host supplies fresh exact-route
@@ -1277,8 +1279,7 @@ layout and normalization, and must never cut selected input. It reports each res
 start, finish, status and usage axes, including interrupted/tool-only responses.
 `connected_seconds` is a cumulative connection watermark, including idle and closing
 time. The host bills its growth once, using the retained exact LiteLLM quote. Unpriced
-usage remains unknown; settlement never silently fetches a newer tariff. Catalog and
-counter warmup precede the audio loop.
+usage remains unknown; settlement never silently fetches a newer tariff. Catalog warmup precedes the audio loop.
 
 Call tools join ordinary schemas; collisions refuse admission. Their async
 `handler(host, arguments)` runs on the serialized tool lane with pre/post-effect

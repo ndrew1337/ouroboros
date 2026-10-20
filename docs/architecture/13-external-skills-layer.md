@@ -44,11 +44,11 @@ Review/grants bind to code. Per-call children reuse the loader with scrubbed env
 
 `skill_repair_admission.py` admits ordinary managed repair against exact bytes (§6). Bucket/name still produces `skill_repair`, normalized to `normal` at promotion: a payload selector, not a reduced tool profile. Installed payloads need no Git copy; repair review never forces unload.
 
-### Live Conversation and provider packages
+### Live Conversation and provider packages (PluginAPI 2.1)
 
-PluginAPI 2.1 registers features (`LiveConfig`, call tools) and providers (route, session, catalog). Features own media/playback/UI; providers own wire/captions/usage. Catalogs declare defaults, capabilities and dated facts. `call_offer` requires enabled calls, a loaded provider and granted credentials.
+PluginAPI 2.1 registers features (`LiveConfig`, call tools) and providers (route, session, catalog). Features own media/playback/UI; providers declare capabilities and dated route facts. `call_offer` requires enabled calls, a loaded provider and granted credentials.
 
-`gateway/call_ws.py` admits the owner's turn with a server-minted `call:<call_id>:open` host fact; the feature answers it once with `Respond`. `live_conversation.py` supplies `LiveHost`, retaining ordinary history, tool, mailbox, money and Stop owners. `realtime_turn.py` binds process-local authority; durable intent cannot resume a call. `realtime_setup.py` refits current history and schemas on every reopen through the ordinary window ladder and physical guard. Conversation windows stay independent of accepted input; o200k bounds use o200k counts with labelled density. Working reserves survive Nano's reply floor; remaining overflow refuses typed, unknown windows stay unknown.
+`gateway/call_ws.py` admits the owner's turn with a server-minted `call:<call_id>:open` host fact; the feature answers it once with `Respond`. `live_conversation.py` supplies `LiveHost`, retaining ordinary history, tool, mailbox, money and Stop owners. `realtime_turn.py` binds process-local authority; durable intent cannot resume a call. `realtime_setup.py` refits current history and schemas on every reopen through the ordinary window ladder and physical guard. Acceptance never raises or invalidates a window. Provider windows use calibrated text density; estimator windows use raw chars/4. Grok usage excludes instructions and never calibrates density. Working reserves survive Nano's reply floor; remaining overflow refuses typed, unknown windows stay unknown.
 
 `pricing_catalog.py` warms the exact LiteLLM entry, digest and date before audio. `live_usage.py` reserves each response and settles through the shared ledger, including interrupted/tool-only responses and cumulative connected-time idle/tail growth. Response ids deduplicate receipts. `_usage_settlement.py` preserves unknown counts/prices; no silent repricing. The shared limit refuses the next response. Native bounds remain distinct from allowances.
 
