@@ -20,11 +20,21 @@ memory or summary. After 90 seconds with completed turns, on GoAway, or on a
 tool-catalog change it asks the host to refit and reserve a new connection after
 pending work finishes. Idle time alone does not rebill unchanged input. Automatic
 sliding-window compression is omitted. Resume tokens never replace host context.
-Sent audio remains pending until transcription and a turn boundary arrive.
+Native VAD and input transcription open input work; sent PCM (including silence)
+does not. Unfinished captions and unanswered tools keep renewal pending.
 Late output captions retain their audio item's identity; generation completion
 alone cannot release that caption barrier. A local schema change wakes the
 receiver without cancelling its socket read. Expiry with pending work ends
 explicitly; Stop retains any known unfinished text as a partial transcript.
-No native Google search tool is enabled; ordinary host tools own effects.
+Call instructions follow the host system text. Language hints, voice, pauses,
+interruptions and optional Google search follow LiveOptions. Extended thinking
+uses the selected level (low by default); the ordinary model has interleaved
+reasoning without a level control. Respond opens a host-labelled greeting fact.
+Silent tool results use native SILENT scheduling on the ordinary model; the
+extended-thinking model does not support scheduling, so the feature must finish
+hangup locally. Tool-schema changes coalesce into one pending fresh renewal.
+The catalog offers both models and 30 prebuilt voices. Its 92k o200k window is
+measured for the ordinary model and a labelled hypothesis for extended thinking;
+the documented 131,072 provider-token input limit is a separate quantity.
 The provider accepts inline images and sends 16 kHz mono PCM input / 24 kHz output.
 Installing or granting it does not enable the Live Conversation beta.

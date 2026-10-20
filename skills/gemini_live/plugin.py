@@ -11,7 +11,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
                                           RouteFacts, canonical_json)
 from ouroboros.realtime_session import JsonSession
@@ -21,7 +21,7 @@ ROUTE = RealtimeRoute('gemini_live', ENDPOINT, 'google::')
 RENEW_AFTER_SECONDS = 90
 
 # Google's prebuilt voices with the one-word style its speech docs give each
-# (ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-17).
+# (https://ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-21).
 VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
     ('Zephyr', 'Bright'), ('Puck', 'Upbeat'), ('Charon', 'Informative'), ('Kore', 'Firm'), ('Fenrir', 'Excitable'),
     ('Leda', 'Youthful'), ('Orus', 'Firm'), ('Aoede', 'Breezy'), ('Callirrhoe', 'Easy-going'), ('Autonoe', 'Bright'),
@@ -33,19 +33,30 @@ VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
 # Spoken turns held at ~92k o200k of instruction (18.10.2026); the endpoint documents
 # a 131,072-token input. The reserve is a planning margin for in-session growth.
 FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
-                   source='spoken retention held at ~92k o200k instruction (owner probes); documented input 131,072',
+                   source='measured spoken retention at ~92k o200k instruction, owner probes 2026-10-18; '
+                          '10k reserve is a planning margin; input 131,072 provider tokens documented at '
+                          'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live (read 2026-10-21)',
                    observed='2026-10-18')
+THINKING_FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
+    source='hypothesis: use the ordinary model retention margin until this route is measured; '
+           'input 131,072 provider tokens documented at '
+           'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking (read 2026-10-21)',
+    observed='2026-10-21')
 CATALOG = ProviderCatalog(
     label='Gemini \u00b7 Google', credential_settings=('GEMINI_API_KEY',),
     privacy='Call audio and the frames you show go to Google.',
     models=(
         CatalogModel('gemini-3.8-live', 'gemini-3.8-live \u2014 Google\u2019s live voice model', FACTS, default=True,
                      vision=True, voices=VOICES, honours=frozenset({'pause', 'interruptions', 'search', 'languages'}),
-                     notes=(('thinking', 'Only the extended-thinking model thinks before it answers.'),)),
+                     notes=(('thinking', 'This model uses interleaved reasoning without a configurable thinking level.'),)),
         CatalogModel('gemini-3.8-live-extended-thinking', 'gemini-3.8-live-extended-thinking \u2014 thinks before it answers',
-                     FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
+                     THINKING_FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
                      honours=frozenset({'pause', 'interruptions', 'thinking', 'search', 'languages'})),
     ))
+
+
+def unique_tools(tools):
+    return tuple({tool['function']['name']: tool for tool in tools}.values())
 
 
 def declarations(tools):
@@ -78,6 +89,8 @@ def layout(selected, options):
     if any(p.get('type') != 'text' for p in parts):
         raise RealtimeSetupError('system', 'Gemini system content requires text')
     system = [{'text': p['text']} for p in parts]
+    if options.instructions:
+        system.append({'text': options.instructions})
     # Full ordered role records, not a summary or an operative memory exception.
     # Keep the actual system directives outside the explicitly untrusted archive.
     history, images = [], []
@@ -103,12 +116,23 @@ def layout(selected, options):
     generation = {'responseModalities': ['AUDIO'], 'maxOutputTokens': selected.output_allowance_tokens}
     if options.voice:
         generation['speechConfig'] = {'voiceConfig': {'prebuiltVoiceConfig': {'voiceName': options.voice}}}
-    if 'extended-thinking' in selected.model:
-        generation['thinkingConfig'] = {'thinkingLevel': 'high'}
+    if selected.model.removeprefix('models/') == 'gemini-3.8-live-extended-thinking':
+        generation['thinkingConfig'] = {'thinkingLevel': options.thinking or 'low'}
     setup = {'model': selected.model if selected.model.startswith('models/') else 'models/' + selected.model,
              'systemInstruction': {'parts': system}, 'generationConfig': generation,
-             'tools': declarations(json.loads(selected.tools_json)),
-             'inputAudioTranscription': {}, 'outputAudioTranscription': {}}
+             'tools': declarations(unique_tools(json.loads(selected.tools_json))),
+             **{key: {'languageCodes': list(options.languages)} if options.languages else {}
+                for key in ('inputAudioTranscription', 'outputAudioTranscription')}}
+    if options.search:
+        setup['tools'].append({'googleSearch': {}})
+    turn_taking = {}
+    silence_ms = {'short': 500, 'normal': 0, 'long': 1600}[options.pause]
+    if silence_ms:
+        turn_taking['automaticActivityDetection'] = {'silenceDurationMs': silence_ms}
+    if not options.interruptions:
+        turn_taking['activityHandling'] = 'NO_INTERRUPTION'
+    if turn_taking:
+        setup['realtimeInputConfig'] = turn_taking
     # No sliding-window compression: the host refits on renewal instead.
     events = [{'setup': setup}]
     if images:
@@ -123,7 +147,7 @@ class GeminiSession(JsonSession):
         self.wire = {'model': selected.model, 'input_sha256': selected.sha256, 'events': self.events}
         self.output_bound_tokens = selected.output_allowance_tokens
         self.pending, self.calls, self.text = [], {}, {}
-        self.tools = tuple(json.loads(selected.tools_json))
+        self.tools = unique_tools(json.loads(selected.tools_json))
         self.response = self.item = ''
         self.response_complete = False
         self.input_pending = self.input_final = self.input_boundary = False
@@ -258,7 +282,8 @@ class GeminiSession(JsonSession):
             for call_id in event['toolCallCancellation'].get('ids', []):
                 self.calls.pop(call_id, None)
         if content.get('interrupted'):
-            result.append(LiveEvent('speech_started'))
+            if self.options.interruptions:
+                result.append(LiveEvent('speech_started'))
         if content.get('turnComplete'):
             # Generation completion may precede outputTranscription. Keep both
             # the response and audio item identity until that caption arrives.
@@ -328,24 +353,34 @@ class GeminiSession(JsonSession):
                     cid = message['tool_call_id']
                     name = self.calls.pop(cid, None)
                     if name:
-                        responses.append({'id': cid, 'name': name, 'response': {'output': message['content']}})
+                        response = {'id': cid, 'name': name, 'response': {'output': message['content']}}
+                        # Extended thinking rejects scheduling (docs and 2026-10-18 probe).
+                        if 'thinkingConfig' not in self.events[0]['setup']['generationConfig']:
+                            response['scheduling'] = 'SILENT' if cid in command.silent else 'WHEN_IDLE'
+                        responses.append(response)
                 elif not message.get('tool_calls'):
                     other.append(message)
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
             if other:
                 await self.send(ContextUpdate(tuple(other)))
-            if command.tools != self.tools:
+            tools = unique_tools(command.tools)
+            if tools != self.tools:
+                self.tools = tools
                 self.renewed = True
-                self.renewal_announced = True
-                self.queue_events(LiveEvent('renew', {'within_s': 30}))
-        elif isinstance(command, ContextUpdate):
+                if not self.renewal_announced:
+                    self.renewal_announced = True
+                    self.queue_events(LiveEvent('renew', {'within_s': 30, 'reason': 'tools', 'resume': False}))
+        elif isinstance(command, (ContextUpdate, Respond)):
             if self.turn_busy:
                 self.held_context.append(command)
             else:
                 self.turn_busy = True
+                text = ('[Host fact; not owner words]\n' + command.fact if isinstance(command, Respond) else
+                        'Host context update; preserve each original role and trust boundary:\n' +
+                        canonical_json(command.messages))
                 await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{
-                    'text': 'Host context update; preserve each original role and trust boundary:\n' + canonical_json(command.messages)}]}],
+                    'text': text}]}],
                     'turnComplete': True}})
         else:
             raise RealtimeSetupError('command', 'unsupported Gemini live command')
