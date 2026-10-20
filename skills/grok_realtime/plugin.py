@@ -9,12 +9,30 @@ import asyncio
 import json
 from contextlib import asynccontextmanager
 from urllib.parse import urlencode
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Playback, ToolOutputs
-from ouroboros.contracts.realtime import RealtimeRoute, RealtimeSetupError, RealtimeSetupResult, canonical_json, sha256
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs
+from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
+                                          RouteFacts, canonical_json)
 from ouroboros.realtime_session import JsonSession
 
 ENDPOINT = 'wss://api.x.ai/v1/realtime'
 ROUTE = RealtimeRoute('grok_realtime', ENDPOINT, 'xai::')
+# Measured 21.10.2026 (probes/GROK_RETENTION_20261021.md): Grok Voice 3.0 keeps earlier
+# spoken turns while session.instructions stays below ~92-103k o200k tokens (PASS 92,144
+# neutral and 81,403 real Nano; FAIL 102,804 and 132,132), whatever the text says. It
+# accepted 231,828 tokens on 19.10 (acceptance only). The window keeps a margin below the pass.
+CATALOG = ProviderCatalog(
+    label='Grok \u00b7 xAI', credential_settings=('XAI_API_KEY',), privacy='Call audio goes to xAI.',
+    models=(CatalogModel(
+        'grok-voice-3.0', 'grok-voice-3.0 \u2014 xAI\u2019s voice model',
+        RouteFacts(conversation_window_tokens=90_000, accepted_input_tokens=231_828, working_reserve_tokens=10_000,
+                   basis='o200k', source='measured spoken-retention bound of session.instructions',
+                   observed='2026-10-21'),
+        default=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
+        honours=frozenset({'languages'}),
+        notes=(('pause', 'Grok Voice decides itself when your turn has ended.'),
+               ('interruptions', 'Grok Voice always lets you speak over it.'),
+               ('thinking', 'Grok Voice has no thinking setting.'),
+               ('search', 'Grok Voice has no built-in search here.'))),))
 
 
 def functions(raw):
@@ -291,8 +309,6 @@ class GrokSession(JsonSession):
                 self.truncations[command.item_id] = command.played_ms
                 await self.write({'type': 'conversation.item.truncate', 'item_id': command.item_id,
                                   'content_index': 0, 'audio_end_ms': command.played_ms})
-        elif isinstance(command, Playback):
-            pass
         elif isinstance(command, (ToolOutputs, ContextUpdate)):
             self.context_queue.append(command)
             await self.advance_context()
@@ -315,11 +331,4 @@ def register(api):
     def session(selected, options, *, observe, connect=None):
         return GrokSession(selected, options, observe=observe, connect=connect or connect_grok)
 
-    async def setup(selected, *, observe, execute=False, **kwargs):
-        from ouroboros.contracts.live_conversation import LiveOptions
-        wire = canonical_json(session(selected, LiveOptions(), observe=observe).wire)
-        if execute:
-            raise RealtimeSetupError('live_consumer_required', 'Use the admitted Live Conversation consumer')
-        return RealtimeSetupResult('prepared', selected.sha256, sha256(wire), wire)
-
-    api.register_realtime_provider('grok', setup, route=ROUTE, session=session)
+    api.register_realtime_provider('grok', route=ROUTE, session=session, catalog=CATALOG)

@@ -6,12 +6,29 @@ from contextlib import asynccontextmanager
 from urllib.parse import urlencode
 
 from ouroboros.contracts.realtime import (
-    RealtimeRoute, RealtimeSetupError, RealtimeSetupResult, canonical_json, sha256,
+    CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError, RouteFacts, canonical_json,
 )
 
 # One address for both the connection and the declared route identity.
 ENDPOINT = "wss://api.openai.com/v1/realtime"
 ROUTE = RealtimeRoute(accounting_provider="openai_realtime", endpoint=ENDPOINT, model_prefix="openai::")
+# Documented 128,000-token context; one text probe was accepted at 133,554 tokens on
+# 20.10.2026 (acceptance, not retention). The window stays the documented figure, a
+# hypothesis until a spoken-retention probe measures it.
+CATALOG = ProviderCatalog(
+    label="OpenAI", credential_settings=("OPENAI_API_KEY",),
+    privacy="Call audio and the frames you show go to OpenAI.",
+    models=(CatalogModel(
+        "gpt-realtime-2.1", "gpt-realtime-2.1 \u2014 OpenAI\u2019s realtime voice model",
+        RouteFacts(conversation_window_tokens=128_000, accepted_input_tokens=133_554, working_reserve_tokens=10_000,
+                   basis="provider", source="documented context; spoken retention not yet measured",
+                   observed="2026-10-20"),
+        default=True, vision=True,
+        voices=tuple(CatalogVoice(name, name.capitalize()) for name in (
+            "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse")),
+        honours=frozenset({"pause", "interruptions", "languages"}),
+        notes=(("thinking", "This model has no thinking setting."),
+               ("search", "OpenAI Realtime has no built-in search here."))),))
 
 # Host bookkeeping is retained in RealtimeInput, not model text. Unknown fields
 # (including name/tool_calls) refuse instead of quietly losing their semantics.
@@ -219,25 +236,9 @@ def register(api):
         ) as ws:
             yield ws
 
-    async def setup(selected, *, observe, execute=False, expected_wire_sha256="", probe=None, connect=None):
-        events, wire = layout(selected, probe)
-        digest = sha256(wire)
-        if not execute:
-            return RealtimeSetupResult("prepared", selected.sha256, digest, wire)
-        if expected_wire_sha256 != digest:
-            raise RealtimeSetupError("wire_changed", "execute requires the digest of this exact preview")
-        # The supplied factory belongs to the host test/probe caller, never a tool
-        # argument or a plugin-controlled alternate URL.
-        async with (connect or connect_openai)(selected.model) as ws:
-            response = await consume(ws, events, observe)
-        return RealtimeSetupResult("response_completed" if response is not None else "setup_accepted",
-                                   selected.sha256, digest, wire,
-                                   canonical_json(response) if response is not None else "")
-
     from .live import OpenAISession
 
     def live(selected, options, *, observe, connect=None):
         return OpenAISession(selected, options, observe=observe, connect=connect or connect_openai)
 
-    live.supports_images = True
-    api.register_realtime_provider("openai", setup, route=ROUTE, session=live)
+    api.register_realtime_provider("openai", route=ROUTE, session=live, catalog=CATALOG)

@@ -11,7 +11,7 @@ import asyncio
 import json
 from dataclasses import replace
 
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Playback, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs, Video
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 from ouroboros.realtime_session import JsonSession
 from . import _OUTPUT_FIELD_MAX, _tools, _usage, layout
@@ -240,8 +240,6 @@ class OpenAISession(JsonSession):
             if command.rate != 24000 or len(command.pcm) % 2:
                 raise RealtimeSetupError("audio_format", "OpenAI expects PCM16 mono at 24000 Hz")
             await self.write({"type": "input_audio_buffer.append", "audio": base64.b64encode(command.pcm).decode()})
-        elif isinstance(command, Playback):
-            return  # retained by the host; only Interrupt changes the provider transcript
         elif isinstance(command, Video):
             # Frames are observations. They do not trigger a response by themselves.
             self.number += 1
