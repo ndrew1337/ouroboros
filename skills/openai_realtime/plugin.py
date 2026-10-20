@@ -234,4 +234,10 @@ def register(api):
                                    selected.sha256, digest, wire,
                                    canonical_json(response) if response is not None else "")
 
-    api.register_realtime_provider("openai", setup, route=ROUTE)
+    from .live import OpenAISession
+
+    def live(selected, options, *, observe, connect=None):
+        return OpenAISession(selected, options, observe=observe, connect=connect or connect_openai)
+
+    live.supports_images = True
+    api.register_realtime_provider("openai", setup, route=ROUTE, session=live)

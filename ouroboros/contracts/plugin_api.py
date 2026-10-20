@@ -28,7 +28,7 @@ from ouroboros.skill_token import SkillToken
 # refused a NEW PASS at issuance (``extension_new_pass_admission_error``).
 # 2.0 absorbs 1.4's presence capability (reviewed transport skills may submit
 # authenticated non-owner presence events through the Host Service ceiling).
-PLUGIN_API_VERSION = "2.1"  # additive, in-process realtime setup provider
+PLUGIN_API_VERSION = "2.2"  # additive, in-process live conversation consumer and provider session
 # The generation an extension WITHOUT the manifest field binds against —
 # "absent ≡ 1.3 by construction" (owner-ratified §6.1-Δ; deliberately NOT 1.4).
 LEGACY_PLUGIN_API_GENERATION = "1.3"
@@ -74,7 +74,7 @@ class ExecutionMode(enum.Enum):
 MATRIX_CAPABILITIES: frozenset[str] = frozenset({
     "register_tool", "register_route", "register_ws_handler", "register_ui_tab",
     "register_settings_section", "send_ws_message", "register_companion_process",
-    "register_supervised_task", "subscribe_event", "on_unload", "register_realtime_provider",
+    "register_supervised_task", "subscribe_event", "on_unload", "register_realtime_provider", "register_live_conversation",
 })
 
 # Runtime-access/introspection methods always available in every execution mode
@@ -91,7 +91,7 @@ ALWAYS_AVAILABLE_CAPABILITIES: frozenset[str] = frozenset({
 OUT_OF_PROCESS_UNAVAILABLE_CAPABILITIES: frozenset[str] = frozenset({
     "subscribe_event",
     "register_supervised_task",
-    "register_realtime_provider",
+    "register_realtime_provider", "register_live_conversation",
 })
 
 
@@ -200,6 +200,7 @@ def plugin_api_surface_fingerprint() -> str:
 # change without a version bump) refuses negotiation until the version is
 # bumped and the new fingerprint recorded here.
 PLUGIN_API_SURFACE_FINGERPRINTS: Dict[str, str] = {
+    "2.2": "f0b9fee80692306abcec06750f7ae44a5486515e3099569a5092432def5eb142",
     "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
     "2.1": "61036a060043ebfc4381084d76893b63c43a483f1ead99a7276ac448acd3aaa5",
 }
@@ -340,15 +341,28 @@ class PluginAPI(Protocol):
         handler: Callable[..., Awaitable[Any]],
         *,
         route: RealtimeRoute,
+        session: Callable[..., Any] | None = None,
     ) -> None:
-        """Register an in-process setup provider as ``<skill>:<name>``.
+        """Register an in-process realtime provider as ``<skill>:<name>``.
 
         Requires ``realtime_provider``. The async handler consumes the host's
         sealed RealtimeInput (contracts/realtime.py), with observe, execute,
         expected_wire_sha256, probe and optional injected connect keyword args,
         and reports response usage in host axes (``USAGE_AXES``). ``route``
         declares its accounting provider, endpoint and model prefix. Selection,
-        fitting, task authority, tools and spending remain host-owned.
+        fitting, task authority, tools and spending remain host-owned. The optional
+        session factory exposes the native duplex LiveSession (2.2); it receives
+        selected input and has no authority to dispatch tools or reserve spending.
+        """
+        ...
+
+    def register_live_conversation(self, name: str, handler: Callable[..., Awaitable[Any]],
+                                   *, configure: Callable[[], dict]) -> None:
+        """Register a Live Conversation consumer. Requires live_conversation, in-process.
+
+        configure reads this feature's beta/selection/limits; handler(host) receives
+        only an admitted turn's host port. Host and provider generations remain leased
+        until actual socket and tool teardown. No serializable request grants this port.
         """
         ...
 

@@ -65,6 +65,15 @@ D19 = "Frozen contracts (ABI)"
 D20 = "Presence"
 
 [modules]
+"ouroboros/live_conversation.py" = "D01"
+"ouroboros/realtime_session.py" = "D02"
+"ouroboros/call_protocol.py" = "D19"
+"ouroboros/call_peers.py" = "D11"
+"ouroboros/contracts/live_conversation.py" = "D19"
+"ouroboros/gateway/call_contracts.py" = "D19"
+"ouroboros/gateway/call_ws.py" = "D11"
+"ouroboros/gateway/host_call.py" = "D11"
+"ouroboros/presence_call.py" = "D20"
 "ouroboros/realtime_turn.py" = "D01"
 "ouroboros/realtime_setup.py" = "D01"
 "ouroboros/contracts/realtime.py" = "D19"
@@ -923,6 +932,7 @@ allowed = [
   "D02->D12",
   "D02->D16",
   "D02->D18",
+  "D02->D19",
   "D03->D01",
   "D03->D02",
   "D03->D04",

@@ -1567,6 +1567,15 @@ stop it. With no engine chosen it uses one on this device. The row menu's Read a
 voice… lists Automatic (a voice on this device) and every voice, "On
 this device" only when the browser marks it local, otherwise "Online voice".
 
+Live Conversation uses the existing glass wave, phone icons and second line,
+crossfade, and collapsed transcript. When explicitly enabled, Talk occupies the
+empty Send slot; text or a file restores Send at the same width. Empty Enter
+never starts a call. During a call the dictation control hides and returns when
+the call ends, preserving the draft. The phone line exposes the selected engine;
+no credential or engine arrival enables the feature. Call capture shares the
+page's audio and visual device leases; End, Panic, hiding the room and unloading
+the feature release them.
+
 ### Conversation activity block
 
 A task's activity block is in the transcript exactly when the record already

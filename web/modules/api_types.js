@@ -255,6 +255,11 @@
 /** @typedef {import('./client_contract_types.js').RealtimeAuthorizedOutbound} RealtimeAuthorizedOutbound */
 /** @typedef {import('./client_contract_types.js').RealtimeRefusedOutbound} RealtimeRefusedOutbound */
 /** @typedef {import('./client_contract_types.js').RealtimeFinishedOutbound} RealtimeFinishedOutbound */
+/** @typedef {import('./client_contract_types.js').CallOpenRequest} CallOpenRequest */
+/** @typedef {import('./client_contract_types.js').CallOpenResponse} CallOpenResponse */
+/** @typedef {import('./client_contract_types.js').CallRefusal} CallRefusal */
+/** @typedef {import('./client_contract_types.js').CallSocketContract} CallSocketContract */
+/** @typedef {import('./client_contract_types.js').ConversationFinishedOutbound} ConversationFinishedOutbound */
 /**
  * @typedef {Object} ChatOutbound
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
@@ -386,6 +391,8 @@
  *   card title and the collapsed activity line. Absent = a frame that predates
  *   the fact (an older worker, a supervisor note, a stored row), which keeps
  *   the legacy reading that promoted every progress frame.
+ * @property {{call_id:string,item_id:string,played_ms:number,status:'played'|'generated'|'interrupted'}=} spoken
+ *   Generated speech and actual playback evidence; retained on history replay.
  * @property {string=} initiator
  *   The turn's origin label: "consciousness" on every frame and row of a self-initiated wake-up (and the roots it starts); absent on an owner's turn.
  * @property {boolean=} cancelable

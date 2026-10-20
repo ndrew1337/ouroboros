@@ -57,6 +57,7 @@ from ouroboros.extension_registry_state import (
     _record_companion_name,
     _routes,
     _realtime_providers,
+    _conversation_features,
     _retiring_imports,
     _settings_sections,
     _tools,
@@ -359,7 +360,7 @@ class PluginAPIImpl:
 
     # --- registration ---
 
-    def register_realtime_provider(self, name: str, handler: Callable[..., Any], *, route: Any) -> None:
+    def register_realtime_provider(self, name: str, handler: Callable[..., Any], *, route: Any, session: Callable[..., Any] | None = None) -> None:
         from ouroboros.contracts.realtime import RealtimeRoute
 
         _reject_extension_child_side_effect("register_realtime_provider")
@@ -369,11 +370,25 @@ class PluginAPIImpl:
             raise ExtensionRegistrationError("realtime provider setup handler must be async")
         if not isinstance(route, RealtimeRoute):
             raise ExtensionRegistrationError("realtime provider route must be a contracts.realtime.RealtimeRoute")
+        if session is not None and not callable(session):
+            raise ExtensionRegistrationError("session must construct a live provider session")
         key = f"{self._skill}:{short}"
         with _lock:
             self._stage_surface_locked(_realtime_providers, self._staged.realtime_providers, key, {
-                "skill": self._skill, "handler": self._wrap_runtime_handler(handler), "route": route,
+                "skill": self._skill, "handler": self._wrap_runtime_handler(handler), "route": route, "session": session,
             }, "realtime provider")
+
+    def register_live_conversation(self, name: str, handler: Callable[..., Any], *, configure: Callable[[], dict]) -> None:
+        """An in-process conversation consumer; ordinary admission grants its host port."""
+        _reject_extension_child_side_effect("register_live_conversation")
+        self._require("live_conversation")
+        short = _assert_tool_name(name)
+        if not inspect.iscoroutinefunction(handler) or not callable(configure):
+            raise ExtensionRegistrationError("conversation requires an async handler and configuration reader")
+        with _lock:
+            self._stage_surface_locked(_conversation_features, self._staged.conversation_features,
+                f"{self._skill}:{short}", {"skill": self._skill,
+                "handler": self._wrap_runtime_handler(handler), "configure": configure}, "conversation feature")
 
     def register_tool(
         self,

@@ -12,6 +12,7 @@ import { draftPort, getContributions } from './modules/contributions.js';
 import { bridgeContributedActions } from './modules/message_actions.js';
 import { startHostModules } from './modules/host_modules.js';
 import { startVoice } from './modules/voice_controls.js';
+import { startConversations } from './modules/conversation_controls.js';
 import { createNotificationActivation, getNotifier } from './modules/notifications.js';
 import { showToast } from './modules/toast.js';
 import { apiClient } from './modules/api_client.js';
@@ -412,6 +413,7 @@ contributions.attach({ ws });
 const visibleDraft = draftPort(() => projectInstances.get(navState.activeProjectId) || mainChat);
 bridgeContributedActions({ store: contributions, draft: visibleDraft });
 startVoice({ hosts: startHostModules({ store: contributions, draft: visibleDraft }) });
+startConversations({ hosts: startHostModules(), openSettings: openSettingsTab });
 
 function hydrateOpenChatsFromState(data, snapshotRequestedAt) {
     mainChat?.hydrateStateSnapshot?.(data, snapshotRequestedAt);

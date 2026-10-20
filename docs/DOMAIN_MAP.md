@@ -8,8 +8,8 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 
 | domain | name | modules | proposed |
 |---|---|---:|---:|
-| D01 | Agent core & main loop | 51 | 0 |
-| D02 | LLM client, routing & providers | 43 | 0 |
+| D01 | Agent core & main loop | 52 | 0 |
+| D02 | LLM client, routing & providers | 44 | 0 |
 | D03 | Context assembly, fit & compaction | 22 | 0 |
 | D04 | Tool execution: registry, access & typed results | 22 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 41 | 0 |
@@ -18,7 +18,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D08 | Supervisor: queue, workers, events & runtime control | 68 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 33 | 0 |
-| D11 | Gateway, server & Web UI | 99 | 0 |
+| D11 | Gateway, server & Web UI | 102 | 0 |
 | D12 | Settings & configuration | 21 | 0 |
 | D13 | Safety, guards & runtime mode | 9 | 0 |
 | D14 | Skills & extensions | 72 | 0 |
@@ -26,9 +26,9 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D16 | Observability, usage accounting & cost | 22 | 0 |
 | D17 | Projects, workspaces & task results | 42 | 0 |
 | D18 | Launcher, packaging, platform & shared substrate | 30 | 0 |
-| D19 | Frozen contracts (ABI) | 13 | 0 |
-| D20 | Presence | 13 | 0 |
-| **total** | | **815** | **0** |
+| D19 | Frozen contracts (ABI) | 16 | 0 |
+| D20 | Presence | 14 | 0 |
+| **total** | | **824** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -37,7 +37,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 | ↓ imports → | D01 | D02 | D03 | D04 | D05 | D06 | D07 | D08 | D09 | D10 | D11 | D12 | D13 | D14 | D15 | D16 | D17 | D18 | D19 | D20 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **D01** | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| **D02** | ✓ | · | ✓ | · | · | · | ✓ | · | ✓ | · | · | ✓ | · | · | · | ✓ | · | ✓ | · | · |
+| **D02** | ✓ | · | ✓ | · | · | · | ✓ | · | ✓ | · | · | ✓ | · | · | · | ✓ | · | ✓ | ✓ | · |
 | **D03** | ✓ | ✓ | · | ✓ | · | · | · | · | · | · | · | ✓ | · | · | ✓ | · | ✓ | ✓ | ✓ | · |
 | **D04** | · | · | · | · | ✓ | · | · | · | · | · | · | · | ✓ | · | · | · | ✓ | ✓ | ✓ | · |
 | **D05** | ✓ | ✓ | · | ✓ | · | · | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | · |
@@ -207,6 +207,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/delivery_seal.py`
 - `ouroboros/external_runs.py`
 - `ouroboros/focus.py`
+- `ouroboros/live_conversation.py`
 - `ouroboros/live_works.py`
 - `ouroboros/loop.py`
 - `ouroboros/loop_budget.py`
@@ -280,6 +281,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/openrouter_cost.py`
 - `ouroboros/pricing.py`
 - `ouroboros/provider_models.py`
+- `ouroboros/realtime_session.py`
 - `ouroboros/reasoning_artifacts.py`
 - `ouroboros/request_wire_attempt.py`
 - `ouroboros/request_wire_contract.py`
@@ -690,11 +692,13 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 
 ### D11 — Gateway, server & Web UI
 
+- `ouroboros/call_peers.py`
 - `ouroboros/chat_references.py`
 - `ouroboros/client_surface.py`
 - `ouroboros/gateway/__init__.py`
 - `ouroboros/gateway/_helpers.py`
 - `ouroboros/gateway/attachment_contracts.py`
+- `ouroboros/gateway/call_ws.py`
 - `ouroboros/gateway/card_contracts.py`
 - `ouroboros/gateway/card_decision.py`
 - `ouroboros/gateway/cards.py`
@@ -718,6 +722,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/history_contracts.py`
 - `ouroboros/gateway/history_deliveries.py`
 - `ouroboros/gateway/history_paging.py`
+- `ouroboros/gateway/host_call.py`
 - `ouroboros/gateway/host_notify.py`
 - `ouroboros/gateway/host_service.py`
 - `ouroboros/gateway/logs.py`
@@ -1038,8 +1043,10 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 
 ### D19 — Frozen contracts (ABI)
 
+- `ouroboros/call_protocol.py`
 - `ouroboros/contracts/__init__.py`
 - `ouroboros/contracts/chat_id_policy.py`
+- `ouroboros/contracts/live_conversation.py`
 - `ouroboros/contracts/plugin_api.py`
 - `ouroboros/contracts/realtime.py`
 - `ouroboros/contracts/record_contract.py`
@@ -1050,6 +1057,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/contracts/task_contract.py`
 - `ouroboros/contracts/tool_abi.py`
 - `ouroboros/contracts/tool_context.py`
+- `ouroboros/gateway/call_contracts.py`
 - `ouroboros/gateway/reference_contracts.py`
 
 ### D20 — Presence
@@ -1057,6 +1065,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/presence_admission.py`
 - `ouroboros/presence_authority.py`
 - `ouroboros/presence_bindings.py`
+- `ouroboros/presence_call.py`
 - `ouroboros/presence_capabilities.py`
 - `ouroboros/presence_context.py`
 - `ouroboros/presence_continuation.py`

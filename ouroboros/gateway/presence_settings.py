@@ -36,10 +36,12 @@ def _runtime_projection(profile: Any, state: PresenceState) -> dict[str, Any]:
         "defaults": {
             "model_slot": defaults.model_slot,
             "inline_max_rounds": defaults.inline_max_rounds,
+            "execution": defaults.execution,
         },
         "overrides": {
             "model_slot": overrides.model_slot,
             "inline_max_rounds": overrides.inline_max_rounds,
+            "execution": overrides.execution,
         },
         "state_fingerprint": presence_state_fingerprint(state),
         "workspace_root": state.workspace_root,
@@ -73,7 +75,7 @@ def _parse_overrides(body: Any) -> tuple[str, Mapping[str, Any]]:
     raw = body.get("runtime_overrides")
     if not isinstance(expected, str) or not isinstance(raw, Mapping):
         raise ValueError("expected_state_fingerprint must be a string and runtime_overrides an object")
-    if set(raw) != _OVERRIDE_FIELDS:
+    if set(raw) - {"execution"} != _OVERRIDE_FIELDS:
         raise ValueError("runtime_overrides must contain exactly model_slot and inline_max_rounds")
     if "workspace_root" in body and not isinstance(body["workspace_root"], str):
         raise ValueError("workspace_root must be a string; empty clears the selection")
@@ -100,6 +102,7 @@ def _update_runtime_overrides(
     overrides = PresenceRuntimeOverrides(
         model_slot=raw.get("model_slot"),
         inline_max_rounds=raw.get("inline_max_rounds"),
+        execution=raw.get("execution"),
     )
     updated = replace(state, runtime_overrides=overrides)
     if "workspace_root" in body:

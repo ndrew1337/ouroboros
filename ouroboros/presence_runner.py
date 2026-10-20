@@ -80,6 +80,45 @@ class PresenceTurnEvent:
     continuation_version: int = 0
 
 
+def presence_turn_event(payload: Any, admission: PresenceAdmission, *,
+                        reporting_version: int = 0, continuing: int = 0) -> PresenceTurnEvent:
+    """Share binding/origin validation between ordinary text and call ingress.
+
+    The transport's claimed conversation_key never chooses the host history
+    or concurrency key; that key comes from the checked origin facts.
+    """
+    from ouroboros.presence_bindings import conversation_key
+
+    expected = {"source_event_id", "provider", "account_id", "conversation_id", "thread_id",
+                "conversation_key", "actor", "conversation", "message", "text"}
+    if not isinstance(payload, dict) or set(payload) != expected:
+        raise PresenceTurnError("presence_event_invalid", "event")
+    provider, account_id, conversation_id, thread_id = (
+        str(payload.get(key) or "").strip()
+        for key in ("provider", "account_id", "conversation_id", "thread_id"))
+    origin = admission.origin
+    if (provider != origin.transport or account_id != origin.account_id
+            or (origin.conversation_id != "*" and conversation_id != origin.conversation_id)
+            or (origin.thread_id and thread_id != origin.thread_id)):
+        raise PresenceTurnError("presence_origin_mismatch", "event")
+    event = PresenceTurnEvent(
+        source_event_id=str(payload["source_event_id"] or "").strip(),
+        provider=provider, account_id=account_id, conversation_id=conversation_id, thread_id=thread_id,
+        conversation_key=conversation_key(provider, account_id, conversation_id, thread_id),
+        actor=dict(payload["actor"]) if isinstance(payload["actor"], dict) else {},
+        conversation=dict(payload["conversation"]) if isinstance(payload["conversation"], dict) else {},
+        message=dict(payload["message"]) if isinstance(payload["message"], dict) else {},
+        text=str(payload["text"] or ""), delivery_reporting_version=reporting_version,
+        continuation_version=continuing)
+    if not event.source_event_id or not event.conversation_key or not event.actor:
+        raise PresenceTurnError("presence_identity_missing", "event")
+    if "transport_queue" in event.conversation:
+        from ouroboros.presence_observations import validate_transport_queue
+        validate_transport_queue(event.conversation["transport_queue"], event.conversation_key,
+                                 event.source_event_id)
+    return event
+
+
 @dataclass(frozen=True)
 class PresenceTurnResult:
     outcome: str
@@ -438,6 +477,19 @@ class PresenceTurnGate:
             return None
         return resources
 
+    def try_acquire(self, conversation_key: str) -> PresenceTurnLease | None:
+        """One admission attempt for a live peer door; no waiting worker."""
+        key, _lock = self._conversation(conversation_key)
+        steps = self._acquisition(key)
+        try:
+            try:
+                next(steps)
+            except StopIteration as done:
+                return PresenceTurnLease(key, done.value, self)
+            return None
+        finally:
+            steps.close()
+
     def acquire(self, conversation_key: str) -> PresenceTurnLease:
         key, _lock = self._conversation(conversation_key)
         return PresenceTurnLease(key, self.acquire_resources(key), self)
@@ -479,6 +531,11 @@ async def admit_configured_gate(drive_root: Path, conversation_key: str) -> Pres
 def _stable_numeric_id(prefix: str, value: str) -> int:
     digest = hashlib.sha256(f"{prefix}\0{value}".encode("utf-8")).digest()
     return (1 << 40) + (int.from_bytes(digest[:6], "big") & ((1 << 40) - 1))
+
+
+def presence_chat_id(conversation_key: str) -> int:
+    """The unchanged ordinary Presence history identity, shared by call ingress."""
+    return _stable_numeric_id("presence-conversation", conversation_key)
 
 
 def presence_turn_task_id(binding_id: str, source_event_id: str) -> str:
@@ -992,6 +1049,8 @@ def _log_dialogue(
     event: PresenceTurnEvent,
     task: Mapping[str, Any],
     task_id: str,
+    speaker: Mapping[str, Any] | None = None,
+    client_message_id: str = "",
 ) -> None:
     from types import SimpleNamespace
     from ouroboros import chat_chain
@@ -1007,9 +1066,9 @@ def _log_dialogue(
         "text": text,
         "format": "markdown" if direction == "out" else "",
         "source": f"presence:{event.provider}",
-        "sender_label": str(event.actor.get("display_name") or event.actor.get("username") or ""),
-        "sender_session_id": str(event.actor.get("platform_actor_id") or event.actor.get("id") or ""),
-        "client_message_id": event.source_event_id,
+        "sender_label": str((speaker or event.actor).get("display_name") or event.actor.get("username") or ""),
+        "sender_session_id": str((speaker or event.actor).get("platform_actor_id") or event.actor.get("id") or ""),
+        "client_message_id": client_message_id or event.source_event_id,
         "presence_event_identity": presence_event_identity(str(task["metadata"]["presence"]["binding_id"]), event),
         "transport": {
             "provider": event.provider,
@@ -1017,7 +1076,7 @@ def _log_dialogue(
             "conversation_id": event.conversation_id,
             "thread_id": event.thread_id,
             "conversation_key": event.conversation_key,
-            "actor": dict(event.actor),
+            "actor": dict(speaker or event.actor),
             "conversation": dict(event.conversation),
             "message": dict(event.message),
             **({"delivery": {"state": "authored"}} if direction == "out" else {}),
@@ -1055,7 +1114,7 @@ def _build_task(
     from ouroboros.config import runtime_setting
 
     task_id = physical_task_id or _task_id(admission, event)
-    chat_id = _stable_numeric_id("presence-conversation", event.conversation_key)
+    chat_id = presence_chat_id(event.conversation_key)
     actor_id = _stable_numeric_id(
         "presence-actor",
         f"{event.provider}:{event.account_id}:{event.actor.get('platform_actor_id') or event.actor.get('id') or ''}",
@@ -1192,6 +1251,7 @@ def run_presence_turn(
     agent_factory: Callable[..., Any] | None = None,
     gate: PresenceTurnGate | None = None,
     admitted: PresenceTurnLease | None = None,
+    live_turn: Any = None,
 ) -> PresenceTurnResult:
     """Run one bounded turn; adapters retain durable provider custody.
 
@@ -1267,6 +1327,13 @@ def run_presence_turn(
             staged_files=tuple(Path(item) for item in staged_files),
             physical_task_id=task_id,
         )
+        if live_turn is not None:
+            from ouroboros.live_conversation import LiveConversationTurn
+            if not isinstance(live_turn, LiveConversationTurn) or live_turn.spec.presence_binding_id != admission.binding_id:
+                raise PresenceTurnError("presence_call_identity", "binding_id")
+            task["metadata"]["execution_transport"] = live_turn.request
+            task["model"], task["use_local_model"] = live_turn.model, False
+            task["_skip_post_task_synthesis"] = True
         chat_id = int(task["chat_id"])
         actor_id = _stable_numeric_id("presence-actor-log", str(task.get("actor_id") or ""))
         log_dialogue = functools.partial(_log_dialogue, Path(drive_root), chat_id=chat_id,
@@ -1289,6 +1356,8 @@ def run_presence_turn(
             drive_root=str(drive_root),
             event_queue=event_queue,
         )
+        if live_turn is not None:
+            agent._realtime_turn = live_turn
         from ouroboros.presence_continuation import bind_review_wait
 
         bind_review_wait(agent, lease=lease, event=event, task_id=task_id, identity=identity,

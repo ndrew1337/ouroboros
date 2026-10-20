@@ -898,11 +898,10 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
     if await _bounded_host_read(ctx, functools.partial(store.migrating, ctx.data_dir)):  # P1: the turn writes its result
         return _presence_error("the task store is importing; retry shortly", 503, "migrating", "retry")
     from ouroboros.presence_admission import PresenceAdmissionError
-    from ouroboros.presence_bindings import conversation_key
     from ouroboros.presence_continuation import continuation_version, turn_response
     from ouroboros.presence_runner import (
         PresenceTurnError,
-        PresenceTurnEvent,
+        presence_turn_event,
         PresenceTurnNotStarted,
         presence_turn_replay,
         presence_turn_task_id,
@@ -917,60 +916,21 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
             return _presence_error("invalid presence payload", 400, "presence_payload_invalid", "rejected")
         reporting_version = delivery_reporting_version(payload.get("delivery_reporting_version", 0))
         continuing = continuation_version(payload.get("continuation_version", 0))
-        event_payload = payload.get("event")
-        expected = {
-            "source_event_id", "provider", "account_id", "conversation_id", "thread_id",
-            "conversation_key", "actor", "conversation", "message", "text",
-        }
-        if not isinstance(event_payload, dict) or set(event_payload) != expected:
-            return _presence_error("invalid presence event", 400, "presence_event_invalid", "rejected")
-
         admission = await _bounded_host_read(
             ctx, functools.partial(_admit_presence, ctx, skill_name, str(payload.get("binding_id") or "")))
-        provider = str(event_payload.get("provider") or "").strip()
-        account_id = str(event_payload.get("account_id") or "").strip()
-        conversation_id = str(event_payload.get("conversation_id") or "").strip()
-        thread_id = str(event_payload.get("thread_id") or "").strip()
-        if (
-            provider != admission.origin.transport
-            or account_id != admission.origin.account_id
-            or (
-                admission.origin.conversation_id != "*"
-                and conversation_id != admission.origin.conversation_id
-            )
-            or (admission.origin.thread_id and thread_id != admission.origin.thread_id)
-        ):
-            return _presence_error("presence event does not match its owner-created binding", 403,
-                                   "presence_origin_mismatch", "rejected")
-        event = PresenceTurnEvent(
-            source_event_id=str(event_payload["source_event_id"] or "").strip(),
-            provider=provider,
-            account_id=account_id,
-            conversation_id=conversation_id,
-            thread_id=thread_id,
-            # The transport authenticates provider facts, but it does not get
-            # to choose the concurrency/history identity. Derive that identity
-            # from the binding-checked origin facts above.
-            conversation_key=conversation_key(provider, account_id, conversation_id, thread_id),
-            actor=dict(event_payload["actor"]) if isinstance(event_payload["actor"], dict) else {},
-            conversation=(
-                dict(event_payload["conversation"])
-                if isinstance(event_payload["conversation"], dict)
-                else {}
-            ),
-            message=dict(event_payload["message"]) if isinstance(event_payload["message"], dict) else {},
-            text=str(event_payload["text"] or ""),
-            delivery_reporting_version=reporting_version,
-            continuation_version=continuing,
-        )
-        if not event.source_event_id or not event.conversation_key or not event.actor:
-            return _presence_error("presence event is missing identity facts", 400,
-                                   "presence_identity_missing", "rejected")
-        if "transport_queue" in event.conversation:
-            from ouroboros.presence_observations import validate_transport_queue
-
-            validate_transport_queue(event.conversation["transport_queue"], event.conversation_key,
-                                     event.source_event_id)
+        try:
+            event = presence_turn_event(payload.get("event"), admission,
+                                        reporting_version=reporting_version, continuing=continuing)
+        except PresenceTurnError as exc:
+            errors = {
+                "presence_event_invalid": (400, "invalid presence event"),
+                "presence_origin_mismatch": (403, "presence event does not match its owner-created binding"),
+                "presence_identity_missing": (400, "presence event is missing identity facts"),
+            }
+            if exc.code not in errors:
+                raise
+            status, message = errors[exc.code]
+            return _presence_error(message, status, exc.code, "rejected")
         staged_files = await _bounded_host_read(
             ctx, functools.partial(_presence_staged_files, ctx, skill_name, payload.get("staged_files")))
         turn_id = presence_turn_task_id(admission.binding_id, event.source_event_id)
@@ -1554,9 +1514,11 @@ def create_host_service_app(
 ) -> Starlette:
     # host_notify imports this module's helpers; mounted here, imported lazily.
     from ouroboros.gateway.host_notify import _api_notify
+    from ouroboros.gateway.host_call import host_call_routes
 
     app = Starlette(
         routes=[
+            *host_call_routes(),
             Route("/identity", _api_identity, methods=["GET"]),
             Route("/tools/schemas", _api_tool_schemas, methods=["GET"]),
             Route("/chat/allocate-internal", _api_allocate_internal, methods=["POST"]),

@@ -275,6 +275,56 @@ Send `{"type": "chat", "content": "...", "client_message_id": "<unique id>", "ch
 
 **Thread filtering.** The socket broadcasts several destinations: apply the merge rules below only to stored-row deliveries of the history view being read, never comparing every frame with Main history, inferring Main from a missing `chat_id` or taking transient notices for missing stored rows.
 
+### Live Conversation
+
+`POST /api/call/open` accepts `CallOpenRequest`:
+`{chat_id, client_message_id, feature?}`. The feature key names a loaded
+`register_live_conversation` registration; its explicit configuration selects
+the provider, native model, voice, duration and per-connection exposure reserve.
+The beta is off by default. Credentials alone never enable it. Admission uses
+the ordinary owner ingress and current common context. Repeating the same
+message ID rejoins its existing call; a different message ID in an active room
+is refused.
+`CallOpenResponse` returns `{call_id, ws_path, vision, joined?}`.
+Failure returns `{ok:false, code, error}` with its HTTP status.
+
+The separate `/ws/call/{call_id}` socket carries bounded JSON controls and
+binary PCM16 media. `GET /api/contract.call_socket` publishes its header,
+payload limits and control-schema names (`gateway/call_contracts.py`);
+`call_protocol.py` owns the codec. A peer first sends
+`{type:"hello", protocol:1, role:"owner", mic, speaker, rate, video?}`.
+Directions may narrow its admitted rights. `mute`, `played`, `context`,
+`participant` and `bye` are controls, never tool or owner-control authority.
+Playback acknowledgements name the item and actual played milliseconds.
+The server sends `state`, `activity`, `turn`, `caption` and `flush`.
+`caption.replace:true` replaces cumulative/revised text instead of appending it;
+`flush.epoch` invalidates older playback. A closed state carries its reason,
+detail and optional next action. The ordinary chat socket also publishes
+`conversation_finished` with `chat_id`, `call_id`, `task_id` and `reason`.
+
+The host executes native model tool calls through ordinary policy, checkpoints
+and effect custody; final captions enter canonical history with provenance and
+playback status (`spoken: {call_id, item_id, played_ms, status}`, with
+`status: played|generated|interrupted` retained on replay).
+New typed owner messages reach the same actor. Ordinary Stop,
+End, deadline, device loss or unload end the call; actual tool/socket teardown
+precedes import release. Interrupted generated speech is not labelled heard.
+Each renewed connection requires current ordinary context fit and an ordinary
+attempt reservation. Unknown modality cost retains exposure. Connection loss
+does not authorize an automatic paid retry.
+
+Companions retain `POST /call/open` and `/call/{call_id}/peer` on the Host Service.
+`X-Skill-Token` and `call_peer` grant bind the reviewed payload and media directions.
+Opening a Presence call also needs its enabled binding, source event, ceiling
+and `presence` grant. Its existing meeting protocol remains available; external
+participants' audio/context stay attributed observations, never owner messages.
+
+The feature page owns Talk in an empty Send slot, same-width Send for text/files,
+the existing call capsule and collapsed transcript. Empty Enter does not call.
+Dictation hides during a call and returns without losing the draft. Browser
+capture uses shared audio/visual leases and releases them on End, Panic,
+hidden room or contribution disposal.
+
 ### Internal realtime setup
 
 An authenticated ordinary `chat` frame may carry `execution_transport`:

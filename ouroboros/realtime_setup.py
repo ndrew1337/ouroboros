@@ -18,7 +18,8 @@ from ouroboros.extension_registry_state import (
 
 
 def input_from_context_plan(plan, *, model: str, selected_tools: list[dict],
-                            output_allowance_tokens: int, messages: list[dict] | None = None) -> RealtimeInput:
+                            output_allowance_tokens: int, messages: list[dict] | None = None,
+                            tool_reader: bool = False) -> RealtimeInput:
     """Seal a complete ordinary projection; do not select a new mode, tools or window."""
     if plan.core is None or not plan.core.memory_view_json:
         raise RealtimeSetupError("missing_memory_view", "the ordinary host capture must include MemoryViewSnapshot")
@@ -29,7 +30,7 @@ def input_from_context_plan(plan, *, model: str, selected_tools: list[dict],
         raise RealtimeSetupError("context_mode", "the host must select an ordinary context mode")
     if plan.initial_mode == "nano" and plan.nano_projection is None:
         raise RealtimeSetupError("context_mode", "the selected Nano projection is missing")
-    if plan.projection(plan.initial_mode).user_content_json is not None:
+    if plan.projection(plan.initial_mode).user_content_json is not None and not tool_reader:
         # This is the ordinary fitter's mandatory original-input reader, not an
         # optional memory link. Setup has no tool loop to fulfill that obligation.
         raise RealtimeSetupError("task_input_reader_required", "setup cannot read the required original task input")

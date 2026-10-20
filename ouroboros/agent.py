@@ -949,11 +949,15 @@ class OuroborosAgent:
     ) -> Callable[[str], Any]:
         """Keep a task's progress address stable after its worker turn ends."""
         def emit_task_progress(text: str, **kwargs: Any) -> None:
+            # A producer can attach per-row facts; the callback's frozen task
+            # provenance still wins over them after this worker changes tasks.
+            meta = dict(kwargs.pop("_progress_meta_override", None) or {})
+            meta.update(progress_meta or {})
             self._emit_progress(
                 text,
                 _task_id_override=task_id,
                 _chat_id_override=chat_id,
-                _progress_meta_override=progress_meta or {},
+                _progress_meta_override=meta,
                 _task_attempt_override=task_attempt,
                 **kwargs,
             )
@@ -1040,8 +1044,9 @@ class OuroborosAgent:
                 if isinstance(task.get("metadata"), dict)
                 else {}
             )
-            # A realtime turn drains no owner mailbox, so it is never a message reader.
-            self._accepting_owner_messages = inline_execution(task) and getattr(self, "_realtime_turn", None) is None
+            transport = getattr(self, "_realtime_turn", None)
+            self._accepting_owner_messages = inline_execution(task) and (
+                transport is None or getattr(transport, "accepts_owner_messages", False))
         authority_refusal = validate_task_authority_sources(self.env, task)
         if not authority_refusal:
             _persist_early_origin_stub(self.env.drive_root, task)
@@ -1085,7 +1090,9 @@ class OuroborosAgent:
                          "reason_code": cap_info["realtime_refusal"]}
             elif getattr(self, "_realtime_turn", None) is not None:
                 text, usage, llm_trace = self._realtime_turn.run(
-                    ctx, messages, self.tools, task=task, initial_effort=initial_effort)
+                    ctx, messages, self.tools, task=task, initial_effort=initial_effort,
+                    **({"incoming_messages": self._incoming_messages, "event_queue": self._event_queue}
+                       if getattr(self._realtime_turn, "accepts_owner_messages", False) else {}))
             elif task_type_str == "deep_self_review":
                 # Deep self-review bypasses the tool loop: review_change(subject=system,
                 # surface=system) on the row the request named, else Main (decision 3A).

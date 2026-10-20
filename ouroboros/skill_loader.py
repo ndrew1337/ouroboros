@@ -694,6 +694,8 @@ def requested_core_setting_keys(env_keys: List[str]) -> List[str]:
 
 _GRANTABLE_SKILL_PERMISSIONS = frozenset({
     "page_module",
+    "live_conversation",
+    "call_peer",
     "inject_chat",
     "presence",
     "notify_owner",
@@ -712,7 +714,7 @@ def requested_skill_permissions(
     """Return manifest-requested privileged permissions needing owner grants."""
     requested: List[str] = []
     permission_set = {str(item or "").strip() for item in (permissions or [])}
-    for permission in ("inject_chat", "presence", "notify_owner", "page_module", "context_snapshot"):
+    for permission in ("inject_chat", "presence", "notify_owner", "page_module", "context_snapshot", "live_conversation", "call_peer"):
         if permission in permission_set:
             requested.append(permission)
     if "subscribe_event" in permission_set:

@@ -33,6 +33,7 @@ class _ExtensionRegistrations:
     ui_tabs: List[str] = field(default_factory=list)
     settings_sections: List[str] = field(default_factory=list)
     realtime_providers: List[str] = field(default_factory=list)
+    conversation_features: List[str] = field(default_factory=list)
     unload_callbacks: List[Callable[[], Any]] = field(default_factory=list)
     event_subscriptions: List[str] = field(default_factory=list)
     companion_names: List[str] = field(default_factory=list)
@@ -137,6 +138,7 @@ class _StagedRegistrations:
     ui_tabs: Dict[str, Any] = field(default_factory=dict)
     settings_sections: Dict[str, Any] = field(default_factory=dict)
     realtime_providers: Dict[str, Any] = field(default_factory=dict)
+    conversation_features: Dict[str, Any] = field(default_factory=dict)
     unload_callbacks: List[Callable[[], Any]] = field(default_factory=list)
     event_subscriptions: List["_StagedEventSubscription"] = field(default_factory=list)
     companion_names: List[str] = field(default_factory=list)
@@ -194,6 +196,7 @@ _ui_tabs: Dict[str, Any] = {}          # {"<skill>:<tab_id>": tab_spec}
 # Declarative settings sections keyed like UI tabs.
 _settings_sections: Dict[str, Any] = {}
 _realtime_providers: Dict[str, Any] = {}
+_conversation_features: Dict[str, Any] = {}
 # An unloading provider loses dispatch immediately. Reload waits for its old
 # imports to drain; no concurrent generations or speculative duplex IPC.
 _retiring_imports: Dict[str, _ExtensionRegistrations] = {}
@@ -210,12 +213,13 @@ SURFACE_KINDS: Sequence[tuple[str, Dict[str, Any], str]] = (
     ("ui_tabs", _ui_tabs, "ui tab"),
     ("settings_sections", _settings_sections, "settings section"),
     ("realtime_providers", _realtime_providers, "realtime provider"),
+    ("conversation_features", _conversation_features, "conversation feature"),
 )
 
 # Dispatch surfaces: a physical call arrives on these, so each descriptor is
 # stamped with the publication that owns it. UI kinds are read as a snapshot
 # and carry no per-surface provenance.
-DISPATCH_SURFACE_KINDS = frozenset({"tools", "routes", "ws_handlers", "realtime_providers"})
+DISPATCH_SURFACE_KINDS = frozenset({"tools", "routes", "ws_handlers", "realtime_providers", "conversation_features"})
 
 
 def _lifecycle_lock_for(skill_name: str) -> threading.RLock:
@@ -422,7 +426,7 @@ def realtime_load_refusal(skill_name: str) -> str:
         if skill_name in _retiring_imports:
             return f"skill {skill_name!r} realtime operation is still closing; retry load after it ends"
         existing = _extensions.get(skill_name)
-        if existing and existing.realtime_providers:
+        if existing and (existing.realtime_providers or existing.conversation_features):
             return f"skill {skill_name!r} realtime provider is already loaded; unload it before replacement"
     return ""
 
@@ -437,12 +441,18 @@ def retire_extension_imports(skill_name: str, bundle: Optional[_ExtensionRegistr
     def release() -> None:
         with _lifecycle_lock_for(skill_name):
             purge()
-            for callback in bundle.import_release_callbacks if bundle is not None else ():
-                callback()
             with _lock:
                 if _retiring_imports.get(skill_name) is bundle:
                     _retiring_imports.pop(skill_name, None)
                 drive_root = bundle.reconcile_after_release if bundle is not None else None
+            # Import retirement is complete even if owner-state cleanup fails.
+            # Cleanup's durable tombstone remains retryable by normal maintenance.
+            for callback in bundle.import_release_callbacks if bundle is not None else ():
+                try:
+                    callback()
+                except Exception:
+                    log.warning("deferred state cleanup failed for %s; retained for retry",
+                                skill_name, exc_info=True)
         if drive_root is not None:
             from ouroboros.extension_reconcile_queue import request_extension_reconcile
 
@@ -492,6 +502,7 @@ def snapshot() -> Dict[str, Any]:
             "routes": sorted(_routes.keys()),
             "ws_handlers": sorted(_ws_handlers.keys()),
             "realtime_providers": sorted(_realtime_providers.keys()),
+            "conversation_features": sorted(_conversation_features.keys()),
             "ui_tabs": [
                 dict(copy.deepcopy(value), key=key)
                 for key, value in sorted(_ui_tabs.items())

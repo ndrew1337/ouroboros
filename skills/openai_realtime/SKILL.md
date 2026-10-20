@@ -1,18 +1,18 @@
 ---
 name: openai_realtime
-description: OpenAI Realtime session setup from the host's ordinary selected context.
+description: OpenAI native Realtime audio, images and tools over the host's ordinary selected context.
 version: 0.1.0
 type: extension
 runtime: python3
 entry: plugin.py
 plugin_api:
-  version: "2.1"
+  version: "2.2"
   capabilities: [register_realtime_provider]
 permissions: [realtime_provider, net, read_settings]
 env_from_settings: [OPENAI_API_KEY]
 ---
 
-Provides `openai_realtime:openai`, an in-process setup consumer for the host's
+Provides `openai_realtime:openai`, an in-process provider for the host's
 `RealtimeInput`. The host selects memory, roles, tools, model and output allowance.
 This package owns OpenAI's physical field layout, acknowledgement handling and
 usage mapping, and declares its route (accounting provider `openai_realtime`, the
@@ -31,7 +31,14 @@ An optional, explicit text probe requests one bounded response and runs no tools
 Response usage goes to the host recorder in host axes, beside the raw event, for
 host settlement; this package neither prices nor authorizes spending.
 
-This internal slice implements initial text-context setup and a text probe on
-the Realtime connection. It adds no UI, device capture, audio playback, live tool
-execution, renewal or conversation history writer. It is not the completed
-Live Conversation plugin or the required three-provider delivery.
+`live.py` supplies the separate Live Conversation consumer with native PCM audio,
+images, input/output captions and ordinary function calls. It uses the measured
+lossless 256000-character text-field fragmentation, retains item role/order,
+verifies setup and live item acknowledgements, and disables automatic truncation.
+Its audio response bound is the smaller of the host allowance and 4096; the
+setup-only text diagnostic above keeps its own explicit probe bound. Server VAD
+detects input; this adapter schedules responses after context/tool ACKs and
+cancels/truncates generated audio only against the host's playback clock.
+Usage retains modality evidence for ordinary accounting, without estimating an
+audio invoice from text prices. The feature owns UI and the host owns history,
+devices, tools, money and Stop. Granting a key does not enable Calls (beta).

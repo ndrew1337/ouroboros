@@ -801,6 +801,8 @@ calls and runtime behaviours:
 | `route` | The skill may call `register_route`. |
 | `tool` | The skill may call `register_tool`. |
 | `realtime_provider` | The skill may call `register_realtime_provider` (PluginAPI 2.1, in-process only). |
+| `live_conversation` | The skill may register the in-process Live Conversation feature (PluginAPI 2.2); the host retains admission, tools, memory, budget and Stop. |
+| `call_peer` | A reviewed companion may join an admitted media call through the Host Service; Presence admission still requires its binding and `presence` grant. External speech conveys no owner authority. |
 | `read_settings` | The skill may call `api.get_settings([...])`. |
 | `supervised_task` | The skill may register an in-process host-supervised async task. |
 | `companion_process` | The skill may register a manifest-declared companion subprocess supervised by the host. |
@@ -1213,13 +1215,13 @@ The frozen ABI is documented in
 This section shows the practical shape.
 
 Extensions declare the PluginAPI generation they bind against in the manifest
-(PluginAPI 2.1; declarations of 2.0 remain supported):
+(PluginAPI 2.2; declarations of 2.0 and 2.1 remain supported):
 
 ```yaml
-plugin_api: "2.1"            # major strict; minor = required minimum
+plugin_api: "2.2"            # major strict; minor = required minimum
 # or, with required capabilities (closed set, validated per execution mode):
 # plugin_api:
-#   version: "2.1"
+#   version: "2.2"
 #   capabilities: [register_tool, subscribe_event]
 ```
 
@@ -1228,7 +1230,7 @@ construction: an already-reviewed payload keeps loading on its existing
 hash-bound review PASS, but a NEW review PASS (LLM review, owner attestation,
 or an install-basis acceptance) is refused until the field is declared.
 
-`register_realtime_provider(name, async_handler, *, route)` publishes a host-only
+`register_realtime_provider(name, async_handler, *, route, session=None)` publishes a host-only
 provider under `<skill>:<name>`, through the ordinary staged registration transaction.
 `route` is a `contracts.realtime.RealtimeRoute`: the accounting provider that keys
 route evidence and the attempt ledger, the endpoint the provider opens, and the
@@ -1257,6 +1259,45 @@ chat transport choice enters ordinary direct admission and context preparation,
 publishes the source-bound preview, then waits on the same actor for an explicit
 `realtime_execute` funding command. It checks the loaded provider generation again
 before reserving one physical attempt. Providers receive no funding authority.
+
+PluginAPI 2.2 adds an optional `session` factory for a native duplex provider and
+`register_live_conversation(name, handler, *, configure)` for the feature that drives
+it. Both registrations require in-process execution and their named permission;
+per-call child catalogs refuse them. `contracts/live_conversation.py` defines
+the session's media, context, tool-result, interruption and usage events. A provider
+owns wire layout, acknowledgements, caption semantics and renewal requests. It
+declares its effective native output bound, or `None` when unknown. The host
+passes a fresh, dated exact-route maximum from `response_limits` in
+`LiveOptions.model_output_bound_tokens`; absent, stale or mismatched evidence
+supplies `None`. OpenAI live sessions encode the unchanged selected allowance
+as an integer 1–4096, otherwise `"inf"` (the model maximum). A numeric
+field supplies a bound; `"inf"` needs that separate evidence. The physical
+attempt reserves the known bound even above the selected allowance; unknown
+uses the ordinary allowance as an estimate and records no native token bound.
+Receipts retain ordinary fit, selected allowance, response-limit evidence and actual
+reserve separately. Selection measures the ordinary input; its prediction cannot
+rewrite or refuse it before the native bound exists. The complete attempt request
+carries input/window and native-output facts for shared Main fitting.
+`renewal_ready` stays false while native input or transcription work is pending.
+The feature checks that boundary beside tools, canonical rows and playback.
+At teardown, `final_captions()` returns already-received unfinished text, marked
+`incomplete`; it starts no wire work. The feature retains it as a partial transcript.
+It cannot silently drop selected input, substitute an engine, execute tools or
+reserve spending. Gemini, Grok and OpenAI have separate packages and sessions.
+
+`skills/live_conversation` is the feature consumer: it drives native audio and
+ordinary host tool batches concurrently. Its trusted page contribution uses
+`provides: conversation`, `runtime: client`, `render.kind: host`;
+`page_module` grants govern it. The authenticated
+call door admits an ordinary actor with the selected common context, canonical
+history, normal tool policy, mailbox, usage ledger and Stop. Feature configuration
+selects an explicit provider/model and positive duration/reservation limits.
+Beta defaults off; keys never enable it. Each connection is sealed and reserved
+before dispatch; renewal asks the host to measure the current ordinary context again.
+Missing modality prices remain unknown exposure. No automatic paid reconnect
+follows a socket loss. Loaded feature/provider imports remain retained through
+actual tool, history and socket teardown. Wire shapes and companion provenance:
+`CLIENT_CONTRACT.md`, “Live Conversation”.
 
 ```python
 def register(api):

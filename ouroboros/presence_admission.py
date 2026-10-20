@@ -55,6 +55,7 @@ class PresenceAdmission:
     selection_fingerprint: str
     capability_ceiling: PresenceCapabilityCeiling
     workspace_root: str = ""
+    execution: str = "event"
 
 
 def _component_error(exc: Any) -> PresenceAdmissionError:
@@ -218,6 +219,7 @@ def admit_presence_turn(
         instructions=profile.instructions,
         context_topics=profile.context_topics,
         model_slot=resolution.runtime.model_slot,
+        execution=resolution.runtime.execution,
         inline_max_rounds=resolution.runtime.inline_max_rounds,
         skill_content_hash=skill.content_hash,
         profile_fingerprint=resolution.profile_fingerprint,

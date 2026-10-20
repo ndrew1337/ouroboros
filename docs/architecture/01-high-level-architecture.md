@@ -8,8 +8,9 @@ launcher.py spawns server.py (Starlette+uvicorn) — HTTP + WebSocket on configu
 web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules not listed here (§3)
   ui.css — the shared palette/control stylesheet of the SPA, onboarding and author pages (§3 Navigation)
   modules/ — browser modules (§3)
-    media_capture.js — One page audio lease, device replacement and lifecycle release
+    media_capture.js — Shared page audio/visual leases, device replacement and lifecycle release
     speech_providers.js, voice_recorder.js, dictation.js — The page's speech hub and strict selection, bounded Opus/AAC/WAV recording, cancellable transcription and draft-insertion decisions
+    conversation_controls.js — Mounts the granted Live Conversation contribution at the composer (§13)
     voice_controls.js, dictation_chooser.js, read_aloud.js — The composer's dictation mic, "+" → Add dictation…, Read aloud on replies (DESIGN "Voice controls")
     ui_primitives.js — safe-field, escaping and tone/status helpers (§3 Navigation)
     i18n.js, settings_language.js, ui_i18n_types.js — interface language: a DOM overlay over rendered chrome from the translation memory, translated at the producer; chat prose, logs, code and owner names are never walked (§3 Settings; §7 `OUROBOROS_UI_LANGUAGE`)
@@ -40,6 +41,7 @@ web/ — Web UI, a SPA of ES modules; chapter 3 owns the pages and the modules n
     acceptance_incident_presentation.js — a stored task-acceptance incident, read-only; no reviewer authority (§6 Result review)
     widgets.js, widget_render.js, widget_module.js, widget_frame.js, widget_card.js, widget_reorder.js, widget_list.js, widget_size.js, widget_chart.js, widget_job.js, masonry.js — Widgets page leaves: host and card registry, the declarative renderer, framed mounts, card chrome, list-request policy, helpers and masonry (§3)
 skills/browser_speech/, skills/device_voice/, skills/templates/ — built-ins (`skills/builtin.json`): speech engines (ui/stt.js, ui/tts.js) and the "+" starters
+skills/live_conversation/, skills/gemini_live/, skills/grok_realtime/, skills/openai_realtime/ — Live Conversation feature and separate native providers (§13)
 supervisor/ — background thread inside server.py (§5)
   active_activity.py — process-local direct actors/call observations for `/api/state`; private reply expectation/handoff facts, no spurious queue rows (§3 Direct turns and the activity block)
   message_bus.py — local message bus for the Web UI and transport skills; re-exports the ingress names
@@ -347,6 +349,10 @@ ouroboros/ — agent core and shared runtime (§6)
   extension_isolated_deps.py — non-reentrant reader/writer leases for `sys.path`; the dependency RLock serializes importer-cache sweeps, not plugin execution
   extension_health.py — Durable process-qualified per-skill health at `data/state/skills/<name>/health.json`; server observation is authoritative, worker observation a handoff-qualified view
   extension_plugin_api.py, extension_registry_state.py, extension_liveness.py, extension_child_catalog.py, extension_import_staging.py, extension_surface_names.py — the extension runtime's leaves: the `PluginAPI`, live-surface registries, liveness, child-catalog validation, staged import trees, surface naming
+  live_conversation.py — Ordinary actor host port: common context, tools, history, money and Stop (§13)
+  realtime_session.py — Joined native socket teardown and JSON transport mechanics
+  call_peers.py, call_protocol.py — Media peers, PCM mixing and the companion codec (§12)
+  presence_call.py — Existing Presence admission/gate over the live feature (§12)
   realtime_turn.py, realtime_setup.py — admitted room turn over a realtime provider: offline preview, one funded physical attempt, joined teardown (§13)
   skill_token.py — Opaque Host Service token minting/validation (§12)
   skill_sources.py, skill_source_git.py, skill_source_catalog.py, skill_source_install.py, skill_starter.py — Sources, git caches, catalogs, install lifecycle, starter (§13)
@@ -392,6 +398,7 @@ ouroboros/ — agent core and shared runtime (§6)
     skill_manifest.py — Unified skill manifest parser (`VALID_SKILL_TYPES`: instruction|script|extension)
     schema_versions.py — Opt-in `_schema_version` stamping helpers (§11.2)
     record_contract.py — Record passport: the local ledger rows external observers may rely on (§11.1)
+    live_conversation.py — Native session events, media and host-selected input (§13)
     plugin_api.py — PluginAPI, ExtensionRegistrationError and the closed vocabularies `FORBIDDEN_SKILL_SETTINGS`, `VALID_EXTENSION_PERMISSIONS`, `VALID_EXTENSION_ROUTE_METHODS` (§11.1)
   gateways/ — Thin outbound transport adapters; no business logic
     claudexor_images.py — requestKind=image upload and whole-result ACK (docs/IMAGE_GENERATION.md)
@@ -411,6 +418,7 @@ ouroboros/ — agent core and shared runtime (§6)
     schema.py — Executable gateway contract: JSON Schema derived from the TypedDicts, validating ingress; `contract_document`: `GET /api/contract`
     router.py — Starlette route collector for /api/* and /ws (§4)
     ws.py — WS manager, extension WS dispatch off the ASGI loop, broadcast (§4 WebSocket protocol)
+    call_ws.py, host_call.py, call_contracts.py — Owner/companion call admission, shared peer parser and media contract (§12)
     realtime.py — owner chat `execution_transport` admission and `realtime_execute` funding of one waiting actor (§13)
     state.py — /api/health, /api/contract and /api/state
     reply_preparation.py — awaited replies active now, projected from existing live owners to destination chats; no store, scheduler or public census fields (§6)

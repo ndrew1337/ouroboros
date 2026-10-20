@@ -20,6 +20,7 @@ import { showToast } from './toast.js';
 import { bindComposerPlus } from './composer_plus.js';
 import { bindComposerChips } from './composer_chips.js';
 import { bindVoiceControls } from './voice_controls.js';
+import { bindConversationControls } from './conversation_controls.js';
 
 const CHAT_DRAFT_KEY = 'ouro_chat_draft';
 const CHAT_INPUT_HISTORY_KEY = 'ouro_chat_input_history';
@@ -442,6 +443,6 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
         },
     };
     const contributed = [bindComposerPlus({ composer }), bindComposerChips({ composer, menu: createPlusMenu }),
-        bindVoiceControls({ composer })];
+        bindVoiceControls({ composer }), bindConversationControls({ composer, page, chatId, ws })];
     return composer;
 }
