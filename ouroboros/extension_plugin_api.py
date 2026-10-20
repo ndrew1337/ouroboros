@@ -58,7 +58,6 @@ from ouroboros.extension_registry_state import (
     _routes,
     _realtime_providers,
     _conversation_features,
-    _retiring_imports,
     _settings_sections,
     _tools,
     _ui_tabs,
@@ -270,7 +269,7 @@ class PluginAPIImpl:
 
     def _require_open_locked(self) -> None:
         if (self._registration_closed or self._runtime_closing or self._runtime_closed
-                or self._skill in _unloading or self._skill in _retiring_imports):
+                or self._skill in _unloading):
             raise ExtensionRegistrationError(
                 f"skill {self._skill!r} cannot register after unload has started"
             )
