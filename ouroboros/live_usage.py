@@ -54,6 +54,26 @@ def _raw_body(raw: Mapping) -> Mapping:
     return raw
 
 
+def text_input_witness(usage: Mapping, raw_usage: Mapping) -> int | None:
+    """Only an explicit text modality split can calibrate selected text."""
+    text = usage.get("text_input_tokens")
+    if type(text) is not int or text <= 0:
+        return None
+    raw = _raw_body(raw_usage)
+    for key in ("input_token_details", "input_tokens_details"):
+        details = raw.get(key)
+        if isinstance(details, Mapping) and type(details.get("text_tokens")) is int and details["text_tokens"] == text:
+            return text
+    for key in ("promptTokensDetails", "prompt_tokens_details"):
+        details = raw.get(key)
+        if isinstance(details, list):
+            values = [part.get("tokenCount", part.get("token_count")) for part in details
+                      if isinstance(part, Mapping) and str(part.get("modality", "")).upper() == "TEXT"]
+            if values and all(type(value) is int and value >= 0 for value in values) and sum(values) == text:
+                return text
+    return None
+
+
 def _cached_split(counts: dict, raw: Mapping) -> dict:
     """The aggregate cache count needs a modality witness when inputs are mixed."""
     total = counts["cached_input_tokens"]

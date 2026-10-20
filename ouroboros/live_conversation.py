@@ -208,6 +208,7 @@ class ConversationHost:
         self._selected_text_estimate = self._selected_raw_estimate = 0
         self._session_instructions = ""
         self._response_text_estimates = {}
+        self._density_input = 0
         self._connection_accounting = False
         self._connection_quote = None
         self._meter_watermark = 0.0
@@ -366,7 +367,10 @@ class ConversationHost:
         key = (self.connection_number, response_id)
         if key in self.responses or key in self.completed:
             return
-        self._response_text_estimates[key] = self._text_estimate()
+        # Only the first response has the sealed selection as its known text
+        # denominator. Later native audio/transcripts must not become text input
+        # witnesses merely because their captions entered canonical history.
+        self._response_text_estimates[key], self._density_input = self._density_input, 0
         try:
             self.responses[key] = reserve_live_response(**self._response_args(response_id))
         except BudgetExceeded as exc:
@@ -391,7 +395,7 @@ class ConversationHost:
         self.completed.add(key)
         self.observe("response", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
-        self._record_text_density(key, usage)
+        self._record_text_density(key, usage, raw_usage)
         held = [usage.get(axis) for axis in ("text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens")]
         measured = 0
         if self.model.facts.basis == "estimator":
@@ -413,11 +417,13 @@ class ConversationHost:
         extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
         return text_input_estimate([*self.messages, *extra], self.schemas)
 
-    def _record_text_density(self, key, usage):
+    def _record_text_density(self, key, usage, raw_usage):
         from ouroboros.capability_evidence import record_token_density, MAIN_DENSITY_BASIS
         from ouroboros.provider_models import normalize_model_identity
-        estimate = self._response_text_estimates.pop(key, self._selected_text_estimate)
-        text = usage.get("text_input_tokens")
+        estimate = self._response_text_estimates.pop(key, self._density_input)
+        self._density_input = 0
+        from ouroboros.live_usage import text_input_witness
+        text = text_input_witness(usage, raw_usage)
         # The adapter's text axis is a modality witness; aggregate prompt usage
         # and audio/image/video axes never teach the text estimator a density.
         if (self.model.facts.basis == "provider" and estimate > 0

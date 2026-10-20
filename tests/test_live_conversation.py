@@ -331,8 +331,12 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     options = LiveOptions(instructions='Feature instructions', languages=('ru-RU', 'en-US'))
     _, cold, _ = session_candidate(host, host_world.provider['session'], options)
     assert cold.physical_context.measurement_density == 1.0
+    # A caption describes native audio; it is not an addition to selected TEXT.
+    host.messages.append({'role': 'user', 'content': 'Native audio caption ' * 300})
     host.response_started('density')
     estimate = host._response_text_estimates[(0, 'density')]
+    assert estimate == host._selected_text_estimate
+    host.messages.pop()
     host.response_done('density', usage={'text_input_tokens': estimate * 2,
         'audio_input_tokens': 99999, 'image_input_tokens': 88888, 'video_input_tokens': 77777},
         raw_usage={'input_tokens_details': {'text_tokens': estimate * 2, 'audio_tokens': 99999}}, status='completed')
@@ -345,7 +349,8 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     assert raw.physical_context.measurement_density == 1
     assert raw.prompt_tokens_estimate == raw.prompt_tokens_bounded_estimate
     host.response_started('grok')
-    host.response_done('grok', usage={'text_input_tokens': estimate * 3}, raw_usage={}, status='completed')
+    host.response_done('grok', usage={'text_input_tokens': estimate * 3},
+        raw_usage={'input_tokens_details': {'text_tokens': estimate * 3}}, status='completed')
     host.model = replace(host.model, facts=replace(host.model.facts, basis='provider'))
     host.response_started('audio-only')
     host.response_done('audio-only', usage={'audio_input_tokens': estimate * 4}, raw_usage={}, status='completed')
@@ -486,3 +491,14 @@ def test_active_call_reload_waits_and_owner_disable_cancels(host_world, monkeypa
         finally:
             release.set()
             running.result(timeout=10)
+
+
+def test_selected_text_estimator_excludes_media():
+    from ouroboros.realtime_setup import text_input_estimate
+    text = {'type': 'text', 'text': 'Selected text'}
+    def estimate(parts):
+        return text_input_estimate([{'role': 'user', 'content': parts}], [])
+    baseline = estimate([text])
+    assert estimate([text, {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + 'eA==' * 5000}},
+                     {'type': 'input_audio', 'input_audio': {'data': 'eA==' * 5000}}]) == baseline
+    assert estimate([{'type': 'text', 'text': 'More selected text ' * 100}]) > baseline

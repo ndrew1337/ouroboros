@@ -152,6 +152,7 @@ def session_candidate(host, factory, options):
         if refusal is None:
             host._session_instructions = options.instructions
             host._selected_text_estimate = text_input_estimate(rows, host.schemas)
+            host._density_input = host._selected_text_estimate
             host._selected_raw_estimate = raw
             host.plan = host.ctx.context_fit_plan = plan
             host.messages[:] = current

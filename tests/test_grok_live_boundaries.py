@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
-from tests.test_live_conversation import VoiceWire, packages  # noqa: F401
+from tests.test_live_conversation import VoiceWire, packages as packages
 from ouroboros.contracts.live_conversation import ContextUpdate, Interrupt, LiveOptions
 from ouroboros.contracts.realtime import RealtimeInput, RealtimeSetupError, canonical_json
 

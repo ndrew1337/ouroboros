@@ -69,7 +69,7 @@ def test_connected_samples_share_watermark_and_settle_before_close_ends(host_wor
         with ua.usage_scope(ua.UsageScope(drive_root=host.ctx.drive_root, task_id=host.ctx.task_id,
                                          global_limit_usd=.06 if ending == 'budget' else None)):
             await host.session(consume, LiveOptions())
-    expected = {'stop': (asyncio.CancelledError, ''), 'budget': (RealtimeSetupError, 'budget_exhausted'),
+    expected = {'stop': (asyncio.CancelledError, None), 'budget': (RealtimeSetupError, 'budget_exhausted'),
                 'close_error': (RuntimeError, 'fixture close failed')}
     if ending in expected:
         error, message = expected[ending]

@@ -108,3 +108,18 @@ def test_shared_limit_refuses_next_response_but_keeps_late_charge(quote):
             reason='budget_exhausted', usage=token_usage(audio_output_tokens=10), raw_usage={}, status='interrupted', quote=value)
     assert len(ua.read_usage_records(root)) == 2
     assert sum(r['cost_usd'] for r in ua.read_usage_records(root)) == pytest.approx(.0022)
+
+
+@pytest.mark.parametrize('raw', [
+    {'input_tokens_details': {'text_tokens': 100, 'audio_tokens': 999}},
+    {'usage': {'input_token_details': {'text_tokens': 100, 'image_tokens': 888}}},
+    {'usageMetadata': {'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 100},
+                                             {'modality': 'VIDEO', 'tokenCount': 777}]}},
+])
+def test_density_witness_requires_matching_explicit_text_modality(raw):
+    from ouroboros.live_usage import text_input_witness
+    assert text_input_witness({'text_input_tokens': 100}, raw) == 100
+    assert text_input_witness({'text_input_tokens': 101}, raw) is None
+    assert text_input_witness({'audio_input_tokens': 100}, raw) is None
+    assert text_input_witness({'text_input_tokens': 100}, {'input_tokens': 100}) is None
+    assert text_input_witness({'text_input_tokens': 100}, {}) is None
