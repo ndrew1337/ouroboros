@@ -240,6 +240,8 @@ def _chat_record(
         if meta.get("role") == "system":
             record["role"] = "system"
             record["system_type"] = str(meta.get("system_type") or "")
+        if isinstance(meta.get("host_fact"), dict) and meta["host_fact"].get("kind") == "call_open":
+            record["host_fact"] = dict(meta["host_fact"])
         if isinstance(meta.get("execution_transport"), dict):
             record["execution_transport"] = dict(meta["execution_transport"])
         if direction == "out" and task_id and record_type != "relay_entry" and "reply_to" not in meta:
@@ -612,7 +614,7 @@ def handle_web_message(
     ts = utc_now_iso()
     message_id = client_message_id or f"web-{uuid.uuid4().hex}"
     metadata = dict(task_metadata or {})
-    host_fact = metadata.get("host_fact") or {}
+    host_fact = metadata.get("host_fact") or {}  # host call admission; browser ingress constructs its own metadata
     call_open = isinstance(host_fact, dict) and host_fact.get("kind") == "call_open"
     reply = ingress_reply(bus.DATA_DIR, metadata)
     if reply:  # the obligation of a fresh acceptance replays the same reference
@@ -644,7 +646,8 @@ def handle_web_message(
                 client_surface=(metadata.get("client_surface") if isinstance(metadata.get("client_surface"), dict) else None),
                 message_meta={"attachments": attachments, "text_placeholder": placeholder, "reply_to": reply,
                               "execution_transport": metadata.get("execution_transport"),
-                              **({"role": "system", "system_type": "call_open"} if call_open else {})},
+                              **({"role": "system", "system_type": "call_open", "host_fact": dict(host_fact)}
+                                 if call_open else {})},
                 dispatch=obligation(name, clean_text, message))
             row, fresh = receipt.row, not receipt.duplicate
         if fresh:
