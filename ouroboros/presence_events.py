@@ -86,5 +86,3 @@ def presence_turn_event(payload: Any, admission: PresenceAdmission, *,
         validate_transport_queue(event.conversation["transport_queue"], event.conversation_key,
                                  event.source_event_id)
     return event
-
-

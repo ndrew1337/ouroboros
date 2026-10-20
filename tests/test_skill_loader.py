@@ -12,14 +12,6 @@ import pathlib
 
 import pytest
 
-
-def test_voice_permissions_are_requested_only_when_declared():
-    from ouroboros.skill_loader import requested_skill_permissions
-
-    assert requested_skill_permissions(["call_peer", "live_conversation", "call_peer"]) == [
-        "live_conversation", "call_peer"]
-    assert requested_skill_permissions([]) == []
-
 from ouroboros.skill_loader import (
     LoadedSkill,
     SkillReviewState,
@@ -41,6 +33,14 @@ from ouroboros.skill_loader import (
     skill_state_dir,
     summarize_skills,
 )
+
+
+def test_voice_permissions_are_requested_only_when_declared():
+    from ouroboros.skill_loader import requested_skill_permissions
+
+    assert requested_skill_permissions(["call_peer", "live_conversation", "call_peer"]) == [
+        "live_conversation", "call_peer"]
+    assert requested_skill_permissions([]) == []
 
 
 def _write_skill(

@@ -62,5 +62,3 @@ def test_call_open_rendering_never_attributes_host_text_to_the_owner(monkeypatch
         [row] = json.loads(response.body)["messages"]
         assert row["role"] == ("system" if call_open else "user")
         assert row["system_type"] == ("call_open" if call_open else "")
-
-
