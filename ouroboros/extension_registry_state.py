@@ -64,12 +64,8 @@ class _ExtensionRegistrations:
     # over small current control files, never rehash the publisher's payload.
     loaded_skill: Any = None
     context_snapshot: Optional[Dict[str, str]] = None
-    # A realtime operation owns imports until its coroutine AND teardown return.
-    import_users: int = 0
-    release_imports_when_idle: Optional[Callable[[], Any]] = None
-    import_release_callbacks: List[Callable[[], Any]] = field(default_factory=list)
-    # A reconcile that met those imports draining runs again once they release.
-    reconcile_after_release: Optional[pathlib.Path] = None
+    # Only scoped call work blocks automatic replacement; background tasks do not.
+    active_call_work: int = 0
 
 
 @dataclass
@@ -197,9 +193,6 @@ _ui_tabs: Dict[str, Any] = {}          # {"<skill>:<tab_id>": tab_spec}
 _settings_sections: Dict[str, Any] = {}
 _realtime_providers: Dict[str, Any] = {}
 _conversation_features: Dict[str, Any] = {}
-# An unloading provider loses dispatch immediately. Reload waits for its old
-# imports to drain; no concurrent generations or speculative duplex IPC.
-_retiring_imports: Dict[str, _ExtensionRegistrations] = {}
 
 # The surface kinds, each naming the field that carries it on a staged
 # snapshot AND on a published bundle, its live registry, and the word used in
@@ -390,105 +383,41 @@ def _record_companion_name(bundle: _ExtensionRegistrations, name: str) -> None:
 
 
 @contextmanager
-def extension_work_scope(spec: Dict[str, Any], work: Any, *, retain_imports: bool = False):
-    """Attach cancellable work to the exact publication already owning dispatch."""
+def extension_work_scope(spec: Dict[str, Any], work: Any):
+    """Attach cancellable call work to its publication, excluding automatic replacement.
+
+    Owner unload still cancels without joining teardown; a late relative import
+    in that teardown can fail after the package has been removed.
+    """
     from ouroboros.contracts.plugin_api import ExtensionRegistrationError
 
     name = str(spec.get("skill") or "")
     generation = str(spec.get("extension_generation") or "")
-    with _lock:
+    # Loading and admission share this short entry fence. The call itself never
+    # holds the lifecycle lock, so an owner's disable remains immediate.
+    with _lifecycle_lock_for(name), _lock:
         bundle = _extensions.get(name)
         if bundle is None or name in _unloading or bundle.generation_digest != generation:
             raise ExtensionRegistrationError("extension generation changed before response dispatch")
         bundle.supervised_futures.append(work)
-        if retain_imports:
-            bundle.import_users += 1
+        bundle.active_call_work += 1
     try:
         yield
     finally:
         with _lock:
-            # Captured bundle identity: completing old work cannot detach a new
-            # generation's resource after unload/reload replaced the registry row.
+            # Captured identity: finishing old work never changes a replacement.
             bundle.supervised_futures[:] = [item for item in bundle.supervised_futures if item is not work]
-            release = None
-            if retain_imports:
-                bundle.import_users -= 1
-                if not bundle.import_users:
-                    release = bundle.release_imports_when_idle
-                    bundle.release_imports_when_idle = None
-        if release is not None:
-            release()
+            bundle.active_call_work -= 1
 
 
 def realtime_load_refusal(skill_name: str) -> str:
-    """Why a realtime provider package cannot load now, or ``""`` when it can."""
+    """Typed automatic-replacement refusal; an idle publication remains replaceable."""
     with _lock:
-        if skill_name in _retiring_imports:
-            return f"skill {skill_name!r} realtime operation is still closing; retry load after it ends"
-        existing = _extensions.get(skill_name)
-        if existing and (existing.realtime_providers or existing.conversation_features):
-            return f"skill {skill_name!r} realtime provider is already loaded; unload it before replacement"
+        bundle = _extensions.get(skill_name)
+        if (bundle and (bundle.realtime_providers or bundle.conversation_features)
+                and bundle.active_call_work):
+            return "live_call_active"
     return ""
-
-
-def retire_extension_imports(skill_name: str, bundle: Optional[_ExtensionRegistrations],
-                             purge: Callable[[], Any]) -> None:
-    """Purge an unloaded publication's imports now, or when its last import user exits.
-
-    A reconcile that met them in use is queued again on the server's ordinary
-    reconcile queue; the wait is never recorded as a load failure.
-    """
-    def release() -> None:
-        with _lifecycle_lock_for(skill_name):
-            purge()
-            with _lock:
-                if _retiring_imports.get(skill_name) is bundle:
-                    _retiring_imports.pop(skill_name, None)
-                drive_root = bundle.reconcile_after_release if bundle is not None else None
-            # Import retirement is complete even if owner-state cleanup fails.
-            # Cleanup's durable tombstone remains retryable by normal maintenance.
-            for callback in bundle.import_release_callbacks if bundle is not None else ():
-                try:
-                    callback()
-                except Exception:
-                    log.warning("deferred state cleanup failed for %s; retained for retry",
-                                skill_name, exc_info=True)
-        if drive_root is not None:
-            from ouroboros.extension_reconcile_queue import request_extension_reconcile
-
-            try:
-                request_extension_reconcile(drive_root, skill_name, reason="imports_released", source="server")
-            except Exception:  # its health keeps the typed wait; the next reconcile loads it
-                log.warning("could not queue the reconcile of %s after its imports released", skill_name,
-                            exc_info=True)
-
-    with _lock:
-        deferred = bool(bundle and bundle.import_users)
-        if deferred:
-            bundle.release_imports_when_idle = release
-    if not deferred:
-        release()
-
-
-def after_extension_imports_release(skill_name: str, callback: Callable[[], Any]) -> bool:
-    """Run cleanup under the lifecycle lock, after actual import release; True if deferred."""
-    with _lifecycle_lock_for(skill_name):
-        with _lock:
-            bundle = _retiring_imports.get(skill_name)
-            if bundle is not None:
-                bundle.import_release_callbacks.append(callback)
-                return True
-        callback()
-        return False
-
-
-def defer_reconcile_until_imports_release(skill_name: str, drive_root: pathlib.Path) -> bool:
-    """True while an unloaded publication still owns imports; their release reconciles again."""
-    with _lock:
-        bundle = _retiring_imports.get(skill_name)
-        if bundle is not None:
-            bundle.reconcile_after_release = pathlib.Path(drive_root)
-        return bundle is not None
 
 
 def snapshot() -> Dict[str, Any]:

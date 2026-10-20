@@ -10,7 +10,7 @@ history, not payload state) and the tombstone itself. A reinstall self-heals:
 the sweep sees a live payload and retires the tombstone instead of sweeping.
 
 Explicit local deletion also lives here. Unlike marketplace uninstall, it
-removes the entire state directory under the owner's specific delete action, after active imports release.
+removes the entire state directory under the owner's specific delete action.
 ``removal_action`` is the one rule both removers admit by; the listing serializes it
 as ``removal`` and the Skills card renders exactly that, never its own derivation.
 """
@@ -24,7 +24,7 @@ from typing import Any, Dict
 
 from ouroboros.contracts.schema_versions import with_schema_version
 from ouroboros.marketplace.provenance import PUBLICATION_FILENAME
-from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
+from ouroboros.utils import atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +56,7 @@ def delete_local_skill(
     """Delete the exact local external payload after host action admission; the path, symlink
     and same-name checks are rmtree safety, not eligibility (``removal_action`` is)."""
     from ouroboros import extension_loader
-    from ouroboros.extension_registry_state import _lifecycle_lock_for, after_extension_imports_release
+    from ouroboros.extension_registry_state import _lifecycle_lock_for
     from ouroboros.skill_install_record import read_install_record
     from ouroboros.skill_loader import discover_skills
 
@@ -89,13 +89,8 @@ def delete_local_skill(
         extension_loader.unload_extension(loaded.name)
         shutil.rmtree(payload_dir)
         had_state = state_dir.exists()
-        write_uninstall_tombstone(drive, loaded.name, source=loaded.source)
-        tombstone = state_dir / UNINSTALL_TOMBSTONE_FILENAME
-        atomic_write_json(tombstone, {**read_json_dict(tombstone), "delete_state": True,
-                                     "repo_path": str(repo_path or "")})
-        after_extension_imports_release(
-            loaded.name, lambda: finish_local_skill_delete(drive, loaded.name))
-        pending = tombstone.exists()
+        if had_state:
+            shutil.rmtree(state_dir)
         deleted_state = had_state and not state_dir.exists()
     from ouroboros.extension_reconcile_queue import announce_extension_state_change
     announce_extension_state_change(drive, loaded.name, reason="deleted")
@@ -105,67 +100,14 @@ def delete_local_skill(
         sync_skill_schedules(discover_skills(drive, repo_path=repo_path), drive_root=drive)
     except Exception:
         log.debug("local skill delete schedule sync failed", exc_info=True)
-    if payload_dir.exists() or (state_dir.exists() and not pending):
+    if payload_dir.exists() or state_dir.exists():
         return refuse(f"failed to fully delete local skill {loaded.name!r}", 500)
     return {
         "ok": True, "skill": loaded.name, "source": loaded.source,
         "content_hash": loaded.content_hash, "deleted_payload_root": requested_root,
-        "deleted_state": deleted_state, "state_delete_pending": pending, "extension_action": "extension_unloaded",
+        "deleted_state": deleted_state, "extension_action": "extension_unloaded",
         "extension_reason": "deleted",
     }
-
-
-def finish_local_skill_delete(drive_root: pathlib.Path, name: str) -> bool:
-    """Retry an explicit deletion using the shared staging owner and tombstone.
-
-    False means retained (active peer imports or a filesystem error). A same-name
-    installation in ANY source retires the old request and preserves its state.
-    """
-    from ouroboros.extension_import_staging import extension_cache_lock, import_trees_in_use
-    from ouroboros.skill_loader import discover_skills
-
-    drive = pathlib.Path(drive_root)
-    state = drive / "state" / "skills" / name
-    mark = state / UNINSTALL_TOMBSTONE_FILENAME
-    record = read_json_dict(mark) or {}
-    if not record.get("delete_state"):
-        return False
-    try:
-        with extension_cache_lock(state, "imports"):
-            record = read_json_dict(mark) or {}
-            if not record.get("delete_state"):
-                return False
-            installed = any(item.name == name for item in discover_skills(
-                drive, repo_path=record.get("repo_path", "")))
-            # Also protect an installation still copying its manifest.
-            installing = any((drive / "skills" / bucket / name).exists()
-                             for bucket in ("native", "external", "ouroboroshub"))
-            if installed or installing:
-                mark.unlink(missing_ok=True)
-                return True
-            if import_trees_in_use(state):
-                return False
-            # Remove the retry authority last. A failed rmtree remains retryable.
-            for entry in state.iterdir():
-                if entry == mark:
-                    continue
-                if entry.is_dir() and not entry.is_symlink():
-                    shutil.rmtree(entry)
-                else:
-                    entry.unlink()
-            mark.unlink()
-            state.rmdir()
-            return True
-    except Exception:
-        if state.exists() and not mark.exists():
-            # rmdir can fail after unlinking the last mark (for example a
-            # concurrently created diagnostic file). Keep retry authority.
-            try:
-                atomic_write_json(mark, record)
-            except Exception:
-                log.warning("could not retain deletion tombstone for %s", name, exc_info=True)
-        log.warning("local skill state deletion pending for %s", name, exc_info=True)
-        return False
 
 
 def write_uninstall_tombstone(drive_root: pathlib.Path, name: str, *, source: str) -> None:
@@ -193,7 +135,7 @@ def sweep_uninstalled_skill_state(drive_root: pathlib.Path) -> Dict[str, Any]:
     """
     from ouroboros.skill_loader import find_skill
 
-    report: Dict[str, Any] = {"swept": [], "restored": [], "errors": [], "pending": []}
+    report: Dict[str, Any] = {"swept": [], "restored": [], "errors": []}
     state_root = pathlib.Path(drive_root) / "state" / "skills"
     try:
         state_dirs = sorted(p for p in state_root.iterdir() if p.is_dir())
@@ -204,12 +146,6 @@ def sweep_uninstalled_skill_state(drive_root: pathlib.Path) -> Dict[str, Any]:
         if not tombstone.exists():
             continue
         name = state_dir.name
-        if read_json_dict(tombstone).get("delete_state"):
-            if finish_local_skill_delete(drive_root, name):
-                report["restored" if state_dir.exists() else "swept"].append(name)
-            else:
-                report["pending"].append(name)
-            continue
         try:
             live = find_skill(pathlib.Path(drive_root), name) is not None
         except Exception:

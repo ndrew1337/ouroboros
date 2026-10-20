@@ -100,9 +100,7 @@ def extension_import_identity(skill: LoadedSkill) -> str:
 def extension_cache_lock(state_dir: pathlib.Path, purpose: str):
     from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
 
-    # Import ownership also gates deletion of the state directory itself. Its
-    # lock must survive that deletion, so new acquirers cannot lock a new inode
-    # while the old owner is removing the shared tree.
+    # Keep the cache lock beside state so deleting a skill cannot replace its inode.
     path = (state_dir.parent / f".{state_dir.name}-extension-imports.lock"
             if purpose == "imports" else state_dir / f".extension-{purpose}.lock")
     fd = acquire_exclusive_file_lock(path, timeout_sec=30, owner_aware_stale=True)
@@ -153,39 +151,6 @@ def release_extension_import_tree(import_root: pathlib.Path) -> None:
             (import_root / "owners" / str(os.getpid())).unlink(missing_ok=True)
     else:
         shutil.rmtree(import_root, ignore_errors=True)
-    # A worker may have requested deletion while this server owned the tree.
-    # The existing uninstall tombstone carries the retry, not a process-local
-    # callback or a second cleanup registry.
-    from ouroboros.skill_uninstall_state import finish_local_skill_delete
-
-    state_dir = import_root.parent.parent
-    finish_local_skill_delete(state_dir.parents[2], state_dir.name)
-
-
-def import_trees_in_use(state_dir: pathlib.Path) -> bool:
-    """Read PID references while the caller holds the imports cache lock.
-
-    Completed content trees use owners/, not their historical copying PID.
-    Incomplete and legacy trees retain the conservative PID/grace rule.
-    """
-    from ouroboros.platform_layer import pid_is_alive
-
-    root = state_dir / "__extension_imports"
-    if not root.exists():
-        return False
-    for tree in root.iterdir():
-        if not tree.is_dir():
-            continue
-        if tree.name.startswith("sha256-") and (tree / "complete.json").is_file():
-            for owner in (tree / "owners").iterdir():
-                if not owner.name.isdigit() or pid_is_alive(int(owner.name)):
-                    return True
-        else:
-            pid = tree.name.split("-", 1)[0]
-            if (not pid.isdigit() or pid_is_alive(int(pid))
-                    or time.time() - tree.stat().st_mtime < _IMPORT_SWEEP_GRACE_SEC):
-                return True
-    return False
 
 
 def declared_catalog_inputs(skill: LoadedSkill) -> dict | None:

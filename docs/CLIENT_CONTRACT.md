@@ -304,8 +304,8 @@ and effect custody; final captions enter canonical history with provenance and
 playback status (`spoken: {call_id, item_id, played_ms, status}`, with
 `status: played|generated|interrupted` retained on replay).
 New typed owner messages reach the same actor. Ordinary Stop,
-End, deadline, device loss or unload end the call; actual tool/socket teardown
-precedes import release. Interrupted generated speech is not labelled heard.
+End, device loss or owner disable end the call. Automatic skill replacement
+waits while a call is live; unload cancels without joining teardown. Interrupted generated speech is not labelled heard.
 Each renewed connection requires current ordinary context fit and an ordinary
 attempt reservation. Unknown modality cost retains exposure. Connection loss
 does not authorize an automatic paid retry.
