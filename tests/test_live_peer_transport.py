@@ -113,8 +113,9 @@ def test_call_event_uses_ordinary_presence_binding_and_history_identity():
         presence_turn_event({**payload, "actor": {}}, admission)
 
 
-def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path):
-    """The #2082 required inbound wait also applies to finalized meeting speech."""
+@pytest.mark.parametrize("direction", ["in", "out"])
+def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path, direction):
+    """The #2082 required wait covers both heard and spoken meeting captions."""
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from ouroboros import dialogue_store
@@ -128,6 +129,7 @@ def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path
         "event": {"source_event_id": "join", "provider": "synthetic", "account_id": "account",
                   "conversation_id": "room", "thread_id": "thread", "conversation_key": key,
                   "actor": {"display_name": "Meeting"}, "conversation": {}, "message": {}}}}}
+    task["metadata"]["execution_transport"] = {"kind": "live_conversation"}
     dialogue_store.append(tmp_path, "progress", {"text": "warm"})
     holding, release, writing = threading.Event(), threading.Event(), threading.Event()
 
@@ -138,7 +140,7 @@ def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path
 
     def record():
         writing.set()
-        return record_call_utterance(tmp_path, task, direction="in", text="Participant spoke.", utterance_id="one")
+        return record_call_utterance(tmp_path, task, direction=direction, text="Caption under contention.", utterance_id="one")
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         holder = pool.submit(hold)
@@ -152,8 +154,33 @@ def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path
             release.set()
         holder.result(5)
         assert saved.result(5)
-    # Replaying after contention has ended still keeps just one exact utterance.
-    assert record()
+    # Inbound replay rejoins the same accepted utterance.
+    if direction == "in":
+        assert record()
     [row] = chat_rows(tmp_path)
-    assert row["text"] == "Participant spoke." and row["sender_label"] == "meeting audio"
-    assert row["client_message_id"] == "join:heard:one"
+    assert row["text"] == "Caption under contention." and row["direction"] == direction
+    assert row["sender_label"] == ("meeting audio" if direction == "in" else "Meeting")
+    assert row["client_message_id"] == f"join:{'heard' if direction == 'in' else 'spoken'}:one"
+    assert row["chat_id"] == task["chat_id"] and row["task_id"] == task["id"]
+
+
+@pytest.mark.parametrize("direction", ["in", "out"])
+@pytest.mark.parametrize("live", [False, True])
+def test_presence_caption_requires_storage_for_calls_but_keeps_text_reply_best_effort(tmp_path, monkeypatch,
+                                                                                    direction, live):
+    from ouroboros import dialogue_store
+    from ouroboros.presence_call import record_call_utterance
+
+    task = {"id": "synthetic-call", "chat_id": 12, "metadata": {"presence": {
+        "binding_id": "binding", "event": {"source_event_id": "join", "provider": "synthetic",
+        "account_id": "account", "conversation_id": "room", "thread_id": "", "conversation_key": "room"}}}}
+    if live:
+        task["metadata"]["execution_transport"] = {"kind": "live_conversation"}
+    quiet = []
+    def unavailable(*args, **kwargs):
+        raise OSError("synthetic unavailable store")
+    monkeypatch.setattr(dialogue_store, "append", unavailable)
+    monkeypatch.setattr(dialogue_store, "append_quietly", lambda *args: quiet.append(args))
+    best_effort = direction == "out" and not live
+    assert record_call_utterance(tmp_path, task, direction=direction, text="Caption", utterance_id="one") is best_effort
+    assert bool(quiet) is best_effort

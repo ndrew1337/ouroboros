@@ -1013,15 +1013,16 @@ def _log_dialogue(
             SimpleNamespace(drive_root=drive_root, task_id=task_id), "presence-event",
             json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"), "json")
     from ouroboros import dialogue_store
-    # The inbound row is a named acceptance (a re-run rejoins the row it landed) and required: it waits for
-    # the store, and a turn whose row cannot be written fails before the model runs (the transport retries).
-    if direction != "in":
+    # Inbound acceptance and both live-call captions require storage before acknowledging the row.
+    # Ordinary text replies keep the best-effort retry buffer.
+    live = (task.get("metadata", {}).get("execution_transport") or {}).get("kind") == "live_conversation"
+    if direction != "in" and not live:
         dialogue_store.append_quietly(drive_root, "chat", row)  # the reply: best effort, retry buffer
         return
     try:
         dialogue_store.append(drive_root, "chat", row)
     except (StoreError, OSError, ValueError) as exc:
-        log.warning("Presence inbound row not stored in %s", drive_root, exc_info=True)
+        log.warning("Presence %s row not stored in %s", direction, drive_root, exc_info=True)
         raise PresenceTurnError("chat_log_unwritable", "chat") from exc
 
 
