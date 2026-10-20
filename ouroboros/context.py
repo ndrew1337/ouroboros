@@ -21,6 +21,7 @@ from ouroboros.context_fit import (
     ContextCore as _ContextCore,
 )
 from ouroboros.context_fit import (
+    PATTERN_REGISTER_POINTER,
     ContextFitPlan,
     resolve_context_fit_route,
 )
@@ -632,7 +633,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
         # Absent when none exists, so an ordinary Runtime block stays byte-identical.
         if candidates := body_candidate.context_fact(str(task.get("root_task_id") or task.get("id") or "")):
             runtime_data["body_candidates"] = candidates
-    out = "## Runtime context\n\n" + json.dumps(runtime_data, ensure_ascii=False, indent=2)
+    out = "## Runtime context\n\n" + json.dumps(runtime_data, ensure_ascii=False, separators=(",", ":"))
     if declared:
         return out
     try:
@@ -675,6 +676,7 @@ def build_knowledge_sections(
     warn_large: bool = False,
     pattern_header: str = "## Known error patterns (Pattern Register)",
     include_pattern_body: bool = True,
+    pattern_section_out: Optional[List[str]] = None,
 ) -> List[str]:
     sections: List[str] = []
     # One mind keeps its authored common orientation across rooms. The generated
@@ -720,8 +722,10 @@ def build_knowledge_sections(
         text = safe_read(env.drive_path("memory/knowledge/patterns.md"))
         if text.strip():
             sections.append(f"{pattern_header}\n\n{text}")
+            if pattern_section_out is not None:  # the captured section a Nano rendering replaces
+                pattern_section_out.append(sections[-1])
     if not include_pattern_body:
-        sections.append("Pattern Register details: knowledge_read(topic='patterns', scope='global').")
+        sections.append(PATTERN_REGISTER_POINTER)
     if pid:
         # Bounded per-project journal tail + workpad (multi-project, v6.32.0):
         # the project's durable progress memory rides along with its knowledge.
@@ -1318,8 +1322,9 @@ def _capture_context_core(
     semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable"))
     # Knowledge leads the changing block (its edits never cost the cached story) and
     # rides only where the view holds it: a child or nanny reads it by knowledge_read.
-    head_parts = (build_knowledge_sections(context_env, project_id=resolve_project_id(task),
-                                           include_pattern_body=not is_child) if view_spec.knowledge else [])
+    pattern_section: List[str] = []
+    head_parts = (build_knowledge_sections(context_env, project_id=resolve_project_id(task), include_pattern_body=not is_child,
+                                           pattern_section_out=pattern_section) if view_spec.knowledge else [])
     if design_nav:
         head_parts.append(design_nav)
 
@@ -1445,6 +1450,7 @@ def _capture_context_core(
         reference_book_errors=tuple(book_errors),
         compact_reference_docs=is_child,
         dynamic_head_text="\n\n".join(head_parts),
+        pattern_register_text="".join(pattern_section),
         memory_view_json=view_json,
         supplementary_messages_json=json.dumps(supplementary_messages, ensure_ascii=False, sort_keys=True),
     )

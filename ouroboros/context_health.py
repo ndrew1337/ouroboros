@@ -274,22 +274,30 @@ def _foreign_owner(run: Any, task_id: str) -> str:
     return str(run.task_id) if task_id and run.task_id and task_id != run.task_id else ""
 
 
+# The authority rule every ``_foreign_work_line`` shares, stated once before those lines.
+_FOREIGN_WORK_RULE = (
+    "INFO: ANOTHER TASK'S DELEGATED WORK — the rule for each such line that follows: Only the owner reads "
+    "and acknowledges its results and decides its patches while it lives; once it is terminal, a live "
+    "top-level task may reject them from any root or apply them from the recorded target or a fresh payload "
+    "binding (integrate_delegated_patch; the disposition row records who acted).")
+
+
 def _foreign_work_line(owner: str, work: Dict[str, List[str]]) -> str:
     """Another task's delegated obligations as ONE line (owner decision Q3=A, 18.10.2026).
 
     D7 keeps them visible to every reader, but only their owner reads and acknowledges its results, and
     decides its patches while it lives; a copy of every run's line in every task's context was most of
     the Health section (17.10: 223 lines, ~110k characters, nearly all about other tasks). The reader
-    sees each owner once: the counts, the run ids, the authority rule and the owner's record, which
-    any task can read (a run's own reader resolves only in its owner's lineage).
+    sees each owner once: the run ids and the owner's record, which any task can read (a run's own
+    reader resolves only in its owner's lineage). The authority rule is the same for every owner, so
+    ``_FOREIGN_WORK_RULE`` states it once before these lines; a copy in each was the next bulk
+    (20.10: 258 owners, 76k of the section's 128k characters).
     """
     parts = [f"{label}: {', '.join(work[key])}" for key, label in (
         ("unread", "results not read to EOF"), ("patches", "patches awaiting apply/reject")) if work[key]]
     line = (f"{'WARNING' if work['patches'] else 'INFO'}: ANOTHER TASK'S DELEGATED WORK — owner task {owner}: "
-            + "; ".join(parts) + ". Only the owner reads and acknowledges its results and decides its patches "
-            "while it lives; once it is terminal, a live top-level task may reject them from any root or apply "
-            "them from the recorded target or a fresh payload binding (integrate_delegated_patch; the disposition "
-            f"row records who acted). The owner's record: query_data(op='json', kind='task_result', ids=['{owner}']).")
+            + "; ".join(parts)
+            + f". The owner's record: query_data(op='json', kind='task_result', ids=['{owner}']).")
     if work["yours"]:
         run_id = work["yours"][0] if len(work["yours"]) == 1 else "<run_id>"
         line += (f" Your active root matches the target of {', '.join(work['yours'])}: once the owner is terminal, "
@@ -365,8 +373,9 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
     ownership: they stay globally visible (owner doctrine D7 — a
     preserved-and-invisible result is how work rots on disk), the OWNER task
     receives each run's line with its call-shaped instruction, and another
-    task's runs fold into ONE line per owner task with their run ids, the
-    authority rule and a run's exact reader (owner decision Q3=A, 18.10.2026).
+    task's runs fold into ONE line per owner task with their run ids and the
+    owner's exact reader (owner decision Q3=A, 18.10.2026), after the authority
+    rule stated once for all of them.
     Empty ``task_id`` (legacy callers) keeps every line call-shaped — an
     unattributed reader may be the owner.
 
@@ -589,6 +598,8 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
             )
     except Exception:
         pass
+    if foreign:
+        checks.append(_FOREIGN_WORK_RULE)
     checks.extend(_foreign_work_line(owner, work) for owner, work in foreign.items())
 
     try:

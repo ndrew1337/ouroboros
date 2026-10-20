@@ -451,6 +451,14 @@ class TestRuntimeEnvSection:
         data = json.loads(section.split("## Runtime context\n\n", 1)[1])
         assert "owner_client" not in data
 
+    def test_the_block_is_compact_json_with_the_same_values(self, tmp_path):
+        """No indentation or separator spaces (20.10.2026): the same values, about a fifth fewer tokens."""
+        from ouroboros.context import build_runtime_section
+
+        section = build_runtime_section(self._make_env(tmp_path), {"id": "t8", "type": "task"})
+        body = section.split("## Runtime context\n\n", 1)[1]
+        assert body == json.dumps(json.loads(body), ensure_ascii=False, separators=(",", ":"))
+
 
 def _delegation_data_root(tmp_path, monkeypatch):
     root = tmp_path / "delegation_data_root"
@@ -613,7 +621,8 @@ def test_captured_recent_and_drive_sections_carry_one_capture_label(tmp_path, mo
     assert "## Drive state\n" + label in dynamic
     # The chat row is the memory view's (the open conversation): no capture-labelled chat tail.
     assert "## Recent chat" not in dynamic and "] hello" in dynamic.split("## This room (Main)", 1)[1]
-    assert '"context_captured_at": "2027-01-15T12:00:00+00:00"' in dynamic
+    runtime = json.loads(dynamic.split("## Runtime context\n\n", 1)[1].split("\n\n## ", 1)[0])
+    assert runtime["context_captured_at"] == "2027-01-15T12:00:00+00:00"
     headings = [line for line in dynamic.splitlines() if line.startswith(("## Recent ", "## Drive state"))]
     assert headings and all(dynamic.split(heading + "\n", 1)[1].startswith(label) for heading in headings)
     assert "## Runtime context\n" + label not in dynamic  # labels are for the captured snapshots only

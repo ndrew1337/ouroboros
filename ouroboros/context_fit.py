@@ -306,6 +306,9 @@ class ContextCore:
     reference_book_errors: Tuple[str, ...] = ()
     # Knowledge (overview, index, patterns, project journal) leading the changing block.
     dynamic_head_text: str = ""
+    # The Pattern Register section as captured in ``dynamic_head_text``: Max, Low and every
+    # later route render it; Nano renders PATTERN_REGISTER_POINTER in its place (owner, 2026-10-20).
+    pattern_register_text: str = ""
     # The captured memory view (``memory_view.snapshot_json``); each projection renders
     # it for its own mode and window. Empty: no memory view (a declared-input child).
     memory_view_json: str = ""
@@ -326,7 +329,7 @@ def _render_context_system_content(
     ``story`` and ``room`` are the memory view rendered for this projection's mode and
     window (``memory_floor.mode_views``); empty without a view.
     """
-    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room)
+    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode)
 
 
 def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, ...]:
@@ -349,13 +352,21 @@ def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, 
     return ("\n\n".join(static_parts), development)
 
 
-def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "") -> List[Dict[str, Any]]:
+# The Pattern Register's reader where a context carries no register body: a child's, and Nano's.
+PATTERN_REGISTER_POINTER = "Pattern Register details: knowledge_read(topic='patterns', scope='global')."
+
+
+def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "",
+                   mode: str = "") -> List[Dict[str, Any]]:
     # All stable items precede C, including D only when the captured core calls
     # for the full handbook. Never create an empty cache boundary.
     stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, story) if part))
+    head = core.dynamic_head_text  # Nano shows the register's reader; the core keeps the captured body
+    if mode == "nano" and core.pattern_register_text and head.count(core.pattern_register_text) == 1:
+        head = head.replace(core.pattern_register_text, PATTERN_REGISTER_POINTER)
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [
-        {"type": "text", "text": "\n\n".join(part for part in (core.dynamic_head_text, room, core.dynamic_text) if part)},
+        {"type": "text", "text": "\n\n".join(part for part in (head, room, core.dynamic_text) if part)},
     ]
 
 
@@ -805,20 +816,20 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
     """
     form = {mode: "low" if core.compact_reference_docs or mode == "nano" else mode for mode in ("max", "low", "nano")}
     if not core.memory_view_json:
-        return {mode: (_system_blocks(core, governance[form[mode]]), {}) for mode in form}, start or preferred
+        return {mode: (_system_blocks(core, governance[form[mode]], mode=mode), {}) for mode in form}, start or preferred
     from ouroboros import memory_floor
     from ouroboros.memory_view import snapshot_from_json
     from ouroboros.tool_policy import select_tool_schemas
     names = [schema["function"]["name"] for schema in tool_schemas or []] if resident else None
     sent = {mode: select_tool_schemas(tool_schemas or [], context_mode=mode, schema_names=names) for mode in form}
-    fixed = {mode: _request_tokens(_system_blocks(core, governance[form[mode]]), user_content_json,
+    fixed = {mode: _request_tokens(_system_blocks(core, governance[form[mode]], mode=mode), user_content_json,
                 supplementary_messages_json=core.supplementary_messages_json, current_messages=current_messages)
              + tool_schema_tokens(list(sent[mode].schemas)) for mode in form}
     views, start = memory_floor.mode_views(snapshot_from_json(core.memory_view_json), preferred=preferred, start=start,
         fixed_tokens_by_mode=fixed, tool_names=None if tool_schemas is None else {m: sent[m].chosen for m in form},
         window_tokens=window_tokens, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
         allow_mode_lowering=preferred != "max" or start in {"low", "nano"}, kept=kept, saving=saving, select=select)
-    return {mode: (_system_blocks(core, governance[form[mode]], story, room), receipt)
+    return {mode: (_system_blocks(core, governance[form[mode]], story, room, mode), receipt)
             for mode, (story, room, receipt) in views.items()}, start
 
 
@@ -944,6 +955,7 @@ def build_context_fit_plan(
             "development_md": core.development_md,
             "semi_stable_text": core.semi_stable_text,
             "dynamic_head_text": core.dynamic_head_text,
+            **({"pattern_register_text": core.pattern_register_text} if core.pattern_register_text else {}),
             "dynamic_text": core.dynamic_text,
             "memory_view_json": core.memory_view_json,
             **({"supplementary_messages": json.loads(core.supplementary_messages_json)}
