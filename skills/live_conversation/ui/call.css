@@ -38,6 +38,8 @@
 .chat-input-wrap[data-call] .chat-text-row {
     position: relative;
     container: call-row / inline-size;
+    /* The composer surface lives on .chat-field; the call glass needs the same fixed corner. */
+    border-radius: var(--radius-sheet);
 }
 
 /* Focus inside the sheet is a button's own ring, not the text field's: the composer keeps floating. */
@@ -320,7 +322,7 @@
         padding: 0 var(--space-3);
     }
 
-    .chat-input-wrap[data-call-view="keyboard"] .chat-attach-btn {
+    .chat-input-wrap[data-call-view="keyboard"] .chat-plus-btn {
         display: none;
     }
 }

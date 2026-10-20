@@ -184,10 +184,21 @@ def test_talk_a_real_composer_and_loaded_feature(subscription_ui, monkeypatch, w
         else:
             assert page.locator(".call-show").is_visible()
             assert page.locator(".call-vision-note").count() == 0
+        browser.capture(page, f"live-voice-{engine}-{width}-{scheme}")
+        assert page.locator('.call-glass').evaluate("node => getComputedStyle(node).borderRadius") == radius
+        page.locator('.call-size').click()
+        page.wait_for_function("!document.querySelector('#page-chat .chat-input-wrap').dataset.callMove")
+        end = page.locator('.call-end').bounding_box()
+        assert end and end['x'] >= 0 and end['x'] + end['width'] <= width and end['y'] + end['height'] <= 800
+        browser.capture(page, f"live-big-{engine}-{width}-{scheme}")
+        page.locator('.call-size').click()
+        page.wait_for_function("!document.querySelector('#page-chat .call-lifted')")
         page.locator(".call-keyboard").click()
+        assert page.locator('#page-chat .chat-plus-btn').is_visible() == (width > 360)
         draft = "Keep this draft: Обычный nano, tools & memory.\nA second line that must survive End."
         field.fill(draft)
         assert page.locator('#page-chat .chat-field').evaluate("node => getComputedStyle(node).borderRadius") == radius
+        assert page.locator('.call-glass').evaluate("node => getComputedStyle(node).borderRadius") == radius
         assert page.locator('#page-chat .chat-text-row').evaluate("node => node.scrollWidth <= node.clientWidth"), "call controls fit their row"
         end = page.locator('.call-end').bounding_box()
         assert end and end['x'] >= 0 and end['x'] + end['width'] <= width and end['y'] + end['height'] <= 800
@@ -202,6 +213,7 @@ def test_talk_a_real_composer_and_loaded_feature(subscription_ui, monkeypatch, w
         page.wait_for_function("document.querySelector('#page-chat .chat-input-wrap')?.dataset.callActive === 'false'")
         assert field.input_value() == draft
         page.locator("#page-chat .voice-mic").wait_for(state="visible")
+        assert page.locator('#page-chat .chat-plus-btn').is_visible()
         assert page.evaluate("window.__callFixture.stopped") > 0
         assert page.evaluate("window.__callFixture.sent.some(x => x.type === 'bye')")
         voice.no_page_scroll(page)

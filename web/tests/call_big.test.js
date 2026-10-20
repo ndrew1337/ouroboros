@@ -1,7 +1,7 @@
 import './fixtures/call_modules.js';
 // The live call's two sizes through the real capsule (call_capsule.js, call_stage.js, call_aura.js) on the
 // DOM double, given a small HTML reader for the capsule's own markup. Geometry, the passage's motion and the
-// look are checked in the browser lane (tests/test_call_browser.py).
+// look are checked in the browser lane (tests/test_live_conversation_browser.py).
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { installDomDouble } from './dom_double.js';
@@ -182,6 +182,21 @@ test('Escape minimises the big view and nothing else; a menu that took Escape ke
         assert.equal(h.wrap.dataset.callView, 'voice');
         h.flush();
         assert.ok(!h.lifted());
+    } finally { h.done(); }
+});
+
+test('minimising keeps the composer corner even when the call has grown taller than one line', () => {
+    const h = harness();
+    try {
+        h.env.getComputedStyle = () => ({ borderTopLeftRadius: '26px', getPropertyValue: () => '' });
+        h.row.getBoundingClientRect = () => ({ left: 0, top: 600, width: 320, height: 100 });
+        h.set({ state: 'live' });
+        h.capsule.expand();
+        h.flush();
+        h.$('.call-size').click();
+        assert.equal(h.row.style.getPropertyValue('--call-panel-radius'), '26px');
+        h.flush();
+        assert.equal(h.row.style.getPropertyValue('--call-panel-radius'), '');
     } finally { h.done(); }
 });
 
