@@ -28,7 +28,8 @@ from ouroboros.pricing_catalog import RATE_FIELDS, get_catalog_quote, rate
 # A provisional accounting unit, not a generation limit or a predicted utterance.
 # Each input/output modality keeps its own tariff; no token is priced as text
 # merely because a response's physical size is not yet known at ResponseStarted.
-PROVISIONAL_USAGE = {key: 1024 for key in USAGE_KEYS if key != "cached_input_tokens"}
+PROVISIONAL_USAGE = {key: 1024 for key in USAGE_KEYS}
+PROVISIONAL_USAGE.update(cached_input_tokens=0, thinking_tokens=0)
 
 
 @dataclass(frozen=True)
@@ -162,12 +163,16 @@ def _price(quote: dict | None, usage: Mapping, raw_usage: Mapping) -> tuple[floa
     if "connected_seconds" in usage:
         seconds = usage["connected_seconds"]
         price = rate(quote, "input_cost_per_second")
-        known = (type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0 and price is not None)
-        return (seconds * price if known else None), {
+        cost = seconds * price if type(seconds) in (int, float) and seconds >= 0 and price is not None else None
+        known = cost is not None and math.isfinite(cost)
+        return (cost if known else None), {
             "priced_usage": {"connected_seconds": {"seconds": seconds, "usd_per_second": price}},
             "unpriced": [] if known else ["connected_seconds_tariff_or_count_unknown"]}
     body = _raw_body(raw_usage)
     missing = _unpriced_raw(body)
+    missing.extend("unknown_" + key for key in USAGE_KEYS if key not in usage)
+    if "thinking_tokens" not in usage and not any(key in body for key in ("thoughtsTokenCount", "thoughts_token_count")):
+        missing.append("unknown_thinking_tokens")
     priced = {}
     try:
         counts = {key: _count(usage.get(key, 0)) for key in USAGE_KEYS}

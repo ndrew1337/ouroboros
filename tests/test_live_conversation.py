@@ -296,8 +296,16 @@ def test_physical_dispatch_minus_one_refits_or_refuses_and_positive_passes(host_
     host.count_input = lambda wire: 9999
     async def allowed(session):
         assert session.opened
+        host.response_started('fits')
+        host.response_done('fits', usage={}, raw_usage={}, status='completed')
     asyncio.run(host.session(allowed, LiveOptions()))
     assert host_world.sessions[-1].opened
+    from ouroboros.usage_accounting import read_usage_records
+    row, = read_usage_records(host.ctx.drive_root)
+    assert row['physical_context']['capacity_total_tokens'] == 20000
+    assert row['physical_context']['measurement_density'] > 0
+    prepared = [json.loads(line) for line in host.wire_path.read_text().splitlines()]
+    assert any(json.loads(row['raw']).get('counter') == 'o200k' for row in prepared if row['direction'] == 'host')
 
 
 def test_call_tool_silent_replay_and_existing_row_change_receipt(host_world):

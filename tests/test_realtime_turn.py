@@ -2,6 +2,8 @@
 import time
 from dataclasses import replace
 
+import pytest
+
 
 def wait_for(predicate, timeout=10):
     until = time.monotonic() + timeout
@@ -46,3 +48,15 @@ def test_metadata_does_not_recreate_process_local_call_authority():
     task = {"metadata": {"execution_transport": {"kind": "live_conversation", "call_id": "call"}}}
     assert recovery_refusal(task, None) == "realtime_restart_required"
     assert recovery_refusal({"metadata": {}}, None) == ""
+
+
+def test_o200k_limits_require_the_declared_counter(monkeypatch):
+    import sys
+    from ouroboros.realtime_setup import input_counter
+    from ouroboros.contracts.realtime import RouteFacts, RealtimeSetupError
+    monkeypatch.setitem(sys.modules, 'tiktoken', None)
+    with pytest.raises(RealtimeSetupError, match='measurement_unavailable'):
+        input_counter(RouteFacts(conversation_window_tokens=90000, basis='o200k'))
+    assert input_counter(RouteFacts(basis='o200k')) is None
+    assert input_counter(RouteFacts(conversation_window_tokens=90000, basis='provider')) is None
+

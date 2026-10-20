@@ -359,10 +359,11 @@ class ConversationHost:
         if "connected_seconds" in counts:
             self._meter_reported = True
             seconds = counts["connected_seconds"]
+            growth = 0
             if type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0:
-                counts["connected_seconds"] = max(0, seconds - self._meter_watermark)
+                counts["connected_seconds"] = growth = max(0, seconds - self._meter_watermark)
                 self._meter_watermark = max(self._meter_watermark, seconds)
-            if key in self.completed and counts["connected_seconds"]:
+            if key in self.completed and growth:
                 record_refused_live_response(**self._response_args(f"{response_id}:tail:{self._meter_watermark}"),
                     reason="received_meter_growth", usage=counts, raw_usage=raw_usage, status=status)
                 return
@@ -383,6 +384,9 @@ class ConversationHost:
             if total:
                 if self._held_density is None:
                     self._held_density = self._opening_input / total if self.count_input else 1.0
+                    if self.count_input:
+                        self.observe("host", canonical_json({"type": "call.usage_density", "basis": "o200k",
+                            "opening_input": self._opening_input, "reported_input": total, "density": self._held_density}))
                 measured = math.ceil(total * self._held_density)
                 if self._held_input:
                     self._growth = max(self._growth, measured - self._held_input)

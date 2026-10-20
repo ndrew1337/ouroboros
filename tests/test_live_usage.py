@@ -8,6 +8,10 @@ from ouroboros import live_usage as live, pricing_catalog as catalog, usage_acco
 from ouroboros.utils import utc_now_iso
 
 
+def token_usage(**reported):
+    return {**{key: 0 for key in live.USAGE_AXES if key != 'connected_seconds'}, **reported}
+
+
 @pytest.fixture
 def quote(tmp_path, monkeypatch):
     monkeypatch.setenv('OUROBOROS_DATA_DIR', str(tmp_path))
@@ -58,7 +62,7 @@ def test_modalities_cache_interrupt_and_dedup_keep_original_quote(quote):
     attempt = reserve(root, value)
     row, = ua.read_usage_records(root)
     assert row['state'] == 'dispatched' and row['cost_evidence']['tariff_quote'] == value
-    usage = dict(text_input_tokens=100, audio_input_tokens=200, image_input_tokens=50,
+    usage = token_usage(text_input_tokens=100, audio_input_tokens=200, image_input_tokens=50,
                  cached_input_tokens=55, text_output_tokens=30, audio_output_tokens=60)
     raw = {'input_token_details': {'cached_tokens_details': {'text_tokens': 20, 'audio_tokens': 30, 'image_tokens': 5}}}
     for _ in range(2):
@@ -79,7 +83,8 @@ def test_missing_modality_price_never_falls_back_to_text(quote, monkeypatch):
                              raw_usage={}, status='completed')
     row, = ua.read_usage_records(root)
     assert row['cost_usd'] is None and row['cost_coverage'] == 'partial'
-    assert live._price(value, {'text_input_tokens': 100}, {})[0] == pytest.approx(.0002)
+    assert live._price(value, token_usage(text_input_tokens=100), {})[0] == pytest.approx(.0002)
+    assert live._price(value, {'text_input_tokens': 100}, {})[0] is None  # absent axes are unknown
 
 
 def test_connected_seconds_and_unreported_usage(quote):
@@ -88,18 +93,18 @@ def test_connected_seconds_and_unreported_usage(quote):
     assert live._price(meter, {'connected_seconds': 60}, {})[0] == pytest.approx(.05)
     assert live._price(None, {'connected_seconds': 60}, {})[0] is None
     assert live._price(value, {}, {})[0] is None
-    assert live._price(value, {'text_input_tokens': 0}, {'input_tokens': 0})[0] == 0
+    assert live._price(value, token_usage(), {'input_tokens': 0})[0] == 0
 
 
 def test_shared_limit_refuses_next_response_but_keeps_late_charge(quote):
     root, value, _ = quote
     with ua.usage_scope(ua.UsageScope(drive_root=root, task_id='task-test', global_limit_usd=.001)):
         attempt = reserve(root, value)
-        live.settle_live_response(attempt, usage={'audio_output_tokens': 100}, raw_usage={}, status='completed')
+        live.settle_live_response(attempt, usage=token_usage(audio_output_tokens=100), raw_usage={}, status='completed')
         with pytest.raises(ua.BudgetExceeded):
             reserve(root, value)
         live.record_refused_live_response(engine='openai_realtime', model='openai::gpt-voice-test',
             call_id='call-test', response_key='late', task_id='task-test', rendered_mode='nano', drive_root=root,
-            reason='budget_exhausted', usage={'audio_output_tokens': 10}, raw_usage={}, status='interrupted', quote=value)
+            reason='budget_exhausted', usage=token_usage(audio_output_tokens=10), raw_usage={}, status='interrupted', quote=value)
     assert len(ua.read_usage_records(root)) == 2
     assert sum(r['cost_usd'] for r in ua.read_usage_records(root)) == pytest.approx(.0022)

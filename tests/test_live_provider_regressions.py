@@ -145,7 +145,7 @@ def test_ordinary_enable_tools_reaches_adapter(ordinary_host, evidence):
     resident = {s["function"]["name"] for s in before}
     extra = next(s["function"]["name"] for s in host.tools.schemas() if s["function"]["name"] not in resident)
     call = {"id": "enable-qa", "type": "function", "function": {"name": "enable_tools",
-        "arguments": canonical_json({"tool_names": [extra]})}}
+        "arguments": canonical_json({"tools": extra})}}
     async def run():
         rows = await host.tool_batch([call])
         assert extra in {s["function"]["name"] for s in host.schemas}

@@ -133,8 +133,11 @@ def session_candidate(host, factory, options):
         measured = host.count_input(session.wire) if host.count_input else fit.measurement.estimated_input_tokens
         ratio = measured / max(1, raw)
         working = max(reserve, bound or 0)
+        # The shared ledger's basis says whether native usage calibrated the
+        # estimator. o200k is a local counter, not native usage; its units and
+        # measured conversion are named in the sealed candidate evidence below.
         measurement = replace(fit.measurement, estimated_input_tokens=measured, raw_input_tokens=raw,
-            measurement_density=ratio, measurement_basis="o200k" if host.count_input else fit.measurement.measurement_basis,
+            measurement_density=ratio, measurement_basis="cold_estimate" if host.count_input else fit.measurement.measurement_basis,
             response_reserve_tokens=working, capacity_total_tokens=window if is_known(plan) else None)
         fit = replace(fit, measurement=measurement)
         request = AttemptRequest(model=host.turn.model, provider=host.turn.route.accounting_provider,
@@ -150,7 +153,8 @@ def session_candidate(host, factory, options):
             host.messages[:] = current
             host.ctx.active_context_mode = plan.initial_mode
             return session, request, {"fit": asdict(fit), "route_facts": asdict(facts),
-                "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "counter": measurement.measurement_basis}
+                "input_sha256": selected.sha256, "wire_sha256": sha256(wire),
+                "counter": "o200k" if host.count_input else measurement.measurement_basis}
         if previous is not None and measured >= previous:
             raise RealtimeSetupError("context_capacity", "This room's context and working reserve do not fit this engine's window.")
         previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)
