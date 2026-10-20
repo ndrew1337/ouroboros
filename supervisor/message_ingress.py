@@ -380,7 +380,7 @@ def rejoin_or_refuse(row: dict, source: str, logged: str, refs: Any, reply: Opti
     if execution_transport is not None and not accepted_here(row):
         from ouroboros.contracts.realtime import RealtimeSetupError
 
-        raise RealtimeSetupError("realtime_restart_required", "this transport's accepting process ended; start a fresh preview")
+        raise RealtimeSetupError("realtime_restart_required", "this call's accepting process ended; start a new call")
     if (not same_message(row, logged, refs)
             or (row.get("reply_to") or {}).get("address", "") != (reply or {}).get("address", "")):
         raise ValueError("client_message_id was already used for a different message")

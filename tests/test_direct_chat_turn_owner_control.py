@@ -500,6 +500,35 @@ def test_settled_row_does_not_hide_a_still_busy_direct_turn_from_custody(tmp_pat
     assert not active_intent(tmp_path, TURN_ID)
 
 
+def test_text_stop_waits_for_runner_after_message_admission_closes(tmp_path, monkeypatch):
+    """Text cleanup has the same custody as a call, even after Stop captured the turn."""
+    from supervisor import cancel_publication, task_lifecycle, worker_chat_lane
+
+    queue = _isolate_queue(monkeypatch, tmp_path)
+    agent = _live_chat_agent(monkeypatch)
+    assert not hasattr(agent, "_realtime_turn")
+    write_task_result(tmp_path, TURN_ID, "running", chat_id=0)
+    released, settled = [], []
+    monkeypatch.setattr(task_lifecycle, "_release_intent_claim", lambda *a, **kw: released.append(kw))
+    monkeypatch.setattr(cancel_publication, "_finalize_cancel_intent_on_miss",
+                        lambda *a, **kw: settled.append(a[1]) or task_lifecycle.CANCEL_CANCELLED)
+
+    def close_admission(*args, **kwargs):
+        agent._accepting_owner_messages = False
+        return worker_chat_lane.DIRECT_TURN_STOP_GONE
+
+    monkeypatch.setattr(worker_chat_lane, "stop_direct_chat_turn", close_admission)
+    try:
+        result = cancel_publication._finish_captured_chat_turn(queue, TURN_ID, {"id": TURN_ID})
+        assert result == task_lifecycle.CANCEL_FAILED
+        assert released[-1]["error"] == "direct activity still owns work"
+        assert not settled and load_task_result(tmp_path, TURN_ID)["status"] == "running"
+    finally:
+        _turn_released(agent)
+    assert cancel_publication._finish_captured_chat_turn(queue, TURN_ID, None) == task_lifecycle.CANCEL_CANCELLED
+    assert settled == [TURN_ID]
+
+
 def test_arming_the_stop_holds_the_turn_admission_lock_and_a_turn_that_ended_under_it_arms_nothing(tmp_path, monkeypatch):
     """Delta review: the liveness re-read and the control write must be ONE
     step under the agent's owner-message admission lock — the lock the turn's

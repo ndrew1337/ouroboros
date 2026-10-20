@@ -645,9 +645,12 @@ class OuroborosAgent:
             authority_refusal = validate_task_authority_sources(self.env, task)
         if authority_refusal:
             return None, [], {"authority_source_unavailable": authority_refusal}
-        from ouroboros.realtime_turn import recovery_refusal
-        if refusal := recovery_refusal(task, getattr(self, "_realtime_turn", None)):
-            return None, [], {"realtime_refusal": refusal}
+        request = (task.get("metadata") or {}).get("execution_transport")
+        if request is not None:
+            task["_skip_post_task_synthesis"] = True
+            turn = getattr(self, "_realtime_turn", None)
+            if turn is None or not turn.matches_live_request(request):
+                return None, [], {"realtime_refusal": "realtime_restart_required"}
         drive_logs = self.env.drive_path("logs")
         task = attach_task_contract(apply_consciousness_authority(task))
         from types import SimpleNamespace
@@ -1085,7 +1088,7 @@ class OuroborosAgent:
             elif str(cap_info.get("executor_blocked_reason") or ""):
                 text, usage, llm_trace = _blocked_executor_terminal(cap_info, task)
             elif cap_info.get("realtime_refusal"):
-                text = "Realtime transport cannot resume here. Start a fresh room preview and authorize its exact input."
+                text = "This call cannot resume here. Start a new call in the room."
                 usage = {"terminal_origin": TERMINAL_ORIGIN_HOST_NOTICE, "execution_status": "infra_failed",
                          "reason_code": cap_info["realtime_refusal"]}
             elif getattr(self, "_realtime_turn", None) is not None:

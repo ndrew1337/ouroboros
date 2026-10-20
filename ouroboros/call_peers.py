@@ -160,8 +160,7 @@ class LiveCallHub(cp.CallHub):
         self._state = {"type": "state", "state": cp.STATE_PREPARING, "reason": "", "engine": spec.engine,
                        "phase": "memory"}
         self._turn = {"type": "turn", "turn": cp.TURN_IDLE}
-        self._counts = dict(input_dropped_samples=0, output_dropped_frames=0,
-                            stale_frames=0, control_overflows=0)
+
 
     @property
     def epoch(self) -> int:
@@ -188,13 +187,6 @@ class LiveCallHub(cp.CallHub):
     def end_by_ouroboros(self) -> None:
         with self._condition:
             self._ouroboros_bye = True
-
-    def stats(self) -> dict[str, int]:
-        with self._condition:
-            return {**self._counts, "pending_events": len(self._events),
-                    "input_samples": sum(len(t.samples) for p in self._peers.values()
-                                         for t in p.tracks.values()),
-                    "output_frames": sum(p.queued_audio for p in self._peers.values())}
 
     def _live(self) -> None:
         if self._closed:
@@ -223,7 +215,6 @@ class LiveCallHub(cp.CallHub):
 
     def _event(self, event: Any) -> None:
         if len(self._events) >= self._control_limit:
-            self._counts["control_overflows"] += 1
             raise CallPeerError("control_queue_full")
         self._events.append(event)
         self._condition.notify_all()
@@ -237,12 +228,10 @@ class LiveCallHub(cp.CallHub):
         if count >= limit:
             if not audio:
                 peer.failure = "control_queue_full"
-                self._counts["control_overflows"] += 1
                 return
             oldest = next(i for i, m in enumerate(peer.outgoing) if isinstance(m, bytes))
             del peer.outgoing[oldest]
             peer.queued_audio -= 1
-            self._counts["output_dropped_frames"] += 1
         peer.outgoing.append(message)
         if audio:
             peer.queued_audio += 1
@@ -288,7 +277,6 @@ class LiveCallHub(cp.CallHub):
                 raise CallPeerError("invalid_pcm")
             delta = (frame.seq - peer.input_seq) & 0xFFFFFFFF if peer.input_seq is not None else 1
             if frame.epoch != self._epoch or not 0 < delta < 0x80000000:
-                self._counts["stale_frames"] += 1
                 return False
             peer.input_seq = frame.seq
             if peer.muted:
@@ -306,7 +294,6 @@ class LiveCallHub(cp.CallHub):
             excess = max(0, len(track.samples) - limit)
             if excess:
                 del track.samples[:excess]
-                self._counts["input_dropped_samples"] += excess
             self._condition.notify_all()
             return True
 
@@ -323,7 +310,6 @@ class LiveCallHub(cp.CallHub):
                 raise CallPeerError("invalid_video_frame")
             delta = (frame.seq - peer.video_seq) & 0xFFFFFFFF if peer.video_seq is not None else 1
             if frame.epoch != self._epoch or not 0 < delta < 0x80000000:
-                self._counts["stale_frames"] += 1
                 return False
             peer.video_seq = frame.seq
             self._video_pending.pop(peer_id, None)
@@ -411,7 +397,6 @@ class LiveCallHub(cp.CallHub):
                 return
             self._input_rate, self._output_rate = input_rate, output_rate
             for peer in self._peers.values():
-                self._counts["input_dropped_samples"] += sum(len(t.samples) for t in peer.tracks.values())
                 peer.tracks.clear()
                 peer.converter = LinearResampler(output_rate, peer.rate)
             self.flush()

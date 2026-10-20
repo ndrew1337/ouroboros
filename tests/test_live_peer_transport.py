@@ -29,28 +29,43 @@ def test_mixed_audio_and_meeting_bye_keep_nonowner_provenance():
     hub.close("fixture_cleanup")
 
 
-def test_shared_socket_parser_refuses_peer_role_escalation():
+@pytest.mark.parametrize("claimed_role", ["owner", "meeting"])
+def test_shared_socket_parser_refuses_only_peer_role_escalation(claimed_role):
     class Socket:
         def __init__(self):
             self.closed = []
+            self.received = False
         async def accept(self):
             pass
         async def receive(self):
+            if self.received:
+                return {"type": "websocket.disconnect"}
+            self.received = True
             return {"type": "websocket.receive", "text": json.dumps({
-                "type": "hello", "protocol": 1, "role": "owner",
+                "type": "hello", "protocol": 1, "role": claimed_role,
                 "mic": True, "speaker": True, "rate": 24000})}
+        async def send_text(self, text):
+            pass
+        async def send_bytes(self, data):
+            pass
         async def close(self, **reason):
             self.closed.append(reason)
 
     hub = LiveCallHub(cp.CallSpec("synthetic-role", 1, "synthetic", "synthetic"))
     socket = Socket()
     asyncio.run(serve_peer(socket, hub, role="meeting", skill="synthetic-transport"))
-    assert socket.closed[0] == {"code": 1008, "reason": "peer_role_forbidden"}
+    if claimed_role == "owner":
+        assert socket.closed[0] == {"code": 1008, "reason": "peer_role_forbidden"}
+        assert hub.next_event(0) is None
+    else:
+        assert isinstance(hub.next_event(0), cp.PeerJoined)
+        assert isinstance(hub.next_event(0), cp.PeerLeft)
+        assert socket.closed == [{"code": 1000}]
     assert not hub.peers() and not hub.ended_by_owner
     hub.close("fixture_cleanup")
 
 
-def test_presence_utterance_identity_and_observed_speaker_survive(tmp_path):
+def test_presence_utterance_identity_and_mixed_audio_attribution_survive(tmp_path):
     from ouroboros.dialogue_provenance import run_origin
     from ouroboros.presence_call import record_call_utterance
     from ouroboros.presence_runner import presence_chat_id
@@ -65,14 +80,14 @@ def test_presence_utterance_identity_and_observed_speaker_survive(tmp_path):
                   "conversation": {}, "message": {}}}}}
     for _ in range(2):
         assert record_call_utterance(tmp_path, task, direction="in", text="Participant words.",
-                                     speaker_label="Dana", utterance_id="one")
+                                     utterance_id="one")
     assert record_call_utterance(tmp_path, task, direction="out", text="Generated reply.", utterance_id="two")
     rows = chat_rows(tmp_path)
     assert len(rows) == 2
     assert rows[0]["client_message_id"] == "meeting:join:heard:one"
     assert rows[1]["client_message_id"] == "meeting:join:spoken:two"
-    assert rows[0]["sender_label"] == "Dana"
-    assert rows[0]["transport"]["actor"]["display_name"] == "Dana"
+    assert rows[0]["sender_label"] == "meeting audio"
+    assert rows[0]["transport"]["actor"]["display_name"] == "meeting audio"
     assert {row["presence_provenance"]["binding_id"] for row in rows} == {"synthetic-binding"}
     assert {row["chat_id"] for row in rows} == {task["chat_id"]}
     assert run_origin(task)["owner_ingress"] is False
@@ -96,3 +111,49 @@ def test_call_event_uses_ordinary_presence_binding_and_history_identity():
             presence_turn_event({**payload, field: "forged"}, admission)
     with pytest.raises(PresenceTurnError, match="presence_identity_missing"):
         presence_turn_event({**payload, "actor": {}}, admission)
+
+
+def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path):
+    """The #2082 required inbound wait also applies to finalized meeting speech."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from ouroboros import dialogue_store
+    from ouroboros.presence_call import record_call_utterance
+    from ouroboros.presence_runner import presence_chat_id
+    from tests._dialogue import chat_rows
+
+    key = "synthetic:account:room:thread"
+    task = {"id": "synthetic-call", "chat_id": presence_chat_id(key), "metadata": {"presence": {
+        "binding_id": "binding", "transport_skill": "transport", "behavior_skill": "behavior",
+        "event": {"source_event_id": "join", "provider": "synthetic", "account_id": "account",
+                  "conversation_id": "room", "thread_id": "thread", "conversation_key": key,
+                  "actor": {"display_name": "Meeting"}, "conversation": {}, "message": {}}}}}
+    dialogue_store.append(tmp_path, "progress", {"text": "warm"})
+    holding, release, writing = threading.Event(), threading.Event(), threading.Event()
+
+    def hold():
+        with dialogue_store.transaction(tmp_path, write=True):
+            holding.set()
+            assert release.wait(5)
+
+    def record():
+        writing.set()
+        return record_call_utterance(tmp_path, task, direction="in", text="Participant spoke.", utterance_id="one")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        holder = pool.submit(hold)
+        assert holding.wait(5)
+        try:
+            saved = pool.submit(record)
+            assert writing.wait(5)
+            # A non-waiting append would already have refused this held writer.
+            assert not threading.Event().wait(.15) and not saved.done()
+        finally:
+            release.set()
+        holder.result(5)
+        assert saved.result(5)
+    # Replaying after contention has ended still keeps just one exact utterance.
+    assert record()
+    [row] = chat_rows(tmp_path)
+    assert row["text"] == "Participant spoke." and row["sender_label"] == "meeting audio"
+    assert row["client_message_id"] == "join:heard:one"
