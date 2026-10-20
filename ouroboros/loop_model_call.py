@@ -890,7 +890,7 @@ def _measure_main_context_view(plan, messages, schemas, mode, effort, round_id, 
 
 
 @contextlib.contextmanager
-def _presend_context_fit(ctx: _RoundModelCallContext):
+def _presend_context_fit(ctx: _RoundModelCallContext | None = None):
     """Use the final physical candidate for the existing strict-shrink recovery, without a paid send."""
     from ouroboros.llm_attempt import main_context_fit_refusal
 
@@ -904,7 +904,7 @@ def _presend_context_fit(ctx: _RoundModelCallContext):
     try:
         yield admit
     except PhysicalAttemptPreconditionFailed:
-        if refused is None:
+        if refused is None or ctx is None:
             raise  # a failed strict-shrink or custody check is not a size prediction
         ctx.accumulated_usage.update({
             REFUSED_CANDIDATE_KEY: refused, "_last_llm_error_kind": "context_overflow", "reason_code": "context_overflow",

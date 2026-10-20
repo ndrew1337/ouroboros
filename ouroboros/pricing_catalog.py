@@ -45,19 +45,6 @@ _retry_after: dict[pathlib.Path, float] = {}
 _fetching: set[pathlib.Path] = set()
 
 
-class CatalogEstimate(float):
-    """Keep the exact tariff beside a float-compatible estimate through settlement.
-
-    Looking the quote up again after computing cost can bind a refreshed tariff
-    to an amount computed with the previous one.
-    """
-
-    def __new__(cls, amount, quote=None):
-        value = super().__new__(cls, amount)
-        value.quote = copy.deepcopy(quote)
-        return value
-
-
 def catalog_id(model: str, provider: str) -> str | None:
     """Translate route syntax only; ids and provider identity remain exact."""
     if provider not in DIRECT_PROVIDERS:

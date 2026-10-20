@@ -159,13 +159,15 @@ def _admit_owner_call(payload):
             or not isinstance(payload.get("client_message_id"), str) or not payload["client_message_id"]):
         raise RealtimeSetupError("invalid_call_request", "chat_id and client_message_id are required")
     with feature_configuration(payload.get("feature", "live_conversation:call")) as (feature, config):
-        if config.get("enabled") is not True:
-            raise RealtimeSetupError("calls_disabled", "Calls (beta) are off in Live Conversation settings")
-        model = config["model"]
-        if not model or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._/" for c in model):
-            raise RealtimeSetupError("model", "choose an explicit native realtime model")
-        spec = cp.CallSpec(uuid.uuid4().hex, payload["chat_id"], config["provider"], model, config["voice"],
-                           client_message_id=payload["client_message_id"])
+        from ouroboros.live_conversation import call_offer
+        offer = call_offer(config)
+        if not offer["offered"]:
+            raise RealtimeSetupError(offer["reason"], offer["detail"])
+        from ouroboros.realtime_setup import loaded_provider
+        model = loaded_provider(config.provider)["catalog"].model(config.model)
+        call_id = uuid.uuid4().hex
+        spec = cp.CallSpec(call_id, payload["chat_id"], config.provider, model.id, config.voice,
+                           client_message_id=f"call:{call_id}:open")
         bridge = try_get_bridge()
         if bridge is None:
             # No supervisor in this server generation (still starting, or no model is set up): nothing can run the turn.
@@ -174,11 +176,9 @@ def _admit_owner_call(payload):
         turn = LiveConversationTurn(feature, config, spec, publish=bridge.broadcast)
         hub, created = open_owner_hub(spec)
         if not created:
-            if hub.spec.client_message_id != spec.client_message_id:
-                raise RealtimeSetupError("call_in_progress", "this room already has a call")
             return {"call_id": hub.call_id, "ws_path": f"/ws/call/{hub.call_id}", "joined": True,
                     "vision": turn.supports_images}
-        metadata = {"execution_transport": turn.request}
+        metadata = {"execution_transport": turn.request, "host_fact": {"kind": "call_open", "call_id": spec.call_id}}
 
         def accepted(text, **message):
             extra = dict(message.get("task_metadata") or {})
@@ -190,7 +190,7 @@ def _admit_owner_call(payload):
                 raise
 
         try:
-            bridge.ui_send("Start a live conversation.", chat_id=spec.chat_id,
+            bridge.ui_send(turn.opening, chat_id=spec.chat_id,
                 client_message_id=spec.client_message_id, task_metadata=metadata, dispatch=accepted)
         except BaseException:
             close_hub(spec.call_id, "admission_failed")

@@ -191,6 +191,18 @@ class CallTool:
     silent: bool = False
 
 
+class ToolBatch(list):
+    """History changes returned by LiveHost.tool_batch, with silent call ids.
+
+    A list-compatible result keeps callers that only forward rows working; the
+    feature forwards ``silent`` to ``ToolOutputs`` without inspecting tool names.
+    """
+
+    def __init__(self, rows=(), *, silent=()):
+        super().__init__(rows)
+        self.silent = tuple(silent)
+
+
 class LiveHost(Protocol):
     """The admitted call's host port, given to the feature's handler and to its call tools."""
 

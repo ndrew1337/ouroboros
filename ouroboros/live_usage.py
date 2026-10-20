@@ -236,7 +236,11 @@ def reserve_live_response(*, engine: str, model: str, call_id: str, response_key
         cost_evidence=evidence))
     # The driver calls at ResponseStarted: a later disconnect is not proof of
     # non-dispatch and cannot release this response as a free attempt.
-    accounting.mark_dispatched(reservation)
+    try:
+        accounting.mark_dispatched(reservation)
+    except accounting.BudgetExceeded:
+        accounting.release_attempt(reservation, "response_admission_refused")
+        raise
     return LiveAttempt(reservation, quote, evidence)
 
 

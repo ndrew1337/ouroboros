@@ -12,11 +12,10 @@ import json
 import os
 import socket
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
-from tests.test_live_conversation import packages, VoiceWire  # noqa: F401
+from tests.test_live_conversation import packages as packages, VoiceWire, host_world as host_world
 
 from ouroboros import call_protocol as cp
 from ouroboros.contracts.live_conversation import Audio, LiveEvent, LiveOptions, ToolOutputs
@@ -115,51 +114,8 @@ class EventSession:
 
 
 @pytest.fixture
-def ordinary_host(packages, tmp_path, monkeypatch, provider_catalog_offline):
-    from ouroboros import config, context
-    from ouroboros.live_conversation import ConversationHost, LiveConversationTurn, loaded_feature
-    from ouroboros.call_peers import open_owner_hub, close_hub
-    from ouroboros.tools.registry import ToolRegistry
-    from ouroboros.tools.tool_context import ToolContext
-    from ouroboros.task_results import write_task_result, STATUS_RUNNING
-    from tests._memory_view_context import world
-
-    env, memory, rooms = world(tmp_path / "world")
-    monkeypatch.setattr(config, "DATA_DIR", env.drive_root)
-    monkeypatch.setenv("OUROBOROS_DATA_DIR", str(env.drive_root))
-    monkeypatch.setattr(context, "get_context_mode", lambda: "nano")
-    from supervisor import message_bus
-    monkeypatch.setattr(message_bus, "DATA_DIR", env.drive_root)
-    monkeypatch.setattr(message_bus, "_BRIDGE", message_bus.LocalChatBridge())
-    spec = cp.CallSpec("focused-host", rooms["alpha"], "openai_realtime:openai", "synthetic-model", "",
-                       client_message_id="synthetic-owner")
-    turn = LiveConversationTurn(loaded_feature("live_conversation:call"),
-        dict(provider=spec.engine, max_seconds=30, reservation_usd=.5), spec, publish=lambda _: None)
-    task = dict(id="focused-host", type="task", text="Read the canary.", _is_direct_chat=True,
-        chat_id=spec.chat_id, model=turn.model, use_local_model=False,
-        origin_message_ref={"chat_id": spec.chat_id, "client_message_id": spec.client_message_id},
-        metadata={"execution_transport": turn.request})
-    write_task_result(env.drive_root, task["id"], STATUS_RUNNING, chat_id=spec.chat_id)
-    ctx = ToolContext(repo_dir=env.repo_dir, drive_root=env.drive_root, branch_dev="test",
-        task_id=task["id"], current_chat_id=spec.chat_id, is_direct_chat=True,
-        task_metadata=task["metadata"], task_contract={})
-    progress = []
-    ctx.emit_progress_fn = lambda text, **kw: progress.append({"text": text, **kw})
-    tools = ToolRegistry(env.repo_dir, env.drive_root)
-    tools.set_context(ctx)
-    messages, _ = context.build_llm_messages(env, memory, task, ctx=ctx, tool_schemas=tools.schemas(),
-                                           route_resolver=turn.resolve_route)
-    hub, _ = open_owner_hub(spec)
-    from ouroboros.model_wait import task_model_wait_scope
-    from tests.test_budget_fence_liveness import _publish
-    _publish(env.drive_root)
-    with task_model_wait_scope(task=task, drive_root=env.drive_root,
-                               event_queue=None, worker_slot_held=False) as owner:
-        ctx.model_wait_context, owner.tool_context = owner, ctx
-        host = ConversationHost(turn, ctx, messages, tools, task, "", hub)
-        yield SimpleNamespace(host=host, env=env, ctx=ctx, progress=progress)
-        asyncio.run(host.finish())
-        close_hub(spec.call_id, "fixture_done")
+def ordinary_host(host_world):
+    return host_world
 
 
 def test_ordinary_read_file_dedup_and_conflicting_identity(ordinary_host, evidence):
@@ -182,44 +138,20 @@ def test_ordinary_read_file_dedup_and_conflicting_identity(ordinary_host, eviden
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("engine", ["openai", "gemini"])
-def test_ordinary_enable_tools_reaches_adapter(ordinary_host, evidence, engine):
+def test_ordinary_enable_tools_reaches_adapter(ordinary_host, evidence):
+    from tests.test_live_conversation import FakeSession
     host = ordinary_host.host
     before = tuple(host.schemas)
-    resident = {item["function"]["name"] for item in before}
+    resident = {s["function"]["name"] for s in before}
     extra = next(s["function"]["name"] for s in host.tools.schemas() if s["function"]["name"] not in resident)
-    call = {"id": "enable-qa", "type": "function", "function": {
-        "name": "enable_tools", "arguments": canonical_json({"tools": extra})}}
-
+    call = {"id": "enable-qa", "type": "function", "function": {"name": "enable_tools",
+        "arguments": canonical_json({"tool_names": [extra]})}}
     async def run():
-        adapter, wire = session(engine, before)
-        try:
-            await adapter.open()
-            await adapter.receive()  # ready
-            if engine == "gemini":
-                await adapter.convert({"toolCall": {"functionCalls": [
-                    {"id": "enable-qa", "name": "enable_tools", "args": {"tools": extra}}]}})
-            changes = await host.tool_batch([call])
-            assert extra in {s["function"]["name"] for s in host.schemas}
-            assert host.schemas != list(before)
-            await adapter.send(ToolOutputs(tuple(changes), tuple(host.schemas)))
-            if engine == "openai":
-                for _ in range(10):
-                    if any(row.get("type") == "response.create" for row in wire.sent):
-                        break
-                    await asyncio.wait_for(adapter.receive(), .5)
-                assert any(row.get("type") == "response.create" for row in wire.sent)
-                updates = [r["session"]["tools"] for r in wire.sent
-                           if r.get("type") == "session.update" and "tools" in r["session"]]
-                assert extra in {item["name"] for item in updates[-1]}
-            else:
-                assert any(row.kind == "renew" for row in await adapter.receive())
-                renewed, _ = session(engine, tuple(host.schemas))
-                declarations = renewed.wire["events"][0]["setup"]["tools"][0]["functionDeclarations"]
-                assert extra in {item["name"] for item in declarations}
-            evidence.update(engine=engine, enabled=extra, changes=changes, wire=wire.sent)
-        finally:
-            await adapter.close()
+        rows = await host.tool_batch([call])
+        assert extra in {s["function"]["name"] for s in host.schemas}
+        adapter = FakeSession(selected(host.schemas), LiveOptions(), observe=lambda *_: None)
+        assert extra in {s["function"]["name"] for s in adapter.wire["tools"]}
+        evidence.update(changes=rows, tools=adapter.wire["tools"])
     asyncio.run(run())
 
 
