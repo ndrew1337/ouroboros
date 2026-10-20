@@ -137,7 +137,7 @@ def test_route_reprojection_keeps_the_captured_handbook_and_counts_it_in_the_flo
     chapter.write_text("# Rules\n\nChanged after capture.\n", encoding="utf-8")
     rebuilt = plan.reproject_for_route(window_tokens=2_000_000, known_window=True, ratio=1.0,
                                       output_reserve=plan.output_reserve_tokens, tool_schemas=None)
-    # A window the Max request cannot hold narrows Max's memory: D is still the captured one, counted the same.
+    # Physical pressure first narrows host facts; D remains the complete captured handbook.
     tight = plan.projection("max").estimated_tokens + plan.output_reserve_tokens - 1
     narrowed = plan.reproject_for_route(window_tokens=tight, known_window=True, ratio=1.0,
                                        output_reserve=plan.output_reserve_tokens, tool_schemas=None)
@@ -153,9 +153,17 @@ def test_route_reprojection_keeps_the_captured_handbook_and_counts_it_in_the_flo
     texts = [block["text"] for block in narrowed.messages_for("max")[0]["content"]]
     assert narrowed.projection("max").system_content_json != plan.projection("max").system_content_json
     assert sum(text.startswith("## DEVELOPMENT.md\n") for text in texts) == int(book)
+    if book:
+        assert texts[1] == "## DEVELOPMENT.md\n\n" + core.development_md
     assert all("Changed after capture" not in text for text in texts)
-    assert (narrowed.projection("max").memory_facts["floor"]["physical_allowance_tokens"]
-            - plan.projection("max").memory_facts["floor"]["physical_allowance_tokens"]) == tight - 1_000_000
+    facts = narrowed.projection("max").memory_facts
+    receipts = facts["host_sections_addressed"]
+    freed = (facts["floor"]["physical_allowance_tokens"]
+             - plan.projection("max").memory_facts["floor"]["physical_allowance_tokens"]
+             - (tight - 1_000_000))
+    # Separate section estimates round individually; the complete request rounds once.
+    assert freed > 0 and abs(freed - sum(row["tokens_saved"] for row in receipts)) <= len(receipts) + 1
+    assert not {row["section_id"] for row in receipts} & {"architecture", "development"}
 
 
 def test_a_knowledge_edit_changes_only_c_and_a_new_page_changes_b_but_never_a(tmp_path):

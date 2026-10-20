@@ -117,7 +117,8 @@ def test_a_route_change_and_a_refusal_selected_mode_render_the_captured_body(tmp
                          if row["section_id"] == "pattern_register"]
             if addressed:
                 from ouroboros.artifacts import read_actor_source_bytes
-                assert read_actor_source_bytes(env.drive_root, addressed[0]["source_ref"]).decode() == core.pattern_register_text
+                retained = read_actor_source_bytes(env.drive_root, core.section_task_id, addressed[0]["source_ref"])
+                assert retained.decode() == core.pattern_register_text
                 assert PATTERN_REGISTER_POINTER in _changing(rebound, mode)
             else:
                 assert core.pattern_register_text in _changing(rebound, mode), mode
