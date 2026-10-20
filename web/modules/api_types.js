@@ -232,27 +232,9 @@
  * @property {boolean} can_skip
  * @property {boolean} saved
  */
-/**
- * @typedef {Object} ChatInbound
- * @property {string=} reply_to
- * @property {"chat"} type
- * @property {string} content
- * @property {string=} sender_session_id
- * @property {string=} client_message_id
- * @property {boolean=} force_plan
- * @property {Array<Object>=} attachments  // [{filename, display_name, mime}] — image uploads become native blocks (v6.26.0)
- * @property {number=} chat_id     // multi-project thread routing (v6.32.0); main chat = 1
- * @property {string=} project_id  // per-project memory scope (v6.32.0)
- * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
- * @property {Object=} execution_transport  // Internal realtime preview; no visible composer change.
- */
+/** @typedef {import('./client_contract_types.js').ChatInbound} ChatInbound */
 /** @typedef {import('./client_contract_types.js').CommandInbound} CommandInbound */
 /** @typedef {import('./client_contract_types.js').PanicAcceptedOutbound} PanicAcceptedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeExecuteInbound} RealtimeExecuteInbound */
-/** @typedef {import('./client_contract_types.js').RealtimePreparedOutbound} RealtimePreparedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeAuthorizedOutbound} RealtimeAuthorizedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeRefusedOutbound} RealtimeRefusedOutbound */
-/** @typedef {import('./client_contract_types.js').RealtimeFinishedOutbound} RealtimeFinishedOutbound */
 /** @typedef {import('./client_contract_types.js').CallOpenRequest} CallOpenRequest */
 /** @typedef {import('./client_contract_types.js').CallOpenResponse} CallOpenResponse */
 /** @typedef {import('./client_contract_types.js').CallRefusal} CallRefusal */
@@ -1465,7 +1447,6 @@
  * @property {string=} content_hash
  * @property {string=} deleted_payload_root
  * @property {boolean=} deleted_state
- * @property {boolean=} state_delete_pending
  * @property {string=} extension_action
  * @property {string=} extension_reason
  * @property {string=} error

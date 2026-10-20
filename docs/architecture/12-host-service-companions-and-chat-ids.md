@@ -44,7 +44,7 @@ Per-turn receipt negotiation: author protocol “Reporting actual Presence deliv
 
 ### Live meeting peers
 
-`presence_runtime.execution` defaults to `event`; a reviewed binding may select `call`. `presence_call.py` uses the same admission ceiling, gate and `PROACTIVE_TURNS` registry with a loaded Live Conversation turn (§13). Existing `/call/open` and `/call/{call_id}/peer` (`gateway/host_call.py`) require `call_peer`; new calls also require the binding's Presence grant. Attachment grants narrow mic/speaker/video directions and bind the token digest. The common peer parser preserves the meeting skill protocol. Final external captions remain Presence observations; playback evidence never makes a participant the owner. Meeting skills are unchanged.
+`presence_runtime.execution` defaults to `event`; a reviewed binding may select `call`. `presence_call.py` uses the same admission ceiling, gate and `PROACTIVE_TURNS` registry with a loaded Live Conversation turn (§13). Existing `/call/open` and `/call/{call_id}/peer` (`gateway/host_call.py`) require `call_peer`; new calls also require the binding's Presence grant. Attachment grants narrow mic/speaker/video directions and bind the token digest. The common peer parser preserves the meeting protocol; `presence_events.py` checks text/call origin identity. Final external captions remain Presence observations; playback evidence never makes a participant the owner. Meeting skills are unchanged.
 
 ### Companion processes
 

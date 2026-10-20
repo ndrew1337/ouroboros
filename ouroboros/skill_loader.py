@@ -712,11 +712,10 @@ def requested_skill_permissions(
     subscribe_events: Optional[List[str]] = None,
 ) -> List[str]:
     """Return manifest-requested privileged permissions needing owner grants."""
-    requested: List[str] = []
     permission_set = {str(item or "").strip() for item in (permissions or [])}
-    for permission in ("inject_chat", "presence", "notify_owner", "page_module", "context_snapshot", "live_conversation", "call_peer"):
-        if permission in permission_set:
-            requested.append(permission)
+    requested = [permission for permission in (
+        "inject_chat", "presence", "notify_owner", "page_module", "context_snapshot", "live_conversation", "call_peer"
+    ) if permission in permission_set]
     if "subscribe_event" in permission_set:
         for raw_topic in subscribe_events or []:
             topic = str(raw_topic or "").strip()

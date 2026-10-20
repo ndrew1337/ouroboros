@@ -457,14 +457,15 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
     image_data = incoming.get("image_data")
     task_constraint = incoming.get("task_constraint")
     task_metadata = incoming.get("task_metadata")
-    # A process-local value minted by the authenticated WS transport, after
+    # A process-local value minted by the authenticated call door, after
     # canonical message acceptance. JSON/API metadata cannot construct it.
-    from ouroboros.realtime_turn import RealtimeTurn
-
     task_metadata = dict(task_metadata or {})
     realtime_turn = task_metadata.pop("_realtime_turn", None)
-    if realtime_turn is not None and not isinstance(realtime_turn, RealtimeTurn):
-        raise ValueError("invalid realtime transport authority")
+    if realtime_turn is not None:
+        from ouroboros.live_conversation import LiveConversationTurn
+
+        if not isinstance(realtime_turn, LiveConversationTurn):
+            raise ValueError("invalid call authority")
     from ouroboros.contracts.task_constraint import normalize_task_constraint
 
     normalized_constraint = normalize_task_constraint(task_constraint)

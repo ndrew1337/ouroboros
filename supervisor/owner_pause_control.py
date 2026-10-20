@@ -173,7 +173,7 @@ def request_owner_pause(task_id: str, *, request_id: str, by: Optional[Dict[str,
     with acquisition_budget(0), q._queue_lock:
         from supervisor.workers import get_direct_chat_agent
 
-        # A bounded realtime attempt has no resumable checkpoint. Its registered
+        # A live call has no resumable checkpoint. Its registered
         # actor still owns work after message admission closes; Stop can end it.
         actor = get_direct_chat_agent(task_id)
         if getattr(actor, "_realtime_turn", None) is not None:

@@ -324,14 +324,14 @@ def _admit_chat_task(
             activity.actor = agent
             admitted["agent"] = agent
         if realtime_turn is not None:
-            from ouroboros.realtime_turn import RealtimeTurn
+            from ouroboros.live_conversation import LiveConversationTurn
 
-            if not isinstance(realtime_turn, RealtimeTurn):
-                raise ValueError("realtime transport requires a host-admitted request")
+            if not isinstance(realtime_turn, LiveConversationTurn):
+                raise ValueError("call requires a host-admitted request")
             agent._realtime_turn = realtime_turn
             task["model"] = realtime_turn.model
             task["use_local_model"] = False
-            # This bounded transport operation authorizes no paid post-task work.
+            # A call authorizes no paid post-task work.
             task["_skip_post_task_synthesis"] = True
         from ouroboros.consciousness_authority import apply_consciousness_authority
         from ouroboros.contracts.task_contract import attach_task_contract

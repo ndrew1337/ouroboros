@@ -522,11 +522,6 @@ INTERFACE_PATHS: tuple[str, ...] = ("/", "/static")
 WS_SHAPES: dict[str, tuple[str, str]] = {
     "chat": ("ChatInbound", "ChatOutbound"),
     "command": ("CommandInbound", ""),
-    "realtime_execute": ("RealtimeExecuteInbound", ""),
-    "realtime_prepared": ("", "RealtimePreparedOutbound"),
-    "realtime_authorized": ("", "RealtimeAuthorizedOutbound"),
-    "realtime_refused": ("", "RealtimeRefusedOutbound"),
-    "realtime_finished": ("", "RealtimeFinishedOutbound"),
     "conversation_finished": ("", "ConversationFinishedOutbound"),
     "panic_accepted": ("", "PanicAcceptedOutbound"),
     "photo": ("", "PhotoOutbound"),

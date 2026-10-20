@@ -21,6 +21,7 @@ from typing import Any, Callable, Mapping, Sequence
 from ouroboros.artifacts import stage_task_attachments
 from ouroboros.contracts.task_contract import attach_task_contract
 from ouroboros.presence_admission import PresenceAdmission
+from ouroboros.presence_events import PresenceTurnError, PresenceTurnEvent, presence_turn_event as presence_turn_event
 from ouroboros.presence_authority import presence_ceiling_payload
 from ouroboros.task_results import (
     STATUS_CANCELLED,
@@ -36,87 +37,6 @@ from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso
 from ouroboros.store import StoreError
 
 log = logging.getLogger(__name__)
-
-
-class PresenceTurnError(ValueError):
-    def __init__(
-        self,
-        code: str,
-        field: str,
-        *,
-        attachment_manifest: Sequence[Mapping[str, Any]] = (),
-        turn_ref: str = "",
-        work_ref: str = "",
-        disposition: str = "",
-        delivery_reporting_version: int = 0,
-    ) -> None:
-        self.code = str(code or "presence_turn_failed")
-        self.field = str(field or "presence_turn")
-        self.turn_ref = str(turn_ref or "")
-        self.work_ref = str(work_ref or "")
-        self.disposition = disposition
-        self.delivery_reporting_version = delivery_reporting_version
-        self.attachment_manifest = [
-            dict(row) for row in attachment_manifest if isinstance(row, Mapping)
-        ]
-        super().__init__(f"{self.code}: {self.field}")
-
-
-@dataclass(frozen=True)
-class PresenceTurnEvent:
-    source_event_id: str
-    provider: str
-    account_id: str
-    conversation_id: str
-    thread_id: str
-    conversation_key: str
-    actor: Mapping[str, Any]
-    conversation: Mapping[str, Any]
-    message: Mapping[str, Any]
-    text: str
-    delivery_reporting_version: int = 0
-    # Negotiated separately from receipts and never part of the event identity
-    # (``presence_continuation``): 1 lets the transport take the initial envelope early.
-    continuation_version: int = 0
-
-
-def presence_turn_event(payload: Any, admission: PresenceAdmission, *,
-                        reporting_version: int = 0, continuing: int = 0) -> PresenceTurnEvent:
-    """Share binding/origin validation between ordinary text and call ingress.
-
-    The transport's claimed conversation_key never chooses the host history
-    or concurrency key; that key comes from the checked origin facts.
-    """
-    from ouroboros.presence_bindings import conversation_key
-
-    expected = {"source_event_id", "provider", "account_id", "conversation_id", "thread_id",
-                "conversation_key", "actor", "conversation", "message", "text"}
-    if not isinstance(payload, dict) or set(payload) != expected:
-        raise PresenceTurnError("presence_event_invalid", "event")
-    provider, account_id, conversation_id, thread_id = (
-        str(payload.get(key) or "").strip()
-        for key in ("provider", "account_id", "conversation_id", "thread_id"))
-    origin = admission.origin
-    if (provider != origin.transport or account_id != origin.account_id
-            or (origin.conversation_id != "*" and conversation_id != origin.conversation_id)
-            or (origin.thread_id and thread_id != origin.thread_id)):
-        raise PresenceTurnError("presence_origin_mismatch", "event")
-    event = PresenceTurnEvent(
-        source_event_id=str(payload["source_event_id"] or "").strip(),
-        provider=provider, account_id=account_id, conversation_id=conversation_id, thread_id=thread_id,
-        conversation_key=conversation_key(provider, account_id, conversation_id, thread_id),
-        actor=dict(payload["actor"]) if isinstance(payload["actor"], dict) else {},
-        conversation=dict(payload["conversation"]) if isinstance(payload["conversation"], dict) else {},
-        message=dict(payload["message"]) if isinstance(payload["message"], dict) else {},
-        text=str(payload["text"] or ""), delivery_reporting_version=reporting_version,
-        continuation_version=continuing)
-    if not event.source_event_id or not event.conversation_key or not event.actor:
-        raise PresenceTurnError("presence_identity_missing", "event")
-    if "transport_queue" in event.conversation:
-        from ouroboros.presence_observations import validate_transport_queue
-        validate_transport_queue(event.conversation["transport_queue"], event.conversation_key,
-                                 event.source_event_id)
-    return event
 
 
 @dataclass(frozen=True)
@@ -1093,15 +1013,16 @@ def _log_dialogue(
             SimpleNamespace(drive_root=drive_root, task_id=task_id), "presence-event",
             json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8"), "json")
     from ouroboros import dialogue_store
-    # The inbound row is a named acceptance (a re-run rejoins the row it landed) and required: it waits for
-    # the store, and a turn whose row cannot be written fails before the model runs (the transport retries).
-    if direction != "in":
+    # Inbound acceptance and both live-call captions require storage before acknowledging the row.
+    # Ordinary text replies keep the best-effort retry buffer.
+    live = (task.get("metadata", {}).get("execution_transport") or {}).get("kind") == "live_conversation"
+    if direction != "in" and not live:
         dialogue_store.append_quietly(drive_root, "chat", row)  # the reply: best effort, retry buffer
         return
     try:
         dialogue_store.append(drive_root, "chat", row)
     except (StoreError, OSError, ValueError) as exc:
-        log.warning("Presence inbound row not stored in %s", drive_root, exc_info=True)
+        log.warning("Presence %s row not stored in %s", direction, drive_root, exc_info=True)
         raise PresenceTurnError("chat_log_unwritable", "chat") from exc
 
 

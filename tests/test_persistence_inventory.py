@@ -103,6 +103,9 @@ SUBROOT_ALIASES = {
     "__extension_imports/*/skill": "state/skills/*/__extension_imports/*/skill",
     "__extension_imports/*/skill/*": "state/skills/*/__extension_imports/*/skill/*",
     ".extension-*.lock": "state/skills/*/.extension-*.lock",
+    # The import lock is beside skill_state_dir, so deleting that skill's state
+    # cannot make a concurrent acquirer lock another inode.
+    ".*-extension-imports.lock": "state/skills/.*-extension-imports.lock",
 }
 
 # The same human promise for a parameter whose NAME is the audited root, read
@@ -816,9 +819,8 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # own section-2 row; ``ouroboros/card_store.py`` writes all four).
 # 407 -> 408: ``state/panic_source.json`` is diagnostic latest-source evidence
 # (section 2); causal observations also use the existing ``logs/events.jsonl``.
-# 408 -> 410 (realtime setup): a realtime turn's raw ``task_results/artifacts/<task>/realtime-wire.jsonl``
-# and its ``source_handles/context_checkpoints/realtime-prepared-<sha256>.json`` input capture
-# (``ouroboros/realtime_turn.py``), one section-7 row each.
+# Live calls retain conversation-wire.jsonl and the sibling extension-imports lock.
+# The unused realtime-wire and realtime-prepared probe writers are retired by the host lane.
 EXPECTED_SCAN_PATHS = 410
 
 # Scanned paths that must always be present — guards the scanner itself
@@ -1303,3 +1305,11 @@ def test_dynamic_source_handle_arguments_do_not_certify_named_rows(tmp_path):
         encoding="utf-8",
     )
     assert scan_data_paths(tmp_path) == frozenset()
+
+
+def test_live_call_evidence_replaces_unused_probe_artifacts():
+    paths = scan_data_paths()
+    assert "state/skills/.*-extension-imports.lock" in paths
+    assert ".*-extension-imports.lock" not in paths
+    assert "task_results/artifacts/*/conversation-wire.jsonl" in paths
+    assert not any("/realtime-wire.jsonl" in path or "/realtime-prepared-" in path for path in paths)
