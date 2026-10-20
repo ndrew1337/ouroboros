@@ -166,4 +166,3 @@ def rate(quote: Mapping | None, field: str, *, input_tokens: int = 0) -> float |
         return value if math.isfinite(value) and value >= 0 else None
     except (ValueError, OverflowError):
         return None
-
