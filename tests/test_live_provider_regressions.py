@@ -307,6 +307,7 @@ def test_gemini_renewal_waits_for_untranscribed_input(packages, evidence):
             assert host.hub.receive_audio("owner", cp.AudioFrame(
                 cp.FRAME_AUDIO_IN, host.hub.epoch, 0, 24000, 0, b"\x01\x00" * 960))
             await until(lambda: any("realtimeInput" in row for row in wire.sent))
+            wire.put({"voiceActivity": {"type": "ACTIVITY_START"}})
             wire.put({"goAway": {"timeLeft": "1s"}})
             await asyncio.sleep(.08)
             evidence.update(wire=wire.sent, received=wire.received, ended_early=running.done(),
