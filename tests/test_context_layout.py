@@ -10,9 +10,11 @@ def test_tier0_protected_core_declared():
     work must not silently demote any of these (BIBLE P1 / P4). The marks I keep
     in view joined it when conversations became the memory view's, whose physical
     floor alone turns old lines into addresses: the recent-dialogue horizon left."""
-    kept = {"system", "bible", "identity", "scratchpad", "knowledge_index"}
+    kept = {"system", "bible", "identity", "scratchpad"}
     assert kept <= set(cl.TIER0_ALWAYS_FULL)
     assert "memory_marks" in cl.TIER0_ALWAYS_FULL
+    assert cl.TIER0_WHOLE_OR_OUTLINE == {"knowledge_index"}
+    assert not cl.TIER0_WHOLE_OR_OUTLINE & cl.TIER0_ALWAYS_FULL
     assert "recent_dialogue" not in cl.TIER0_ALWAYS_FULL
     assert set(cl.TIER0_ALWAYS_FULL) == kept | {"memory_marks"}
 

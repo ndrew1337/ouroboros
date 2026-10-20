@@ -30,13 +30,17 @@ from __future__ import annotations
 
 import dataclasses
 import json
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+import logging
+from typing import Callable, Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ouroboros import context_budget
 from ouroboros.chat_chain import parse_address
 from ouroboros import memory_view as mv
 from ouroboros import memory_view_legacy as legacy
 from ouroboros.utils import estimate_tokens
+from ouroboros.section_floor import HostSection, PROTECTED, retain_section, relocated_text, section_views
+
+log = logging.getLogger(__name__)
 
 # The ladder, old before new and people last: host fact lines of this room's tasks
 # (F1), other live rooms without notes (F1b), retold records, whole or not, as one line per room
@@ -280,7 +284,7 @@ def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mo
                        lowered_from=lowered_from))
 
 
-TRACE_FIELDS = ("role", "room_id", "floor", "story_status")  # what a task trace keeps of a view receipt
+TRACE_FIELDS = ("role", "room_id", "floor", "story_status", "host_sections_addressed")  # what a task trace keeps of a view receipt
 
 
 def trace_facts(receipt: Mapping[str, Any]) -> Dict[str, Any]:
@@ -332,11 +336,15 @@ def physical_mode(preferred: str, fixed_tokens_by_mode: Mapping[str, int], minim
     return candidates[-1]
 
 
-def mode_views(snapshot: mv.MemoryViewSnapshot, *, preferred: str, fixed_tokens_by_mode: Mapping[str, int],
+def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fixed_tokens_by_mode: Mapping[str, int],
                window_tokens: Optional[int], known_window: bool, output_reserve: Optional[int], ratio: float,
                start: Optional[str] = None, tool_names: Optional[Mapping[str, Iterable[str]]] = None,
                allow_mode_lowering: bool = True, kept: Optional[Mapping[str, mv.FloorLevel]] = None,
                saving: Optional[Mapping[str, int]] = None, select: Optional[str] = None,
+               host_sections: Optional[Mapping[str, Iterable[HostSection]]] = None,
+               measure_fixed: Optional[Callable[..., int]] = None,
+               section_root: str = "", section_task_id: str = "",
+               kept_sections: Optional[Mapping[str, Iterable[Mapping]]] = None,
                ) -> Tuple[Dict[str, Tuple[str, str, Dict[str, Any]]], str]:
     """Every mode's ``(story text, room text, view receipt)`` and the mode the task starts in.
 
@@ -356,17 +364,42 @@ def mode_views(snapshot: mv.MemoryViewSnapshot, *, preferred: str, fixed_tokens_
     nothing shown unfolds.
     """
     window = int(window_tokens) if known_window and window_tokens else None
+    fixed_tokens_by_mode = dict(fixed_tokens_by_mode)
+    requested_saving = dict(saving or {})
+    saving = {}
+    receipts = {}
+    shown = start if start in MODES else preferred
+    def host_mode(mode, carried_mode):
+        level = (kept or {}).get(carried_mode) or mv.FULL_VIEW
+        story, room = (mv.render_story(snapshot, level), mv.render_room(snapshot, level)) if snapshot else ("", "")
+        previous = tuple((kept_sections or {}).get(carried_mode, ()))
+        parts = tuple((host_sections or {}).get(mode, ()))
+        measure = (lambda addressed, mode=mode: measure_fixed(mode, addressed, story, room)) if measure_fixed else None
+        receipts[mode], remaining = _host_steps(
+            parts, previous, measure=measure,
+            window=window, reserve=context_budget.context_mode_limits(mode, preferred, output_reserve)[1],
+            ratio=ratio, saving=requested_saving.get(mode, 0), root=section_root, task_id=section_task_id)
+        if measure is not None:
+            fixed_tokens_by_mode[mode] = measure_fixed(mode, section_views(parts, receipts[mode]))
+        saving[mode] = remaining
+    for mode in MODES:
+        host_mode(mode, shown if select and mode == select else mode)
     physical = (physical_mode(preferred, fixed_tokens_by_mode, minimal_view_tokens(snapshot, window_tokens=window),
                               window_tokens=window, known_window=known_window, calibration_ratio=ratio,
                               reserve_by_mode={mode: context_budget.context_mode_limits(mode, preferred, output_reserve)[1]
                                                for mode in MODES})
-                if allow_mode_lowering else preferred)
+                if allow_mode_lowering and snapshot is not None else preferred)
     begin = (select if select in MODES
              else start if start in MODES and MODES.index(start) > MODES.index(physical) else physical)
     shown = start if start in MODES else preferred
     carried = kept is not None and begin != shown  # the shown level moves to the selected mode
+    if kept_sections is not None and begin != shown:
+        host_mode(begin, shown)
     views = {}
     for mode in MODES:
+        if snapshot is None:
+            views[mode] = ("", "", {"host_sections_addressed": receipts[mode]} if receipts[mode] else {})
+            continue
         story, room, facts = render_view_for_mode(
             snapshot, mode=mode, owner_mode=preferred, window_tokens=window, known_window=known_window,
             output_reserve=output_reserve, ratio=ratio, non_memory_tokens=fixed_tokens_by_mode[mode],
@@ -374,5 +407,53 @@ def mode_views(snapshot: mv.MemoryViewSnapshot, *, preferred: str, fixed_tokens_
             tool_names=(tool_names or {}).get(mode),
             kept=None if kept is None else kept.get(shown if carried and mode == begin else mode, mv.FULL_VIEW),
             saving=(saving or {}).get(mode, 0))
+        if receipts[mode]:
+            facts["host_sections_addressed"] = receipts[mode]
         views[mode] = (story, room, view_receipt(snapshot, story, room, facts))
     return views, begin
+
+
+# Host producers before indexes, then the existing memory ladder. These are window
+# steps only: a preferred target or a working margin cannot relocate service facts.
+HOST_STEPS = ("health_invariants", "runtime", "review_records", "registry", "installed_skills",
+              "drive_state", "shared_understanding", "pattern_register", "world", "subagents",
+              "execution_reflections", "project_execution_reflections", "architecture_map", "development_map")
+INDEX_STEPS = ("project_knowledge_index", "knowledge_index")
+
+
+def _host_steps(sections, previous, *, measure, window, reserve, ratio, saving, root, task_id):
+    """First steps of mode_views, using the same physical allowance as memory.
+
+    Producers own meaning; this walk selects only explicit smaller views. Retained
+    source handles precede pointers. A failed capture leaves the full bytes inline.
+    Previously shown addresses stay addressed; their savings never pay a new deficit.
+    """
+    if measure is None:
+        return list(previous), saving
+    receipts = list(previous)
+    addressed = section_views(sections, receipts)
+    initial = measure(addressed)
+    order = {name: i for i, name in enumerate((*HOST_STEPS, *INDEX_STEPS))}
+    for part in sorted(sections, key=lambda p: (p.section_id in INDEX_STEPS,
+                                               order.get(p.section_id, len(HOST_STEPS)))):
+        if part.section_id in addressed or part.section_id in PROTECTED or part.operative_view is None:
+            continue
+        if not window or not root or not task_id or len(part.operative_view) >= len(part.full_text):
+            continue
+        current = measure(addressed)
+        physical = floor_allowances(window_tokens=window, output_reserve_tokens=reserve,
+                                    non_memory_tokens=0, calibration_ratio=ratio)["physical"]
+        if (physical is None or current <= physical) and initial - current >= saving:
+            continue
+        try:
+            row = retain_section(part, root=root, task_id=task_id)
+        except (OSError, ValueError):
+            log.warning("Host section capture unavailable; keeping %s whole", part.section_id, exc_info=True)
+            continue
+        short = relocated_text(part, row["reader"])
+        saved = view_tokens(part.full_text) - view_tokens(short)
+        if saved <= 0:
+            continue
+        addressed[part.section_id] = short
+        receipts.append({**row, "tokens_saved": saved})
+    return receipts, max(0, saving - (initial - measure(addressed)))
