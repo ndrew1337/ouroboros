@@ -221,6 +221,9 @@ def classify_member(row: Mapping[str, Any], raw: Optional[Mapping[str, Any]] = N
         if _owner_actions(row)[1]:
             state["turn"].append({"kind": "action", "task_id": task_id, "code": code})
             state["release"] = "owner"
+        if raw.get("execution_transport") is not None:
+            state["release"] = "none"
+            state["turn"] = []
         return state
     wait = _owner_wait(row)
     if wait == "owner_wait":
@@ -302,7 +305,8 @@ def controls_for(current: Optional[Mapping[str, Any]], current_row: Optional[Map
                 and current["activity"] in {"working", "queued", "waiting"} \
                 and "earlier_work_unconfirmed" not in codes and phase != "budget_paused":
             controls.append({"action": "pause", "target": target})
-        if current["activity"] == "paused" and phase == "budget_paused" and codes & _RESUMABLE_CODES:
+        if (current["activity"] == "paused" and phase == "budget_paused"
+                and current.get("release") != "none" and codes & _RESUMABLE_CODES):
             controls.append({"action": "resume", "target": target})
     for task_id in [*([str(current.get("task_id"))] if current is not None else []), *roots]:
         if task_id and task_id not in {entry["target"] for entry in controls if entry["action"] == "stop"}:
