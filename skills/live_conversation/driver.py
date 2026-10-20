@@ -11,36 +11,88 @@ import asyncio
 import time
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, Playback, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import RealtimeSetupError
 from ouroboros.realtime_session import joined
 
 
-async def run(host):
+CALL_INSTRUCTIONS = """## Live calls
+
+In a call my model is a realtime speech model, and I am still myself: the
+same core, memory, tools and judgment. I speak briefly, in the language of
+the spoken conversation whatever the interface language, and call tools
+myself. Work still running is pending, never done; long work becomes a task
+while we keep talking, and its result reaches me in the call. Links, code and
+lists go to the room's chat through `send_user_message`: saying a message or
+a URL aloud does not deliver it, so when asked to send something I use that
+tool and confirm its result. Typed messages and other turns' replies in the
+room reach me during the call, and my words reach them. In a meeting I speak
+when it helps the people there; their voices are correspondents, not my
+human. Words cut off by an interruption were not heard, so I do not count
+them as said."""
+
+
+def languages_opening_sentence(languages):
+    if languages:
+        return (f"Speech recognition expects {', '.join(languages)}, as you recorded for these calls; when someone "
+                "speaks a language that is not listed, record the new list with set_call_languages.")
+    return ("Speech recognition has no languages recorded for these calls yet and guesses each utterance: assume "
+            "the owner's language from this room's correspondence and your memory and record it right away with "
+            "set_call_languages, the owner's first; ask when unsure.")
+
+
+def session_options(host, resume_handle=""):
+    config, honours = host.config, host.model.honours
+    languages = tuple(host.state.get("languages", ()))
+    knobs = {key: getattr(config, key) for key in ("pause", "interruptions", "thinking", "search") if key in honours}
+    return LiveOptions(voice=config.voice, resume_handle=resume_handle,
+        languages=languages if "languages" in honours else (),
+        instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, languages_opening_sentence(languages), config.instructions))),
+        **knobs)
+
+
+async def run(host: LiveHost):
+    resume_handle = ""
     while True:
         await host.check()
         if host.hub.closed or host.hub.ended_by_owner:
             return
-        result = await host.session(lambda session, usage: consume(host, session, usage))
-        if result != "renew":
+        result = await host.session(lambda session: consume(host, session), session_options(host, resume_handle))
+        if result is None:
             return
-        host.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
+        resume_handle = result
 
 
-async def consume(host, session, report_usage):
+async def consume(host: LiveHost, session):
     hub = host.hub
     tool_queue, rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
     ended = asyncio.Event()
     renewing, response_open, tools_running, input_open = False, False, False, False
     renewal_deadline = None
+    resume = False
+    provider_closed = False
     input_rate = output_rate = 0
-    vision = False
     playing_item = ""
     played, audio_ms = {}, {}
     interrupted = set()
     meeting_audio = False
     empty_since = time.monotonic()
     pending_spoken = {}
+
+    def request_renewal(*, resuming=False, within=None):
+        nonlocal renewing, resume, renewal_deadline
+        # A refit request wins over a transport resume: it needs current history.
+        resume = resuming if not renewing else resume and resuming
+        renewing = True
+        if within is not None:
+            deadline = time.monotonic() + float(within)
+            renewal_deadline = min(renewal_deadline, deadline) if renewal_deadline else deadline
+
+    def quiet():
+        unheard = any(item not in interrupted and played.get(item, 0) < duration - 20
+                      for item, duration in audio_ms.items())
+        return (not response_open and not input_open and not tools_running and tool_queue.empty()
+                and not pending_spoken and not unheard and session.renewal_ready)
 
     async def finish_spoken(item, *, interrupted=False, completed=False):
         text = pending_spoken.pop(item, None)
@@ -107,15 +159,17 @@ async def consume(host, session, report_usage):
             await finish_spoken(item, interrupted=True)
 
     async def provider():
-        nonlocal input_rate, output_rate, response_open, renewing, renewal_deadline, playing_item, meeting_audio, vision, input_open
+        nonlocal input_rate, output_rate, response_open, playing_item, meeting_audio, input_open, provider_closed
         while True:
             for event in await session.receive():
                 data = event.data
                 if event.kind == "ready":
                     input_rate, output_rate = data["input_rate"], data["output_rate"]
-                    vision = bool(data.get("vision"))
                     hub.set_engine_rates(input_rate, output_rate)
                     hub.send_state(cp.STATE_LIVE)
+                    if not host.state.get("greeted"):
+                        host.state["greeted"] = True
+                        await session.send(Respond(host.opening))
                 elif event.kind == "audio":
                     if data["rate"] != output_rate:
                         raise RealtimeSetupError("audio_rate", "provider changed its output rate")
@@ -137,24 +191,32 @@ async def consume(host, session, report_usage):
                 elif event.kind == "input_done":
                     input_open = False
                 elif event.kind == "response_started":
+                    host.response_started(data["response_id"])
                     response_open = True
                     hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
-                    report_usage(data["usage"])
+                    host.response_done(data["response_id"], usage=data["usage"], raw_usage=data["raw_usage"], status=data["status"])
                     response_open = bool(data.get("continues"))
                     hub.send_turn(cp.TURN_AWAITING if response_open or tools_running else cp.TURN_IDLE)
                 elif event.kind == "tool_call":
                     await tool_queue.put({"id": data["call_id"], "type": "function", "function": {
                         "name": data["name"], "arguments": data["arguments"]}})
                 elif event.kind == "renew":
-                    renewing = True
-                    renewal_deadline = time.monotonic() + float(data.get("within_s", 30))
+                    request_renewal(resuming=data["resume"], within=data["within_s"])
+                elif event.kind == "resumable":
+                    host.state["resume_handle"] = data["handle"]
                 elif event.kind == "closed":
-                    raise RealtimeSetupError("provider_closed", "provider ended the live connection")
+                    if not data.get("resumable") or not host.state.get("resume_handle"):
+                        raise RealtimeSetupError("provider_closed", "provider ended the live connection")
+                    provider_closed = True
+                    request_renewal(resuming=True)
+                    await ended.wait()
+                    return
 
     async def peers():
         nonlocal meeting_audio, empty_since
         while True:
+            await host.check()
             if hub.closed or hub.ended_by_owner:
                 for item in tuple(pending_spoken):
                     await finish_spoken(item)
@@ -165,24 +227,27 @@ async def consume(host, session, report_usage):
                 empty_since = time.monotonic()
             elif time.monotonic() - empty_since >= 15:
                 raise RealtimeSetupError("peers_left", "no peer is attached")
+            if host.renewal_due():
+                request_renewal()
             if renewing:
-                if (not response_open and not input_open and not tools_running and tool_queue.empty()
-                        and not pending_spoken and getattr(session, "renewal_ready", True)):
+                if quiet():
+                    if resume and not host.state.get("resume_handle"):
+                        raise RealtimeSetupError("resume_unavailable", "provider has not supplied a resume handle")
                     hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     await rows.join()
                     ended.set()
                     return
-                if time.monotonic() >= renewal_deadline:
+                if renewal_deadline is not None and time.monotonic() >= renewal_deadline:
                     raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
             # A renewal request waits for a completed audible turn. Media keeps
             # flowing until then; after the boundary queued frames belong to the
             # next connection and the browser pauses capture while reconnecting.
             event = hub.next_event(0)
-            if isinstance(event, cp.PeerAudio) and input_rate:
+            if isinstance(event, cp.PeerAudio) and input_rate and not provider_closed:
                 meeting_audio |= event.role == cp.PEER_MEETING
                 await session.send(Audio(event.pcm, input_rate))
             elif isinstance(event, cp.PeerVideo):
-                if not vision:
+                if not host.model.vision:
                     raise RealtimeSetupError("vision_unsupported", "selected engine does not accept images")
                 await session.send(Video(event.data, event.mime))
             elif isinstance(event, cp.PeerControl):
@@ -193,14 +258,11 @@ async def consume(host, session, report_usage):
                     if (event.role == cp.PEER_OWNER or
                             (hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
                         played[item] = min(message["played_ms"], int(audio_ms.get(item, 0)))
-                        await session.send(Playback(item, played[item]))
                         if played[item] > 0 and played[item] >= int(audio_ms.get(item, 0)) - 20:
                             await finish_spoken(item, completed=True)
                 elif message["type"] == "context":
                     row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
-                    async with host._tools_lock:
-                        host.messages.append(row)
-                        host.selected_input()
+                    await host.observe_context(row)
                     await session.send(ContextUpdate((row,)))
             await asyncio.sleep(.01)
 
@@ -219,7 +281,7 @@ async def consume(host, session, report_usage):
         for child in done:
             await child
         await rows.join()
-        return "renew" if renewing else "ended"
+        return (host.state.get("resume_handle", "") if resume else "") if renewing else None
     finally:
         hub.send_state(cp.STATE_CLOSING if not renewing else cp.STATE_RECONNECTING)
         # Stop producers before draining final rows; the one writer remains
