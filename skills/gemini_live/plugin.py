@@ -46,14 +46,15 @@ VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
     ('Laomedeia', 'Upbeat'), ('Achernar', 'Soft'), ('Alnilam', 'Firm'), ('Schedar', 'Even'), ('Gacrux', 'Mature'),
     ('Pulcherrima', 'Forward'), ('Achird', 'Friendly'), ('Zubenelgenubi', 'Casual'), ('Vindemiatrix', 'Gentle'),
     ('Sadachbia', 'Lively'), ('Sadaltager', 'Knowledgeable'), ('Sulafat', 'Warm')))
-# Spoken turns held at ~92k o200k of instruction (18.10.2026); the endpoint documents
-# a 131,072-token input. The reserve is a planning margin for in-session growth.
-FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
-                   source='measured spoken retention at ~92k o200k instruction, owner probes 2026-10-18; '
+# Spoken turns held under a ~92k-token instruction once the session renews before ~2.5k
+# held audio tokens (18.10.2026); the endpoint documents a 131,072-token input. The
+# reserve is a planning margin for in-session growth.
+FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='provider',
+                   source='spoken retention held under a ~92k-token instruction, owner probes 2026-10-18; '
                           '10k reserve is a planning margin; input 131,072 provider tokens documented at '
                           'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live (read 2026-10-21)',
                    observed='2026-10-18')
-THINKING_FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
+THINKING_FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='provider',
     source='hypothesis: use the ordinary model retention margin until this route is measured; '
            'input 131,072 provider tokens documented at '
            'https://ai.google.dev/gemini-api/docs/models/gemini-3.8-live-extended-thinking (read 2026-10-21)',
