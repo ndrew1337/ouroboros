@@ -149,6 +149,7 @@ test('only an opted-in holder keeps capture while hidden, including pending perm
     assert.equal(lease.signal.aborted, false);
     assert.equal(replacement.track.stops, 0);
     lease.release();
+    env.navigator.mediaDevices.getUserMedia = () => Promise.resolve(stream());
     const dictation = await capture.acquire({ owner: 'dictation' });
     env.document.dispatchEvent(new Event('visibilitychange'));
     assert.equal(dictation.signal.reason, 'hidden', 'opt-in does not leak to the next holder');
