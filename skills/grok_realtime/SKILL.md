@@ -12,11 +12,19 @@ permissions: [realtime_provider, net, read_settings]
 env_from_settings: [XAI_API_KEY]
 ---
 
-Registers `grok_realtime:grok`. The host selects the explicit native model,
-ordinary context and function tools, owns authority and reserves spending before
-connection. This provider maps xAI's wire, cumulative caption replacements and
-outer response usage. Connected-time samples are retained as cumulative evidence;
-missing samples and the unreported connection tail remain unknown. No token tariff
-or delta sum is substituted. Grok Voice has no image input; Show is unavailable.
-Credentials are read only when opening a host-admitted connection. Installing or
-granting this provider does not enable the Live Conversation beta.
+Registers `grok_realtime:grok` for ordinary host-selected context and tools.
+Grok Voice 3.0 has a measured conversation window of 90,000 o200k tokens
+(2026-10-21); the 231,828-token accepted input is separate evidence, not a fit
+target. This package never selects or cuts memory. Host facts keep their roles;
+`Respond` opens the greeting only after setup acknowledgements. Call instructions
+follow host system text; language tags add a recognition sentence, not a session
+field. Silent tool outputs do not request another response.
+
+The provider reports modality usage when present, final response status, and
+cumulative connected seconds. Idle samples and the closing tail reach the host
+through the `observe("usage", ...)` callback; the host prices only growth within
+one physical connection. Provider usage remains raw evidence beside those axes.
+Server VAD decides pauses and interruptions. There is no image input; Show is
+unavailable. The feature owns playback, UI and call renewal; the host owns tools,
+history, shared spending and Stop. Credentials are read only on an admitted
+connection. Installing or granting this provider does not enable Calls (beta).

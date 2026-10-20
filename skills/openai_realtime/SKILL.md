@@ -12,33 +12,28 @@ permissions: [realtime_provider, net, read_settings]
 env_from_settings: [OPENAI_API_KEY]
 ---
 
-Provides `openai_realtime:openai`, an in-process provider for the host's
-`RealtimeInput`. The host selects memory, roles, tools, model and output allowance.
-This package owns OpenAI's physical field layout, acknowledgement handling and
-usage mapping, and declares its route (accounting provider `openai_realtime`, the
-Realtime endpoint, model prefix `openai::`) for host fitting and accounting.
-Unsupported input fails before a connection opens; nothing is clipped or
-reclassified as owner speech. Automatic truncation is disabled. The session's
-`max_output_tokens` is `"inf"`: the field takes an integer 1-4096 or `inf`, the
-model's maximum, so the host allowance is not written into it. The one probe
-response carries its own integer bound, refused offline outside 1-4096.
+Registers `openai_realtime:openai` for `gpt-realtime-2.1`. The host selects
+memory, roles, tools and output allowance. The provider owns wire layout,
+acknowledgements, captions, usage axes and its catalog. The 128,000-token window
+is documented, with spoken retention still a hypothesis; accepting 133,554 text
+tokens once on 2026-10-20 does not enlarge it. Automatic truncation is disabled.
+Text fields preserve every character and role across the observed 256000-character
+item limit. Images remain native input. Unsupported content fails explicitly.
 
-The host can preview the exact wire plan without credentials or network access.
-Execution requires the preview digest and the existing hash-bound grant for
-`OPENAI_API_KEY`. The key is read through `PluginAPI.get_settings` only when
-opening a connection. The host supplies an event recorder and a total deadline.
-An optional, explicit text probe requests one bounded response and runs no tools.
-Response usage goes to the host recorder in host axes, beside the raw event, for
-host settlement; this package neither prices nor authorizes spending.
+Call instructions follow host system text. The first language tag supplies the
+ISO-639-1 transcription hint; additional tags stay in instructions. Pause maps
+to server-VAD silence duration (300/500/1000 ms); interruptions follow the owner's
+option. Responses remain host-driven, after setup and context/tool ACKs. `Respond`
+opens the greeting; silent tool outputs request no answer.
 
-`live.py` supplies the separate Live Conversation consumer with native PCM audio,
-images, input/output captions and ordinary function calls. It uses the measured
-lossless 256000-character text-field fragmentation, retains item role/order,
-verifies setup and live item acknowledgements, and disables automatic truncation.
-Its audio response bound is the smaller of the host allowance and 4096; the
-setup-only text diagnostic above keeps its own explicit probe bound. Server VAD
-detects input; this adapter schedules responses after context/tool ACKs and
-cancels/truncates generated audio only against the host's playback clock.
-Usage retains modality evidence for ordinary accounting, without estimating an
-audio invoice from text prices. The feature owns UI and the host owns history,
-devices, tools, money and Stop. Granting a key does not enable Calls (beta).
+The native per-response limit encodes allowances up to 4096 directly; larger
+allowances use `"inf"` (the model maximum). An unknown model maximum stays unknown.
+Usage reports text/audio/image/cache input and text/audio output independently,
+with raw usage and completion status, including interrupted or failed responses.
+There is no diagnostic probe or per-connection reservation in this package.
+
+Renewal opens a fresh host-refitted session; there is no resumption. Native
+transcription, response and tool/ACK work must finish first (`renewal_ready`);
+the feature also waits for playback and durable caption writes. The host owns
+history, tools, shared spending and Stop. Credentials are read only while opening
+an admitted connection. Granting a key does not enable Calls (beta).

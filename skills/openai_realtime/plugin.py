@@ -1,4 +1,4 @@
-"""OpenAI wire layout and initial setup consumer. No host content selection."""
+"""OpenAI wire layout, catalog and usage mapping. No host content selection."""
 from __future__ import annotations
 
 import json
@@ -82,7 +82,7 @@ def _tools(raw):
     return result
 
 
-def layout(selected, probe=None):
+def layout(selected):
     """Preserve selected roles/text, fragmenting only at observed field limits."""
     messages = json.loads(selected.messages_json)
     if not isinstance(messages, list) or not messages:
@@ -92,8 +92,7 @@ def layout(selected, probe=None):
     if first_role != "system":
         raise RealtimeSetupError("instructions", "the ordinary leading system message is required")
     tools = _tools(json.loads(selected.tools_json))
-    # No automatic response can start (turn detection is off). The one requested
-    # response carries the explicit probe bound; the host allowance bounds that.
+    # Initial input is acknowledged before VAD or a host-requested response starts.
     session = {
         "type": "realtime", "instructions": first_parts[0]["text"], "tools": tools,
         "truncation": "disabled", "output_modalities": ["text"],
@@ -120,104 +119,22 @@ def layout(selected, probe=None):
         append_item("system", [part])
     for role, parts in parsed[1:]:
         append_item(role, parts)
-    if probe is not None:
-        if probe.max_output_tokens > selected.output_allowance_tokens:
-            raise RealtimeSetupError("probe", "probe output exceeds the host's selected allowance")
-        if probe.max_output_tokens > _OUTPUT_FIELD_MAX:
-            raise RealtimeSetupError("probe", f"OpenAI max_output_tokens is an integer 1-{_OUTPUT_FIELD_MAX} or inf")
-        append_item("user", [{"type": "input_text", "text": probe.text}])
-        events.append({"type": "response.create", "event_id": "setup_probe_response", "response": {
-            "output_modalities": ["text"], "max_output_tokens": probe.max_output_tokens,
-            "tool_choice": "none",
-        }})
     wire = canonical_json({"model": selected.model, "input_sha256": selected.sha256, "events": events})
     return events, wire
 
 
 def _usage(response):
-    """OpenAI usage in host axes; an axis it does not report stays absent (unknown)."""
-    raw = response.get("usage") if isinstance(response, dict) else None
-    raw = raw if isinstance(raw, dict) else {}
-    details = raw.get("input_token_details")
-    values = {"prompt_tokens": raw.get("input_tokens"), "completion_tokens": raw.get("output_tokens"),
-              "cached_tokens": details.get("cached_tokens") if isinstance(details, dict) else None}
+    """Reported modality axes only; totals are not a witness of their split."""
+    raw = response.get("usage") or {}
+    inputs, outputs = raw.get("input_token_details") or {}, raw.get("output_token_details") or {}
+    values = {"text_input_tokens": inputs.get("text_tokens"),
+              "audio_input_tokens": inputs.get("audio_tokens"),
+              "image_input_tokens": inputs.get("image_tokens"),
+              "cached_input_tokens": inputs.get("cached_tokens"),
+              "text_output_tokens": outputs.get("text_tokens"),
+              "audio_output_tokens": outputs.get("audio_tokens"),
+              "thinking_tokens": outputs.get("reasoning_tokens")}
     return {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
-
-
-async def _receive(ws, observe):
-    raw = await ws.recv()
-    if isinstance(raw, bytes):
-        raw = raw.decode("utf-8")
-    observe("receive", raw)  # preserve even a malformed/error event before interpreting it
-    event = json.loads(raw)
-    if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-        raise RealtimeSetupError("wire", "expected a JSON event object")
-    if event.get("type") == "error":
-        error = event.get("error") or {}
-        raise RealtimeSetupError("provider_error", canonical_json(error))
-    if event.get("type") in {"conversation.item.deleted", "conversation.item.truncated"}:
-        raise RealtimeSetupError("provider_truncation", "the selected input changed")
-    return event
-
-
-def _check_session(effective, sent):
-    for key in ("instructions", "tools", "truncation", "output_modalities", "max_output_tokens"):
-        if effective.get(key) != sent[key]:
-            raise RealtimeSetupError("session_mismatch", f"provider did not retain {key}")
-    if effective.get("audio", {}).get("input", {}).get("turn_detection", "missing") is not None:
-        raise RealtimeSetupError("session_mismatch", "automatic responses must remain disabled during setup")
-
-
-def _check_item(actual, sent):
-    if any(actual.get(key) != sent[key] for key in ("id", "type", "role", "content")):
-        raise RealtimeSetupError("item_mismatch", f"provider did not retain {sent['id']} exactly")
-
-
-async def consume(ws, events, observe):
-    """Serial acknowledgements: no probe response is requested after partial setup."""
-    response = None
-    response_id = None
-    for outgoing in events:
-        raw = canonical_json(outgoing)
-        observe("send", raw)
-        await ws.send(raw)
-        while True:
-            incoming = await _receive(ws, observe)
-            kind = incoming.get("type")
-            if kind == "session.updated":
-                _check_session(incoming.get("session", {}), events[0]["session"])
-                if outgoing["type"] == "session.update":
-                    break
-            elif kind in {"conversation.item.added", "conversation.item.done"}:
-                item = incoming.get("item", {})
-                if outgoing.get("item", {}).get("id") == item.get("id"):
-                    _check_item(item, outgoing["item"])
-                    if incoming.get("previous_item_id") != outgoing["previous_item_id"]:
-                        # The API uses null for the first item; the client spells it root.
-                        if not (outgoing["previous_item_id"] == "root" and incoming.get("previous_item_id") is None):
-                            raise RealtimeSetupError("item_order", "provider changed the selected order")
-                    if kind == "conversation.item.done":
-                        break
-                elif outgoing["type"] != "response.create" or item.get("role") != "assistant":
-                    raise RealtimeSetupError("unexpected_item", "unrequested conversation input during setup")
-            elif kind.startswith("response."):
-                if outgoing["type"] != "response.create":
-                    raise RealtimeSetupError("unexpected_response", "response began before whole input was acknowledged")
-                if kind == "response.created":
-                    if response_id is not None:
-                        raise RealtimeSetupError("response_mismatch", "more than one response began")
-                    response_id = incoming.get("response", {}).get("id")
-                    if not response_id:
-                        raise RealtimeSetupError("response_mismatch", "response.created has no id")
-                elif kind == "response.done":
-                    response = incoming.get("response", {})
-                    observe("usage", canonical_json(_usage(response)))  # before the checks: failed responses bill too
-                    if not response_id or response.get("id") != response_id:
-                        raise RealtimeSetupError("response_mismatch", "response.done does not match the requested response")
-                    if response.get("status") != "completed":
-                        raise RealtimeSetupError("response_failed", canonical_json(response))
-                    break
-    return response
 
 
 def register(api):

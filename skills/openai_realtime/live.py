@@ -11,7 +11,7 @@ import asyncio
 import json
 from dataclasses import replace
 
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 from ouroboros.realtime_session import JsonSession
 from . import _OUTPUT_FIELD_MAX, _tools, _usage, layout
@@ -55,6 +55,14 @@ class OpenAISession(JsonSession):
     def __init__(self, selected, options, *, connect, observe):
         super().__init__(selected, options, connect=connect, observe=observe)
         messages = json.loads(selected.messages_json)
+        additions = [options.instructions] if options.instructions else []
+        if len(options.languages) > 1:
+            additions.append("Speech recognition should also expect: " + ", ".join(options.languages[1:]) + ".")
+        if additions:
+            position = 0
+            while position < len(messages) and messages[position]["role"] == "system":
+                position += 1
+            messages.insert(position, {"role": "system", "content": "\n\n".join(additions)})
         # The first system block remains the measured setup layout; all following
         # native items retain their order, tool ids and full text.
         first = replace(selected, messages_json=canonical_json(messages[:1]))
@@ -78,6 +86,11 @@ class OpenAISession(JsonSession):
         session["audio"] = {"input": {"format": {"type": "audio/pcm", "rate": 24000},
             "transcription": {"model": "gpt-4o-transcribe"}, "turn_detection": None},
             "output": {"format": {"type": "audio/pcm", "rate": 24000}}}
+        if options.languages:
+            session["audio"]["input"]["transcription"]["language"] = options.languages[0].split("-")[0].lower()
+        self.turn_detection = {"type": "server_vad", "create_response": False,
+                               "interrupt_response": options.interruptions,
+                               "silence_duration_ms": {"short": 300, "normal": 500, "long": 1000}[options.pause]}
         if options.voice:
             session["audio"]["output"]["voice"] = options.voice
         self.events = events
@@ -96,6 +109,21 @@ class OpenAISession(JsonSession):
         self.context_lock = asyncio.Lock()
         self.response_requested = self.want_response = self.speech_active = False
         self.waiting_tools = set()
+        self.input_transcripts, self.output_transcripts = set(), set()
+        self.ready = False
+
+    @property
+    def renewal_ready(self):
+        # The feature separately waits for playback ACKs and its caption writer.
+        return self.ready and not (self.speech_active or self.input_transcripts or self.output_transcripts
+            or self.active_response or self.response_requested or self.want_response or self.context_queue
+            or self.outstanding or self.tool_update is not None or self.waiting_tools or self.truncations)
+
+    def final_captions(self):
+        events = [LiveEvent("caption", {"speaker": "ouroboros", "item_id": item, "text": text,
+                  "final": True, "replace": True, "incomplete": True}) for item, text in self.text.items() if text]
+        self.text.clear()
+        return events
 
     async def open(self):
         await self.connect_wire()
@@ -123,7 +151,7 @@ class OpenAISession(JsonSession):
                 if kind and (kind.startswith("response.") or kind in {"conversation.item.deleted", "conversation.item.truncated"}):
                     raise RealtimeSetupError("setup_mutated", "OpenAI responded or changed input before setup completed")
         await self.write({"type": "session.update", "session": {"type": "realtime", "audio": {"input": {
-            "turn_detection": {"type": "server_vad", "create_response": False, "interrupt_response": False}}}}})
+            "turn_detection": self.turn_detection}}}})
         while True:
             event = await self.read()
             if event.get("type") == "session.updated":
@@ -131,7 +159,12 @@ class OpenAISession(JsonSession):
                 if effective.get("truncation") != "disabled":
                     raise RealtimeSetupError("session_mismatch", "OpenAI enabled truncation")
                 self.check_output_bound(effective)
+                self.check_turn_detection(effective)
                 break
+            if event.get("type", "").startswith("response.") or event.get("type") in {"conversation.item.deleted", "conversation.item.truncated"}:
+                raise RealtimeSetupError("setup_mutated", "OpenAI responded or changed input before setup completed")
+        self.ready = True
+        await self.advance_context()
         self.pending.append(LiveEvent("ready", {"input_rate": 24000, "output_rate": 24000, "vision": True}))
 
     async def receive(self):
@@ -146,10 +179,15 @@ class OpenAISession(JsonSession):
         if effective.get("max_output_tokens") != self.events[0]["session"]["max_output_tokens"]:
             raise RealtimeSetupError("session_mismatch", "OpenAI changed max_output_tokens")
 
+    def check_turn_detection(self, effective):
+        actual = effective.get("audio", {}).get("input", {}).get("turn_detection", {})
+        if not isinstance(actual, dict) or any(actual.get(k) != v for k, v in self.turn_detection.items()):
+            raise RealtimeSetupError("session_mismatch", "OpenAI changed turn_detection")
+
     async def advance_context(self):
         """Only this provider owns the ordering of item ACKs and responses."""
         async with self.context_lock:
-            if self.active_response or self.response_requested or self.outstanding or self.tool_update is not None:
+            if not self.ready or self.active_response or self.response_requested or self.outstanding or self.tool_update is not None:
                 return
             while self.context_queue and not self.outstanding and self.tool_update is None:
                 command = self.context_queue.pop(0)
@@ -165,7 +203,8 @@ class OpenAISession(JsonSession):
                     if item["type"] == "function_call_output":
                         self.waiting_tools.discard(item["call_id"])
                     await self.write({"type": "conversation.item.create", "item": item})
-                self.want_response |= bool(outgoing)
+                self.want_response |= any(item["type"] != "function_call_output" or
+                    not isinstance(command, ToolOutputs) or item["call_id"] not in command.silent for item in outgoing)
             if (self.want_response and not self.context_queue and not self.outstanding
                     and self.tool_update is None and not self.speech_active and not self.waiting_tools):
                 self.want_response, self.response_requested = False, True
@@ -178,6 +217,7 @@ class OpenAISession(JsonSession):
             if actual.get("truncation") != "disabled":
                 raise RealtimeSetupError("provider_truncation", "OpenAI changed truncation policy")
             self.check_output_bound(actual)
+            self.check_turn_detection(actual)
             if self.tool_update is not None:
                 if actual.get("tools") != self.tool_update:
                     raise RealtimeSetupError("tools_mismatch", "OpenAI changed the ordinary tool catalog")
@@ -198,32 +238,47 @@ class OpenAISession(JsonSession):
             return [LiveEvent("response_started", {"response_id": self.active_response})]
         if kind == "input_audio_buffer.speech_started":
             self.speech_active = True
-            return [LiveEvent("input_started"), LiveEvent("speech_started", {"item_id": item})]
+            self.input_transcripts.add(item)
+            return [LiveEvent("input_started")] + ([LiveEvent("speech_started", {"item_id": item})] if self.options.interruptions else [])
         if kind == "input_audio_buffer.speech_stopped":
             self.speech_active = False
             return [LiveEvent("input_done")]
         if kind == "input_audio_buffer.committed":
+            self.input_transcripts.add(item)
             self.want_response = True
         if kind == "response.output_audio.delta":
+            self.output_transcripts.add(item)
+            if (event.get("response_id") or self.active_response) in self.cancelled:
+                return []
             return [LiveEvent("audio", {"item_id": item, "rate": 24000,
                 "pcm": base64.b64decode(event["delta"], validate=True)})]
         if kind == "response.output_audio_transcript.delta":
+            self.output_transcripts.add(item)
             self.text[item] = self.text.get(item, "") + event["delta"]
             return [LiveEvent("caption", {"speaker": "ouroboros", "item_id": item, "text": event["delta"], "final": False})]
         if kind in {"response.output_audio_transcript.done", "conversation.item.input_audio_transcription.completed"}:
             speaker = "ouroboros" if kind.startswith("response.") else "owner"
             text = event.get("transcript", self.text.pop(item, ""))
             self.text.pop(item, None)
+            (self.output_transcripts if speaker == "ouroboros" else self.input_transcripts).discard(item)
             return [LiveEvent("caption", {"speaker": speaker, "item_id": item, "text": text, "final": True})]
+        if kind == "conversation.item.input_audio_transcription.failed":
+            self.input_transcripts.discard(item)
+            return [LiveEvent("closed", {"reason": "transcription_failed", "resumable": False})]
         if kind == "response.done":
             response = event["response"]
             rid = response["id"]
             if rid in self.responses:
                 return []
             self.responses.add(rid)
-            self.active_response = ""
-            events = [LiveEvent("response_done", {"usage": {**_usage(response), "raw_usage": response.get("usage"),
-                "response_id": rid, "status": response.get("status")}})]
+            if self.active_response == rid:
+                self.active_response = ""
+            self.response_requested = False
+            status = response.get("status", "incomplete")
+            if status == "cancelled" and (rid in self.cancelled or response.get("status_details", {}).get("reason") == "turn_detected"):
+                status = "interrupted"
+            events = [LiveEvent("response_done", {"usage": _usage(response), "raw_usage": response.get("usage") or {},
+                "response_id": rid, "status": status, "continues": False})]
             # A failed response still reports usage before the host stops it.
             if response.get("status") not in {"completed", "cancelled"}:
                 events.append(LiveEvent("closed", {"reason": response.get("status")}))
@@ -256,6 +311,9 @@ class OpenAISession(JsonSession):
                 self.truncations[command.item_id] = command.played_ms
                 await self.write({"type": "conversation.item.truncate", "item_id": command.item_id,
                                   "content_index": 0, "audio_end_ms": command.played_ms})
+        elif isinstance(command, Respond):
+            self.want_response = True
+            await self.advance_context()
         elif isinstance(command, (ToolOutputs, ContextUpdate)):
             self.context_queue.append(command)
             await self.advance_context()

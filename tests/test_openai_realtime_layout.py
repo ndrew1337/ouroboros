@@ -1,27 +1,24 @@
 """Lossless OpenAI field packaging after the observed 256000-character refusal."""
 from dataclasses import replace
 import asyncio
-import json
 
 import pytest
 
-from ouroboros.contracts.realtime import RealtimeProbe, canonical_json
-from tests.test_realtime_setup import (  # noqa: F401
-    Wire, execute, loaded, preview, selected, _clear_loader_state,
-)
+from ouroboros.contracts.realtime import canonical_json
+from ouroboros.contracts.live_conversation import LiveOptions, Respond
+from tests.test_grok_openai_protocol import providers as providers, deny_network as deny_network, Wire, selected
 
 
 @pytest.mark.parametrize("role", ["system", "user", "assistant"])
 @pytest.mark.parametrize("length", [0, 255999, 256000, 256001, 512001])
-def test_item_text_fragments_keep_every_character_role_and_order(loaded, role, length):
+def test_item_text_fragments_keep_every_character_role_and_order(providers, role, length):
     text = ("Я🐍\n" * ((length + 2) // 3))[:length]
     parts = ["BEFORE\n", text, "\nAFTER", ""]
     value = replace(selected(), messages_json=canonical_json([
         {"role": "system", "content": "UNCHANGED GOVERNANCE"},
         {"role": role, "content": [{"type": "text", "text": p} for p in parts]},
     ]))
-    result = asyncio.run(preview(value))
-    events = json.loads(result.wire_json)["events"]
+    events, _ = providers["openai"].module.layout(value)
     assert events[0]["session"]["instructions"] == "UNCHANGED GOVERNANCE"
     items = events[1:]
     assert items and all(e["item"]["role"] == role for e in items)
@@ -36,21 +33,26 @@ def test_item_text_fragments_keep_every_character_role_and_order(loaded, role, l
         assert len(items) == 1 and [p["text"] for p in actual] == parts
 
 
-def test_chunked_setup_is_fully_acknowledged_before_bounded_probe(loaded):
+def test_chunked_setup_is_fully_acknowledged_before_greeting(providers):
     text = "Large selected memory 🐍\n" * 15000
     value = replace(selected(), messages_json=canonical_json([
         {"role": "system", "content": "UNCHANGED GOVERNANCE"},
         {"role": "system", "content": text},
-        {"role": "user", "content": "UNCHANGED USER INPUT"},
+        {"role": "system", "content": "The owner opened this call."},
     ]))
     wire = Wire()
-    result, observed = asyncio.run(execute(wire, value, RealtimeProbe("Return OK.", 64)))
-    assert result.state == "response_completed" and wire.closed
-    assert wire.sent[-1]["type"] == "response.create"
-    assert wire.sent[-1]["response"]["max_output_tokens"] == 64
-    memory_parts = [p["text"] for e in wire.sent if e.get("item", {}).get("role") == "system"
-                    for p in e["item"]["content"]]
-    assert "".join(memory_parts) == text
-    assert len(memory_parts) == 2
-    assert all(len(p) <= 256000 for p in memory_parts)
-    assert observed
+    adapter = providers["openai"].session(value, LiveOptions(), connect=wire.connect, observe=lambda *_: None)
+    async def run():
+        try:
+            await adapter.open()
+            assert not any(e["type"] == "response.create" for e in wire.sent)
+            await adapter.send(Respond("The owner opened this call."))
+            assert wire.sent[-1]["type"] == "response.create"
+            memory = [p["text"] for e in wire.sent if e.get("item", {}).get("role") == "system"
+                      for p in e["item"]["content"]]
+            assert "".join(memory[:-1]) == text
+            assert all(len(p) <= 256000 for p in memory)
+        finally:
+            await adapter.close()
+        assert wire.closed
+    asyncio.run(run())
