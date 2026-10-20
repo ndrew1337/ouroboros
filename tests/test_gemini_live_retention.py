@@ -122,3 +122,24 @@ def test_thinking_intermediate_response_does_not_release_context_or_reuse_charge
         finally:
             await session.close()
     asyncio.run(run())
+
+
+def test_thinking_idle_without_more_output_closes_the_existing_receipt(gemini):
+    async def run():
+        session, wire = make_session(gemini, model="gemini-3.8-live-extended-thinking")
+        try:
+            await session.open()
+            await session.receive()
+            await receive(session, wire, audio_content())
+            events = await receive(session, wire, {"serverContent": {"turnComplete": True, "interactionStatus": "IN_PROGRESS"},
+                "usageMetadata": usage(100)})
+            first = next(e.data for e in events if e.kind == "response_done")
+            events = await receive(session, wire, {"serverContent": {"turnComplete": True, "interactionStatus": "IDLE"}})
+            last = next(e.data for e in events if e.kind == "response_done")
+            assert last == {**first, "continues": False}  # Same settlement identity, only interaction state changes.
+            assert session.renewal_ready
+            assert not any(e.kind == "response_done" for e in await receive(session, wire,
+                {"serverContent": {"turnComplete": True, "interactionStatus": "IDLE"}}))
+        finally:
+            await session.close()
+    asyncio.run(run())

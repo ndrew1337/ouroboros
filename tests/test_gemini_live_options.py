@@ -125,3 +125,11 @@ def test_silent_tool_results_and_deduplicated_schema_renewal(gemini, extended):
         finally:
             await session.close()
     asyncio.run(run())
+
+
+def test_nonfunction_tools_refuse_typed_and_unfamiliar_functions_remain_available(gemini):
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    with pytest.raises(RealtimeSetupError, match="tools"):
+        make_session(gemini, tools=({"type": "unexpected"},))
+    session, _ = make_session(gemini, tools=(tool("future_function"),))
+    assert session.wire["events"][0]["setup"]["tools"][0]["functionDeclarations"][0]["name"] == "future_function"

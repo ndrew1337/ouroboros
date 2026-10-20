@@ -31,7 +31,7 @@ HELD_AUDIO_SPANS = {}
 # Google's handles expire two hours after termination (session-management docs,
 # read 2026-10-21). Prune on construction; no timer, disk state or socket is kept.
 RESUMPTIONS = {}
-RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses',
+RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
                  'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
                  'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final',
                  'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth')
@@ -72,7 +72,12 @@ CATALOG = ProviderCatalog(
 
 
 def unique_tools(tools):
-    return tuple({tool['function']['name']: tool for tool in tools}.values())
+    result = {}
+    for tool in tools:
+        if tool.get('type') != 'function' or set(tool) - {'type', 'function', 'cache_control'}:
+            raise RealtimeSetupError('tools', 'Gemini Live accepts host function tools only')
+        result[tool['function']['name']] = tool
+    return tuple(result.values())
 
 
 def normalize_usage(raw):
@@ -98,8 +103,6 @@ def normalize_usage(raw):
 def declarations(tools):
     result = []
     for tool in tools:
-        if tool.get('type') != 'function' or set(tool) - {'type', 'function', 'cache_control'}:
-            raise RealtimeSetupError('tools', 'Gemini Live accepts host function tools only')
         function = tool['function']
         result.append({**{k: function[k] for k in ('name', 'description') if k in function},
                        'parametersJsonSchema': function.get('parameters', {}), 'behavior': 'NON_BLOCKING'})
@@ -188,6 +191,7 @@ class GeminiSession(JsonSession):
         self.response = self.item = ''
         self.native_response = ''
         self.completed_responses = set()
+        self.last_done = None
         self.seen_calls, self.tool_results = {}, {}
         self.caption_offsets = set()
         self.response_complete = False
@@ -202,7 +206,7 @@ class GeminiSession(JsonSession):
         self.read_task = None
         self.pending_event = asyncio.Event()
         self.resume_handle = options.resume_handle
-        self.resume_requested = False
+        self.resume_requested = bool(options.resume_handle)
         now = time.monotonic()
         for key, (expiry, _) in tuple(RESUMPTIONS.items()):
             if expiry <= now:
@@ -228,11 +232,16 @@ class GeminiSession(JsonSession):
     async def open(self):
         await self.connect_wire()
         await self.write(self.events[0])
-        while 'setupComplete' not in await self.read():
-            pass
+        handshake = []
+        while True:
+            event = await self.read()
+            handshake.extend(await self.convert(event))
+            if 'setupComplete' in event:
+                break
         for event in self.events[1:]:
             await self.write(event)
-        self.queue_events(LiveEvent('ready', {'input_rate': 16000, 'output_rate': 24000, 'vision': True}))
+        self.resume_requested = False
+        self.queue_events(LiveEvent('ready', {'input_rate': 16000, 'output_rate': 24000, 'vision': True}), *handshake)
 
     async def receive(self):
         if self.pending:
@@ -296,6 +305,7 @@ class GeminiSession(JsonSession):
                 if cid in self.tool_results:
                     await self.write({'toolResponse': {'functionResponses': [self.tool_results[cid]]}})
             else:
+                self.seen_calls[cid] = identity
                 calls.append(call)
         native_response = event.get('responseId', '')
         replayed_response = native_response and native_response in self.completed_responses
@@ -346,6 +356,8 @@ class GeminiSession(JsonSession):
                     self.input_pending = True
                     self.input_final = False
                     result.append(LiveEvent('input_started'))
+                elif speaker == 'ouroboros':
+                    self.output_pending = True
                 if speaker not in self.text:
                     self.text[speaker] = ['local_' + uuid4().hex if speaker == 'owner' else self.item, '']
                 row = self.text[speaker]
@@ -362,8 +374,7 @@ class GeminiSession(JsonSession):
                         self.input_pending = False
                         result.append(LiveEvent('input_done'))
         for call in calls:
-            cid, identity = call['id'], canonical_json(call)
-            self.seen_calls[cid] = identity
+            cid = call['id']
             self.calls[cid] = call['name']
             result.append(LiveEvent('tool_call', {'call_id': cid, 'name': call['name'],
                                                  'arguments': canonical_json(call.get('args', {}))}))
@@ -388,23 +399,31 @@ class GeminiSession(JsonSession):
                 if self.input_pending:
                     result.append(LiveEvent('input_done'))
                 self.input_pending = False
+            was_busy = self.turn_busy
             self.turn_busy = content.get('interactionStatus') == 'IN_PROGRESS'
-            if self.usage and not self.response:
+            if self.usage and (not self.response or self.response_complete):
                 self.response = 'local_' + uuid4().hex
                 self.native_response = native_response
                 self.response_complete = False
                 result.append(LiveEvent('response_started', {'response_id': self.response}))
             if self.response and not self.response_complete:
                 usage = normalize_usage(self.usage)
-                result.append(LiveEvent('response_done', {'response_id': self.response, 'usage': usage,
+                self.last_done = {'response_id': self.response, 'usage': usage,
                     'raw_usage': dict(self.usage), 'status': 'interrupted' if self.interrupted else 'completed',
-                    'continues': self.turn_busy}))
+                    'continues': self.turn_busy}
+                result.append(LiveEvent('response_done', self.last_done))
                 result.extend(self.retention_renewal(usage))
                 self.response_complete = True
-                if self.native_response and not self.turn_busy:
-                    self.completed_responses.add(self.native_response)
                 self.usage = {}
                 self.interrupted = False
+            elif was_busy and not self.turn_busy and self.last_done:
+                # Background reasoning can end without new output. Close the
+                # interaction using the same settlement id and unchanged usage;
+                # the host deduplicates settlement independently of continues.
+                self.last_done = {**self.last_done, 'continues': False}
+                result.append(LiveEvent('response_done', self.last_done))
+            if self.response_complete and not self.turn_busy and (native_response or self.native_response):
+                self.completed_responses.add(native_response or self.native_response)
             if not self.turn_busy and self.held_context:
                 held, self.held_context = self.held_context, []
                 for command in held:
@@ -499,6 +518,7 @@ class GeminiSession(JsonSession):
             RESUMPTIONS[(self.selected.model, self.resume_handle)] = (
                 time.monotonic() + 2 * 60 * 60,
                 copy.deepcopy({name: getattr(self, name) for name in RESUME_FIELDS}))
+            self.resume_requested = False
         await super().close()
 
 

@@ -173,3 +173,41 @@ def test_late_output_and_outstanding_tool_keep_their_boundaries(gemini):
         finally:
             await session.close()
     asyncio.run(run())
+
+
+def test_caption_without_audio_remains_pending_until_finished(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            await receive(session, wire, {"serverContent": {"outputTranscription": {"text": "First "}}})
+            await receive(session, wire, {"serverContent": {"turnComplete": True}})
+            assert not session.renewal_ready
+            events = await receive(session, wire, {"serverContent": {
+                "outputTranscription": {"text": "last.", "finished": True}}})
+            assert next(e.data["text"] for e in events if e.kind == "caption" and e.data["final"]) == "First last."
+            assert session.renewal_ready
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+def test_schema_wakeup_keeps_a_socket_frame_that_arrived_together(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            receiving = asyncio.create_task(session.receive())
+            await asyncio.sleep(0)
+            wire.put({"serverContent": {"inputTranscription": {"text": "Must survive", "finished": True}}})
+            schema = {"type": "function", "function": {"name": "added", "parameters": {"type": "object"}}}
+            await session.send(ToolOutputs((), (schema,)))
+            events = await asyncio.wait_for(receiving, 1)
+            assert [e.kind for e in events] == ["renew"]
+            events = await asyncio.wait_for(session.receive(), 1)
+            assert any(e.kind == "caption" and e.data["text"] == "Must survive" for e in events)
+        finally:
+            await session.close()
+    asyncio.run(run())

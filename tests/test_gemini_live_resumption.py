@@ -153,3 +153,66 @@ def test_provider_errors_are_not_transport_retries(gemini):
         finally:
             await session.close()
     asyncio.run(run())
+
+
+def test_tool_identity_conflicts_refuse_but_distinct_calls_still_work(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            call = {"id": "same-id", "name": "read_file", "args": {"path": "first"}}
+            events = await receive(session, wire, {"toolCall": {"functionCalls": [call, call]}})
+            assert len([e for e in events if e.kind == 'tool_call']) == 1
+            assert await receive(session, wire, {"toolCall": {"functionCalls": [call]}}) == []
+            with pytest.raises(RealtimeSetupError, match="tool_identity"):
+                await receive(session, wire, {"toolCall": {"functionCalls": [{**call, "args": {"path": "different"}}]}})
+            events = await receive(session, wire, {"toolCall": {"functionCalls": [{**call, "id": "new-id"}]}})
+            assert any(e.kind == "tool_call" for e in events)
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+def test_handle_before_setup_ack_is_not_lost(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            wire.put(checkpoint())
+            await session.open()
+            events = await session.receive()
+            assert events[0].kind == "ready"
+            assert next(e.data["handle"] for e in events if e.kind == "resumable") == "test-resume-handle"
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+def test_failed_reopen_keeps_state_for_another_attempt(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            await receive(session, wire, checkpoint())
+            await receive(session, wire, audio_content("Keep ", finished=False))
+            await receive(session, wire, ConnectionError("lost"))
+        finally:
+            await session.close()
+        failed, broken_wire = make_session(gemini, LiveOptions(resume_handle="test-resume-handle"))
+        try:
+            broken_wire.put(ConnectionError("open failed"))
+            with pytest.raises(ConnectionError):
+                await failed.open()
+        finally:
+            await failed.close()
+        resumed, next_wire = make_session(gemini, LiveOptions(resume_handle="test-resume-handle"))
+        try:
+            await resumed.open()
+            await resumed.receive()
+            events = await receive(resumed, next_wire, {"serverContent": {
+                "outputTranscription": {"text": "me", "finished": True}, "turnComplete": True}})
+            assert next(e.data["text"] for e in events if e.kind == "caption" and e.data["final"]) == "Keep me"
+        finally:
+            await resumed.close()
+    asyncio.run(run())
