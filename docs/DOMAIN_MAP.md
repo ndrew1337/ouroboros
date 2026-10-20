@@ -18,7 +18,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D08 | Supervisor: queue, workers, events & runtime control | 69 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 33 | 0 |
-| D11 | Gateway, server & Web UI | 103 | 0 |
+| D11 | Gateway, server & Web UI | 102 | 0 |
 | D12 | Settings & configuration | 21 | 0 |
 | D13 | Safety, guards & runtime mode | 9 | 0 |
 | D14 | Skills & extensions | 72 | 0 |
@@ -27,7 +27,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D17 | Projects, workspaces & task results | 46 | 0 |
 | D18 | Launcher, packaging, platform & shared substrate | 32 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
-| D20 | Presence | 14 | 0 |
+| D20 | Presence | 15 | 0 |
 | **total** | | **834** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
@@ -742,7 +742,6 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/owner_settings.py`
 - `ouroboros/gateway/presence_settings.py`
 - `ouroboros/gateway/projects.py`
-- `ouroboros/gateway/realtime.py`
 - `ouroboros/gateway/reply_preparation.py`
 - `ouroboros/gateway/router.py`
 - `ouroboros/gateway/routing_decision.py`
@@ -1080,6 +1079,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/presence_context.py`
 - `ouroboros/presence_continuation.py`
 - `ouroboros/presence_delivery.py`
+- `ouroboros/presence_events.py`
 - `ouroboros/presence_observations.py`
 - `ouroboros/presence_profile.py`
 - `ouroboros/presence_recovery.py`
