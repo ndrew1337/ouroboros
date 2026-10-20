@@ -156,6 +156,11 @@
     text-overflow: ellipsis;
 }
 
+.call-small.call-vision-note {
+    font-family: inherit;
+    white-space: normal;
+}
+
 .call-small {
     color: var(--text-secondary);
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;

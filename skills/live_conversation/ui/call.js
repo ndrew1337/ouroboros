@@ -440,6 +440,7 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
         mute: () => session.setMuted(!session.muted),
         show: kind => session.toggleVision(kind),
         vision: () => session.supportsVision ? visionAvailability(env) : { screen: false, camera: false,
+            unsupported: Boolean(session.callId),
             reason: 'This voice engine does not accept images.', cameraReason: 'This voice engine does not accept images.' },
         end: () => session.end(),
         dismiss: () => session.dismiss(),
