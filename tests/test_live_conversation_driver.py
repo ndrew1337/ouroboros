@@ -155,3 +155,92 @@ def test_unsupported_vision_and_nonresumable_close_refuse_without_retry():
             await asyncio.wait_for(task, 2)
         assert len(host.sessions) == 1
     for kind in ('vision', 'closed'): asyncio.run(scenario(kind))
+
+
+def test_languages_are_validated_persisted_and_separate_for_each_binding(tmp_path):
+    from skills.live_conversation.driver import record_call_languages, recorded_call_languages
+    assert recorded_call_languages(tmp_path) == ()
+    assert record_call_languages(tmp_path, ['ru-RU', 'en-us', 'ru-RU']) == ('ru-RU', 'en-US')
+    assert record_call_languages(tmp_path, ['de-DE'], binding_id='binding-one') == ('de-DE',)
+    assert recorded_call_languages(tmp_path) == ('ru-RU', 'en-US')
+    assert recorded_call_languages(tmp_path, 'binding-one') == ('de-DE',)
+    assert recorded_call_languages(tmp_path, 'binding-two') == ()
+    for invalid in (['Russian'], ['en-US', 42], 'ru-RU'):
+        with pytest.raises(ValueError): record_call_languages(tmp_path, invalid)
+        assert recorded_call_languages(tmp_path) == ('ru-RU', 'en-US')
+    assert record_call_languages(tmp_path, []) == ()
+    assert recorded_call_languages(tmp_path) == ()
+
+
+def install_tools(host, state_dir):
+    import json
+    from skills.live_conversation.driver import call_tools
+    tools = {tool.name: tool for tool in call_tools(state_dir)}
+    async def batch(calls):
+        return [{'role':'tool', 'tool_call_id':call['id'],
+                 'content':await tools[call['function']['name']].handler(host, json.loads(call['function']['arguments']))}
+                for call in calls]
+    host.tool_batch = batch
+    return tools
+
+
+def test_language_tool_refits_at_next_boundary_and_later_calls_start_with_record(tmp_path):
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        host.model = replace(host.model, honours=frozenset({'languages'}))
+        tools = install_tools(host, tmp_path)
+        assert tools['set_call_languages'].silent
+        task, session = await started(host, state_dir=tmp_path)
+        try:
+            assert host.options[0].languages == ()
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.renewal_ready = False
+            session.emit('response_done', response_id='tool-response', usage={}, raw_usage={}, status='completed', continues=True)
+            session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            outputs = next(x for x in session.sent if isinstance(x, ToolOutputs))
+            assert outputs.silent == ('lang',)
+            assert 'expects ru-RU' in outputs.messages[0]['content']
+            assert len(host.sessions) == 1
+            session.renewal_ready = True
+            await until(lambda: len(host.sessions) == 2)
+            assert host.options[1].languages == ('ru-RU',)
+            assert host.options[1].resume_handle == ''
+            assert 'Speech recognition expects ru-RU' in host.options[1].instructions
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+        later = Host()
+        later.model = host.model
+        task, _ = await started(later, state_dir=tmp_path)
+        assert later.options[0].languages == ('ru-RU',)
+        later.hub.ended_by_owner = True
+        await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_end_call_is_silent_and_waits_until_goodbye_audio_was_played(tmp_path):
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        tools = install_tools(host, tmp_path)
+        assert tools['end_call'].silent
+        task, session = await started(host, state_dir=tmp_path)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.emit('audio', item_id='goodbye', rate=24000, pcm=b'\0' * 48000)
+            session.emit('response_done', response_id='goodbye', usage={}, raw_usage={}, status='completed', continues=True)
+            session.emit('tool_call', call_id='hangup', name='end_call', arguments='{}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            assert next(x for x in session.sent if isinstance(x, ToolOutputs)).silent == ('hangup',)
+            assert host.hub.ended_by_ouroboros and not task.done()
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':300}))
+            await asyncio.sleep(.03)
+            assert not task.done(), 'partial playback is not a completed goodbye'
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':1000}))
+            await asyncio.wait_for(task, 2)
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())

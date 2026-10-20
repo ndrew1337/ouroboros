@@ -9,11 +9,14 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, CallTool, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import RealtimeSetupError
 from ouroboros.realtime_session import joined
+from ouroboros.ui_language import normalize_language_tag
+from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
 
 
 CALL_INSTRUCTIONS = """## Live calls
@@ -41,6 +44,80 @@ def languages_opening_sentence(languages):
             "set_call_languages, the owner's first; ask when unsure.")
 
 
+def language_tags(raw):
+    if not isinstance(raw, (list, tuple)):
+        raise ValueError("languages must be a list of language tags such as ru-RU")
+    kept = []
+    for item in raw:
+        tag = normalize_language_tag(item) if isinstance(item, str) else None
+        if not tag:
+            raise ValueError(f"not a language tag: {item!r} (use tags such as ru-RU or en-US)")
+        if tag not in kept:
+            kept.append(tag)
+    return tuple(kept)
+
+
+def recorded_call_languages(state_dir, binding_id=""):
+    if state_dir is None:
+        return ()
+    data = read_json_dict(Path(state_dir) / "call_languages.json") or {}
+    bindings = data.get("bindings") if isinstance(data.get("bindings"), dict) else {}
+    entry = bindings.get(binding_id) if binding_id else data.get("owner")
+    try:
+        return language_tags(entry.get("languages")) if isinstance(entry, dict) else ()
+    except ValueError:
+        return ()
+
+
+def record_call_languages(state_dir, languages, *, binding_id=""):
+    kept = language_tags(languages)
+    entry = {"languages": list(kept), "recorded_at": utc_now_iso()}
+    def mutate(current):
+        if binding_id:
+            bindings = current.get("bindings") if isinstance(current.get("bindings"), dict) else {}
+            current["bindings"] = {**bindings, binding_id: entry}
+        else:
+            current["owner"] = entry
+        return current
+    update_json_locked(Path(state_dir) / "call_languages.json", mutate)
+    return kept
+
+
+SILENT_TOOLS = frozenset({"end_call", "set_call_languages"})
+
+
+def call_tools(state_dir):
+    async def end_call(host, arguments):
+        if arguments:
+            raise ValueError("end_call takes no arguments")
+        host.hub.end_by_ouroboros()
+        return "The call ends once your goodbye has been heard."
+
+    async def set_languages(host, arguments):
+        if not isinstance(arguments, dict) or set(arguments) != {"languages"}:
+            raise ValueError("set_call_languages takes a languages list")
+        languages = record_call_languages(state_dir, arguments["languages"], binding_id=host.hub.spec.presence_binding_id)
+        if languages != host.state.get("languages", ()):
+            host.state.update(languages=languages, refit=True)
+        if not languages:
+            return "Recorded: no languages. Speech recognition guesses each utterance again from the next pause."
+        return (f"Recorded: speech recognition expects {', '.join(languages)} from the next pause, "
+                "and later calls start with it.")
+
+    return (
+        CallTool("end_call", "Hang up this live call when the owner says goodbye or asks to end it. Say your goodbye "
+                 "first; the call ends once it has been heard.",
+                 {"type": "object", "properties": {}, "additionalProperties": False}, end_call, silent=True),
+        CallTool("set_call_languages", "Record the languages speech recognition should expect in calls with these people, the most "
+                 "spoken first, as BCP-47 tags such as ru-RU or en-US; an empty list lets recognition guess "
+                 "each utterance again. Judge them from the correspondence and your memory, and add a language "
+                 "you hear someone use. Recognition takes the list at the next pause and later calls start "
+                 "with it. It never decides the language you answer in.",
+                 {"type": "object", "properties": {"languages": {"type": "array", "items": {"type": "string"}}},
+                  "required": ["languages"], "additionalProperties": False}, set_languages, silent=True),
+    )
+
+
 def session_options(host, resume_handle=""):
     config, honours = host.config, host.model.honours
     languages = tuple(host.state.get("languages", ()))
@@ -51,12 +128,14 @@ def session_options(host, resume_handle=""):
         **knobs)
 
 
-async def run(host: LiveHost):
+async def run(host: LiveHost, *, state_dir=None):
+    host.state["languages"] = recorded_call_languages(state_dir, host.hub.spec.presence_binding_id)
     resume_handle = ""
     while True:
         await host.check()
-        if host.hub.closed or host.hub.ended_by_owner:
+        if host.hub.closed or host.hub.ended_by_owner or host.hub.ended_by_ouroboros:
             return
+        host.state.pop("refit", None)
         result = await host.session(lambda session: consume(host, session), session_options(host, resume_handle))
         if result is None:
             return
@@ -68,6 +147,7 @@ async def consume(host: LiveHost, session):
     tool_queue, rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
     ended = asyncio.Event()
     renewing, response_open, tools_running, input_open = False, False, False, False
+    response_active = False
     renewal_deadline = None
     resume = False
     provider_closed = False
@@ -89,7 +169,7 @@ async def consume(host: LiveHost, session):
             renewal_deadline = min(renewal_deadline, deadline) if renewal_deadline else deadline
 
     def quiet():
-        unheard = any(item not in interrupted and played.get(item, 0) < duration - 20
+        unheard = any(item not in interrupted and played.get(item, 0) < int(duration)
                       for item, duration in audio_ms.items())
         return (not response_open and not input_open and not tools_running and tool_queue.empty()
                 and not pending_spoken and not unheard and session.renewal_ready)
@@ -129,7 +209,7 @@ async def consume(host: LiveHost, session):
                 rows.task_done()
 
     async def tools():
-        nonlocal tools_running
+        nonlocal tools_running, response_open
         while True:
             calls = [await tool_queue.get()]
             while not tool_queue.empty():
@@ -141,7 +221,10 @@ async def consume(host: LiveHost, session):
                 # history before its pre-effect checkpoint.
                 await rows.join()
                 changes = await host.tool_batch(calls)
-                await session.send(ToolOutputs(tuple(changes), tuple(host.schemas)))
+                silent = tuple(call["id"] for call in calls if call["function"]["name"] in SILENT_TOOLS)
+                await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent))
+                if len(silent) == len(calls) and not response_active:
+                    response_open = False
             finally:
                 for _ in calls:
                     tool_queue.task_done()
@@ -159,7 +242,7 @@ async def consume(host: LiveHost, session):
             await finish_spoken(item, interrupted=True)
 
     async def provider():
-        nonlocal input_rate, output_rate, response_open, playing_item, meeting_audio, input_open, provider_closed
+        nonlocal input_rate, output_rate, response_open, response_active, playing_item, meeting_audio, input_open, provider_closed
         while True:
             for event in await session.receive():
                 data = event.data
@@ -192,10 +275,11 @@ async def consume(host: LiveHost, session):
                     input_open = False
                 elif event.kind == "response_started":
                     host.response_started(data["response_id"])
-                    response_open = True
+                    response_open = response_active = True
                     hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
                     host.response_done(data["response_id"], usage=data["usage"], raw_usage=data["raw_usage"], status=data["status"])
+                    response_active = False
                     response_open = bool(data.get("continues"))
                     hub.send_turn(cp.TURN_AWAITING if response_open or tools_running else cp.TURN_IDLE)
                 elif event.kind == "tool_call":
@@ -227,7 +311,11 @@ async def consume(host: LiveHost, session):
                 empty_since = time.monotonic()
             elif time.monotonic() - empty_since >= 15:
                 raise RealtimeSetupError("peers_left", "no peer is attached")
-            if host.renewal_due():
+            if hub.ended_by_ouroboros and quiet():
+                await rows.join()
+                ended.set()
+                return
+            if host.renewal_due() or host.state.get("refit"):
                 request_renewal()
             if renewing:
                 if quiet():

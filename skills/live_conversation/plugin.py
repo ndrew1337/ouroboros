@@ -21,10 +21,14 @@ def validate(value):
 
 
 def register(api):
-    from .driver import run
+    from .driver import call_tools, run
     from ouroboros.utils import atomic_write_json
 
-    path = Path(api.get_state_dir()) / "conversation.json"
+    state_dir = Path(api.get_state_dir())
+    path = state_dir / "conversation.json"
+
+    async def handle(host):
+        await run(host, state_dir=state_dir)
 
     def configure():
         try:
@@ -47,7 +51,7 @@ def register(api):
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         return JSONResponse(asdict(configure()))
 
-    api.register_live_conversation("call", run, configure=configure)
+    api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir))
     api.register_route("config", settings, methods=["GET", "POST"])
     api.register_settings_section("conversation", title="Live Conversation", schema={"components": [
         {"type": "markdown", "text": "Calls (beta). Choose and enable an engine skill, grant its API key, then select its registration and native model here. Audio goes to that vendor. Calls use this room's ordinary context and tools."},
