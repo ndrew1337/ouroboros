@@ -97,3 +97,75 @@ def test_direct_load_refuses_only_live_calls(publication, monkeypatch, tmp_path)
         assert registry._extensions[name] is bundle and not work.cancelled and not loaded
     assert loader.load_extension(subject, lambda: {}, drive_root=tmp_path) is None
     assert loaded == [subject]
+
+
+def test_reconcile_marker_waits_for_call_then_retries(publication, monkeypatch, tmp_path):
+    from ouroboros import extension_loader as loader
+    from ouroboros.extension_reconcile_queue import process_extension_reconcile_requests, request_extension_reconcile
+
+    name, _bundle, spec = publication
+    companions = []
+    monkeypatch.setattr(loader, "reconcile_extension", lambda *a, **kw: {
+        "action": "extension_reload_pending" if registry.realtime_load_refusal(name) else "extension_loaded",
+        "reason": registry.realtime_load_refusal(name) or "ready"})
+    monkeypatch.setattr(loader, "ensure_companions_running", lambda *a, **kw: companions.append(name))
+    marker = request_extension_reconcile(tmp_path, name, reason="payload_changed")
+    with registry.extension_work_scope(spec, Work()):
+        [result] = process_extension_reconcile_requests(tmp_path, lambda: {})
+        assert result["reason"] == "live_call_active" and not result["marker_removed"]
+        assert marker.exists() and not companions
+    [result] = process_extension_reconcile_requests(tmp_path, lambda: {})
+    assert result["action"] == "extension_loaded" and result["marker_removed"]
+    assert not marker.exists() and companions == [name]
+
+
+def test_source_unload_and_settlement_refuse_only_live_calls(publication, monkeypatch, tmp_path):
+    from ouroboros import skill_source_install as installer
+
+    name, bundle, spec = publication
+    settled = []
+    monkeypatch.setattr(installer, "settle_pending_update", lambda *a, **kw: settled.append(name) or {"status": "none"})
+    work = Work()
+    with registry.extension_work_scope(spec, work):
+        for operation in (lambda: installer._unload(name), lambda: installer.settle_before_replacement(tmp_path, name)):
+            with pytest.raises(installer.SkillInstallError) as exc:
+                operation()
+            assert exc.value.code == "live_call_active"
+            assert registry._extensions[name] is bundle and not work.cancelled and not settled
+    installer.settle_before_replacement(tmp_path, name)
+    installer._unload(name)
+    assert settled == [name] and name not in registry._extensions
+
+
+@pytest.mark.parametrize("admission", ["before_update", "before_unload", "idle"])
+def test_marketplace_replacement_checks_both_mutation_boundaries(publication, monkeypatch, tmp_path, admission):
+    from contextlib import ExitStack
+    from ouroboros import extension_loader, skill_install_record, skill_loader
+    from ouroboros.marketplace import install
+
+    name, bundle, spec = publication
+    work, settled, installed = Work(), [], []
+    monkeypatch.setattr(install, "_clawhub_skills_root", lambda root: root / "skills")
+    monkeypatch.setattr(skill_loader, "_skill_location_conflict_error", lambda *a, **kw: None)
+    monkeypatch.setattr(install, "read_provenance", lambda *a: {"slug": name})
+    monkeypatch.setattr(skill_install_record, "read_install_record", lambda *a: {})
+    monkeypatch.setattr(skill_install_record, "settle_pending_update",
+                        lambda *a, **kw: settled.append(name) or {"status": "none"})
+    monkeypatch.setattr(extension_loader, "is_extension_live", lambda *a: True)
+    monkeypatch.setattr(extension_loader, "reconcile_extension", lambda *a, **kw: None)
+    monkeypatch.setattr(install, "install_skill", lambda *a, **kw: installed.append(name) or install.InstallResult(False, name))
+    with ExitStack() as stack:
+        if admission == "before_update":
+            stack.enter_context(registry.extension_work_scope(spec, work))
+        def basis(*a, **kw):
+            if admission == "before_unload":
+                stack.enter_context(registry.extension_work_scope(spec, work))
+            return {}
+        monkeypatch.setattr(skill_install_record, "install_basis_fields", basis)
+        result = install.update_skill(tmp_path, tmp_path, sanitized_name=name, auto_review=False)
+        if admission == "idle":
+            assert installed == settled == [name] and name not in registry._extensions
+        else:
+            assert result.error_code == "live_call_active" and result.error_status == 409
+            assert registry._extensions[name] is bundle and not installed and not work.cancelled
+            assert settled == ([] if admission == "before_update" else [name])
