@@ -529,15 +529,3 @@ function ensureStylesheet(doc) {
     });
 }
 
-/** A room's call keeps the room while it lasts: hiding the room keeps the call (like a phone
- * call), destroying it hangs up, and `hasPendingWork` holds a Project room for the whole
- * non-terminal lifetime. When the call ends, `release` lets go of a hidden room nothing else holds. */
-export function mountRoomCall({ room, mount = mountCall, release = () => {}, ...options }) {
-    const call = mount({ ...options, onSettled: () => queueMicrotask(release) });
-    const { destroy, hasPendingWork, hydrateStateSnapshot } = room;
-    room.destroy = () => { call.destroy(); destroy(); };
-    room.hasPendingWork = () => call.retains() || Boolean(hasPendingWork?.());
-    // The state snapshot every open room already receives tells its call whether Talk can work.
-    room.hydrateStateSnapshot = (data, ...rest) => { call.state?.(data); return hydrateStateSnapshot?.(data, ...rest); };
-    return call;
-}
