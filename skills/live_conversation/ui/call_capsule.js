@@ -311,6 +311,7 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
     row.addEventListener('click', talkPress, true);
     row.addEventListener('keydown', enterGuard, true);
     field.addEventListener('input', renderEntry);
+    field.addEventListener('change', renderEntry);  // dictation and contributed draft edits
     field.addEventListener('keydown', renderEntry);  // after the chat's own history keys
     send.addEventListener('click', renderEntry);     // after the chat's own Send cleared the field
 
@@ -529,6 +530,7 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
             row.removeEventListener('click', talkPress, true);
             row.removeEventListener('keydown', enterGuard, true);
             field.removeEventListener('input', renderEntry);
+            field.removeEventListener('change', renderEntry);
             field.removeEventListener('keydown', renderEntry);
             send.removeEventListener('click', renderEntry);
             showMenu?.close();

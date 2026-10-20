@@ -522,7 +522,9 @@ bridgeContributedActions({ store: contributions, draft: visibleDraft });
 startVoice({ hosts: startHostModules({ store: contributions, draft: visibleDraft }) });
 startConversations({ hosts: startHostModules(), openSettings: openSettingsTab,
     roomOptions: ({ page, chatId }) => {
-        const project = lastProjectRows.find(row => Number(row.chat_id) === chatId);
+        // A directly opened Project need not be in the bounded sidebar census.
+        const project = chatId === 1 ? null : lastProjectRows.find(row => Number(row.chat_id) === chatId)
+            || { id: navState.activeProjectId, chat_id: chatId, name: projectPanelTitle.textContent };
         return {
             label: () => project ? freshProjectRow(project).name || project.id : 'Main',
             onScreen: () => state.activePage === 'chat' && !page.hidden

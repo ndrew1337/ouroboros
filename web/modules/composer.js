@@ -432,6 +432,7 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
         setDraft(text) {
             input.value = String(text ?? '');
             onInput();
+            input.dispatchEvent?.(new Event('change', { bubbles: true }));
         },
         /** Insert words at the caret, replacing a selection, and leave the caret after them in the focused field. */
         insertAtCursor(text) {
@@ -442,6 +443,7 @@ export function createComposer({ page, byId, ws, replies, chatSessionId, isMain,
             input.focus({ preventScroll: true });
             input.setSelectionRange(start + words.length, start + words.length);
             onInput();
+            input.dispatchEvent?.(new Event('change', { bubbles: true }));
         },
         // After a send, once the feed shows it: the emptied field's height and the room's dock.
         resize: resizeChatInput,
