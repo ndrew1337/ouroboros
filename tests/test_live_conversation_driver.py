@@ -119,7 +119,7 @@ def test_port_greeting_options_usage_and_context():
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('reason', ['host', 'refit', 'resume', 'closed'])
+@pytest.mark.parametrize('reason', ['host', 'refit', 'resume'])
 def test_renewal_waits_for_a_quiet_boundary_and_greets_only_once(reason):
     async def scenario():
         host = Host()
@@ -129,18 +129,13 @@ def test_renewal_waits_for_a_quiet_boundary_and_greets_only_once(reason):
             first.emit('resumable', handle='old-handle')
             first.emit('resumable', handle='latest-handle')
             first.renewal_ready = False
-            if reason == 'closed':
-                first.emit('audio', item_id='tail', rate=24000, pcm=b'\0' * 48000)
             if reason == 'host': host.due = True
-            elif reason == 'closed': first.emit('closed', reason='rotate', resumable=True)
             else: first.emit('renew', within_s=2, reason='rotate', resume=reason == 'resume')
             await asyncio.sleep(.05)
             assert len(host.sessions) == 1
             first.renewal_ready = True
-            if reason == 'closed':
-                host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'tail', 'played_ms':1000}))
             await until(lambda: len(host.sessions) == 2)
-            assert host.options[1].resume_handle == ('latest-handle' if reason in {'resume','closed'} else '')
+            assert host.options[1].resume_handle == ('latest-handle' if reason == 'resume' else '')
             assert any(state[0] == cp.STATE_RECONNECTING for state in host.hub.states)
             second = host.sessions[1]
             second.emit('ready', input_rate=24000, output_rate=24000)
@@ -315,14 +310,180 @@ def test_tool_outputs_use_host_silent_ids_without_opening_a_response(silent):
         host.tool_batch = batch
         task, session = await started(host)
         try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
             # Deliberately disagree with a feature tool name: the port owns silence.
             session.emit('tool_call', call_id='call-id', name='end_call' if not silent else 'another_silent_tool', arguments='{}')
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
             outputs = next(x for x in session.sent if isinstance(x, ToolOutputs))
             assert outputs == ToolOutputs(tuple(changes), tuple(host.schemas), silent=silent)
-            assert not any(isinstance(x, Respond) for x in session.sent)
+            assert [x for x in session.sent if isinstance(x, Respond)] == [Respond(host.opening)]
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
 
+
+def test_resume_keeps_playback_captions_and_response_identity_until_completion():
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        finalized = []
+        first.final_captions = lambda: finalized.append('first') or []
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='continuation')
+            first.emit('response_started', response_id='r1')
+            first.emit('audio', item_id='spoken', rate=24000, pcm=b'\0' * 48000)
+            first.emit('caption', speaker='ouroboros', item_id='spoken', text='A continuing thought.', final=True)
+            await until(lambda: host.hub.audio)
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'spoken', 'played_ms':400}))
+            first.emit('closed', resumable=True, reason='transport_lost')
+            await until(lambda: len(host.sessions) == 2)
+            assert not finalized, 'a resumed connection must retain its parser captions'
+            assert not host.captions, 'the unfinished spoken row still belongs to the call'
+            assert host.usage == [('start', 'r1')], 'do not settle the response at connection close'
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            second.emit('response_started', response_id='r1')
+            second.emit('audio', item_id='spoken', rate=24000, pcm=b'\0' * 48000)
+            second.emit('response_done', response_id='r1', usage={'audio_output_tokens':42}, raw_usage={'vendor':42}, status='completed', continues=True)
+            await until(lambda: any(x[0] == 'done' for x in host.usage))
+            assert [x for x in host.usage if x[0] == 'start'] == [('start', 'r1')]
+            host.due = True
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'spoken', 'played_ms':1500}))
+            await asyncio.sleep(.04)
+            assert not host.captions and len(host.sessions) == 2
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'spoken', 'played_ms':2000}))
+            await until(lambda: host.captions)
+            assert host.captions[0]['played_ms'] == 2000
+            assert host.captions[0]['completed'] is True
+            assert len(host.sessions) == 2, 'continues holds the interaction open after playback'
+            second.emit('response_done', response_id='r1', usage={'audio_output_tokens':42}, raw_usage={'vendor':42}, status='completed', continues=False)
+            await until(lambda: len(host.sessions) == 3)
+            assert len([x for x in host.usage if x[0] == 'done']) == 1, 'liveness alone is not another receipt'
+            assert host.options[2].resume_handle == ''
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_tool_finishing_during_resume_goes_to_the_new_session():
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        running, release = asyncio.Event(), asyncio.Event()
+        cancelled = []
+        async def batch(calls):
+            running.set()
+            try: await release.wait()
+            except asyncio.CancelledError:
+                cancelled.append(True)
+                raise
+            return Batch([{'role':'tool', 'tool_call_id':'work', 'content':'Finished'}], silent=('work',))
+        host.tool_batch = batch
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='tool-continuation')
+            first.emit('tool_call', call_id='work', name='slow_tool', arguments='{}')
+            await running.wait()
+            first.emit('closed', resumable=True, reason='transport_lost')
+            await until(lambda: len(host.sessions) == 2)
+            release.set()
+            await asyncio.sleep(.03)
+            assert not cancelled
+            assert not any(isinstance(x, ToolOutputs) for x in first.sent)
+            second = host.sessions[1]
+            assert not second.sent, 'outputs wait for the new ready event'
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in second.sent))
+            assert next(x for x in second.sent if isinstance(x, ToolOutputs)).silent == ('work',)
+            assert not any(isinstance(x, Respond) for x in second.sent)
+        finally:
+            release.set()
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_failed_resume_finalizes_only_on_failure_and_keeps_the_unfinished_reservation():
+    async def scenario():
+        host = Host()
+        original_session = host.session
+        finalized, at_reopen = [], []
+        async def session(consume, options):
+            if host.sessions:
+                at_reopen.append((list(finalized), list(host.usage)))
+                raise RealtimeSetupError('reopen_failed', 'fake failure')
+            return await original_session(consume, options)
+        host.session = session
+        task, first = await started(host)
+        def final_captions():
+            finalized.append(True)
+            return [LiveEvent('caption', {'speaker':'ouroboros', 'item_id':'partial', 'text':'Unfinished', 'final':True, 'incomplete':True})]
+        first.final_captions = final_captions
+        first.emit('ready', input_rate=24000, output_rate=24000)
+        first.emit('resumable', handle='handle')
+        first.emit('response_started', response_id='unfinished')
+        first.emit('closed', resumable=True, reason='transport_lost')
+        with pytest.raises(RealtimeSetupError, match='reopen_failed'):
+            await asyncio.wait_for(task, 2)
+        assert at_reopen == [([], [('start', 'unfinished')])]
+        assert finalized == [True]
+        assert host.captions[0]['text'] == '[Partial transcript] Unfinished'
+        assert host.captions[0]['completed'] is False
+    asyncio.run(scenario())
+
+
+def test_interrupted_audio_stays_silent_after_resume_while_cancelled_usage_drains():
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='handle')
+            first.emit('response_started', response_id='interrupted')
+            first.emit('audio', item_id='cut-off', rate=24000, pcm=b'\0' * 48000)
+            first.emit('speech_started')
+            first.emit('closed', resumable=True, reason='transport_lost')
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            second.emit('audio', item_id='cut-off', rate=24000, pcm=b'\0' * 48000)
+            second.emit('response_done', response_id='interrupted', usage={'audio_output_tokens':12}, raw_usage={'cancelled':12}, status='cancelled', continues=False)
+            await until(lambda: len(host.usage) == 2)
+            assert len(host.hub.audio) == 1
+            assert host.usage[-1] == ('done', 'interrupted', {'usage':{'audio_output_tokens':12}, 'raw_usage':{'cancelled':12}, 'status':'cancelled'})
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_end_call_stops_extended_thinking_followup_after_goodbye(tmp_path):
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        install_tools(host, tmp_path)
+        task, session = await started(host)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.emit('audio', item_id='goodbye', rate=24000, pcm=b'\0' * 48000)
+            session.emit('tool_call', call_id='hangup', name='end_call', arguments='{}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            session.renewal_ready = False
+            session.emit('response_started', response_id='unwanted-followup')
+            session.emit('audio', item_id='followup', rate=24000, pcm=b'\0' * 48000)
+            await asyncio.sleep(.03)
+            assert [item for _, item in host.hub.audio] == ['goodbye']
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':300}))
+            await asyncio.sleep(.03)
+            assert not task.done()
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':1000}))
+            await asyncio.wait_for(task, 2)
+            assert len(host.sessions) == 1
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())

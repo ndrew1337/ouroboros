@@ -129,289 +129,307 @@ def session_options(host, resume_handle=""):
 
 async def run(host: LiveHost, *, state_dir=None):
     host.state["languages"] = recorded_call_languages(state_dir, host.hub.spec.presence_binding_id)
-    resume_handle = ""
-    while True:
-        await host.check()
-        if host.hub.closed or host.hub.ended_by_owner or host.hub.ended_by_ouroboros:
-            return
-        host.state.pop("refit", None)
-        if not resume_handle:
-            host.state.pop("resume_handle", None)
-        result = await host.session(lambda session: consume(host, session), session_options(host, resume_handle))
-        if result is None:
-            return
-        resume_handle = result
+    await _Call(host).run()
 
 
-async def consume(host: LiveHost, session):
-    hub = host.hub
-    tool_queue, rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
-    ended = asyncio.Event()
-    renewing, response_open, tools_running, input_open = False, False, False, False
-    response_active = False
-    renewal_deadline = None
-    resume = False
-    provider_closed = False
-    input_rate = output_rate = 0
-    playing_item = ""
-    played, audio_ms = {}, {}
-    interrupted = set()
-    meeting_audio = False
-    empty_since = time.monotonic()
-    pending_spoken = {}
+class _Call:
+    """Media evidence and work belong to the call, including between connections."""
 
-    def request_renewal(*, resuming=False, within=None):
-        nonlocal renewing, resume, renewal_deadline
-        # A refit request wins over a transport resume: it needs current history.
-        resume = resuming if not renewing else resume and resuming
-        renewing = True
+    def __init__(self, host):
+        self.host, self.hub = host, host.hub
+        self.tool_queue, self.rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
+        self.connected = asyncio.Event()
+        self.session = self.last_session = None
+        self.played, self.audio_ms, self.pending_spoken = {}, {}, {}
+        self.interrupted, self.started_responses, self.active_responses = set(), set(), set()
+        self.receipts = {}
+        self.response_open = self.tools_running = self.input_open = False
+        self.meeting_audio = False
+        self.playing_item = ""
+        self.empty_since = time.monotonic()
+        self.renewing = self.resume = self.provider_closed = False
+        self.renewal_deadline = None
+        self.input_rate = self.output_rate = 0
+
+    async def run(self):
+        writer = asyncio.create_task(self.save_rows())
+        workers = [asyncio.create_task(self.connections()), asyncio.create_task(self.tools())]
+        try:
+            done, _ = await asyncio.wait([*workers, writer], return_when=asyncio.FIRST_COMPLETED)
+            for task in done:
+                await task
+        finally:
+            # A resume never cancels tools. Actual call teardown owns and joins
+            # them; the host also joins any already-dispatched side effects.
+            for task in workers:
+                task.cancel()
+            await joined(asyncio.gather(*workers, return_exceptions=True))
+            flushing = asyncio.create_task(self.finalize())
+            try:
+                done, _ = await joined(asyncio.wait((flushing, writer), return_when=asyncio.FIRST_COMPLETED))
+                if writer in done:
+                    await writer
+                await joined(flushing)
+            finally:
+                flushing.cancel()
+                writer.cancel()
+                await joined(asyncio.gather(flushing, writer, return_exceptions=True))
+
+    async def connections(self):
+        handle = ""
+        while True:
+            await self.host.check()
+            if self.hub.closed or self.hub.ended_by_owner or self.hub.ended_by_ouroboros:
+                return
+            self.host.state.pop("refit", None)
+            if not handle:
+                self.host.state.pop("resume_handle", None)
+            result = await self.host.session(self.consume, session_options(self.host, handle))
+            if result is None:
+                return
+            handle = result
+
+    async def consume(self, session):
+        self.session = self.last_session = session
+        self.renewing = self.resume = self.provider_closed = False
+        self.renewal_deadline = None
+        self.input_rate = self.output_rate = 0
+        resumed = False
+        children = [asyncio.create_task(action()) for action in (self.provider, self.peers, self.mailbox)]
+        try:
+            done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
+            for child in done:
+                await child
+            await self.rows.join()
+            resumed = self.renewing and self.resume
+            return (self.host.state.get("resume_handle", "") if resumed else "") if self.renewing else None
+        finally:
+            self.connected.clear()
+            self.hub.send_state(cp.STATE_RECONNECTING if self.renewing else cp.STATE_CLOSING)
+            for child in children:
+                child.cancel()
+            await joined(asyncio.gather(*children, return_exceptions=True))
+            self.session = None
+            if not resumed:
+                await joined(self.finalize())
+
+    async def send(self, command):
+        # A tool may finish after the old socket closes or while setup is in
+        # flight. Only the replacement's ready event releases its outputs.
+        await self.connected.wait()
+        await self.session.send(command)
+
+    def request_renewal(self, *, resuming=False, within=None):
+        # A fresh fit wins over a requested resume while the transport is live.
+        self.resume = resuming if not self.renewing else self.resume and resuming
+        self.renewing = True
         if within is not None:
             deadline = time.monotonic() + float(within)
-            renewal_deadline = min(renewal_deadline, deadline) if renewal_deadline else deadline
+            self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
 
-    def quiet():
-        unheard = any(item not in interrupted and played.get(item, 0) < int(duration)
-                      for item, duration in audio_ms.items())
-        return (not response_open and not input_open and not tools_running and tool_queue.empty()
-                and not pending_spoken and not unheard and (provider_closed or session.renewal_ready))
+    def unheard(self):
+        return any(item not in self.interrupted and self.played.get(item, 0) < int(duration)
+                   for item, duration in self.audio_ms.items())
 
-    async def finish_spoken(item, *, interrupted=False, completed=False):
-        text = pending_spoken.pop(item, None)
+    def quiet(self):
+        return (not self.response_open and not self.input_open and not self.tools_running
+                and self.tool_queue.empty() and not self.pending_spoken and not self.unheard()
+                and self.session.renewal_ready)
+
+    async def finish_spoken(self, item, *, interrupted=False, completed=False):
+        text = self.pending_spoken.pop(item, None)
         if text is not None:
-            await rows.put(dict(speaker="ouroboros", text=text, item_id=item, heard=False,
-                played_ms=played.get(item, 0), interrupted=interrupted, completed=completed))
+            await self.rows.put(dict(speaker="ouroboros", text=text, item_id=item, heard=False,
+                played_ms=self.played.get(item, 0), interrupted=interrupted, completed=completed))
 
-    async def caption(data):
-        nonlocal input_open, meeting_audio
+    async def caption(self, data):
         speaker, item = data["speaker"], data["item_id"]
         text = ("[Partial transcript] " if data.get("incomplete") else "") + data["text"]
         if speaker == "owner":
-            input_open = not data["final"]
-        hub.send_caption(speaker, text, data["final"], item, replace=bool(data.get("replace")))
+            self.input_open = not data["final"]
+        self.hub.send_caption(speaker, text, data["final"], item, replace=bool(data.get("replace")))
         if data["final"]:
-            heard = speaker == "owner" and (meeting_audio or any(
-                peer.role == cp.PEER_MEETING and peer.mic for peer in hub.peers()))
+            heard = speaker == "owner" and (self.meeting_audio or any(
+                peer.role == cp.PEER_MEETING and peer.mic for peer in self.hub.peers()))
             if speaker == "ouroboros":
-                pending_spoken[item] = text
-                if item in interrupted or (played.get(item, 0) > 0
-                        and played[item] >= int(audio_ms.get(item, 1)) - 20):
-                    await finish_spoken(item, interrupted=item in interrupted, completed=item not in interrupted)
+                self.pending_spoken[item] = text
+                if item in self.interrupted or (self.played.get(item, 0) > 0
+                        and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20):
+                    await self.finish_spoken(item, interrupted=item in self.interrupted, completed=item not in self.interrupted)
             else:
-                await rows.put(dict(speaker=speaker, text=text, item_id=item, heard=heard))
+                await self.rows.put(dict(speaker=speaker, text=text, item_id=item, heard=heard))
             if speaker == "owner":
-                meeting_audio = False
+                self.meeting_audio = False
 
-    async def save_rows():
+    async def save_rows(self):
         while True:
-            row = await rows.get()
+            row = await self.rows.get()
             try:
-                await host.caption(**row)
+                await self.host.caption(**row)
             finally:
-                rows.task_done()
+                self.rows.task_done()
 
-    async def tools():
-        nonlocal tools_running, response_open
+    async def finalize(self):
+        session, self.last_session = self.last_session, None
+        if session is not None:
+            for event in session.final_captions():
+                await self.caption(event.data)
+        for item in tuple(self.pending_spoken):
+            await self.finish_spoken(item, interrupted=item in self.interrupted)
+        await self.rows.join()
+
+    async def tools(self):
         while True:
-            calls = [await tool_queue.get()]
-            while not tool_queue.empty():
-                calls.append(tool_queue.get_nowait())
-            tools_running = True
-            hub.send_activity("working", ", ".join(call["function"]["name"] for call in calls))
+            calls = [await self.tool_queue.get()]
+            while not self.tool_queue.empty():
+                calls.append(self.tool_queue.get_nowait())
+            self.tools_running = True
+            self.hub.send_activity("working", ", ".join(call["function"]["name"] for call in calls))
             try:
-                # Input captions preceding this call must reach canonical
-                # history before its pre-effect checkpoint.
-                await rows.join()
-                changes = await host.tool_batch(calls)
-                await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent=changes.silent))
-                if len(changes.silent) == len(calls) and not response_active:
-                    response_open = False
+                await self.rows.join()
+                changes = await self.host.tool_batch(calls)
+                await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
+                if len(changes.silent) == len(calls) and not self.active_responses:
+                    self.response_open = False
             finally:
                 for _ in calls:
-                    tool_queue.task_done()
-                tools_running = False
-                hub.send_activity("idle")
+                    self.tool_queue.task_done()
+                self.tools_running = False
+                self.hub.send_activity("idle")
 
-    async def interrupt():
-        hub.flush()
-        await session.send(Interrupt("", 0))
-        for item in tuple(audio_ms):
-            if item in interrupted or played.get(item, 0) >= audio_ms[item]:
+    async def interrupt(self):
+        self.hub.flush()
+        await self.session.send(Interrupt("", 0))
+        for item in tuple(self.audio_ms):
+            if item in self.interrupted or self.played.get(item, 0) >= self.audio_ms[item]:
                 continue
-            interrupted.add(item)
-            await session.send(Interrupt(item, min(played.get(item, 0), int(audio_ms[item]))))
-            await finish_spoken(item, interrupted=True)
+            self.interrupted.add(item)
+            await self.session.send(Interrupt(item, min(self.played.get(item, 0), int(self.audio_ms[item]))))
+            await self.finish_spoken(item, interrupted=True)
 
-    async def provider():
-        nonlocal input_rate, output_rate, response_open, response_active, playing_item, meeting_audio, input_open, provider_closed
+    async def provider(self):
         while True:
-            for event in await session.receive():
+            for event in await self.session.receive():
                 data = event.data
                 if event.kind == "ready":
-                    input_rate, output_rate = data["input_rate"], data["output_rate"]
-                    hub.set_engine_rates(input_rate, output_rate)
-                    hub.send_state(cp.STATE_LIVE)
-                    if not host.state.get("greeted"):
-                        host.state["greeted"] = True
-                        await session.send(Respond(host.opening))
+                    self.input_rate, self.output_rate = data["input_rate"], data["output_rate"]
+                    self.hub.set_engine_rates(self.input_rate, self.output_rate)
+                    self.hub.send_state(cp.STATE_LIVE)
+                    if not self.host.state.get("greeted"):
+                        self.host.state["greeted"] = True
+                        await self.session.send(Respond(self.host.opening))
+                    self.connected.set()
                 elif event.kind == "audio":
-                    if data["rate"] != output_rate:
+                    if data["rate"] != self.output_rate:
                         raise RealtimeSetupError("audio_rate", "provider changed its output rate")
                     item = data["item_id"]
-                    if item in interrupted:
+                    # Some engines cannot make a function result silent. The
+                    # goodbye already queued is the last playback of this call.
+                    if item in self.interrupted or self.hub.ended_by_ouroboros:
                         continue
-                    if playing_item != item:
-                        # Preserve the old worklet's stream-to-item binding before PCM.
-                        hub.send_caption("ouroboros", "", False, item)
-                        playing_item = item
-                    audio_ms[item] = audio_ms.get(item, 0) + len(data["pcm"]) * 500 / output_rate
-                    hub.play(data["pcm"], item)
+                    if self.playing_item != item:
+                        self.hub.send_caption("ouroboros", "", False, item)
+                        self.playing_item = item
+                    self.audio_ms[item] = self.audio_ms.get(item, 0) + len(data["pcm"]) * 500 / self.output_rate
+                    self.hub.play(data["pcm"], item)
                 elif event.kind == "caption":
-                    await caption(data)
+                    await self.caption(data)
                 elif event.kind == "speech_started":
-                    await interrupt()
+                    await self.interrupt()
                 elif event.kind == "input_started":
-                    input_open = True
+                    self.input_open = True
                 elif event.kind == "input_done":
-                    input_open = False
+                    self.input_open = False
                 elif event.kind == "response_started":
-                    host.response_started(data["response_id"])
-                    response_open = response_active = True
-                    hub.send_turn(cp.TURN_ANSWERING)
+                    response = data["response_id"]
+                    if response not in self.started_responses:
+                        self.host.response_started(response)
+                        self.started_responses.add(response)
+                    if response not in self.receipts:
+                        self.active_responses.add(response)
+                    self.response_open = bool(self.active_responses) or self.response_open
+                    self.hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
-                    host.response_done(data["response_id"], usage=data["usage"], raw_usage=data["raw_usage"], status=data["status"])
-                    response_active = False
-                    response_open = bool(data.get("continues"))
-                    hub.send_turn(cp.TURN_AWAITING if response_open or tools_running else cp.TURN_IDLE)
+                    response = data["response_id"]
+                    receipt = {key: data[key] for key in ("usage", "raw_usage", "status")}
+                    if self.receipts.get(response) != receipt:
+                        self.host.response_done(response, **receipt)
+                        self.receipts[response] = receipt
+                    self.active_responses.discard(response)
+                    self.response_open = bool(self.active_responses) or bool(data.get("continues"))
+                    self.hub.send_turn(cp.TURN_AWAITING if self.response_open or self.tools_running else cp.TURN_IDLE)
                 elif event.kind == "tool_call":
-                    await tool_queue.put({"id": data["call_id"], "type": "function", "function": {
+                    await self.tool_queue.put({"id": data["call_id"], "type": "function", "function": {
                         "name": data["name"], "arguments": data["arguments"]}})
                 elif event.kind == "renew":
-                    request_renewal(resuming=data["resume"], within=data["within_s"])
+                    self.request_renewal(resuming=data["resume"], within=data["within_s"])
                 elif event.kind == "resumable":
-                    host.state["resume_handle"] = data["handle"]
+                    self.host.state["resume_handle"] = data["handle"]
                 elif event.kind == "closed":
-                    if not data.get("resumable") or not host.state.get("resume_handle"):
+                    if not data.get("resumable") or not self.host.state.get("resume_handle"):
                         raise RealtimeSetupError("provider_closed", "provider ended the live connection")
-                    provider_closed = True
-                    response_open = response_active = input_open = False
-                    for item in tuple(pending_spoken):
-                        if item not in audio_ms:
-                            await finish_spoken(item, interrupted=True)
-                    request_renewal(resuming=True)
-                    hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
-                    await ended.wait()
+                    self.provider_closed = True
+                    self.connected.clear()
+                    # The dead input transport cannot reach another VAD boundary.
+                    # Response, tool and playback obligations survive the resume.
+                    self.input_open = False
+                    self.renewing = self.resume = True
+                    self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     return
 
-    async def peers():
-        nonlocal meeting_audio, empty_since
+    async def peers(self):
         while True:
-            await host.check()
-            if hub.closed or hub.ended_by_owner:
-                for item in tuple(pending_spoken):
-                    await finish_spoken(item)
-                await rows.join()
-                ended.set()
+            await self.host.check()
+            if self.hub.closed or self.hub.ended_by_owner:
                 return
-            if hub.peers():
-                empty_since = time.monotonic()
-            elif time.monotonic() - empty_since >= 15:
+            if self.hub.peers():
+                self.empty_since = time.monotonic()
+            elif time.monotonic() - self.empty_since >= 15:
                 raise RealtimeSetupError("peers_left", "no peer is attached")
-            if hub.ended_by_ouroboros and quiet():
-                await rows.join()
-                ended.set()
-                return
-            if host.renewal_due() or host.state.get("refit"):
-                request_renewal()
-            if renewing:
-                if quiet():
-                    if resume and not host.state.get("resume_handle"):
-                        raise RealtimeSetupError("resume_unavailable", "provider has not supplied a resume handle")
-                    hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
-                    await rows.join()
-                    ended.set()
+            if self.hub.ended_by_ouroboros:
+                if not self.unheard():
+                    # Do not wait for extended thinking, more input, or another
+                    # native boundary after our deliberate goodbye.
+                    self.renewing = False
                     return
-                if renewal_deadline is not None and time.monotonic() >= renewal_deadline:
-                    raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
-            # A renewal request waits for a completed audible turn. Media keeps
-            # flowing until then; after the boundary queued frames belong to the
-            # next connection and the browser pauses capture while reconnecting.
-            event = hub.next_event(0)
-            if isinstance(event, cp.PeerAudio) and input_rate and not provider_closed:
-                meeting_audio |= event.role == cp.PEER_MEETING
-                await session.send(Audio(event.pcm, input_rate))
+            else:
+                if self.host.renewal_due() or self.host.state.get("refit"):
+                    self.request_renewal()
+                if self.renewing:
+                    if self.quiet():
+                        if self.resume and not self.host.state.get("resume_handle"):
+                            raise RealtimeSetupError("resume_unavailable", "provider has not supplied a resume handle")
+                        self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
+                        return
+                    if self.renewal_deadline is not None and time.monotonic() >= self.renewal_deadline:
+                        raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
+            event = self.hub.next_event(0)
+            if isinstance(event, cp.PeerAudio) and self.input_rate and not self.provider_closed:
+                self.meeting_audio |= event.role == cp.PEER_MEETING
+                await self.session.send(Audio(event.pcm, self.input_rate))
             elif isinstance(event, cp.PeerVideo):
-                if not host.model.vision:
+                if not self.host.model.vision:
                     raise RealtimeSetupError("vision_unsupported", "selected engine does not accept images")
-                await session.send(Video(event.data, event.mime))
+                await self.session.send(Video(event.data, event.mime))
             elif isinstance(event, cp.PeerControl):
                 message = event.message
                 if message["type"] == "played":
                     item = message["item_id"]
-                    # A companion's clock cannot claim that the owner heard audio.
                     if (event.role == cp.PEER_OWNER or
-                            (hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
-                        played[item] = min(message["played_ms"], int(audio_ms.get(item, 0)))
-                        if played[item] > 0 and played[item] >= int(audio_ms.get(item, 0)) - 20:
-                            await finish_spoken(item, completed=True)
+                            (self.hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
+                        self.played[item] = min(message["played_ms"], int(self.audio_ms.get(item, 0)))
+                        if self.played[item] > 0 and self.played[item] >= int(self.audio_ms.get(item, 0)) - 20:
+                            await self.finish_spoken(item, completed=True)
                 elif message["type"] == "context":
                     row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
-                    await host.observe_context(row)
-                    await session.send(ContextUpdate((row,)))
+                    await self.host.observe_context(row)
+                    await self.session.send(ContextUpdate((row,)))
             await asyncio.sleep(.01)
 
-    async def mailbox():
+    async def mailbox(self):
         while True:
-            if not renewing:
-                mail = await host.mailbox()
+            if not self.renewing:
+                mail = await self.host.mailbox()
                 if mail:
-                    await session.send(ContextUpdate(tuple(mail)))
+                    await self.send(ContextUpdate(tuple(mail)))
             await asyncio.sleep(.25)
-
-    children = [asyncio.create_task(action()) for action in (provider, peers, tools, mailbox, save_rows)]
-    stop = asyncio.create_task(ended.wait())
-    try:
-        done, _ = await asyncio.wait([*children, stop], return_when=asyncio.FIRST_COMPLETED)
-        for child in done:
-            await child
-        await rows.join()
-        return (host.state.get("resume_handle", "") if resume else "") if renewing else None
-    finally:
-        hub.send_state(cp.STATE_CLOSING if not renewing else cp.STATE_RECONNECTING)
-        # Stop producers before draining final rows; the one writer remains
-        # owned until its queued commits land, including cancellation during Stop.
-        for child in [*children[:-1], stop]:
-            if not child.done():
-                child.cancel()
-        for child in [*children[:-1], stop]:
-            try:
-                await joined(child)
-            except (Exception, asyncio.CancelledError):
-                pass
-        writer = children[-1]
-        if not writer.done():
-            async def flush_final():
-                for event in getattr(session, "final_captions", lambda: ())():
-                    await caption(event.data)
-                for item in tuple(pending_spoken):
-                    await finish_spoken(item)
-            flushing = asyncio.create_task(flush_final())
-            done, _ = await joined(asyncio.wait((flushing, writer), return_when=asyncio.FIRST_COMPLETED))
-            if writer in done:
-                flushing.cancel()
-                try:
-                    await joined(flushing)
-                except (Exception, asyncio.CancelledError):
-                    pass
-                await joined(writer)
-            await joined(flushing)
-            drain = asyncio.create_task(rows.join())
-            done, _ = await joined(asyncio.wait((drain, writer), return_when=asyncio.FIRST_COMPLETED))
-            if writer in done:
-                drain.cancel()
-            else:
-                writer.cancel()
-            for task in (drain, writer):
-                try:
-                    await joined(task)
-                except (Exception, asyncio.CancelledError):
-                    pass
