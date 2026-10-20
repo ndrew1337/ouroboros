@@ -91,6 +91,9 @@ const ENDINGS = {
     no_microphone: { sheet: true, words: 'No microphone was found. Connect one, then press Talk again.' },
     microphone_unreadable: { sheet: true, words: 'The microphone could not be opened. Close other apps that use it, then press Talk again.' },
     microphone_busy: { sheet: true, words: 'Another room is in a call. End that call first.', action: 'reveal' },
+    // Something other than a call holds the microphone (dictation): the lease names it.
+    microphone_in_use: { sheet: true, words: 'The microphone is in use by {detail}. Stop it, then press Talk again.',
+        bare: 'The microphone is in use. Stop what uses it, then press Talk again.' },
     microphone_lost: { words: 'The microphone was disconnected', action: 'retry' },
     audio_failed: { words: 'Live audio stopped working', action: 'retry' },
     slow_uplink: { words: 'The connection is too slow to send live audio', action: 'retry' },

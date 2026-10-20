@@ -41,6 +41,7 @@ export function createCallLight({ env = globalThis, visible = () => true, heard 
     let belowSince = null;  // when it last fell under the release, while it stays there
     let room = 0;  // the room's own level, under the owner's voice
     let roomAt = null;
+    let quiet = 0;  // the hold that still closes the owner's voice after the meter fell silent
     let frame = 0;
     let last = 0;
     const pending = [];
@@ -126,6 +127,11 @@ export function createCallLight({ env = globalThis, visible = () => true, heard 
         // The gate reads the voice above the room, so a steady background keeps the words and the colour calm;
         // the wave itself still shows what the microphone hears.
         gate(at, Math.max(0, nextMic - roomLevel(at, nextMic)));
+        // The meter reports the first window of digital silence and then nothing until sound returns
+        // (call_worklet.js LevelMeter), so the owner's voice still closes when its hold runs out.
+        env.clearTimeout?.(quiet);
+        quiet = !nextMic && !nextOut && !nextPlaying && ownerVoice
+            ? env.setTimeout?.(() => { quiet = 0; if (active) gate(now(), 0); }, CLOSE_HOLD_S * 1000 + 20) || 0 : 0;
         pending.push({ at: now() + latency * 1000, out: nextOut, playing: nextPlaying });
         if (pending.length > MAX_PENDING) pending.splice(0, pending.length - MAX_PENDING);
         if (visible()) schedule();
@@ -140,6 +146,8 @@ export function createCallLight({ env = globalThis, visible = () => true, heard 
         pending.length = 0;
         room = 0;
         roomAt = null;
+        env.clearTimeout?.(quiet);
+        quiet = 0;
         aboveSince = belowSince = null;
         if (ownerVoice) { ownerVoice = false; owner(false); }
         write();

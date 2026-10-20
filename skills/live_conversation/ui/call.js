@@ -53,6 +53,14 @@ export function mediaFailure(error) {
         OverconstrainedError: 'no_microphone', NotReadableError: 'microphone_unreadable' }[error?.name] || 'call_failed';
 }
 
+/** The page lease's answer (media_capture.js) as the page's own code. A microphone in use is another room's call
+ * only when that call holds it; any other holder (dictation) is named instead. */
+export function leaseFailure(lease) {
+    if (lease.code === 'in_use') return lease.owner instanceof CallSession ? 'microphone_busy' : 'microphone_in_use';
+    return { denied: 'permission_denied', no_device: 'no_microphone', lost: 'microphone_unreadable',
+        no_api: 'no_microphone_api', insecure_origin: 'insecure' }[lease.code] || lease.code;
+}
+
 function outputLatency(context) {
     const seconds = Number(context?.outputLatency) || Number(context?.baseLatency) || 0;
     return seconds > 0 ? seconds : 0;
@@ -126,16 +134,26 @@ export class CallSession {
             // Resume during the gesture, before permission or admission can consume it on iOS.
             const resume = context.resume();
             resume.catch(() => {});
+            this.resuming = resume;
             // This client's chosen microphone and cleaning (Settings → Live calls), else the system's own.
             const prefs = loadDevicePrefs(this.env);
             const pending = acquire({ owner: this, label: 'Live Conversation', constraints: microphoneConstraints(prefs).audio });
             this.pendingLease = pending;
             const lease = await pending;
-            if (lease.code) { this.fail(lease.code === 'in_use' ? 'microphone_busy' : lease.code); return; }
+            if (lease.code) {
+                const code = leaseFailure(lease);
+                this.fail(code, code === 'microphone_in_use' ? { detail: String(lease.label || '') } : {});
+                return;
+            }
             if (!current()) { lease.release('cancelled'); return; }
             this.lease = lease;
             this.pendingLease = null;
-            lease.signal.addEventListener('abort', () => { if (this.active) this.end(); }, { once: true });
+            // The lease lets go first when its device is lost: that is the lost microphone, not the owner's End.
+            // Every other release keeps ending the call as before.
+            lease.signal.addEventListener('abort', () => {
+                if (!this.active) return;
+                if (lease.signal.reason === 'lost') this.fail('microphone_lost'); else this.end();
+            }, { once: true });
             const { stream: media, fellBack } = lease;
             if (!current()) { media.getTracks().forEach(track => track.stop()); return; }
             if (fellBack) this.notice(MIC_FELL_BACK);
@@ -183,10 +201,10 @@ export class CallSession {
             };
         } catch (error) {
             if (!current()) return;
-            // An admission refusal carries the server's code and the owner's words.
-            if (error?.body?.ok === false || error?.status) this.fail(String(error.body?.code || 'call_not_started'),
-                { words: String(error.body?.error || error.message || '') });
-            else this.fail(mediaFailure(error));
+            // An admission refusal carries the server's code and the owner's words; any other answer carries neither.
+            if (error?.body?.ok === false) this.fail(String(error.body.code || 'call_not_started'),
+                { words: String(error.body.error || '') });
+            else this.fail(error?.status ? 'call_failed' : mediaFailure(error));
         }
     }
 
@@ -358,7 +376,13 @@ export class CallSession {
             this.node.port.onmessage = null;
             this.node.port.close(); this.node.disconnect(); this.node = null;
         }
-        if (this.context) { this.context.close().catch(() => {}); this.context = null; }
+        if (this.context) {
+            const context = this.context;
+            context.close().catch(() => {});
+            // WebKit reopens a context whose resume was still pending when it closed: close it again once that settles.
+            Promise.resolve(this.resuming).then(() => { if (context.state !== 'closed') context.close().catch(() => {}); }, () => {});
+            this.context = this.resuming = null;
+        }
         if (this.socket) {
             this.send({ type: 'bye', reason: state === 'failed' ? 'client_error' : 'left' });
             this.socket.onopen = this.socket.onmessage = this.socket.onerror = this.socket.onclose = null;
@@ -431,7 +455,7 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
         if (action.kind === 'settings') {
             session.dismiss();
             await openSettings(action.tab);
-            const target = action.focus && doc.getElementById(action.focus);
+            const target = action.focus ? doc.getElementById(action.focus) : null;
             target?.closest('details')?.setAttribute('open', '');
             target?.scrollIntoView?.({ block: 'center' });
             target?.focus?.({ preventScroll: true });

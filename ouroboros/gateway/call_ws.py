@@ -152,7 +152,7 @@ def _admit_owner_call(payload):
     from ouroboros.call_peers import open_owner_hub
     from ouroboros.contracts.realtime import RealtimeSetupError
     from ouroboros.live_conversation import LiveConversationTurn, feature_configuration
-    from supervisor.message_bus import get_bridge
+    from supervisor.message_bus import try_get_bridge
 
     if (set(payload) - {"chat_id", "client_message_id", "feature"}
             or type(payload.get("chat_id")) is not int
@@ -166,7 +166,11 @@ def _admit_owner_call(payload):
             raise RealtimeSetupError("model", "choose an explicit native realtime model")
         spec = cp.CallSpec(uuid.uuid4().hex, payload["chat_id"], config["provider"], model, config["voice"],
                            client_message_id=payload["client_message_id"])
-        bridge = get_bridge()
+        bridge = try_get_bridge()
+        if bridge is None:
+            # No supervisor in this server generation (still starting, or no model is set up): nothing can run the turn.
+            raise RealtimeSetupError("calls_unavailable", "Ouroboros isn’t ready to take calls yet. "
+                                     "Try again in a moment, or connect a model in Settings.")
         turn = LiveConversationTurn(feature, config, spec, publish=bridge.broadcast)
         hub, created = open_owner_hub(spec)
         if not created:
@@ -202,7 +206,8 @@ async def api_call_open(request):
         payload = await read_call_body(request)
         return JSONResponse(await run_sync_to_completion(_admit_owner_call, payload))
     except (RealtimeSetupError, CallPeerError) as exc:
-        return refusal(exc.code, 409, str(exc))
+        # `error` is the owner's sentence; the code travels in its own field.
+        return refusal(exc.code, 409, str(exc).removeprefix(f"{exc.code}: "))
 
 
 async def ws_call(websocket):
