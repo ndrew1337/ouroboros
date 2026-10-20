@@ -90,22 +90,25 @@ class RouteFacts:
     an input the endpoint once accepted. A larger accepted input never raises the
     conversation window. ``working_reserve_tokens`` is the room inside the window the
     conversation needs to grow in one session before the host renews it. ``basis``
-    names the counter of these numbers (``o200k`` or ``provider``). None is unknown;
-    an unknown window steps nothing and fits nothing.
+    names the counter of these numbers: ``provider`` is the provider's own token
+    count, which the host reaches through the route's calibrated density like any
+    route; ``estimator`` is the host's own estimate before any density (four
+    characters a token), for a route whose usage cannot calibrate it. None is
+    unknown; an unknown window steps nothing and fits nothing.
     """
 
     conversation_window_tokens: int | None = None
     accepted_input_tokens: int | None = None
     working_reserve_tokens: int | None = None
-    basis: str = "o200k"
+    basis: str = "provider"
     source: str = ""
     observed: str = ""  # ISO date of the measurement or the documentation read
 
     def __post_init__(self):
         for name in ("conversation_window_tokens", "accepted_input_tokens", "working_reserve_tokens"):
             _count(name, getattr(self, name))
-        if self.basis not in {"o200k", "provider"}:
-            raise RealtimeSetupError("catalog", "basis must be 'o200k' or 'provider'")
+        if self.basis not in {"provider", "estimator"}:
+            raise RealtimeSetupError("catalog", "basis must be 'provider' or 'estimator'")
         _text("source", self.source, empty=True)
         _text("observed", self.observed, empty=True)
         window, reserve = self.conversation_window_tokens, self.working_reserve_tokens

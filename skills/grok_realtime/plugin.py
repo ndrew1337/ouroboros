@@ -17,16 +17,19 @@ from ouroboros.realtime_session import JsonSession
 
 ENDPOINT = 'wss://api.x.ai/v1/realtime'
 ROUTE = RealtimeRoute('grok_realtime', ENDPOINT, 'xai::')
-# Measured 21.10.2026 (probes/GROK_RETENTION_20261021.md): Grok Voice 3.0 keeps earlier
-# spoken turns while session.instructions stays below ~92-103k o200k tokens (PASS 92,144
-# neutral and 81,403 real Nano; FAIL 102,804 and 132,132), whatever the text says. It
-# accepted 231,828 tokens on 19.10 (acceptance only). The window keeps a margin below the pass.
+# Measured 21.10.2026: Grok Voice 3.0 keeps earlier spoken turns while session.instructions
+# stays small, whatever the text says. In the host's own estimate (characters / 4) the passes
+# were 105,000 (neutral text) and 75,000 (the owner's Nano), the failures 117,148 and 117,212;
+# in o200k tokens 92,144 and 81,403 passed, 102,804 and 132,132 failed. Grok's usage does not
+# count the instructions, so nothing calibrates a density: the window is in estimator units,
+# 80,000, which also keeps the owner's Nano (1.13 o200k per estimator token) under 92,144 o200k.
+# Written facts were recalled from instructions up to 231,828 o200k (19.10): acceptance only.
 CATALOG = ProviderCatalog(
     label='Grok \u00b7 xAI', credential_settings=('XAI_API_KEY',), privacy='Call audio goes to xAI.',
     models=(CatalogModel(
         'grok-voice-3.0', 'grok-voice-3.0 \u2014 xAI\u2019s voice model',
-        RouteFacts(conversation_window_tokens=90_000, accepted_input_tokens=231_828, working_reserve_tokens=10_000,
-                   basis='o200k', source='measured spoken-retention bound of session.instructions',
+        RouteFacts(conversation_window_tokens=80_000, working_reserve_tokens=10_000, basis='estimator',
+                   source='measured spoken-retention bound of session.instructions (owner probes)',
                    observed='2026-10-21'),
         default=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
         thinking_levels=('none', 'high'), honours=frozenset({'languages', 'thinking'}),
