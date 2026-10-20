@@ -12,7 +12,6 @@ import functools
 import json
 import math
 import threading
-import time
 from contextlib import contextmanager
 from dataclasses import replace
 
@@ -209,9 +208,9 @@ class ConversationHost:
         self._selected_text_estimate = self._selected_raw_estimate = 0
         self._session_instructions = ""
         self._response_text_estimates = {}
-        self._meter_started = None
+        self._connection_accounting = False
+        self._connection_quote = None
         self._meter_watermark = 0.0
-        self._meter_reported = False
         self._caption_dirty = False
 
     def checkpoint(self, boundary):
@@ -252,6 +251,29 @@ class ConversationHost:
         with self.wire_path.open("a", encoding="utf-8") as stream:
             stream.write(canonical_json({"connection": self.connection_number, "direction": direction, "raw": raw}) + "\n")
             stream.flush()
+        if direction == "usage" and self._connection_accounting:
+            sample = json.loads(raw)
+            usage = sample.get("usage", {})
+            if "connected_seconds" in usage:
+                self._settle_connection_sample(self._connection_growth(usage), sample.get("raw_usage", {}))
+
+    def _connection_growth(self, usage):
+        counts = dict(usage)
+        seconds = counts.get("connected_seconds")
+        if type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0:
+            counts["connected_seconds"] = max(0, seconds - self._meter_watermark)
+            self._meter_watermark = max(self._meter_watermark, seconds)
+        return counts
+
+    def _settle_connection_sample(self, counts, raw_usage):
+        from ouroboros.live_usage import settle_connection_usage
+        if counts.get("connected_seconds") == 0:
+            return
+        args = self._response_args("")
+        args.pop("response_key")
+        settle_connection_usage(**args, connection_key=str(self.connection_number),
+            usage={"connected_seconds": counts["connected_seconds"]}, raw_usage=raw_usage,
+            watermark=self._meter_watermark)
 
     async def check(self):
         waiter = self.ctx.model_wait_context
@@ -299,7 +321,6 @@ class ConversationHost:
                 self._physical_context = request.physical_context
                 self._held_input = self._growth = 0
                 self._meter_watermark = 0.0
-                self._meter_reported = False
                 receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
                     task_id=self.ctx.task_id, attempt_id=f"call-{self.turn.spec.call_id}-{self.connection_number}",
                     candidate=session.wire, candidate_facts=evidence)
@@ -310,15 +331,20 @@ class ConversationHost:
                     if not admit(request):
                         raise PhysicalAttemptPreconditionFailed("context_capacity")
                     await self.check()
+                    self._connection_quote = copy.deepcopy(self.quote)
+                    self._connection_accounting = True
                     await session.open()
-                    self._meter_started = time.monotonic()
                     return await consume(session)
             finally:
                 try:
                     await joined(session.close())
                 finally:
-                    self._settle_tail()
-                    self._meter_started = None
+                    # close() may synchronously publish its final usage sample,
+                    # even after cancellation or exhausted admission. Consume it
+                    # before ending this connection's accounting lifetime.
+                    self._connection_accounting = False
+                    self._connection_quote = None
+                    self._response_text_estimates.clear()
                     for key, attempt in list(self.responses.items()):
                         from ouroboros.live_usage import abandon_live_response
                         abandon_live_response(attempt, reason="call_connection_closed_without_receipt")
@@ -331,7 +357,8 @@ class ConversationHost:
         return dict(engine=self.turn.route.accounting_provider, model=self.turn.model,
                     call_id=self.turn.spec.call_id, response_key=f"{self.connection_number}:{response_id}",
                     task_id=self.ctx.task_id, rendered_mode=self.plan.initial_mode, drive_root=self.ctx.drive_root,
-                    quote=self.quote, physical_context=self._physical_context)
+                    quote=self._connection_quote if self._connection_accounting else self.quote,
+                    physical_context=self._physical_context)
 
     def response_started(self, response_id):
         from ouroboros.live_usage import reserve_live_response, record_refused_live_response
@@ -350,19 +377,10 @@ class ConversationHost:
     def response_done(self, response_id, *, usage, raw_usage, status):
         from ouroboros.live_usage import settle_live_response, record_refused_live_response
         key = (self.connection_number, response_id)
-        counts = dict(usage)
-        if "connected_seconds" in counts:
-            self._meter_reported = True
-            seconds = counts["connected_seconds"]
-            growth = 0
-            if type(seconds) in (int, float) and math.isfinite(seconds) and seconds >= 0:
-                counts["connected_seconds"] = growth = max(0, seconds - self._meter_watermark)
-                self._meter_watermark = max(self._meter_watermark, seconds)
-            if key in self.completed and growth:
-                record_refused_live_response(**self._response_args(f"{response_id}:tail:{self._meter_watermark}"),
-                    reason="received_meter_growth", usage=counts, raw_usage=raw_usage, status=status)
-                return
+        counts = self._connection_growth(usage)
         if key in self.completed:
+            if "connected_seconds" in counts:
+                self._settle_connection_sample(counts, raw_usage)
             return
         if key not in self.responses:
             # A tool-only response or a closing receipt may have no start event.
@@ -371,7 +389,7 @@ class ConversationHost:
         else:
             settle_live_response(self.responses.pop(key), usage=counts, raw_usage=raw_usage, status=status)
         self.completed.add(key)
-        self.observe("usage", canonical_json({"response_id": response_id, "usage": dict(usage),
+        self.observe("response", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
         self._record_text_density(key, usage)
         held = [usage.get(axis) for axis in ("text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens")]
@@ -407,13 +425,6 @@ class ConversationHost:
             record_token_density(self.ctx.drive_root, normalize_model_identity(self.turn.model),
                 prompt_chars=estimate * 4, prompt_tokens=text, source="live_text_usage",
                 route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS)
-
-    def _settle_tail(self):
-        from ouroboros.pricing_catalog import rate
-        if self._meter_started is not None and (self._meter_reported or rate(self.quote, "input_cost_per_second") is not None):
-            self.response_done(f"connection-tail-{self.connection_number}",
-                usage={"connected_seconds": max(self._meter_watermark, time.monotonic() - self._meter_started)},
-                raw_usage={"source": "host_connection_elapsed"}, status="completed")
 
     def renewal_due(self):
         facts = self.model.facts

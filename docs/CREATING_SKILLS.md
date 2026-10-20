@@ -1278,7 +1278,12 @@ output-limit evidence in `LiveOptions.model_output_bound_tokens`. A provider own
 layout and normalization, and must never cut selected input. It reports each response's
 start, finish, status and usage axes, including interrupted/tool-only responses.
 `connected_seconds` is a cumulative connection watermark, including idle and closing
-time. The host bills its growth once, using the retained exact LiteLLM quote. Unpriced
+time. The factory's `observe("usage", raw)` reports JSON
+`{"usage": {...}, "raw_usage": {...}}` for that physical connection; `close()` emits
+its final sample before returning. Samples and responses share one watermark. The host
+settles growth after Stop/budget exhaustion without admitting work or inventing responses;
+response IDs dedupe per connection. `billable_audio_seconds` remains evidence.
+The host uses the retained exact LiteLLM quote. Unpriced
 usage remains unknown; settlement never silently fetches a newer tariff. Catalog warmup precedes the audio loop.
 
 Call tools join ordinary schemas; collisions refuse admission. Their async
@@ -1294,7 +1299,8 @@ durable immediately; whole-turn checkpoints are coalesced. The server's host-att
 Provider-specific audio-drop policy stays in the provider. `renewal_ready` carries
 native input/transcription work; the feature also waits for tools and playback.
 `final_captions()` returns received unfinished words at teardown without new wire work.
-Unload requests Stop and ends owned work. Page contributions use `provides: conversation`,
+Automatic feature/provider reload refuses with `live_call_active` and retries later.
+Owner disable cancels the call; host teardown joins its sockets and started tools. Page contributions use `provides: conversation`,
 `runtime: client`, `render.kind: host` under the ordinary `page_module` grant.
 Companion framing and call doors: `CLIENT_CONTRACT.md`, “Live Conversation”.
 

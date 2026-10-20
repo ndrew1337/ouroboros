@@ -1,7 +1,7 @@
 """Completed, interrupted and closing live receipts use the ordinary ledger."""
 import asyncio
+import json
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
@@ -39,38 +39,64 @@ def test_response_dedup_pinned_quote_and_shared_limit(host_world):
     assert len(rows) == 2 and sum(row['cost_usd'] for row in rows) == pytest.approx(100.012)
 
 
-def test_connected_watermarks_idle_tail_and_unknown_tariff_survive_close_error(host_world, monkeypatch):
-    import ouroboros.live_conversation as live
+@pytest.mark.parametrize('ending', ['normal', 'stop', 'budget', 'close_error'])
+def test_connected_samples_share_watermark_and_settle_before_close_ends(host_world, ending):
     host = host_world.host
     host.quote = tariff(input_cost_per_second=.01)
-    now = [1000.0]
-    monkeypatch.setattr(live, 'time', SimpleNamespace(monotonic=lambda: now[0]))
-
+    def sample(session, seconds):
+        session.observe('usage', json.dumps({'usage': {'connected_seconds': seconds},
+            'raw_usage': {'billable_audio_seconds': 999}}))
     async def consume(session):
-        host.response_started('tools')
-        for seconds in (60, 60, 90, 90):
-            host.response_done('tools', usage={'connected_seconds': seconds}, raw_usage={'fixture_meter': seconds},
-                               status='interrupted')
-        host.response_done('without-start', usage={'connected_seconds': 120}, raw_usage={}, status='completed')
-        now[0] += 150
-    asyncio.run(host.session(consume, LiveOptions()))
+        for _ in range(2):
+            sample(session, 4)
+        host.response_started('same-id')
+        for _ in range(2):
+            host.response_done('same-id', usage={'connected_seconds': 7},
+                               raw_usage={'billable_audio_seconds': 999}, status='interrupted')
+        async def close():
+            assert host._connection_accounting
+            for _ in range(2):
+                sample(session, 9)
+            session.closed = True
+            if ending == 'close_error':
+                raise RuntimeError('fixture close failed')
+        session.close = close
+        if ending == 'stop':
+            raise asyncio.CancelledError()
+        if ending == 'budget':
+            host.response_started('over-limit')
+    async def run():
+        with ua.usage_scope(ua.UsageScope(drive_root=host.ctx.drive_root, task_id=host.ctx.task_id,
+                                         global_limit_usd=.06 if ending == 'budget' else None)):
+            await host.session(consume, LiveOptions())
+    expected = {'stop': (asyncio.CancelledError, ''), 'budget': (RealtimeSetupError, 'budget_exhausted'),
+                'close_error': (RuntimeError, 'fixture close failed')}
+    if ending in expected:
+        error, message = expected[ending]
+        with pytest.raises(error, match=message):
+            asyncio.run(run())
+    else:
+        asyncio.run(run())
     rows = ua.read_usage_records(host.ctx.drive_root)
-    assert len(rows) == 4
-    assert sum(row['cost_usd'] for row in rows) == pytest.approx(1.5)
-    assert sorted(row['cost_evidence']['usage']['connected_seconds'] for row in rows) == [30, 30, 30, 60]
+    settled = [row for row in rows if row.get('cost_usd') is not None]
+    assert [row['cost_usd'] for row in settled] == pytest.approx([.04, .03, .02])
+    assert [row['cost_evidence']['usage']['connected_seconds'] for row in settled] == [4, 3, 2]
+    assert [row['source'] for row in settled] == ['live_connection_usage', 'live_response', 'live_connection_usage']
+    assert all('response_key' not in row['cost_evidence'] for row in (settled[0], settled[2]))
+    assert all(row['cost_evidence']['raw_usage']['billable_audio_seconds'] == 999 for row in settled)
+    assert host._connection_accounting is False and host_world.sessions[-1].closed
 
+    # Same provider response id belongs to a fresh physical connection. Its
+    # unknown quote stays unknown, and the previous watermark does not apply.
     host.quote = None
-    async def unknown(session):
-        host.response_done('tools', usage={'connected_seconds': 10}, raw_usage={}, status='completed')
-        now[0] += 20
-        async def failed_close():
-            raise RuntimeError('fixture close failed')
-        session.close = failed_close
-    with pytest.raises(RuntimeError, match='fixture close failed'):
-        asyncio.run(host.session(unknown, LiveOptions()))
-    added = ua.read_usage_records(host.ctx.drive_root)[4:]
+    async def next_connection(session):
+        host.response_done('same-id', usage={'connected_seconds': 2}, raw_usage={}, status='completed')
+        sample(session, 2)
+        sample(session, 3)
+    asyncio.run(host.session(next_connection, LiveOptions()))
+    added = ua.read_usage_records(host.ctx.drive_root)[len(rows):]
     assert len(added) == 2 and all(row['cost_usd'] is None for row in added)
-    assert [row['cost_evidence']['usage']['connected_seconds'] for row in added] == [10, 10]
+    assert [row['cost_evidence']['usage']['connected_seconds'] for row in added] == [2, 1]
 
 
 def test_cancel_joins_started_tool_before_connection_closes(host_world):

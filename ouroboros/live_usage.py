@@ -292,5 +292,22 @@ def record_refused_live_response(*, engine: str, model: str, call_id: str, respo
     return LiveAttempt(reservation, quote, evidence)
 
 
+def settle_connection_usage(*, engine: str, model: str, call_id: str, connection_key: str, task_id: str,
+                            rendered_mode: str, drive_root, usage: Mapping, raw_usage: Mapping,
+                            watermark: float, quote=None, physical_context=None) -> None:
+    """Record spent connection time through the response settlement owner, without admission.
+
+    A connection sample is not a response: it has its own source and connection
+    identity, no response key, reservation or invented provider response event.
+    """
+    quote = copy.deepcopy(quote)
+    evidence = {"call_id": call_id, "connection_key": connection_key, "rendered_mode": rendered_mode,
+                "tariff_quote": quote, "connected_seconds_watermark": watermark}
+    normalized, cost = _settlement(quote, evidence, usage, raw_usage, "observed")
+    accounting.record_received_attempt(accounting.AttemptRequest(
+        model=model, provider=engine, task_id=task_id, drive_root=drive_root, source="live_connection_usage",
+        physical_context=physical_context, cost_evidence=evidence), normalized, cost_usd=cost)
+
+
 def abandon_live_response(attempt: LiveAttempt, *, reason: str) -> None:
     accounting.mark_unresolved(attempt._reservation, reason)

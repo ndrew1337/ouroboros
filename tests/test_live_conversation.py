@@ -9,6 +9,7 @@ import base64
 import json
 import shutil
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -19,6 +20,16 @@ from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINES = [('openai_realtime', 'openai'), ('grok_realtime', 'grok'), ('gemini_live', 'gemini')]
+
+
+def wait_for(predicate, timeout=10):
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(.01)
+    raise AssertionError("timed out waiting for live call evidence")
 
 
 @pytest.fixture
@@ -148,7 +159,7 @@ class FakeSession:
     renewal_ready = True
 
     def __init__(self, selected, options, *, observe):
-        self.selected, self.options = selected, options
+        self.selected, self.options, self.observe = selected, options, observe
         self.wire = {'messages': json.loads(selected.messages_json), 'tools': json.loads(selected.tools_json),
                      'instructions': options.instructions + (' Speech recognition should expect: ' + ', '.join(options.languages) + '.' if options.languages else '')}
         self.opened = self.closed = False
@@ -410,3 +421,68 @@ def test_renewal_uses_reported_held_input_and_growth(host_world):
     assert host.renewal_due() is False
     host.response_done('two', usage={'text_input_tokens': 8000}, raw_usage={}, status='completed')
     assert host.renewal_due() is True
+
+
+@pytest.mark.parametrize('surface', ['provider', 'feature'])
+@pytest.mark.parametrize('action', ['reload', 'disable'])
+def test_active_call_reload_waits_and_owner_disable_cancels(host_world, monkeypatch, surface, action):
+    from concurrent.futures import ThreadPoolExecutor
+    import contextvars
+    from ouroboros import call_peers, extension_loader as loader, extension_registry_state as registry
+    from ouroboros.contracts.live_conversation import LiveOptions
+    host = host_world.host
+    provider_name, feature_name = 'fixture', 'fixture-feature'
+    provider_bundle = registry._ExtensionRegistrations(generation_digest='generation',
+        realtime_providers=['fixture:voice'], api_instances=registry._extensions[provider_name].api_instances)
+    feature_bundle = registry._ExtensionRegistrations(generation_digest='generation', conversation_features=['fixture:call'])
+    monkeypatch.setitem(registry._extensions, provider_name, provider_bundle)
+    monkeypatch.setitem(registry._extensions, feature_name, feature_bundle)
+    monkeypatch.setitem(host.turn.feature, 'skill', feature_name)
+    monkeypatch.setattr(call_peers, 'get_hub', lambda call_id: host.hub)
+    started, release, ended = threading.Event(), threading.Event(), threading.Event()
+    sessions = []
+    async def handler(port):
+        async def consume(session):
+            sessions.append(session)
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(.01)
+        try:
+            await port.session(consume, LiveOptions())
+        finally:
+            ended.set()
+    monkeypatch.setitem(host.turn.feature, 'handler', handler)
+    name = provider_name if surface == 'provider' else feature_name
+    subject = SimpleNamespace(name=name)
+    current = {'skill': name, 'enabled': True, 'desired_live': True,
+               'loaded_present': True, 'live_loaded': False, 'reason': 'ready'}
+    monkeypatch.setattr(loader, 'runtime_state_for_skill_name', lambda *a, **kw: dict(current))
+    monkeypatch.setattr(loader, '_finalize_extension_reconcile', lambda *a, **kw: None)
+    loaded = []
+    monkeypatch.setattr(loader, 'load_extension', lambda *a, **kw: loaded.append(a[0]) or None)
+    def reconcile():
+        return loader.reconcile_extension(name, host.ctx.drive_root, lambda: {}, skills=[subject], repo_path='')
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        running = executor.submit(contextvars.copy_context().run, host.turn.run,
+            host.ctx, list(host.messages), host.tools, task=host.task, initial_effort='')
+        try:
+            wait_for(started.is_set, timeout=30)
+            if action == 'reload':
+                refused = reconcile()
+                assert refused['reason'] == 'live_call_active'
+                assert refused['action'] == 'extension_reload_pending'
+                assert not loaded and not ended.is_set()
+                release.set()
+                running.result(timeout=10)
+                assert reconcile()['action'] == 'extension_loaded'
+                assert loaded == [subject]
+            else:
+                current.update(enabled=False, desired_live=False, reason='disabled')
+                assert reconcile()['action'] == 'extension_unloaded'
+                result = running.result(timeout=10)
+                assert result[1]['reason_code'] == 'cancelled'
+                assert name not in registry._extensions and ended.is_set()
+            assert sessions[-1].closed
+        finally:
+            release.set()
+            running.result(timeout=10)

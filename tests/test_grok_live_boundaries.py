@@ -139,7 +139,9 @@ def test_cancel_before_audio_drains_usage_and_allows_next_response(packages, cap
             assert adapter.convert(audio) == []
             usage = adapter.convert({"type": "response.done", "usage": {"audio_seconds": 4},
                                      "response": {"id": "cancelled", "status": "cancelled"}})
-            assert usage[0].data["usage"]["raw_usage"] == {"audio_seconds": 4}
+            assert usage[0].data["response_id"] == "cancelled"
+            assert usage[0].data["status"] == "cancelled"
+            assert usage[0].data["raw_usage"] == {"audio_seconds": 4}
             adapter.convert({"type": "response.created", "response": {"id": "next"}})
             assert adapter.convert({**audio, "response_id": "next"})[0].kind == "audio"
             captured.append({"usage": usage})

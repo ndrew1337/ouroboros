@@ -170,8 +170,15 @@ class LiveSession(Protocol):
 
 
 # A provider's session factory: session(selected, options, *, observe) -> LiveSession.
-# ``observe(direction, raw)`` records wire evidence in the task; a factory may take
-# further keyword-only test hooks of its own.
+# ``observe(direction, raw)`` records wire evidence in the task. Direction "usage"
+# additionally reports {"usage": {USAGE_AXES...}, "raw_usage": {...}} for this
+# physical connection, including idle time and closing tail. The host settles
+# connected_seconds cumulative growth across these samples and response_done;
+# it never sums watermarks or creates a synthetic response. close() publishes its
+# final sample before returning, even after Stop or exhausted admission: settlement
+# records spent usage and admits nothing new. Response ids dedupe per connection;
+# a new connection starts its own watermark. billable_audio_seconds is evidence.
+# A factory may take further keyword-only test hooks of its own.
 SessionFactory = Callable[..., LiveSession]
 
 
