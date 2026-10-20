@@ -152,7 +152,7 @@ class _Call:
         self.input_rate = self.output_rate = 0
 
     async def run(self):
-        writer = asyncio.create_task(self.save_rows())
+        writer = self.writer = asyncio.create_task(self.save_rows())
         workers = [asyncio.create_task(self.connections()), asyncio.create_task(self.tools())]
         try:
             done, _ = await asyncio.wait([*workers, writer], return_when=asyncio.FIRST_COMPLETED)
@@ -164,16 +164,11 @@ class _Call:
             for task in workers:
                 task.cancel()
             await joined(asyncio.gather(*workers, return_exceptions=True))
-            flushing = asyncio.create_task(self.finalize())
             try:
-                done, _ = await joined(asyncio.wait((flushing, writer), return_when=asyncio.FIRST_COMPLETED))
-                if writer in done:
-                    await writer
-                await joined(flushing)
+                await joined(self.finalize())
             finally:
-                flushing.cancel()
                 writer.cancel()
-                await joined(asyncio.gather(flushing, writer, return_exceptions=True))
+                await joined(asyncio.gather(writer, return_exceptions=True))
 
     async def connections(self):
         handle = ""
@@ -181,8 +176,8 @@ class _Call:
             await self.host.check()
             if self.hub.closed or self.hub.ended_by_owner or self.hub.ended_by_ouroboros:
                 return
-            self.host.state.pop("refit", None)
             if not handle:
+                self.host.state.pop("refit", None)
                 self.host.state.pop("resume_handle", None)
             result = await self.host.session(self.consume, session_options(self.host, handle))
             if result is None:
@@ -194,18 +189,19 @@ class _Call:
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
-        resumed = False
+        resumed = replacing = False
         children = [asyncio.create_task(action()) for action in (self.provider, self.peers, self.mailbox)]
         try:
             done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
             for child in done:
                 await child
             await self.rows.join()
-            resumed = self.renewing and self.resume
+            replacing = self.renewing
+            resumed = replacing and self.resume
             return (self.host.state.get("resume_handle", "") if resumed else "") if self.renewing else None
         finally:
             self.connected.clear()
-            self.hub.send_state(cp.STATE_RECONNECTING if self.renewing else cp.STATE_CLOSING)
+            self.hub.send_state(cp.STATE_RECONNECTING if replacing else cp.STATE_CLOSING)
             for child in children:
                 child.cancel()
             await joined(asyncio.gather(*children, return_exceptions=True))
@@ -223,6 +219,8 @@ class _Call:
         # A fresh fit wins over a requested resume while the transport is live.
         self.resume = resuming if not self.renewing else self.resume and resuming
         self.renewing = True
+        if not resuming:
+            self.host.state["refit"] = True
         if within is not None:
             deadline = time.monotonic() + float(within)
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
@@ -276,7 +274,15 @@ class _Call:
                 await self.caption(event.data)
         for item in tuple(self.pending_spoken):
             await self.finish_spoken(item, interrupted=item in self.interrupted)
-        await self.rows.join()
+        drain = asyncio.create_task(self.rows.join())
+        try:
+            done, _ = await asyncio.wait((drain, self.writer), return_when=asyncio.FIRST_COMPLETED)
+            if self.writer in done:
+                await self.writer
+            await drain
+        finally:
+            drain.cancel()
+            await asyncio.gather(drain, return_exceptions=True)
 
     async def tools(self):
         while True:

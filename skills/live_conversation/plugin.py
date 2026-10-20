@@ -53,6 +53,8 @@ def configuration_view(config, catalogs):
         model = selected.model(config.model) if selected else None
     except RealtimeSetupError:
         model = None
+    # After the host merge, replace this one assignment with:
+    # from ouroboros.live_conversation import call_offer; offered = call_offer(config)["offered"]
     offered = bool(config.enabled and model and any(key == config.provider and granted for key, _, granted in catalogs))
     return {**asdict(config), "offered": offered, "selected_model": model_json(model) if model else None,
             "catalogs": [{"id": key, "label": catalog.label, "privacy": catalog.privacy,

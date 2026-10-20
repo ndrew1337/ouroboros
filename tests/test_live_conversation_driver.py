@@ -487,3 +487,190 @@ def test_end_call_stops_extended_thinking_followup_after_goodbye(tmp_path):
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+def test_pending_refit_survives_a_transport_resume_until_the_response_finishes():
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='handle')
+            first.emit('response_started', response_id='r1')
+            host.state['refit'] = True
+            first.emit('closed', resumable=True, reason='transport_lost')
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await asyncio.sleep(.03)
+            assert host.options[1].resume_handle == 'handle'
+            assert len(host.sessions) == 2
+            second.emit('response_done', response_id='r1', usage={}, raw_usage={}, status='completed', continues=False)
+            await until(lambda: len(host.sessions) == 3)
+            assert host.options[2].resume_handle == ''
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_final_caption_writer_failure_does_not_leave_teardown_waiting():
+    from skills.live_conversation.driver import _Call
+    async def scenario():
+        host = Host()
+        async def failed_caption(**row): raise RuntimeError('fake caption storage failure')
+        host.caption = failed_caption
+        call = _Call(host)
+        session = Session()
+        session.final_captions = lambda: [LiveEvent('caption', {'speaker':'owner', 'item_id':str(i), 'text':'partial', 'final':True}) for i in range(2)]
+        call.last_session = session
+        call.writer = asyncio.create_task(call.save_rows())
+        flushing = asyncio.create_task(call.finalize())
+        try:
+            done, _ = await asyncio.wait([flushing], timeout=.2)
+            assert flushing in done, 'writer failure must not strand queued final captions'
+            with pytest.raises(RuntimeError, match='caption storage failure'): await flushing
+        finally:
+            flushing.cancel()
+            call.writer.cancel()
+            await asyncio.gather(flushing, call.writer, return_exceptions=True)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('source', ['host', 'provider'])
+@pytest.mark.parametrize('barrier', ['response', 'input', 'tools', 'playback', 'caption', 'native'])
+def test_fresh_renewal_waits_for_every_quiet_barrier(source, barrier):
+    async def scenario():
+        host = Host()
+        released, running = asyncio.Event(), asyncio.Event()
+        batches = []
+        async def batch(calls):
+            batches.append(calls)
+            running.set()
+            await released.wait()
+            return Batch(silent=[call['id'] for call in calls])
+        host.tool_batch = batch
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='must-not-refit-with-this')
+            if barrier == 'response': first.emit('response_started', response_id='busy')
+            if barrier == 'input': first.emit('input_started')
+            if barrier == 'tools':
+                first.emit('tool_call', call_id='one', name='work', arguments='{}')
+                await running.wait()
+                first.emit('tool_call', call_id='two', name='work', arguments='{}')
+            if barrier == 'playback': first.emit('audio', item_id='spoken', rate=24000, pcm=b'\0' * 48000)
+            if barrier == 'caption': first.emit('caption', speaker='ouroboros', item_id='spoken', text='Waiting for audio', final=True)
+            if barrier == 'native': first.renewal_ready = False
+            await asyncio.sleep(.03)
+            if source == 'host': host.due = True
+            else: first.emit('renew', within_s=2, resume=False, reason='audio_span')
+            await asyncio.sleep(.05)
+            assert len(host.sessions) == 1
+            if barrier == 'response': first.emit('response_done', response_id='busy', usage={}, raw_usage={}, status='completed', continues=False)
+            if barrier == 'input': first.emit('input_done')
+            if barrier == 'tools': released.set()
+            if barrier == 'caption': first.emit('audio', item_id='spoken', rate=24000, pcm=b'\0' * 48000)
+            if barrier in {'caption', 'playback'}:
+                host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'spoken', 'played_ms':1000}))
+            if barrier == 'native': first.renewal_ready = True
+            await until(lambda: len(host.sessions) == 2)
+            assert host.options[1].resume_handle == ''
+            if barrier == 'tools': assert [c['id'] for batch in batches for c in batch] == ['one', 'two']
+        finally:
+            released.set()
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('reason', ['audio_span', 'audio_drop', 'tools', 'languages'])
+def test_refit_reasons_never_reuse_a_resumption_handle(reason):
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='old')
+            first.emit('resumable', handle='latest')
+            first.emit('renew', within_s=2, resume=False, reason=reason)
+            await until(lambda: len(host.sessions) == 2)
+            assert host.options[1].resume_handle == ''
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('revoked', [False, True])
+def test_goaway_without_a_current_handle_does_not_claim_a_resume(revoked):
+    async def scenario():
+        host = Host()
+        task, session = await started(host)
+        session.emit('ready', input_rate=24000, output_rate=24000)
+        if revoked:
+            session.emit('resumable', handle='stale')
+            session.emit('resumable', handle='')
+        session.emit('renew', within_s=2, resume=True, reason='go_away')
+        with pytest.raises(RealtimeSetupError, match='resume_unavailable'):
+            await asyncio.wait_for(task, 2)
+        assert len(host.sessions) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('provider_deadline', [False, True])
+def test_only_provider_renewal_has_a_deadline_and_final_captions_are_saved(provider_deadline):
+    async def scenario():
+        host = Host()
+        task, first = await started(host)
+        final_calls = []
+        def final_captions():
+            final_calls.append(True)
+            return [LiveEvent('caption', {'speaker':'owner', 'item_id':'pending', 'text':'tail', 'final':True, 'incomplete':True})]
+        first.final_captions = final_captions
+        first.emit('ready', input_rate=24000, output_rate=24000)
+        first.renewal_ready = False
+        if provider_deadline: first.emit('renew', within_s=.02, resume=False, reason='audio_drop')
+        else: host.due = True
+        try:
+            await asyncio.sleep(.06)
+            if provider_deadline:
+                with pytest.raises(RealtimeSetupError, match='renewal_pending_work'): await asyncio.wait_for(task, 2)
+                assert len(host.sessions) == 1
+            else:
+                assert not task.done() and len(host.sessions) == 1
+                first.renewal_ready = True
+                await until(lambda: len(host.sessions) == 2)
+            assert final_calls == [True]
+            assert host.captions[0]['text'] == '[Partial transcript] tail'
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('stop', ['end', 'cancel'])
+def test_final_teardown_saves_partial_captions_once(stop):
+    async def scenario():
+        host = Host()
+        task, session = await started(host)
+        final_calls = []
+        def final_captions():
+            final_calls.append(True)
+            return [LiveEvent('caption', {'speaker':'ouroboros', 'item_id':'partial', 'text':'Still talking', 'final':True, 'incomplete':True})]
+        session.final_captions = final_captions
+        session.emit('ready', input_rate=24000, output_rate=24000)
+        session.emit('response_started', response_id='pending')
+        await until(lambda: host.usage)
+        if stop == 'cancel':
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError): await asyncio.wait_for(task, 2)
+        else:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+        assert final_calls == [True]
+        assert host.captions == [{'speaker':'ouroboros', 'text':'[Partial transcript] Still talking', 'item_id':'partial',
+                                  'heard':False, 'played_ms':0, 'interrupted':False, 'completed':False}]
+        assert host.usage == [('start', 'pending')], 'host teardown owns the unreceipted reservation'
+    asyncio.run(scenario())
