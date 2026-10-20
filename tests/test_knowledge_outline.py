@@ -60,5 +60,3 @@ def test_a_group_or_a_topic_lists_with_its_summaries(tmp_path):
     one = knowledge_index_view(address, topics=("release-queue-20261016",))
     assert "The queue stalls when two releases race." in one and "people/ada" not in one
     assert "patterns" in knowledge_index_view(address)  # no filter: the whole active index
-
-
