@@ -350,6 +350,9 @@ def test_captions_are_crash_durable_but_checkpoint_at_completed_turn(host_world,
     assert not checkpoints
     rows = list(iter_rows(host.ctx.drive_root, 'chat'))
     assert sum('Durable owner speech' in str(row) for row in rows) == 1
+    spoken = [entry.row for entry in iter_rows(host.ctx.drive_root, 'progress') if entry.row.get('spoken')]
+    assert len(spoken) == 1 and spoken[0]['text'] == 'Durable reply'
+    assert spoken[0]['spoken']['status'] == 'played' and spoken[0]['role'] == 'assistant'
     # No start event still leaves a settled, unknown-priced response.
     host.response_done('answer-1', usage={}, raw_usage={}, status='completed')
     assert checkpoints == ['ready']

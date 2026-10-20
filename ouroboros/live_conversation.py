@@ -507,7 +507,7 @@ class ConversationHost:
                 elif speaker == "owner" and not heard:
                     message_id = f"call:{spec.call_id}:{item_id}"
                     row = log_chat("in", spec.chat_id, 1, text, source="live_call", sender_label="voice",
-                        client_message_id=message_id, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root)
+                        client_message_id=message_id, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root, require_write=True)
                     if not row:
                         raise RealtimeSetupError("history_write", "owner call caption was not recorded")
                     get_bridge().broadcast({"type": "chat", "role": "user", "content": text, "ts": row.get("ts"),
@@ -515,13 +515,17 @@ class ConversationHost:
                         "client_message_id": message_id})
                 elif speaker == "owner":
                     send_with_budget(spec.chat_id, "Heard in the call: " + text, role="system",
-                        system_type="call_heard", narration=False,
+                        system_type="call_heard", narration=False, require_write=True, task_id=self.ctx.task_id,
                         progress_meta={"source": "live_call", "call_id": spec.call_id, "item_id": item_id})
                 else:
                     meta = {"source": "live_call", "call_id": spec.call_id, "spoken": {
                         "call_id": spec.call_id, "item_id": item_id, "played_ms": played_ms,
                         "status": "interrupted" if interrupted else "played" if completed else "generated"}}
-                    self.ctx.emit_progress_fn(text, narration=True, _progress_meta_override=meta)
+                    # A queued progress event is not a durable caption. Use the
+                    # ordinary required writer before completing this receipt.
+                    send_with_budget(spec.chat_id, text, is_progress=True, task_id=self.ctx.task_id,
+                        role="assistant", system_type="model_narration", narration=True, require_write=True,
+                        progress_meta={**meta, "_is_direct_chat": True})
 
             await joined(asyncio.to_thread(write))
             self.captioned.add(key)
