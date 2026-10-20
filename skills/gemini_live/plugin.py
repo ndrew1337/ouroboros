@@ -139,7 +139,7 @@ class GeminiSession(JsonSession):
 
     @property
     def renewal_ready(self):
-        return not (self.input_pending or self.output_pending or self.turn_busy or self.held_context)
+        return not (self.input_pending or self.output_pending or self.turn_busy or self.calls or self.held_context)
 
     def queue_events(self, *events):
         self.pending.extend(events)
@@ -195,6 +195,13 @@ class GeminiSession(JsonSession):
         result = []
         content = event.get('serverContent', {})
         calls = event.get('toolCall', {}).get('functionCalls', [])
+        if event.get('voiceActivity', {}).get('type') == 'ACTIVITY_START':
+            if not self.input_pending:
+                result.append(LiveEvent('input_started'))
+            self.input_pending = True
+            self.input_final = self.input_boundary = False
+        elif event.get('voiceActivity', {}).get('type') == 'ACTIVITY_END':
+            self.input_boundary = True
         if 'usageMetadata' in event:
             self.usage = dict(event['usageMetadata'])
         new_output = bool(content.get('modelTurn') or calls)
@@ -221,6 +228,10 @@ class GeminiSession(JsonSession):
         for key, speaker in (('inputTranscription', 'owner'), ('outputTranscription', 'ouroboros')):
             if key in content:
                 part = content[key]
+                if speaker == 'owner' and not self.input_pending:
+                    self.input_pending = True
+                    self.input_final = False
+                    result.append(LiveEvent('input_started'))
                 if speaker not in self.text:
                     self.text[speaker] = ['local_' + uuid4().hex if speaker == 'owner' else self.item, '']
                 row = self.text[speaker]
@@ -234,8 +245,8 @@ class GeminiSession(JsonSession):
                         self.output_final = True
                     else:
                         self.input_final = True
-                        if self.input_boundary:
-                            self.input_pending = False
+                        self.input_pending = False
+                        result.append(LiveEvent('input_done'))
         for call in calls:
             if call['id'] not in self.calls:
                 self.calls[call['id']] = call['name']
@@ -256,6 +267,8 @@ class GeminiSession(JsonSession):
                 self.input_final = True
             self.input_boundary = True
             if self.input_final:
+                if self.input_pending:
+                    result.append(LiveEvent('input_done'))
                 self.input_pending = False
             self.turn_busy = content.get('interactionStatus') == 'IN_PROGRESS'
             usage = {'response_id': self.response, 'raw_usage': dict(self.usage)}
@@ -299,9 +312,8 @@ class GeminiSession(JsonSession):
         if isinstance(command, Audio):
             if command.rate != 16000 or len(command.pcm) % 2:
                 raise RealtimeSetupError('audio_format', 'Gemini expects PCM16 mono at 16000 Hz')
-            if not self.input_pending:
-                self.input_final = self.input_boundary = False
-            self.input_pending = True
+            # Continuous PCM includes silence. Only native VAD/transcription
+            # can open an input boundary; sending a frame says nothing about it.
             await self.write({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
                 'data': base64.b64encode(command.pcm).decode()}}})
         elif isinstance(command, Video):
