@@ -28,7 +28,7 @@ def test_route_facts_keep_the_reserve_inside_the_window_and_unknown_as_none():
     with pytest.raises(RealtimeSetupError):
         RouteFacts(conversation_window_tokens=0)
     with pytest.raises(RealtimeSetupError):
-        RouteFacts(basis="chars")
+        RouteFacts(basis="o200k")  # no tokenizer in the runtime: provider or estimator units only
 
 
 def test_catalog_model_pairs_thinking_levels_with_the_knob_and_notes_only_unhonoured_knobs():
@@ -124,7 +124,7 @@ def _plugin_catalog(skill):
 
 @pytest.mark.parametrize("skill,window,credential", [
     ("gemini_live", 92_000, "GEMINI_API_KEY"),
-    ("grok_realtime", 90_000, "XAI_API_KEY"),
+    ("grok_realtime", 80_000, "XAI_API_KEY"),
     ("openai_realtime", 128_000, "OPENAI_API_KEY"),
 ])
 def test_built_in_engines_declare_labelled_windows_that_acceptance_never_raises(skill, window, credential):
