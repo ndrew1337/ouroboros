@@ -87,9 +87,10 @@ export function bindDeviceSettings(root, env = globalThis) {
                 await preview.play().catch(() => {});
                 status.textContent = 'This camera preview stays on this device.';
             } else {
-                context = new env.AudioContext(); await context.resume();
-                const analyser = context.createAnalyser(); analyser.fftSize = 512;
-                context.createMediaStreamSource(lease.stream).connect(analyser);
+                const audio = new env.AudioContext(); context = audio; await audio.resume();
+                if (disposed || token !== generation) return;
+                const analyser = audio.createAnalyser(); analyser.fftSize = 512;
+                audio.createMediaStreamSource(lease.stream).connect(analyser);
                 const samples = new Float32Array(analyser.fftSize), meter = $('[data-call-meter]'); meter.hidden = false;
                 const draw = () => {
                     if (disposed || token !== generation) return;

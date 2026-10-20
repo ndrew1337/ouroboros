@@ -64,3 +64,26 @@ test('a test cannot steal call capture; changing the client choice announces it 
         assert.equal(currentHolder().owner,'live-call');
     } finally { lease?.release(); f.restore(); }
 });
+
+test('a cancelled microphone test cannot attach to the next test while audio resume is pending', async () => {
+    const f = fixture(async () => ({getTracks:() => [Object.assign(new EventTarget(), {stop() {}})]}));
+    const contexts = [];
+    f.env.requestAnimationFrame = () => 1;
+    f.env.AudioContext = class {
+        constructor() { this.analysers = 0; this.pending = new Promise(resolve => {this.finishResume = resolve;}); contexts.push(this); }
+        resume() { return this.pending; }
+        close() { return Promise.resolve(); }
+        createMediaStreamSource() { return {connect() {}}; }
+        createAnalyser() { this.analysers++; return {fftSize:512,getFloatTimeDomainData() {}}; }
+    };
+    try {
+        f.click('mic'); await settle();
+        f.click('mic'); // cancel while the first context is resuming
+        f.click('mic'); await settle();
+        assert.equal(contexts.length,2);
+        contexts[0].finishResume(); await settle();
+        assert.equal(contexts[1].analysers,0);
+        contexts[1].finishResume(); await settle();
+        assert.equal(contexts[1].analysers,1);
+    } finally { contexts.forEach(context => context.finishResume()); f.restore(); }
+});

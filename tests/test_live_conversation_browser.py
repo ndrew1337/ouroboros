@@ -72,7 +72,7 @@ FAKES = r"""(() => {
         createOscillator() { return {frequency:{value:0},connect() { return {connect() {}}; },start() {},stop() {}}; }
         createGain() { return {gain:{value:0}}; }
         get currentTime() { return 0; }
-        setSinkId() { return Promise.resolve(); }
+        setSinkId(value) { this.sinkId = value; return Promise.resolve(); }
     }
     window.AudioContext = Context;
     Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {configurable:true,
@@ -491,4 +491,26 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     assert not any('device' in key or key == 'echoCancellation' for key in subscription_ui['call_saves'][-1])
     navigate(page, 'chat')
     assert page.locator("[data-call-entry='talk']").count() == 0
+    assert not subscription_ui['errors']
+
+
+def test_settings_device_change_reaches_live_call_without_stealing_its_capture(subscription_ui, monkeypatch):
+    from playwright.sync_api import expect
+    page, _ = open_call_ui(subscription_ui, monkeypatch, width=1280, scheme='light', engine='gemini')
+    start_call(page)
+    navigate(page, 'settings')
+    page.locator('[data-settings-tab="advanced"]').click()
+    form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
+    form.locator('[data-call-device="mic"]').select_option('test-mic')
+    page.wait_for_function('__callFixture.microphones === 2 && __callFixture.tracks[0].readyState === "ended"')
+    assert page.evaluate('__callFixture.tracks[1].readyState') == 'live'
+    assert page.evaluate('__callFixture.sockets.length === 1 && __callFixture.sockets[0].readyState === 1')
+    form.locator('[data-call-device="speaker"]').select_option('test-speaker')
+    page.wait_for_function('__callFixture.contexts[0].sinkId === "test-speaker"')
+    form.locator('[data-call-test="mic"]').click()
+    expect(form.locator('[data-call-device-status]')).to_contain_text('in use by Live Conversation')
+    assert page.evaluate('__callFixture.microphones') == 2
+    form.locator('[name="enabled"]').uncheck()
+    form.locator('button[type="submit"]').click()
+    assert_ended(page)
     assert not subscription_ui['errors']
