@@ -665,7 +665,9 @@ def uninstall_installed(drive_root: pathlib.Path, name: str) -> Dict[str, Any]:
         if not result.ok:
             raise SkillInstallError("uninstall_failed", result.error)
         return {"ok": True, "name": name, "source": "clawhub"}
-    _unload(name)
+    from ouroboros.extension_loader import unload_extension
+
+    unload_extension(name)  # an explicit owner removal keeps ordinary cancellation
     shutil.rmtree(skill_dir)  # nothing seeds built-ins at startup, so a removed one stays removed
     discard_update_snapshot(pathlib.Path(drive_root), name)
     (skill_state_dir_path(pathlib.Path(drive_root), name) / DEPS_STATE_FILENAME).unlink(missing_ok=True)

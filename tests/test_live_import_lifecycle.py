@@ -169,3 +169,18 @@ def test_marketplace_replacement_checks_both_mutation_boundaries(publication, mo
             assert result.error_code == "live_call_active" and result.error_status == 409
             assert registry._extensions[name] is bundle and not installed and not work.cancelled
             assert settled == ([] if admission == "before_update" else [name])
+
+
+def test_explicit_source_uninstall_cancels_live_work(publication, monkeypatch, tmp_path):
+    from ouroboros import skill_loader, skill_source_install as installer, skill_uninstall_state
+
+    name, _bundle, spec = publication
+    payload = tmp_path / "synthetic-payload"
+    payload.mkdir()
+    monkeypatch.setattr(skill_loader, "find_skill", lambda *a, **kw: SimpleNamespace(
+        skill_dir=payload, location="native"))
+    monkeypatch.setattr(skill_uninstall_state, "removal_action", lambda *a: "uninstall")
+    work = Work()
+    with registry.extension_work_scope(spec, work):
+        assert installer.uninstall_installed(tmp_path, name)["ok"]
+        assert work.cancelled and name not in registry._extensions and not payload.exists()
