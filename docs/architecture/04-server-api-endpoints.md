@@ -125,6 +125,7 @@ Every path-addressed `/api/files/*` operation resolves its requested `path` and 
 | POST | `/api/tasks/{task_id}/pause` | (§6 Owner Pause of a whole tree) |
 | POST | `/api/tasks/{task_id}/continue` | (§6 Owner Continue after a technical interruption) |
 | POST | `/api/tasks/{task_id}/resume` | |
+| POST | `/api/call/open` | admits a live call as an ordinary room turn when Calls (beta) is on (§13 Live Conversation) |
 | POST | `/api/decisions` | |
 | GET | `/api/cards/{card_id}` | a living card's current body and presses |
 | GET | `/api/cards/{card_id}/app` | app HTML as `text/plain`, `nosniff`, `no-store` |
@@ -171,6 +172,7 @@ Every path-addressed `/api/files/*` operation resolves its requested `path` and 
 | POST | `/api/mcp/test` | |
 | POST | `/api/mcp/import/preview` | |
 | WS | `/ws` | |
+| WS | `/ws/call/{call_id}` | one admitted call's audio and frames (`call_protocol.py`) |
 | STATIC | `/static/*` | |
 | STATIC | `/onboarding/static/*` | |
 | STATIC | `/auth/*` | selected public login assets |
