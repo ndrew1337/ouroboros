@@ -83,9 +83,6 @@ def record_call_languages(state_dir, languages, *, binding_id=""):
     return kept
 
 
-SILENT_TOOLS = frozenset({"end_call", "set_call_languages"})
-
-
 def call_tools(state_dir):
     async def end_call(host, arguments):
         if arguments:
@@ -122,6 +119,8 @@ def session_options(host, resume_handle=""):
     config, honours = host.config, host.model.honours
     languages = tuple(host.state.get("languages", ()))
     knobs = {key: getattr(config, key) for key in ("pause", "interruptions", "thinking", "search") if key in honours}
+    if knobs.get("thinking") not in host.model.thinking_levels:
+        knobs.pop("thinking", None)
     return LiveOptions(voice=config.voice, resume_handle=resume_handle,
         languages=languages if "languages" in honours else (),
         instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, languages_opening_sentence(languages), config.instructions))),
@@ -223,9 +222,8 @@ async def consume(host: LiveHost, session):
                 # history before its pre-effect checkpoint.
                 await rows.join()
                 changes = await host.tool_batch(calls)
-                silent = tuple(call["id"] for call in calls if call["function"]["name"] in SILENT_TOOLS)
-                await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent))
-                if len(silent) == len(calls) and not response_active:
+                await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent=changes.silent))
+                if len(changes.silent) == len(calls) and not response_active:
                     response_open = False
             finally:
                 for _ in calls:

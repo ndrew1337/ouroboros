@@ -41,6 +41,13 @@ class Session:
     def emit(self, kind, **data): self.events.put_nowait([LiveEvent(kind, data)])
 
 
+class Batch(list):
+    """The additive ToolBatch port shape; trunk owns its contract class."""
+    def __init__(self, rows=(), *, silent=()):
+        super().__init__(rows)
+        self.silent = tuple(silent)
+
+
 class Host:
     """No old private host fields/methods exist on this port."""
     def __init__(self):
@@ -61,7 +68,7 @@ class Host:
         self.options.append(options)
         return await consume(session)
     async def mailbox(self): return []
-    async def tool_batch(self, calls): return []
+    async def tool_batch(self, calls): return Batch()
     async def caption(self, **row): self.captions.append(row)
     async def observe_context(self, row): self.context.append(row)
     def response_started(self, response_id): self.usage.append(('start', response_id))
@@ -207,9 +214,9 @@ def install_tools(host, state_dir):
     from skills.live_conversation.driver import call_tools
     tools = {tool.name: tool for tool in call_tools(state_dir)}
     async def batch(calls):
-        return [{'role':'tool', 'tool_call_id':call['id'],
+        return Batch([{'role':'tool', 'tool_call_id':call['id'],
                  'content':await tools[call['function']['name']].handler(host, json.loads(call['function']['arguments']))}
-                for call in calls]
+                for call in calls], silent=[call['id'] for call in calls if tools[call['function']['name']].silent])
     host.tool_batch = batch
     return tools
 
@@ -286,3 +293,36 @@ def test_options_only_forward_honoured_knobs(honoured):
     options = session_options(host)
     assert (options.pause,options.interruptions,options.thinking,options.search,options.languages) == (
         ('long',False,'high',True,('ru-RU',)) if honoured else ('normal',True,'',False,()))
+
+
+@pytest.mark.parametrize('levels', [('none', 'high'), ('minimal', 'low', 'medium', 'high', 'xhigh'), ('low', 'medium', 'high'), ()])
+@pytest.mark.parametrize('configured', ['none', 'low', 'high', 'xhigh', 'obsolete'])
+def test_thinking_requires_a_catalog_level(levels, configured):
+    from skills.live_conversation.driver import session_options
+    host = Host()
+    host.model = replace(host.model, honours=frozenset({'thinking'}) if levels else frozenset(), thinking_levels=levels)
+    host.config = replace(host.config, thinking=configured)
+    assert session_options(host).thinking == (configured if configured in levels else '')
+
+
+@pytest.mark.parametrize('silent', [(), ('call-id',)])
+def test_tool_outputs_use_host_silent_ids_without_opening_a_response(silent):
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        changes = Batch([{'role': 'tool', 'tool_call_id': 'call-id', 'content': 'result'}], silent=silent)
+        async def batch(calls): return changes
+        host.tool_batch = batch
+        task, session = await started(host)
+        try:
+            # Deliberately disagree with a feature tool name: the port owns silence.
+            session.emit('tool_call', call_id='call-id', name='end_call' if not silent else 'another_silent_tool', arguments='{}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            outputs = next(x for x in session.sent if isinstance(x, ToolOutputs))
+            assert outputs == ToolOutputs(tuple(changes), tuple(host.schemas), silent=silent)
+            assert not any(isinstance(x, Respond) for x in session.sent)
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
