@@ -3,11 +3,15 @@ import { mountCall } from './call.js';
 import { fetchJson } from '/static/modules/api_client.js';
 export function mount(ctx) {
     const rooms = new Set();
-    let config = { enabled: false }, disposed = false;
+    let config = { enabled: false }, disposed = false, reading = 0;
     async function refresh() {
-        try { config = await fetchJson(`/api/extensions/${encodeURIComponent(ctx.skill)}/config`, { cache: 'no-store' }); }
-        catch { config = { enabled: false }; }
-        if (!disposed) for (const room of rooms) room.state(config);
+        const request = ++reading;
+        let next;
+        try { next = await fetchJson(`/api/extensions/${encodeURIComponent(ctx.skill)}/config`, { cache: 'no-store' }); }
+        catch { return; }  // A failed read is not an owner's decision to end the call.
+        if (disposed || request !== reading) return;
+        config = next;
+        for (const room of rooms) room.state(config);
     }
     const unregister = ctx.providers.register('conversation', {
         mountRoom(options) {
@@ -21,10 +25,17 @@ export function mount(ctx) {
     // Settings writes do not require a page reload. This read cannot enable a
     // skill or reveal a key; it returns only the feature's explicit configuration.
     void refresh();
-    const timer = setInterval(refresh, 5000);
+    const returned = () => { if (!document.hidden) void refresh(); };
+    window.addEventListener('focus', refresh);
+    window.addEventListener('ouro:settings-updated', refresh);
+    document.addEventListener('visibilitychange', returned);
     function dispose() {
         if (disposed) return;
-        disposed = true; clearInterval(timer); unregister();
+        disposed = true;
+        window.removeEventListener('focus', refresh);
+        window.removeEventListener('ouro:settings-updated', refresh);
+        document.removeEventListener('visibilitychange', returned);
+        unregister();
         for (const room of [...rooms]) room.destroy();
     }
     ctx.signal.addEventListener('abort', dispose, { once: true });
