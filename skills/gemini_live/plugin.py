@@ -30,10 +30,11 @@ VOICES = tuple(CatalogVoice(name, f"{name} \u2014 {style}") for name, style in (
     ('Laomedeia', 'Upbeat'), ('Achernar', 'Soft'), ('Alnilam', 'Firm'), ('Schedar', 'Even'), ('Gacrux', 'Mature'),
     ('Pulcherrima', 'Forward'), ('Achird', 'Friendly'), ('Zubenelgenubi', 'Casual'), ('Vindemiatrix', 'Gentle'),
     ('Sadachbia', 'Lively'), ('Sadaltager', 'Knowledgeable'), ('Sulafat', 'Warm')))
-# Spoken turns held at ~92k o200k of instruction (18.10.2026); the endpoint documents
-# a 131,072-token input. The reserve is a planning margin for in-session growth.
-FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='o200k',
-                   source='spoken retention held at ~92k o200k instruction (owner probes); documented input 131,072',
+# Spoken turns held under a ~92k-token instruction once the session renews before ~2.5k
+# held audio tokens (18.10.2026); the endpoint documents a 131,072-token input. The
+# reserve is a planning margin for in-session growth.
+FACTS = RouteFacts(conversation_window_tokens=92_000, working_reserve_tokens=10_000, basis='provider',
+                   source='spoken retention held under a ~92k-token instruction (owner probes); documented input 131,072',
                    observed='2026-10-18')
 CATALOG = ProviderCatalog(
     label='Gemini \u00b7 Google', credential_settings=('GEMINI_API_KEY',),
