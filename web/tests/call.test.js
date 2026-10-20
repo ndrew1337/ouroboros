@@ -549,4 +549,3 @@ test('the registered AudioWorklet captures at device rate, never echoes, and met
         }
     }
 });
-

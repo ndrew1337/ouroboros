@@ -528,4 +528,3 @@ function ensureStylesheet(doc) {
         link.addEventListener('error', done, { once: true });
     });
 }
-
