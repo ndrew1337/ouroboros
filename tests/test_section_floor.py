@@ -311,3 +311,28 @@ def test_failed_retention_keeps_the_whole_section(tmp_path, monkeypatch):
     section = _service(size=400)
     plan = _plan(_core(tmp_path, [section]), RESERVE + 1)
     assert section.full_text in _text(plan) and not _host_facts(plan)
+
+
+def test_declared_inputs_use_the_same_book_map_floor_without_loading_shared_memory(tmp_path, monkeypatch):
+    from tests.test_doc_context import _make_env_and_memory
+
+    env, memory = _make_env_and_memory(tmp_path)
+    env.repo_path("docs/ARCHITECTURE.md").write_text(
+        "# Architecture\n\nBody map.\n\n## Chapters\n\n- [Core](architecture/core.md)\n")
+    chapter = env.repo_path("docs/architecture/core.md")
+    chapter.parent.mkdir(exist_ok=True)
+    chapter.write_text("# Core\n\nIts purpose.\n\n" + "\n\n".join(f"## Detail {i}\n\nFacts." for i in range(100)))
+    task = {"id": "declared-child", "type": "task", "delegation_role": "subagent", "text": "Exact assignment",
+            "configured_subagent": {"route": {"kind": "api_model"}},
+            "task_contract": {"input_sources": "declared"}}
+    monkeypatch.setattr(context, "build_memory_sections", lambda *_a, **_kw: pytest.fail("shared memory opened"))
+    monkeypatch.setattr(context, "build_knowledge_sections", lambda *_a, **_kw: pytest.fail("knowledge opened"))
+    core = context._capture_context_core(env, memory, task, None, None)
+    assert not core.memory_view_json
+    assert core.section_root == str(env.drive_root) and core.section_task_id == task["id"]
+    unknown = _plan(core, 0, "nano")
+    assert not _host_facts(unknown)
+    small = _plan(core, RESERVE + 1, "nano")
+    assert _host_facts(small)
+    assert {row["section_id"] for row in _host_facts(small)} <= {"architecture_map", "development_map"}
+    assert core.dynamic_text in _text(small) and "Exact assignment" in core.user_content_json

@@ -1071,12 +1071,16 @@ def _capture_context_core(
     design_nav = task_design_navigation(design_ctx, task)
 
     if declared:
-        return _capture_declared_context_core(
+        from dataclasses import replace
+
+        core = _capture_declared_context_core(
             env, memory, task, ctx, runtime_builder=build_runtime_section,
             user_builder=build_user_content, captured_at=captured_at, base_prompt=base_prompt,
             bible_md=bible_md, architecture_md=architecture_md, development_md=development_md,
             books=books, book_errors=book_errors, design_nav=design_nav,
         )
+        # Its governance maps use the same window ladder without opening shared memory.
+        return replace(core, section_root=_section_root_for(env, ctx), section_task_id=str(task["id"]))
 
     # A fork is an execution boundary, not a second mind.  Keep the agent's
     # writable Memory object task-local, but capture identity/dialogue from the

@@ -265,7 +265,9 @@ def test_a_rebind_narrows_a_view_the_window_cannot_hold_from_its_own_level_by_th
     floor = rebound.projection("low").memory_facts["floor"]
     assert mode == "low" and event["view_kept"] is False and messages[0] == rebound.projection("low").system_message()
     assert all(floor["steps"].get(step, 0) >= count for step, count in old["steps"].items())  # nothing unfolds
-    assert sum(floor["steps"].values()) > sum(old["steps"].values())
+    # The first host view pays this one-token shortfall before any additional memory step.
+    assert rebound.projection("low").memory_facts["host_sections_addressed"]
+    assert floor["steps"] == old["steps"]
     assert floor["by_budget"] == old["by_budget"] and floor["budget_allowance_tokens"] is None  # no target refold
     assert floor["allowance_tokens"] == floor["physical_allowance_tokens"]  # no working margin reapplied
     assert messages[1:] == _long_tail(low)[1:]  # the actual tail is never touched

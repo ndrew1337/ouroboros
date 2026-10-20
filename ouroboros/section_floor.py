@@ -44,8 +44,10 @@ def capture_sections(parts: Iterable[str], *, prefix: str) -> tuple[HostSection,
                  for i, part in enumerate(parts))
 
 
-def labelled_section(section: HostSection, label: Callable[[str], str]) -> HostSection:
+def labelled_section(section: str, label: Callable[[str], str]) -> str:
     """Apply the same snapshot label to both forms without losing the captured metadata."""
+    if not isinstance(section, HostSection):
+        return label(section)
     return replace(section, full_text=label(section.full_text),
                    operative_view=None if section.operative_view is None else label(section.operative_view))
 
