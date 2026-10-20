@@ -14,7 +14,6 @@ import threading
 import pytest
 
 from ouroboros import mcp_client
-from ouroboros.live_call_route import initial_call_schemas
 from ouroboros.tool_policy import initial_tool_schemas
 from ouroboros.tools.registry import ToolRegistry
 from ouroboros.tools.tool_discovery import enable_tools
@@ -87,19 +86,19 @@ def _mcp_names(schemas) -> list:
 
 def test_first_schema_reads_start_one_background_listing_and_wait_for_none(cold_worker):
     registry, listing, on_caller = cold_worker
-    call_view = initial_call_schemas(registry)
+    nano_view = initial_tool_schemas(registry, context_mode="nano")  # a call's ordinary first view
     text_turn = initial_tool_schemas(registry, context_mode="max")
 
     assert listing.finished == [] and True not in on_caller  # neither read listed anything itself
     assert len(_refresh_threads()) == 1  # one listing started; the second read found it running
-    assert _mcp_names(call_view) == [] and _mcp_names(text_turn) == []
+    assert _mcp_names(nano_view) == [] and _mcp_names(text_turn) == []
     assert {"surface": "mcp", "reason": "server_no_tools",
             "servers": [{"id": "svc", "last_error": "not listed yet"}]} in registry.capability_omissions()
 
 
 def test_tools_listed_in_the_background_reach_the_next_read_and_enable_tools(cold_worker):
     registry, listing, on_caller = cold_worker
-    resident = list(initial_call_schemas(registry))
+    resident = list(initial_tool_schemas(registry, context_mode="nano"))
     assert listing.finished == []
     listing.release.set()
     _join_listings()
