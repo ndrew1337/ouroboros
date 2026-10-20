@@ -2,9 +2,9 @@
 
 Owner decision 2026-10-20 (mailbox row 2302258): take the register out of Nano and keep a link.
 The capture reads the register once and keeps it whole in the immutable core, so Max, Low,
-a route change and a refusal-selected mode render it as before; only the Nano rendering shows
-the existing reader line in its place, for every role alike (text and call; no voice, provider
-or pressure condition). The knowledge index keeps its ``patterns`` line and the reader reads
+a roomy route change and refusal-selected mode retain it; physical window pressure may
+address host sections in any mode. Nano always shows the existing reader line in its place,
+for every role alike (text and call; no voice or provider condition). The index keeps its ``patterns`` line and the reader reads
 the current note whole. Fixture: a SYNTHETIC drive under ``tmp_path``; no live data.
 """
 from __future__ import annotations
@@ -113,7 +113,14 @@ def test_a_route_change_and_a_refusal_selected_mode_render_the_captured_body(tmp
                                  output_reserve=plan.output_reserve_tokens, tool_schemas=None, select_mode="low"),
     ):
         for mode in ("max", "low"):
-            assert core.pattern_register_text in _changing(rebound, mode), mode
+            addressed = [row for row in rebound.projection(mode).memory_facts.get("host_sections_addressed", ())
+                         if row["section_id"] == "pattern_register"]
+            if addressed:
+                from ouroboros.artifacts import read_actor_source_bytes
+                assert read_actor_source_bytes(env.drive_root, addressed[0]["source_ref"]).decode() == core.pattern_register_text
+                assert PATTERN_REGISTER_POINTER in _changing(rebound, mode)
+            else:
+                assert core.pattern_register_text in _changing(rebound, mode), mode
         nano = _changing(rebound, "nano")
         assert nano.count(PATTERN_REGISTER_POINTER) == 1 and "synthetic-class-" not in nano
         assert all("EDITED LATER" not in _changing(rebound, mode) for mode in ("max", "low", "nano"))

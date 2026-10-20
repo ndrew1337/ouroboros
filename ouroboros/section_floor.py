@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from typing import Callable, Iterable, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ouroboros.context_layout import TIER0_ALWAYS_FULL
 
@@ -75,3 +75,46 @@ def section_views(sections: Iterable[HostSection], receipts: Iterable[Mapping]) 
 def render_sections(sections: Iterable[HostSection], fallback: str, addressed: Mapping[str, str]) -> str:
     parts = tuple(sections)
     return "\n\n".join(addressed.get(part.section_id, part.full_text) for part in parts) if parts else fallback
+
+
+def _governance_blocks(env: Any, core: Any, *, mode: str, reference_docs: Callable) -> Tuple[Any, ...]:
+    # D-ARCH (owner, 2026-08-08): the reference-doc form follows the RENDERED
+    # mode directly — ARCHITECTURE is full in max for every task class and the
+    # nav map in low; DEVELOPMENT inclusion is the caller's mode-independent
+    # decision carried on the core (the former per-task force_low_docs lever is
+    # gone: workspace binding no longer shapes the docs).
+    static_parts = [core.base_prompt, "## BIBLE.md\n\n" + core.bible_md]
+    sections, development = reference_docs(
+        env,
+        context_mode="low" if core.compact_reference_docs else mode,
+        include_development=core.docs_need_development,
+        architecture_text=core.architecture_md,
+        development_text=core.development_md,
+        books=core.reference_books,
+    )
+    static_parts.extend(sections)
+    static_parts.extend(core.reference_book_errors)
+    return (capture_sections(static_parts, prefix="governance"), development)
+
+
+# The Pattern Register's reader where a context carries no register body: a child's, and Nano's.
+PATTERN_REGISTER_POINTER = "Pattern Register details: knowledge_read(topic='patterns', scope='global')."
+
+
+def _system_blocks(core: Any, governance: Tuple[Any, ...], story: str = "", room: str = "",
+                   mode: str = "", addressed: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
+    # All stable items precede C, including D only when the captured core calls
+    # for the full handbook. Never create an empty cache boundary.
+    addressed = addressed or {}
+    rendered_governance = tuple(render_sections(part, "", addressed) if not isinstance(part, str) else part
+                                for part in governance)
+    semi = render_sections(core.semi_stable_sections, core.semi_stable_text, addressed)
+    dynamic = render_sections(core.dynamic_sections, core.dynamic_text, addressed)
+    stable = (*rendered_governance, "\n\n".join(part for part in (semi, story) if part))
+    head = render_sections(core.dynamic_head_sections, core.dynamic_head_text, addressed)  # Nano shows the register's reader; the core keeps the captured body
+    if mode == "nano" and core.pattern_register_text and head.count(core.pattern_register_text) == 1:
+        head = head.replace(core.pattern_register_text, PATTERN_REGISTER_POINTER)
+    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
+            for text in stable if text.strip()] + [
+        {"type": "text", "text": "\n\n".join(part for part in (head, room, dynamic) if part)},
+    ]
