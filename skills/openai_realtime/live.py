@@ -277,13 +277,13 @@ class OpenAISession(JsonSession):
                 self.active_response = ""
             self.response_requested = False
             status = response.get("status", "incomplete")
-            if status == "cancelled" and (rid in self.cancelled or response.get("status_details", {}).get("reason") == "turn_detected"):
+            if status == "cancelled" and (rid in self.cancelled or (response.get("status_details") or {}).get("reason") == "turn_detected"):
                 status = "interrupted"
             events = [LiveEvent("response_done", {"usage": _usage(response), "raw_usage": response.get("usage") or {},
                 "response_id": rid, "status": status, "continues": False})]
             # A failed response still reports usage before the host stops it.
             if response.get("status") not in {"completed", "cancelled"}:
-                events.append(LiveEvent("closed", {"reason": response.get("status")}))
+                events.append(LiveEvent("closed", {"reason": response.get("status"), "resumable": False}))
             for output in response.get("output", []) if response.get("status") == "completed" else ():
                 if output.get("type") == "function_call":
                     self.waiting_tools.add(output["call_id"])

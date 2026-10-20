@@ -329,7 +329,7 @@ class GrokSession(JsonSession):
             usage = {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
             usage.update(self.connection_usage())
             status = response.get('status', 'completed')
-            if status == 'cancelled' and (rid in self.cancelled or response.get('status_details', {}).get('reason') == 'turn_detected'):
+            if status == 'cancelled' and (rid in self.cancelled or (response.get('status_details') or {}).get('reason') == 'turn_detected'):
                 status = 'interrupted'
             events = [LiveEvent('response_done', {'response_id': rid, 'usage': usage, 'raw_usage': raw,
                                                 'status': status, 'continues': False})]
@@ -338,7 +338,7 @@ class GrokSession(JsonSession):
                     self.waiting_tools.add(call['call_id'])
                     events.append(LiveEvent('tool_call', {'call_id': call['call_id'], 'name': call['name'], 'arguments': call['arguments']}))
             if response.get('status') not in {None, 'completed', 'cancelled'}:
-                events.append(LiveEvent('closed'))
+                events.append(LiveEvent('closed', {'reason': response.get('status'), 'resumable': False}))
             return events
         return []
 

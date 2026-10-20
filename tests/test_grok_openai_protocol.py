@@ -222,8 +222,30 @@ def test_response_usage_has_contract_axes_status_and_deduplicates(providers, eng
             assert done["usage"]["text_input_tokens"] == 4
             assert done["usage"]["audio_output_tokens"] == 7
             assert done["usage"]["cached_input_tokens"] == 3
+            if status in {"failed", "incomplete"}:
+                assert events[-1].kind == "closed"
+                assert events[-1].data == {"reason": status, "resumable": False}
             wire.put(event)
             assert await adapter.receive() == []
+        finally:
+            await adapter.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("engine", ["grok", "openai"])
+@pytest.mark.parametrize("details,expected", [(None, "cancelled"), ({"reason": "turn_detected"}, "interrupted")])
+def test_cancelled_response_keeps_usage_with_nullable_status_details(providers, engine, details, expected):
+    async def run():
+        adapter, wire = make(providers, engine)
+        try:
+            await adapter.open()
+            await adapter.receive()
+            wire.put({"type": "response.done", "response": {"id": "r", "status": "cancelled",
+                "status_details": details, "usage": {"output_token_details": {"audio_tokens": 2}}}})
+            events = await adapter.receive()
+            assert len(events) == 1 and events[0].kind == "response_done"
+            assert events[0].data["status"] == expected
+            assert events[0].data["usage"]["audio_output_tokens"] == 2
         finally:
             await adapter.close()
     asyncio.run(run())
