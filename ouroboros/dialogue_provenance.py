@@ -351,6 +351,8 @@ _HOST_FACT_FIELDS = (("status", "status"), ("outcome", "outcome"), ("phase", "ou
 
 
 def _direction(row: Mapping[str, Any]) -> str:
+    if row.get("role") == "system":
+        return "system"
     value = _text(row.get("direction")).lower()
     return "out" if value == "outgoing" else value
 
