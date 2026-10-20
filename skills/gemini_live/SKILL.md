@@ -22,6 +22,15 @@ for a fresh refit after pending work finishes. Drops lower the process-local
 route span. The host also owns usage-driven total-window renewals; both use the
 same quiet boundary. Idle time alone does not renew. Automatic sliding-window
 compression is omitted. GoAway asks for server-side resumption.
+Session resumption is enabled; handle updates reach the feature, and transport
+loss is marked resumable only while a valid handle exists. A replacement using
+that handle restores in-process caption, tool, held-context and usage state.
+Completed response ids, timestamped transcripts and function-call ids prevent
+identified replays from being counted twice; identical words without native
+identity are never guessed to be a replay. Reconnecting state is consumed once,
+expires with Google's two-hour handle lifetime and is never written to disk.
+The feature must retain playback acknowledgements and defer partial-caption and
+response settlement across a resumed connection; Stop still finalizes them.
 Native VAD and input transcription open input work; sent PCM (including silence)
 does not. Unfinished captions and unanswered tools keep renewal pending.
 Late output captions retain their audio item's identity; generation completion
@@ -42,3 +51,7 @@ Every completed response reports modality usage, cached input and thinking units
 where Gemini supplies them, with raw evidence and status; missing axes stay unknown.
 The provider accepts inline images and sends 16 kHz mono PCM input / 24 kHz output.
 Installing or granting it does not enable the Live Conversation beta.
+
+Wire reference: https://ai.google.dev/api/live (updated 2026-10-09 UTC), model
+pages and capabilities guide (read 2026-10-21). Live-provider probes remain
+necessary to verify the deployed dialect and the labelled retention hypotheses.
