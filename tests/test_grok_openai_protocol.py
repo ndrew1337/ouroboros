@@ -283,3 +283,125 @@ def test_grok_connected_time_includes_idle_and_closing_tail(providers, monkeypat
         await adapter.close()
         assert len([1 for d, v in observations if d == "usage"]) == len(samples)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("engine,levels", [("grok", ("none", "high")),
+                                         ("openai", ("minimal", "low", "medium", "high", "xhigh"))])
+def test_catalog_thinking_matches_documented_wire_and_default(providers, engine, levels):
+    async def run():
+        model = providers[engine].catalog.model()
+        assert model.thinking_levels == levels and "thinking" in model.honours
+        for level in ("", *levels):
+            adapter, wire = make(providers, engine, LiveOptions(thinking=level))
+            try:
+                await adapter.open()
+                assert wire.session.get("reasoning") == ({"effort": level} if level else None)
+                assert ("voice" not in wire.session if engine == "grok" else "voice" not in wire.session["audio"]["output"])
+            finally:
+                await adapter.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("engine", ["grok", "openai"])
+def test_unknown_usage_stays_absent_and_tool_only_response_keeps_charge(providers, engine):
+    async def run():
+        adapter, wire = make(providers, engine)
+        try:
+            await adapter.open()
+            await adapter.receive()
+            wire.put({"type": "response.done", "response": {"id": "tool-only", "status": "completed",
+                "usage": {"input_tokens": 20, "output_token_details": {"audio_tokens": 0, "text_tokens": 3}},
+                "output": [{"type": "function_call", "call_id": "c", "name": "read_file", "arguments": "{}"}]}})
+            events = await adapter.receive()
+            assert [e.kind for e in events] == ["response_done", "tool_call"]
+            usage = events[0].data["usage"]
+            assert "text_input_tokens" not in usage and "audio_input_tokens" not in usage
+            assert usage["audio_output_tokens"] == 0 and usage["text_output_tokens"] == 3
+        finally:
+            await adapter.close()
+    asyncio.run(run())
+
+
+def test_grok_outer_meter_does_not_hide_nested_token_axes(providers):
+    async def run():
+        adapter, wire = make(providers, "grok")
+        try:
+            await adapter.open()
+            await adapter.receive()
+            wire.put({"type": "response.done", "usage": {"billable_audio_seconds": 9}, "response": {
+                "id": "r", "status": "completed", "usage": {"output_token_details": {"text_tokens": 3}}}})
+            done = (await adapter.receive())[0].data
+            assert done["usage"]["text_output_tokens"] == 3
+            assert done["raw_usage"]["billable_audio_seconds"] == 9
+            assert done["raw_usage"]["nested_usage"] == {"output_token_details": {"text_tokens": 3}}
+        finally:
+            await adapter.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_openai_vad_echo_keeps_owner_option(providers, changed):
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    class ChangedWire(Wire):
+        def put(self, event):
+            event = copy.deepcopy(event)
+            vad = event.get("session", {}).get("audio", {}).get("input", {}).get("turn_detection")
+            if changed and vad:
+                vad["interrupt_response"] = True
+            super().put(event)
+    async def run():
+        adapter, wire = make(providers, "openai", LiveOptions(interruptions=False), wire=ChangedWire())
+        try:
+            if changed:
+                with pytest.raises(RealtimeSetupError, match="session_mismatch.*turn_detection"):
+                    await adapter.open()
+            else:
+                await adapter.open()
+                assert adapter.renewal_ready
+        finally:
+            await adapter.close()
+    asyncio.run(run())
+
+
+def test_openai_interrupted_audio_stays_silent_and_partial_caption_survives(providers):
+    from ouroboros.contracts.live_conversation import Interrupt
+    async def run():
+        adapter, wire = make(providers, "openai")
+        try:
+            await adapter.open()
+            await adapter.receive()
+            wire.put({"type": "response.created", "response": {"id": "r"}})
+            await adapter.receive()
+            wire.put({"type": "response.output_audio_transcript.delta", "item_id": "spoken", "delta": "Partial words"})
+            await adapter.receive()
+            await adapter.send(Interrupt())
+            wire.put({"type": "response.output_audio.delta", "response_id": "r", "item_id": "spoken", "delta": "AAA="})
+            assert await adapter.receive() == []
+            wire.put({"type": "response.done", "response": {"id": "r", "status": "cancelled", "usage": {
+                "output_token_details": {"audio_tokens": 2}}}})
+            done = (await adapter.receive())[0].data
+            assert done["status"] == "interrupted" and done["usage"]["audio_output_tokens"] == 2
+            captions = adapter.final_captions()
+            assert captions[0].data["text"] == "Partial words" and captions[0].data["incomplete"]
+            assert adapter.final_captions() == []
+        finally:
+            await adapter.close()
+    asyncio.run(run())
+
+
+def test_openai_images_remain_native_and_do_not_open_response(providers):
+    from ouroboros.contracts.live_conversation import Video
+    async def run():
+        adapter, wire = make(providers, "openai")
+        try:
+            await adapter.open()
+            await adapter.receive()
+            await adapter.send(Video(b"fake-image", "image/png"))
+            assert not adapter.renewal_ready
+            await drain(adapter, wire)
+            assert adapter.renewal_ready
+            assert wire.sent[-1]["item"]["content"][0]["type"] == "input_image"
+            assert not any(e["type"] == "response.create" for e in wire.sent)
+        finally:
+            await adapter.close()
+    asyncio.run(run())

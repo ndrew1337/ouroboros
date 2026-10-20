@@ -22,13 +22,13 @@ CATALOG = ProviderCatalog(
         "gpt-realtime-2.1", "gpt-realtime-2.1 \u2014 OpenAI\u2019s realtime voice model",
         RouteFacts(conversation_window_tokens=128_000, accepted_input_tokens=133_554, working_reserve_tokens=10_000,
                    basis="provider", source="documented context; spoken retention not yet measured",
-                   observed="2026-10-20"),
+                   observed="2026-10-21"),
         default=True, vision=True,
         voices=tuple(CatalogVoice(name, name.capitalize()) for name in (
             "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse")),
-        honours=frozenset({"pause", "interruptions", "languages"}),
-        notes=(("thinking", "This model has no thinking setting."),
-               ("search", "OpenAI Realtime has no built-in search here."))),))
+        thinking_levels=("minimal", "low", "medium", "high", "xhigh"),
+        honours=frozenset({"pause", "interruptions", "languages", "thinking"}),
+        notes=(("search", "OpenAI Realtime has no built-in search here."),)),))
 
 # Host bookkeeping is retained in RealtimeInput, not model text. Unknown fields
 # (including name/tool_calls) refuse instead of quietly losing their semantics.

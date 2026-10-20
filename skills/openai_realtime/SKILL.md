@@ -37,3 +37,6 @@ transcription, response and tool/ACK work must finish first (`renewal_ready`);
 the feature also waits for playback and durable caption writes. The host owns
 history, tools, shared spending and Stop. Credentials are read only while opening
 an admitted connection. Granting a key does not enable Calls (beta).
+
+Catalog checked 2026-10-21: thinking follows `reasoning.effort` (minimal through
+xhigh); the ten built-in voices remain available.

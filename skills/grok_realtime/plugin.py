@@ -1,7 +1,7 @@
 """xAI Voice is a separate wire consumer: cumulative captions and outer usage.
 
 Protocol: https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
-Read 2026-10-20; R6 observed outer response.done.usage is retained verbatim.
+Read 2026-10-21; R6 observed outer response.done.usage is retained verbatim.
 """
 from __future__ import annotations
 import base64
@@ -29,10 +29,9 @@ CATALOG = ProviderCatalog(
                    basis='o200k', source='measured spoken-retention bound of session.instructions',
                    observed='2026-10-21'),
         default=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
-        honours=frozenset({'languages'}),
+        thinking_levels=('none', 'high'), honours=frozenset({'languages', 'thinking'}),
         notes=(('pause', 'Grok Voice decides itself when your turn has ended.'),
                ('interruptions', 'Grok Voice always lets you speak over it.'),
-               ('thinking', 'Grok Voice has no thinking setting.'),
                ('search', 'Grok Voice has no built-in search here.'))),))
 
 
@@ -133,6 +132,8 @@ class GrokSession(JsonSession):
                   'turn_detection': None,
                   'audio': {'input': {'format': {'type': 'audio/pcm', 'rate': 24000}},
                             'output': {'format': {'type': 'audio/pcm', 'rate': 24000}}}}
+        if options.thinking:
+            config['reasoning'] = {'effort': options.thinking}
         if options.voice:
             config['voice'] = options.voice
         self.instructions = config['instructions']
@@ -318,15 +319,17 @@ class GrokSession(JsonSession):
             if self.active_response == rid:
                 self.active_response = ''
             self.response_requested = self.vad_response_pending = False
-            raw = event.get('usage') if isinstance(event.get('usage'), dict) else response.get('usage') or {}
-            inputs, outputs = raw.get('input_token_details') or {}, raw.get('output_token_details') or {}
+            outer, nested = event.get('usage') or {}, response.get('usage') or {}
+            raw = {**outer, 'nested_usage': nested} if outer and nested and outer != nested else outer or nested
+            inputs = {**(nested.get('input_token_details') or {}), **(outer.get('input_token_details') or {})}
+            outputs = {**(nested.get('output_token_details') or {}), **(outer.get('output_token_details') or {})}
             values = {'text_input_tokens': inputs.get('text_tokens'), 'audio_input_tokens': inputs.get('audio_tokens'),
                       'cached_input_tokens': inputs.get('cached_tokens'), 'text_output_tokens': outputs.get('text_tokens'),
                       'audio_output_tokens': outputs.get('audio_tokens'), 'thinking_tokens': outputs.get('reasoning_tokens')}
             usage = {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
             usage.update(self.connection_usage())
             status = response.get('status', 'completed')
-            if status == 'cancelled' and rid in self.cancelled:
+            if status == 'cancelled' and (rid in self.cancelled or response.get('status_details', {}).get('reason') == 'turn_detected'):
                 status = 'interrupted'
             events = [LiveEvent('response_done', {'response_id': rid, 'usage': usage, 'raw_usage': raw,
                                                 'status': status, 'continues': False})]
@@ -356,6 +359,11 @@ class GrokSession(JsonSession):
             self.want_response = True
             await self.advance_context()
         elif isinstance(command, (ToolOutputs, ContextUpdate)):
+            for message in command.messages:
+                if message.get('role') == 'system':
+                    system_parts(message.get('content', ''))
+                else:
+                    item_rows(message)
             self.context_queue.append(command)
             await self.advance_context()
         else:

@@ -1,7 +1,7 @@
 """OpenAI Realtime audio/tool session, sharing the measured initial layout.
 
 Wire: https://developers.openai.com/api/docs/guides/realtime-conversations
-Read 2026-10-20. Automatic truncation stays disabled. Only a playback-correlated
+Read 2026-10-21. Automatic truncation stays disabled. Only a playback-correlated
 host interruption may truncate newly generated audio; seeded input is immutable.
 """
 from __future__ import annotations
@@ -91,6 +91,8 @@ class OpenAISession(JsonSession):
         self.turn_detection = {"type": "server_vad", "create_response": False,
                                "interrupt_response": options.interruptions,
                                "silence_duration_ms": {"short": 300, "normal": 500, "long": 1000}[options.pause]}
+        if options.thinking:
+            session["reasoning"] = {"effort": options.thinking}
         if options.voice:
             session["audio"]["output"]["voice"] = options.voice
         self.events = events
