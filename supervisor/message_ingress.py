@@ -237,6 +237,9 @@ def _chat_record(
         # Speech rows persist only the compact identity required to route a
         # child final after progress retention/rotation has removed its cards.
         meta = dict(message_meta or {})
+        if meta.get("role") == "system":
+            record["role"] = "system"
+            record["system_type"] = str(meta.get("system_type") or "")
         if isinstance(meta.get("execution_transport"), dict):
             record["execution_transport"] = dict(meta["execution_transport"])
         if direction == "out" and task_id and record_type != "relay_entry" and "reply_to" not in meta:
@@ -609,6 +612,8 @@ def handle_web_message(
     ts = utc_now_iso()
     message_id = client_message_id or f"web-{uuid.uuid4().hex}"
     metadata = dict(task_metadata or {})
+    host_fact = metadata.get("host_fact") or {}
+    call_open = isinstance(host_fact, dict) and host_fact.get("kind") == "call_open"
     reply = ingress_reply(bus.DATA_DIR, metadata)
     if reply:  # the obligation of a fresh acceptance replays the same reference
         metadata["reply_reference"] = reply
@@ -617,7 +622,7 @@ def handle_web_message(
     from ouroboros.chat_uploads import attachment_placeholder
 
     log_text = clean_text or str(image_caption or "").strip() or attachment_placeholder(image_base64, metadata)
-    placeholder = not clean_text  # a web caption is the gateway's own ``[user attachment: …]`` label
+    placeholder = call_open or not clean_text  # host facts and attachment labels are not owner words
     # The canonical row precedes echo/dispatch: neither WS nor Queue survives restart.
     # The row, its receipt and the dispatch obligation are ONE store transaction; the
     # returned witness lets dequeue validation avoid any chat read.
@@ -638,7 +643,8 @@ def handle_web_message(
                 sender_session_id=sender_session_id, client_message_id=message_id,
                 client_surface=(metadata.get("client_surface") if isinstance(metadata.get("client_surface"), dict) else None),
                 message_meta={"attachments": attachments, "text_placeholder": placeholder, "reply_to": reply,
-                              "execution_transport": metadata.get("execution_transport")},
+                              "execution_transport": metadata.get("execution_transport"),
+                              **({"role": "system", "system_type": "call_open"} if call_open else {})},
                 dispatch=obligation(name, clean_text, message))
             row, fresh = receipt.row, not receipt.duplicate
         if fresh:
@@ -675,13 +681,15 @@ def handle_web_message(
             # The echo is the accepted row as history replays it (text, time, views, placeholder
             # mark); a rejoin re-echoes it, so every tab keys it as the same saved bubble.
             echo = {
-                "type": "chat", "role": "user", "content": log_text,
+                "type": "chat", "role": row.get("role") or "user", "content": log_text,
                 "ts": ts, "source": "web", "chat_id": thread_id, "attachments": attachment_views(attachments),
                 "sender_session_id": sender_session_id, "client_message_id": message_id,
                 "ingress_accepted": True,  # Canonical row exists; execution is not promised.
             }
             if placeholder:
                 echo["text_placeholder"] = True
+            if row.get("system_type"):
+                echo["system_type"] = row["system_type"]
             # Positive call-entry evidence, never the acceptance stamp alone; a deferred dispatch is still pending.
             echo.update(delivery_facts(row, thread_id))
             echo.update(projection_fields(row))

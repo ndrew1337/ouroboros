@@ -20,6 +20,37 @@ def test_configure_from_settings_without_legacy_field(monkeypatch):
     assert bridge.get_updates(offset=0, timeout=0) == []
 
 
+@pytest.mark.parametrize("call_open", [False, True])
+def test_call_open_is_a_host_fact_with_the_same_owner_admission(monkeypatch, tmp_path, call_open):
+    from supervisor.message_ingress import accepted_chat_message
+
+    bridge = _make_bridge(monkeypatch)
+    echoes, dispatched = [], []
+    bridge._broadcast_fn = echoes.append
+    monkeypatch.setattr(message_bus, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(message_bus, "load_state", lambda: {})
+    metadata = {"host_fact": {"kind": "call_open", "call_id": "synthetic"}} if call_open else {}
+    cmid = "call:synthetic:open" if call_open else "owner-message"
+    text = "The owner has just opened this call and can hear you now." if call_open else "My actual words."
+    bridge.ui_send(text, client_message_id=cmid, task_metadata=metadata,
+                   dispatch=lambda text, **message: dispatched.append((text, message)))
+    [row] = chat_rows(tmp_path)
+    assert row["direction"] == "in" and row["user_id"] == 1 and row["ingress_accepted"]
+    assert accepted_chat_message(tmp_path, 1, cmid) == row
+    assert row.get("role", "user") == echoes[0]["role"] == ("system" if call_open else "user")
+    assert row.get("system_type", "") == echoes[0].get("system_type", "") == ("call_open" if call_open else "")
+    assert bool(row.get("text_placeholder")) is call_open
+    assert bool(echoes[0].get("text_placeholder")) is call_open
+    [(sent, message)] = dispatched
+    assert sent == text and message["task_metadata"] == metadata
+    assert message["accepted_source_row"] == row
+    assert message["accepted_source_ref"]["client_message_id"] == cmid
+    assert message["accepted_source_ref"]["ts"] == row["ts"]
+    bridge.ui_send(text, client_message_id=cmid, task_metadata=metadata,
+                   dispatch=lambda *a, **kw: pytest.fail("accepted press was dispatched twice"))
+    assert len(chat_rows(tmp_path)) == 1 and echoes[-1]["role"] == echoes[0]["role"]
+
+
 def _readable_by_the_chain_reader(root):
     """Transition (unit Q1b migrates the history reader onto the dialogue store): the reader still
     reads the chain files, so the rows the store holds are exported to them first -- the exact
