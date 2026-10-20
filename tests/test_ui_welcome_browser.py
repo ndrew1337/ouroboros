@@ -355,10 +355,11 @@ def test_empty_main_greeting_contract(direct_server_with_data, engine):
             page.wait_for_selector(WELCOME)
             page.fill("#chat-input", "First owner message")
             page.click("#chat-send")
-            page.locator(".chat-bubble.user", has_text="First owner message").wait_for()
+            # The feed's own row: the sent draft's copy rising into it (send_flight.js) is not a row.
+            page.locator("#chat-messages .chat-bubble.user", has_text="First owner message").wait_for()
             page.wait_for_selector(ANY_WELCOME, state="detached")
             _open_main(page, url)
-            page.locator(".chat-bubble.user", has_text="First owner message").wait_for()
+            page.locator("#chat-messages .chat-bubble.user", has_text="First owner message").wait_for()
             assert page.locator(ANY_WELCOME).count() == 0
             body = page.request.get(url + "/api/chat/history").text()
             for copy in (DEFAULT, "Second line", FILE_CUSTOM, RECONNECT_CUSTOM):

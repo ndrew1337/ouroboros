@@ -1,6 +1,6 @@
 // The quote panel (docs/DESIGN.md "Replies"): the one component that shows another message inside a bubble.
 // A reply shows one ellipsized line and is a button that jumps to the quoted message; with a cancel control it
-// is the strip above the composer while the owner replies. A relay shows the owner's complete words (they ARE
+// is the strip in the composer's field while the owner replies. A relay shows the owner's complete words (they ARE
 // the instruction) clamped to six lines, with a real `Show all` control in its head. The bar and the author
 // line wear the QUOTED author's ink; the bubble around keeps its own voice. Every string is set as text: the
 // quoted words are data, never markup.
@@ -87,7 +87,7 @@ export function normalizeRelay(raw) {
 }
 
 /**
- * The panel for one reply reference. `composer: true` is the strip above the field: a lead word
+ * The panel for one reply reference. `composer: true` is the field's first line: a lead word
  * (`Replying to`) and a cancel button beside the jump button; otherwise it is the quote inside a bubble.
  * Returns null for a reference with nothing to show.
  */

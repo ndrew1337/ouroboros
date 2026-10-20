@@ -3888,39 +3888,49 @@ html[data-layout="stack"] .chat-page-note {
     min-width: 0;
 }
 
-.chat-text-row {
+/* The field (DESIGN "The composer field"): one floating object holding a staged reply's strip and the text row. Its
+   corner is the sheet radius, half its one-line height, and never grows with the words: one line is a capsule, a
+   paragraph a card with the same corner, never an oval. No border: its edge and its focus ring are shadows, so the
+   one-line field is exactly the row's height. A transparent outline inside the edge is its edge where shadows are
+   not drawn (Windows High Contrast paints it in the system colour), wider while the field holds the focus. */
+.chat-field {
     order: 2;
     display: flex;
-    align-items: center;
-    gap: var(--space-2);
+    flex-direction: column;
     min-width: 0;
-    padding: var(--space-2);
-    /* Oval (pill) composer: the send/attach controls are vertically CENTERED so they
-       never bulge out of the rounded corners as the textarea grows multi-line (the
-       earlier flex-end + 999px pushed them past the curve; centering fixes that). */
-    border-radius: 999px;
-    border: 1px solid rgba(var(--neutral-rgb), 0.10);
+    border-radius: var(--radius-sheet);
+    outline: 1px solid transparent;
+    outline-offset: -1px;
     background: rgba(var(--composer-rgb), 0.68);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04);
-    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s;
+    box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04), 0 0 0 1px rgba(var(--neutral-rgb), 0.10);
+    transition: box-shadow 0.2s, background 0.2s;
 }
 
-.chat-text-row:focus-within {
-    border-color: var(--focus-accent-border);
+.chat-field:focus-within {
+    outline-width: 2px;
+    outline-offset: -2px;
     background: rgba(var(--composer-rgb), 0.86);
-    box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04), 0 0 0 3px var(--accent-10);
+    box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04), 0 0 0 1px var(--focus-accent-border), 0 0 0 4px var(--accent-10);
+}
+
+/* "+", the words, the mic and Send: the controls ride on the words' last line (flex-end), never on their middle. */
+.chat-text-row {
+    display: flex;
+    align-items: flex-end;
+    gap: var(--space-2);
+    min-width: 0;
+    padding: var(--space-2);
 }
 
 /* "Chat freed" cue (P3): a brief fuchsia brighten when a task moves out to a
    project, signalling the main chat is free again. The animation owns the
    900ms and the class comes off on animationend, so no chat-instance timer. */
-.chat-text-row.chat-freed { animation: chat-freed 900ms ease-out; }
+.chat-field.chat-freed { animation: chat-freed 900ms ease-out; }
 @keyframes chat-freed {
     0%, 70% {
-        border-color: var(--project);
-        box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04), 0 0 0 3px var(--project-12);
+        box-shadow: inset 0 1px 0 rgba(var(--neutral-rgb), 0.04), 0 0 0 1px var(--project), 0 0 0 4px var(--project-12);
     }
 }
 
@@ -3949,7 +3959,7 @@ html[data-layout="stack"] .chat-page-note {
    target whose negative margin keeps the row's height and the field's place. */
 .chat-plus-btn {
     flex: 0 0 auto;
-    align-self: center;
+    align-self: flex-end;
     width: var(--touch-target-min);
     height: var(--touch-target-min);
     margin: calc((var(--composer-control-height) - var(--touch-target-min)) / 2);
@@ -3997,7 +4007,7 @@ html[data-layout="stack"] .chat-page-note {
    contributed chips after the room's capsules on their one line. The host capsules keep priority: the chips slot
    takes only the room they leave (a zero basis never wraps the row; it shrinks first and clips), and a chip keeps
    its own width. */
-.chat-voice-slot { display: inline-flex; flex: 0 0 auto; align-items: center; gap: var(--space-1); }
+.chat-voice-slot { display: inline-flex; flex: 0 0 auto; align-self: flex-end; align-items: center; gap: var(--space-1); }
 /* The dictation mic and its recording face (voice_controls.js): quiet finger-sized controls like "+", whose negative
    margin keeps the row's height; the chevron is a narrow, finger-high door to the engine menu. While recording, Stop
    wears the soft crimson of a control that is on now and the dot follows the microphone's level. */
@@ -4189,9 +4199,9 @@ html[data-layout="stack"] .chat-page-note {
 
 #chat-input,
 textarea.chat-input {
-    /* Bare text surface inside the .chat-input-wrap card (the card owns the
-       border / background / focus ring), so no fixed side paddings to reserve
-       room for floated controls — the row flexes at any width. */
+    /* Bare text surface inside the field (.chat-field owns the surface and the
+       focus ring), so no fixed side paddings to reserve room for floated
+       controls — the row flexes at any width. */
     flex: 1 1 auto;
     width: 100%;
     min-width: 0;
@@ -4263,7 +4273,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 
 .chat-send-group {
     flex: 0 0 auto;
-    align-self: center;
+    align-self: flex-end;
     display: flex;
     align-items: center;
     gap: 0;
@@ -7105,6 +7115,7 @@ html[data-layout="stack"] #chat-input-area {
 }
 
 html[data-layout="stack"] .chat-input-wrap,
+html[data-layout="stack"] .chat-field,
 html[data-layout="stack"] .chat-text-row,
 html[data-layout="stack"] .chat-toolbar-row,
 html[data-layout="stack"] #chat-input,
@@ -7124,8 +7135,9 @@ html[data-layout="stack"] .chat-toolbar-row {
 
 /* While the owner reads back through the history the row of capsules folds away (composer_fold.js; owner 19.10, 2A):
    its line collapses from its measured height (--fold-row-h) with the wrap's gap, the capsules fade, ☰ stays the
-   row's first control and lands beside the field's middle (--fold-menu-dy), and the field makes room for it on its
-   leading side, where ☰ leads the row in either direction (☰ and the row's 6px padding, then the row's gap).
+   row's first control and lands beside the field on its last line, beside "+" (--fold-menu-dy), and the field makes
+   room for it on its leading side, where ☰ leads the row in either direction (☰ and the row's 6px padding, then the
+   row's gap).
    data-fold holds from the fold until the row is back, so all of it runs back on the same curve. */
 html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-toolbar-row {
     max-height: var(--fold-row-h);
@@ -7151,15 +7163,15 @@ html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-toolbar-row > :not
 html[data-layout="stack"] .chat-input-wrap[data-fold]:not([data-folded]) .chat-toolbar-row > :not(.composer-menu) {
     transition: opacity 160ms ease 140ms, visibility 0s;
 }
-html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-text-row {
-    transition: border-color 0.2s, box-shadow 0.2s, background 0.2s, margin-inline-start 300ms cubic-bezier(0.32, 0.72, 0, 1);
+html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-field {
+    transition: box-shadow 0.2s, background 0.2s, margin-inline-start 300ms cubic-bezier(0.32, 0.72, 0, 1);
 }
-html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-text-row {
+html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-field {
     margin-inline-start: calc(var(--composer-control-height) + 6px + var(--space-2));
 }
 /* Each as specific as the motion it stops: the line and the field, ☰, the capsules going and coming back. */
 @media (prefers-reduced-motion: reduce) {
-    html[data-layout="stack"] .chat-input-wrap[data-fold] :is(.chat-toolbar-row, .chat-text-row),
+    html[data-layout="stack"] .chat-input-wrap[data-fold] :is(.chat-toolbar-row, .chat-field),
     html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-toolbar-row > .composer-menu,
     html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-toolbar-row > :not(.composer-menu),
     html[data-layout="stack"] .chat-input-wrap[data-fold]:not([data-folded]) .chat-toolbar-row > :not(.composer-menu) {
@@ -9381,7 +9393,7 @@ body.keyboard-open .project-panel {
 }
 
 /* === The quote panel (docs/DESIGN.md "Replies"): one component (chat_reply_quote.js) inside a bubble and
-   above the composer. The bar and the author name wear the QUOTED author's ink, the panel one tint of that same
+   as the composer field's first line. The bar and the author name wear the QUOTED author's ink, the panel one tint of that same
    ink on the quote glass; no literal colours. A reply shows one ellipsized line and is a button that jumps to
    the quoted message; a relay shows the owner's complete words, clamped to six lines, `Show all` in its head. */
 .chat-quote {
@@ -9502,20 +9514,30 @@ body.keyboard-open .project-panel {
 }
 .chat-clamp-toggle[hidden] { display: none; }
 
-/* Above the composer: the same panel on the glass of the field below it, with its cancel control. */
-.chat-input-wrap > .chat-quote--composer {
-    order: 1;
+/* A staged reply is the field's first line: the same panel inside the field, concentric with its corner (the sheet
+   radius less the field's 8 px inset), with its cancel control. No hairline of its own: the field is the object. */
+.chat-field > .chat-quote--composer {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: 0;
+    margin: var(--space-2) var(--space-2) 0;
     padding-inline-end: var(--space-2);
-    border: 1px solid var(--surface-border);
-    border-radius: var(--radius-lg);
-    background: linear-gradient(var(--quote-tint), var(--quote-tint)), var(--quote-glass);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
+    border-radius: calc(var(--radius-sheet) - var(--space-2));
+    /* The quote's tint on the field itself: the field is already the glass, and fills never stack. */
+    background: var(--quote-tint);
     animation: chat-quote-in 0.16s ease-out;
+}
+.chat-field > .chat-quote--composer + .chat-text-row { padding-top: var(--space-1); }
+/* The sent draft's copy in flight (send_flight.js; DESIGN "The composer field"): the new bubble's own look, fixed over
+   the room for one motion, above a Project and below the drawer, inert. */
+.chat-bubble.chat-send-flight {
+    position: fixed;
+    z-index: var(--z-send-flight);
+    box-sizing: border-box;
+    margin: 0;
+    max-width: none;
+    overflow: hidden;
+    pointer-events: none;
 }
 .chat-quote--composer .chat-quote-main { flex: 1 1 auto; width: auto; padding-block: var(--space-2); padding-inline-start: var(--space-5); }
 /* In the rounded strip the author bar stands inside the curve, straight from end to end (the bubble quote's
@@ -9544,7 +9566,7 @@ body.keyboard-open .project-panel {
     from { opacity: 0; transform: translateY(var(--space-1)); }
 }
 @media (prefers-reduced-motion: reduce) {
-    .chat-input-wrap > .chat-quote--composer { animation: none; }
+    .chat-field > .chat-quote--composer { animation: none; }
 }
 /* A finger needs the shared touch target on the controls these blocks add (the clamp toggle, the doubt's actions);
    the time under the doubt's actions then keeps clear of the Reply / Copy targets that sit on its line. */
@@ -9871,12 +9893,13 @@ body.keyboard-open .project-panel {
     border-color: transparent; border-radius: var(--radius-object); background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-:root[data-theme] .chat-text-row {
-    border-color: transparent; background: var(--surface-float); box-shadow: var(--elev-float);
+:root[data-theme] .chat-field {
+    background: var(--surface-float); box-shadow: var(--elev-float);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
-:root[data-theme] .chat-text-row:focus-within {
-    border-color: var(--focus-accent-border); background: var(--surface-float); box-shadow: var(--elev-float), 0 0 0 3px var(--focus-accent-ring);
+:root[data-theme] .chat-field:focus-within {
+    background: var(--surface-float);
+    box-shadow: 0 0 0 1px var(--focus-accent-border), 0 0 0 4px var(--focus-accent-ring), var(--elev-float);
 }
 
 /* Controls: ui.css's tones mapped onto the page's own controls. Every one with a body stands on the rest shadow in

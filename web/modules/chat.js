@@ -2660,7 +2660,7 @@ export function createChatInstance({
     function showSent({ text, frame, result, views }) {
         const sentTs = new Date().toISOString();
         reading.cancel(); // an accepted Send supersedes any saved place
-        addMessage(text, 'user', false, sentTs, false, {
+        const row = addMessage(text, 'user', false, sentTs, false, {
             pending: result?.status === 'queued',
             source: 'web',
             senderSessionId: chatSessionId,
@@ -2685,6 +2685,7 @@ export function createChatInstance({
         syncChatStatus();
         composer.resize();
         reading.followAfterLayout();
+        return row;  // the sent draft rises into it (send_flight.js)
     }
     // Dynamic CSS reserve keeps the absolute composer from covering messages.
 

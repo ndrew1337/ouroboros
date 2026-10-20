@@ -114,7 +114,7 @@ gradient behind content or on an object, and no glows, textures, outlines or neu
 
 - Radii by role, both themes: capsule `999px` (every one-line control and chip) · object `18px`
   (bubbles, cards, groups, menus, answer cards) · inner `12px` (trays and rows inside an object) ·
-  sheet `24px` (the Shade's lower corners).
+  sheet `24px` (the Shade's lower corners, the composer's field).
 - Type: the system face (SF Pro on Apple), 12 / 14 / 16 / 24; weight 400 to read,
   500 for a status word, a root's title or a setting's name, 600 for labels,
   controls and a setting's value.
@@ -423,7 +423,7 @@ Inside Telegram a level the finger reaches, and another level or mode pressed, t
 
 **On a phone the row folds while the owner reads back.** Scrolling back through a
 room's history folds the row of capsules away: its line collapses, the capsules
-fade, and ☰, still the row's first control, waits beside the field. Scrolling
+fade, and ☰, still the row's first control, waits beside the field on its last line, beside "+". Scrolling
 toward the latest, reaching it, focusing the field or another layout brings the row
 back; while the owner writes or works a capsule, or the field holds the focus, it
 stays. Only the owner's own scroll decides, as with Safari's bars: older history
@@ -452,6 +452,27 @@ The dictation mic has a slot between the field and Send that takes no room until
 engine is chosen. Contributed chips have a slot at the end of the capsule row that takes
 only the room the capsules leave (never a second line: the chips that do not fit fold
 into one "+N" whose list holds them) and steps aside with them.
+
+### The composer field
+
+**One object whose corner never grows.** The field is one floating object: a staged
+reply (Replies) is its first line, and the text row with "+", the words, the mic and
+Send its last. Its corner is the sheet radius, half its one-line height, and stays as
+the words grow: one line is a capsule, a paragraph a card with the same corner, never
+an oval. "+", the mic and Send ride on the words' last line, never their middle. The
+reply panel inside is concentric (the sheet radius less the field's 8 px inset) with no
+hairline of its own; the text row has no surface; the field takes the float shadow and
+the focus ring, drawn as shadows, so a border never adds to its height (owner 20.10, 1C).
+
+**A Send rises into the feed.** An accepted Send lifts a copy of the new bubble from
+where the draft stood, its words on the draft's, to the bubble's place in 340 ms on the
+iOS sheet curve: its box moves and resizes, never a scale, while the field's surface,
+corner and shadow turn into the bubble's, and its sender line grows in; the bubble
+shows as the copy lands. A bubble that moves under the flight (a phone's keyboard going
+down after a tap on Send) is followed to its place; a room that goes away (the drawer
+over it, a closed Project) ends the flight at once. Reduced motion, a hidden page or a
+bubble outside the feed's view: it simply appears (`web/modules/send_flight.js`; owner
+20.10, 2A).
 
 ### `.muted`
 
@@ -1609,7 +1630,7 @@ file (owner choice 1C/2A/3A/4A/5A/6A with mobile first-class).
 
 A reply names the row meant; Ouroboros decides what to do, routing nothing by it. Saved rows offer Reply beside
 Copy on bubbles and in row menus, a work card in its row menu only; never on hover only. Reply stages one
-composer strip (`Replying to`, quoted author, one line, ×; Esc cancels). Send
+strip, the composer field's first line (`Replying to`, quoted author, one line, ×; Esc cancels). Send
 carries only the address; the host makes the snippet. Answerable questions use their own field.
 
 One quote component serves bubbles, strips and relays: above the text, a 2 px

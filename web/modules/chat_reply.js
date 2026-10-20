@@ -1,6 +1,6 @@
 // Replies of one chat instance (docs/DESIGN.md "Replies"): the Reply control beside Copy in a bubble's
 // control row (the registered message actions stand between them, message_actions.js), the quote above the
-// replying bubble's text, the strip above the composer while the owner is replying, the jump from a quote to the
+// replying bubble's text, the strip in the composer's field while the owner is replying, the jump from a quote to the
 // message it quotes, and the owner's words a relay carries into a work's room (one Ouroboros bubble: his words in
 // a quote panel above the note). A reply is a reference the host resolves: this module sends only the quoted
 // row's address and never decides who reads the words.
@@ -54,7 +54,8 @@ function failureText({ state, task_id: taskId, error }) {
  */
 export function createChatReplies({ chatId, feed, input, key = '', reading, history = () => null,
     navigate = null, present = () => true, onDomWrite = (write) => write(), actions = undefined }) {
-    // The strip stands right before the field's row (below the pills); a bare field (a test fixture) takes it itself.
+    // The strip is the field's first line: inside the field, right before its text row (composer.js); a bare field (a
+    // test fixture) takes it itself.
     const textRow = input.closest('.chat-text-row') || input;
     let storage = null;
     try { storage = sessionStorage; } catch { /* storage blocked: a staged reply lives for this page only */ }
@@ -156,7 +157,7 @@ export function createChatReplies({ chatId, feed, input, key = '', reading, hist
 
     /**
      * Reply to one row. A still-open question card answers in its own field (the existing answer door, never a
-     * second path); anything else stages the strip above the composer.
+     * second path); anything else stages the strip, the composer field's first line.
      */
     function start(raw) {
         const ref = normalizeReplyRef(raw);
@@ -191,7 +192,7 @@ export function createChatReplies({ chatId, feed, input, key = '', reading, hist
         event.preventDefault();
         cancel();
     }
-    // One listener on the composer wrap: Esc from the field and from the strip's own buttons lands here.
+    // One listener on the field (the text row's parent): Esc from the words and from the strip's own buttons lands here.
     const keyHost = textRow.parentElement || input;
     keyHost?.addEventListener('keydown', onKeydown);
 

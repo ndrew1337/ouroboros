@@ -101,7 +101,7 @@ warning | web/onboarding.css | .wizard-test-result[data-tone="warn"] | border-co
 system | web/style.css | .chat-bubble.system | background, border-left
 system | web/style.css | .chat-bubble.system .message | color
 system | web/style.css | .chat-bubble.system .sender | color
-system | web/style.css | .chat-input-wrap > .chat-quote--composer | background
+system | web/style.css | .chat-field > .chat-quote--composer | background
 system | web/style.css | .chat-quote | background
 system | web/style.css | .chat-quote-author | color
 system | web/style.css | .chat-quote::before | background
