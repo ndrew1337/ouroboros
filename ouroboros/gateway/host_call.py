@@ -19,6 +19,7 @@ from starlette.websockets import WebSocket
 
 from ouroboros import call_protocol as cp
 from ouroboros.call_peers import CallPeerError, get_hub
+from ouroboros.contracts.realtime import RealtimeSetupError
 from ouroboros.gateway.call_contracts import HostCallOpenRequest
 from ouroboros.gateway.call_ws import read_call_body, refusal, serve_peer
 from ouroboros.gateway.host_service import HostServiceAuthError, _authenticated, _bounded_host_read
@@ -87,9 +88,9 @@ async def api_host_call_open(request: Request) -> JSONResponse:
 
             try:
                 call_id = await _admit_presence_call(ctx, skill, binding_id, payload)
-            except PresenceCallRefused as exc:
+            except (PresenceCallRefused, RealtimeSetupError) as exc:
                 code = exc.code or "presence_call_refused"
-                return refusal(code, _REFUSAL_STATUS.get(code, 409), str(exc.message or ""))
+                return refusal(code, _REFUSAL_STATUS.get(code, 409), str(getattr(exc, "message", str(exc))).removeprefix(code + ": "))
         hub = get_hub(call_id)
         if hub is None or hub.closed:
             return refusal("call_not_found", 404)

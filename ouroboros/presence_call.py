@@ -47,12 +47,13 @@ def open_presence_call(*, drive_root, repo_dir, skill_name, binding_id, event,
     if admission.execution != "call":
         raise PresenceCallRefused("presence_call_not_enabled", "This binding is configured for event turns.")
     with feature_configuration("live_conversation:call") as (feature, config):
-        if config.get("enabled") is not True:
+        if not config.enabled:
             raise PresenceCallRefused("calls_disabled", "Calls (beta) are off.")
         spec = CallSpec(secrets.token_hex(16), presence_chat_id(turn_event.conversation_key),
-            config["provider"], config["model"], config["voice"], opened_by=OPENED_BY_SKILL,
+            config.provider, config.model, config.voice, opened_by=OPENED_BY_SKILL,
             presence_binding_id=binding_id, label=str(label), client_message_id=turn_event.source_event_id)
         turn = LiveConversationTurn(feature, config, spec, publish=get_bridge().broadcast)
+        spec = turn.spec
         lease = _configured_gate(Path(drive_root)).try_acquire(turn_event.conversation_key)
         if lease is None:
             raise PresenceCallRefused("presence_call_busy", "This conversation or the Presence capacity is busy.")

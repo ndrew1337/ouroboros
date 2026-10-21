@@ -170,8 +170,15 @@ class LiveSession(Protocol):
 
 
 # A provider's session factory: session(selected, options, *, observe) -> LiveSession.
-# ``observe(direction, raw)`` records wire evidence in the task; a factory may take
-# further keyword-only test hooks of its own.
+# ``observe(direction, raw)`` records wire evidence in the task. Direction "usage"
+# additionally reports {"usage": {USAGE_AXES...}, "raw_usage": {...}} for this
+# physical connection, including idle time and closing tail. The host settles
+# connected_seconds cumulative growth across these samples and response_done;
+# it never sums watermarks or creates a synthetic response. close() publishes its
+# final sample before returning, even after Stop or exhausted admission: settlement
+# records spent usage and admits nothing new. Response ids dedupe per connection;
+# a new connection starts its own watermark. billable_audio_seconds is evidence.
+# A factory may take further keyword-only test hooks of its own.
 SessionFactory = Callable[..., LiveSession]
 
 
@@ -189,6 +196,18 @@ class CallTool:
     parameters: Mapping[str, Any]
     handler: Callable[..., Awaitable[str]]
     silent: bool = False
+
+
+class ToolBatch(list):
+    """History changes returned by LiveHost.tool_batch, with silent call ids.
+
+    A list-compatible result keeps callers that only forward rows working; the
+    feature forwards ``silent`` to ``ToolOutputs`` without inspecting tool names.
+    """
+
+    def __init__(self, rows=(), *, silent=()):
+        super().__init__(rows)
+        self.silent = tuple(silent)
 
 
 class LiveHost(Protocol):

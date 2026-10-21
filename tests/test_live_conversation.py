@@ -6,12 +6,10 @@ Raw wire/ledger receipts are exported even when assertions fail.
 from __future__ import annotations
 import asyncio
 import base64
-import importlib
 import json
-import os
-import queue
 import shutil
 import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -19,10 +17,19 @@ from types import SimpleNamespace
 
 import pytest
 from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
-from tests.test_realtime_turn import wait_for
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINES = [('openai_realtime', 'openai'), ('grok_realtime', 'grok'), ('gemini_live', 'gemini')]
+
+
+def wait_for(predicate, timeout=10):
+    until = time.monotonic() + timeout
+    while time.monotonic() < until:
+        value = predicate()
+        if value:
+            return value
+        time.sleep(.01)
+    raise AssertionError("timed out waiting for live call evidence")
 
 
 @pytest.fixture
@@ -35,7 +42,6 @@ def packages(tmp_path):
     for name in ['live_conversation', *(name for name, _ in ENGINES)]:
         directory = drive / 'skills/external' / name
         shutil.copytree(ROOT / 'skills' / name, directory)
-        (directory / 'late_identity.py').write_text('VALUE = "synthetic-old-import"\n')
         skill = find_skill(drive, name)
         save_enabled(drive, name, True)
         skill = replace(skill, enabled=True, manifest=replace(skill.manifest, env_from_settings=[]),
@@ -60,10 +66,6 @@ class VoiceWire:
         self.invoked = False
         self.result_received = threading.Event()
         self.closed = False
-        self.closing = threading.Event()
-        self.allow_close = threading.Event()
-        self.allow_close.set()
-        self.after_close = lambda: None
 
     def put(self, value):
         self.events.put_nowait(value)
@@ -140,205 +142,355 @@ class VoiceWire:
         try:
             yield self
         finally:
-            self.closing.set()
-            await asyncio.to_thread(self.allow_close.wait, 10)
-            self.after_close()
             self.closed = True
 
 
-def test_separate_loaded_registrations_and_beta_default(packages):
-    from ouroboros.live_conversation import feature_configuration
-    from ouroboros.realtime_setup import loaded_provider
-    with feature_configuration('live_conversation:call') as (_, config):
-        assert config['enabled'] is False and not config['provider']
-    routes = [loaded_provider(f'{name}:{engine}')['route'] for name, engine in ENGINES]
-    assert len({route.accounting_provider for route in routes}) == 3
-    assert len({route.endpoint for route in routes}) == 3
-    assert all(callable(loaded_provider(f'{name}:{engine}')['session']) for name, engine in ENGINES)
+
+class FakeSession:
+    output_bound_tokens = 100
+    renewal_ready = True
+
+    def __init__(self, selected, options, *, observe):
+        self.selected, self.options, self.observe = selected, options, observe
+        self.wire = {'messages': json.loads(selected.messages_json), 'tools': json.loads(selected.tools_json),
+                     'instructions': options.instructions + (' Speech recognition should expect: ' + ', '.join(options.languages) + '.' if options.languages else '')}
+        self.opened = self.closed = False
+
+    async def open(self):
+        self.opened = True
+
+    async def close(self):
+        self.closed = True
 
 
-@pytest.mark.parametrize('name,engine', ENGINES)
-@pytest.mark.parametrize('ending', ['bye', 'owner_stop'])
-def test_full_consumer_memory_tools_history_money_stop(packages, tmp_path, monkeypatch, provider_catalog_offline, name, engine, ending):
-    from ouroboros import config, context, call_protocol as cp, usage_accounting as ua
-    from ouroboros.call_peers import open_owner_hub, close_hub
-    from ouroboros.live_conversation import LiveConversationTurn, loaded_feature
-    from ouroboros.extension_registry_state import _realtime_providers
-    from ouroboros.model_wait import task_model_wait_scope
-    from ouroboros.task_results import write_task_result, STATUS_RUNNING
+@pytest.fixture
+def host_world(tmp_path, monkeypatch, provider_catalog_offline):
+    from ouroboros import config, context, extension_registry_state as registry
+    from ouroboros.contracts.live_conversation import LiveConfig, CallTool
+    from ouroboros.contracts.realtime import CatalogModel, ProviderCatalog, RouteFacts, RealtimeRoute
+    from ouroboros.live_conversation import LiveConversationTurn, ConversationHost
+    from ouroboros.call_protocol import CallSpec
+    from ouroboros.call_peers import LiveCallHub
     from ouroboros.tools.registry import ToolRegistry
     from ouroboros.tools.tool_context import ToolContext
+    from ouroboros.task_results import write_task_result, STATUS_RUNNING
     from tests._memory_view_context import world
     from tests.test_budget_fence_liveness import _publish
+    from ouroboros.model_wait import task_model_wait_scope
+    from supervisor import message_bus
 
     env, memory, rooms = world(tmp_path / 'world')
     monkeypatch.setattr(config, 'DATA_DIR', env.drive_root)
     monkeypatch.setenv('OUROBOROS_DATA_DIR', str(env.drive_root))
     monkeypatch.setattr(context, 'get_context_mode', lambda: 'nano')
-    from supervisor import message_bus
-    for attribute in ('DATA_DIR', 'TOTAL_BUDGET_LIMIT', 'BUDGET_REPORT_EVERY_MESSAGES', '_BRIDGE'):
-        monkeypatch.setattr(message_bus, attribute, getattr(message_bus, attribute))
-    message_bus.init(env.drive_root, 10, 100, message_bus.LocalChatBridge(settings={}))
-    canary = env.repo_dir / 'synthetic-call-canary.txt'
-    canary.write_text('SYNTHETIC-CALL-CANARY-ONLY')
-    wire = VoiceWire(engine, canary)
-    provider_key = f'{name}:{engine}'
-    factory = _realtime_providers[provider_key]['session']
-    selected_inputs = []
-    def captured_session(selected, options, *, observe):
-        from dataclasses import asdict
-        selected_inputs.append(asdict(selected))
-        return factory(selected, options, observe=observe, connect=wire.connect)
-    monkeypatch.setitem(_realtime_providers[provider_key], 'session', captured_session)
-    events, results, failures = [], [], []
-    spec = cp.CallSpec('synthetic-' + engine, rooms['alpha'], provider_key, 'synthetic-live-model', '', client_message_id='synthetic-input')
-    turn = LiveConversationTurn(loaded_feature('live_conversation:call'), dict(provider=provider_key,
-        max_seconds=15, reservation_usd=.5), spec, publish=events.append)
-    original_handler = turn.feature['handler']
-    async def diagnose(host):
-        try:
-            return await original_handler(host)
-        except BaseException:
-            import traceback
-            failures.append(traceback.format_exc())
-            raise
-    turn.feature = {**turn.feature, 'handler': diagnose}
-    task = dict(id='synthetic-live-' + engine, type='task', text='Read the synthetic canary during our call.',
-                _is_direct_chat=True, chat_id=spec.chat_id, model=turn.model, use_local_model=False,
-                origin_message_ref={'chat_id': spec.chat_id, 'client_message_id': 'synthetic-input'},
-                metadata={'execution_transport': turn.request})
-    write_task_result(env.drive_root, task['id'], STATUS_RUNNING, chat_id=task['chat_id'])
+    monkeypatch.setattr(message_bus, 'DATA_DIR', env.drive_root)
+    monkeypatch.setattr(message_bus, '_BRIDGE', message_bus.LocalChatBridge())
+    settings = {'TEST_CREDENTIAL': 'test-credential'}
+    async def language(host, arguments):
+        host.state['languages'] = arguments['languages']
+        return 'Language selection retained.'
+    async def handler(host):
+        pass
+    call_tool = CallTool('set_test_language', 'Set the test language.',
+        {'type': 'object', 'properties': {'languages': {'type': 'array', 'items': {'type': 'string'}}}}, language, silent=True)
+    live_config = LiveConfig(enabled=True, provider='fixture:voice')
+    feature = dict(skill='fixture', key='fixture:call', extension_generation='generation',
+                   content_hash='fixture-content', configure=lambda: live_config, handler=handler, call_tools=(call_tool,))
+    catalog = ProviderCatalog('Fixture engine', (CatalogModel('voice-test', 'Voice test',
+        RouteFacts(200000, 250000, 10000, 'provider', 'fixture', '2026-10-21'), default=True, vision=True),),
+        ('TEST_CREDENTIAL',))
+    sessions = []
+    def factory(*args, **kw):
+        value = FakeSession(*args, **kw)
+        sessions.append(value)
+        return value
+    provider = dict(skill='fixture', extension_generation='generation', content_hash='fixture-content',
+        catalog=catalog, route=RealtimeRoute('fixture_live', 'wss://example.invalid/live', 'fixture::'), session=factory)
+    bundle = SimpleNamespace(generation_digest='generation', supervised_futures=[],
+                             api_instances=[SimpleNamespace(get_settings=lambda keys: dict(settings))])
+    monkeypatch.setitem(registry._extensions, 'fixture', bundle)
+    monkeypatch.setitem(registry._realtime_providers, 'fixture:voice', provider)
+    monkeypatch.setitem(registry._conversation_features, 'fixture:call', feature)
+    spec = CallSpec('fixture-call', rooms['alpha'], live_config.provider, '', '', client_message_id='call:fixture-call:open')
+    turn = LiveConversationTurn(feature, live_config, spec, publish=lambda event: None)
+    task = dict(id='fixture-call-task', type='task', text='The owner opened a call.', _is_direct_chat=True,
+        chat_id=spec.chat_id, model=turn.model, use_local_model=False,
+        origin_message_ref={'chat_id': spec.chat_id, 'client_message_id': spec.client_message_id},
+        metadata={'execution_transport': turn.request})
+    write_task_result(env.drive_root, task['id'], STATUS_RUNNING, chat_id=spec.chat_id)
     _publish(env.drive_root)
     ctx = ToolContext(repo_dir=env.repo_dir, drive_root=env.drive_root, branch_dev='test', task_id=task['id'],
-                      current_chat_id=spec.chat_id, is_direct_chat=True, task_metadata=task['metadata'], task_contract={})
-    ctx.emit_progress_fn = lambda text, **kw: events.append({'text': text, **kw})
+        current_chat_id=spec.chat_id, is_direct_chat=True, task_metadata=task['metadata'], task_contract={})
+    progress = []
+    ctx.emit_progress_fn = lambda text, **kw: progress.append({'text': text, **kw})
     tools = ToolRegistry(env.repo_dir, env.drive_root)
     tools.set_context(ctx)
     messages, _ = context.build_llm_messages(env, memory, task, ctx=ctx, tool_schemas=tools.schemas(), route_resolver=turn.resolve_route)
-    ordinary_messages = json.loads(json.dumps(messages))
-    hub, created = open_owner_hub(spec)
-    assert created
-    hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), 24000)
-    scope = ua.UsageScope(drive_root=env.drive_root, task_id=task['id'], root_task_id=task['id'], global_limit_usd=10)
-    def run():
-        with ua.usage_scope(scope), task_model_wait_scope(task=task, drive_root=env.drive_root,
-                event_queue=None, worker_slot_held=False) as owner:
-            ctx.model_wait_context = owner
-            owner.tool_context = ctx
-            results.append(turn.run(ctx, messages, tools, task=task, initial_effort='', incoming_messages=queue.Queue()))
-    thread = threading.Thread(target=run)
-    thread.start()
-    try:
-        wait_for(lambda: hub._state['state'] == cp.STATE_LIVE or results)
-        assert not results, results
-        assert selected_inputs[0]['mode'] == 'nano'
-        selected_messages = json.loads(selected_inputs[0]['messages_json'])
-        assert selected_messages == messages
-        assert selected_messages[:len(ordinary_messages)] == ordinary_messages
-        assert hub.receive_audio('owner', cp.AudioFrame(cp.FRAME_AUDIO_IN, hub.epoch, 0, 24000, 0, b'\x00\x00' * 960))
-        wait_for(wire.result_received.is_set)
-        # The actual ordinary tool delivery, not a synthetic replacement result.
-        output = json.dumps(wire.sent, ensure_ascii=False)
-        assert 'SYNTHETIC-CALL-CANARY-ONLY' in output, output[-1000:]
-        wait_for(lambda: any(e.get('type') == 'response.done' or e.get('serverContent', {}).get('turnComplete') for e in wire.received))
-        if ending == 'bye':
-            hub.receive_control('owner', {'type': 'bye', 'reason': 'left'})
-        else:
-            from supervisor.task_reaper import request_finalization_grace
-            from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN
-            from ouroboros import extension_loader as loader
-            from ouroboros.extension_import_staging import _module_key
-            from ouroboros.extension_registry_state import _retiring_imports
-            wire.allow_close.clear()
-            late = []
-            wire.after_close = lambda: late.extend(importlib.import_module(_module_key(skill) + '.late_identity').VALUE
-                                                  for skill in (name, 'live_conversation'))
-            assert request_finalization_grace(env.drive_root, task['id'], REASON_OWNER_STOPPED_DIRECT_TURN,
-                chat_id=spec.chat_id, stamp=0, quiet=True)
-            assert wire.closing.wait(5)
-            loader.unload_extension(name)
-            loader.unload_extension('live_conversation')
-            assert {name, 'live_conversation'} <= _retiring_imports.keys()
-            assert thread.is_alive() and not wire.closed
-            assert not any(e.get('type') == 'conversation_finished' for e in events)
-            wire.allow_close.set()
-        thread.join(10)
-        assert not thread.is_alive() and wire.closed
-        if ending == 'bye':
-            assert results[0][1]['execution_status'] == 'ok', results
-        else:
-            assert results[0][1]['reason_code'] in {'finalize_requested', 'cancelled'}, results
-            assert late == ['synthetic-old-import'] * 2
-            assert name not in _retiring_imports and 'live_conversation' not in _retiring_imports
-        assert any(row.get('tool_call_id') == 'read-1' for row in messages)
-        # Gemini's item names are local; all final owner captions carry a call
-        # identity and remain ordinary canonical chat input.
-        from ouroboros.dialogue_store import iter_rows
-        stored = list(iter_rows(env.drive_root, 'chat'))
-        assert any('Read the synthetic canary.' in str(row) and 'live_call' in str(row) for row in stored), stored
-        assert any('Read the synthetic canary' in str(row.get('content', '')) for row in messages)
-        ledger = ua.read_usage_records(env.drive_root, final_only=True)
-        assert len(ledger) == 1 and ledger[0].get('cost_usd') is None, ledger
-        # Usage evidence can settle after Stop while its price remains unknown.
-        assert ledger[0]['state'] == 'settled', ledger
-        assert not ledger[0].get('cost_final'), ledger
-        assert ledger[0].get('prompt_tokens') is None and ledger[0].get('completion_tokens') is None, ledger
-        projection = ua.usage_projection(env.drive_root)
-        assert projection['unresolved_upper_bound_usd'] == .5, projection
-        assert projection['accounted_usd'] == .5 and not projection['cost_final'], projection
-        if ending == 'bye':
-            assert ledger[0]['cost_evidence']['responses'], ledger
-    finally:
-        close_hub(spec.call_id, 'fixture_cleanup')
-        wire.allow_close.set()
-        turn.deadline = 0
-        thread.join(10)
-        evidence = os.environ.get('OUROBOROS_TEST_EVIDENCE_ROOT')
-        if evidence:
-            target = Path(evidence) / 'live-consumers' / engine / ending
-            target.mkdir(parents=True, exist_ok=True)
-            (target / 'raw.json').write_text(json.dumps({'fixture': 'synthetic-only', 'selected_inputs': selected_inputs,
-                'ordinary_messages': ordinary_messages, 'sent': wire.sent,
-                'received': wire.received, 'events': events, 'results': results, 'alive': thread.is_alive(),
-                'closed': wire.closed, 'failures': failures, 'ledger': ua.read_usage_records(env.drive_root),
-                'usage_projection': ua.usage_projection(env.drive_root)}, default=str, indent=2))
-            artifacts = env.drive_root / 'task_results/artifacts' / task['id']
-            if artifacts.exists():
-                shutil.copytree(artifacts, target / 'artifacts', dirs_exist_ok=True)
-            observed = env.drive_root / 'observability'
-            if observed.exists():
-                shutil.copytree(observed, target / 'observability', dirs_exist_ok=True)
-                (target / 'receipt-path-map.json').write_text(json.dumps({
-                    'original_root': str(observed), 'retained_relative_root': 'observability',
-                    'note': 'Receipts are unchanged; absolute refs point to the disposable run.'
-                }, indent=2))
+    hub = LiveCallHub(turn.spec)
+    with task_model_wait_scope(task=task, drive_root=env.drive_root, event_queue=None, worker_slot_held=False) as owner:
+        ctx.model_wait_context, owner.tool_context = owner, ctx
+        host = ConversationHost(turn, ctx, messages, tools, task, '', hub)
+        yield SimpleNamespace(host=host, env=env, ctx=ctx, settings=settings, config=live_config, provider=provider,
+            sessions=sessions, feature=feature, task=task, progress=progress)
+        asyncio.run(host.finish())
+        hub.close('fixture_done')
+        registry._extensions.pop('fixture', None)
+        registry._realtime_providers.pop('fixture:voice', None)
+        registry._conversation_features.pop('fixture:call', None)
 
 
-def test_grok_cumulative_caption_and_outer_meter(packages):
-    from ouroboros.extension_import_staging import _module_key
+def test_typed_port_default_model_offer_and_unknown_model(host_world):
+    from ouroboros.live_conversation import call_offer, LiveConversationTurn
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    state, host = host_world, host_world.host
+    assert host.config is state.config and host.model.id == 'voice-test'
+    assert host.state == {} and host.opening
+    assert call_offer(state.config)['offered'] is True
+    assert call_offer(replace(state.config, enabled=False))['reason'] == 'calls_disabled'
+    assert call_offer(replace(state.config, provider='missing:voice'))['reason'] == 'provider_unavailable'
+    state.settings.clear()
+    assert call_offer(state.config)['reason'] == 'credential'
+    state.settings['TEST_CREDENTIAL'] = 'test-credential'
+    with pytest.raises(RealtimeSetupError, match='model_unavailable'):
+        LiveConversationTurn(state.feature, replace(state.config, model='unknown'), host.turn.spec, publish=lambda _: None)
+
+
+def test_every_session_refits_current_canonical_rows_and_options(host_world, monkeypatch):
+    from ouroboros.context_fit import ContextFitPlan
     from ouroboros.contracts.live_conversation import LiveOptions
-    from ouroboros.contracts.realtime import RealtimeInput, canonical_json
-    module = importlib.import_module(_module_key('grok_realtime'))
-    selected = RealtimeInput('synthetic', canonical_json([{'role': 'system', 'content': 'rules'},
-        {'role': 'user', 'content': 'hello'}]), '[]', 100, 'nano', 'core', 'view')
-    session = module.GrokSession(selected, LiveOptions(), connect=None, observe=lambda *_: None)
-    rows = [session.convert({'type': 'conversation.item.input_audio_transcription.completed', 'item_id': 'a',
-        'transcript': text, 'status': status})[0] for text, status in [('wrong word', 'in_progress'),
-        ('correct word', 'in_progress'), ('correct word here', 'completed')]]
-    assert [row.data['replace'] for row in rows] == [True] * 3
-    assert [row.data['final'] for row in rows] == [False, False, True]
-    usage = [session.convert({'type': 'response.done', 'usage': {'audio_seconds': value},
-        'response': {'id': str(i), 'usage': {}, 'output': []}})[0].data['usage'] for i, value in enumerate([2, 3, 5, 5])]
-    assert [row['raw_usage']['audio_seconds'] for row in usage] == [2, 3, 5, 5]
-    assert all('prompt_tokens' not in row and row['meter'] == 'connection_cumulative' for row in usage)
+    host = host_world.host
+    refits = []
+    original = ContextFitPlan.reproject_for_route
+    def refit(plan, **kwargs):
+        refits.append(json.loads(json.dumps(kwargs['current_messages'])))
+        return original(plan, **kwargs)
+    monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', refit)
+    async def consume(session):
+        assert session.opened
+    async def run():
+        await host.session(consume, LiveOptions(instructions='Feature then owner instructions', languages=('ru-RU',)))
+        await host.observe_context({'content': 'NEW PEER FACT'})
+        await host.session(consume, LiveOptions(instructions='Updated instructions'))
+    asyncio.run(run())
+    assert len(refits) == 2
+    assert 'NEW PEER FACT' not in canonical(refits[0]) and 'NEW PEER FACT' in canonical(refits[1])
+    assert 'Feature then owner instructions' in canonical(refits[0])
+    assert all(session.closed for session in host_world.sessions)
+    assert host_world.sessions[0].options.languages == ('ru-RU',)
+    assert host.messages[-1]['_host_context_kind'] == 'call_observation'
 
 
-def test_grok_images_refuse_before_connect(packages):
-    from ouroboros.realtime_setup import loaded_provider
+def canonical(value):
+    return json.dumps(value, ensure_ascii=False)
+
+
+def test_physical_dispatch_minus_one_refuses_and_positive_passes(host_world, monkeypatch):
+    from ouroboros.context_fit import ContextFitPlan
     from ouroboros.contracts.live_conversation import LiveOptions
-    from ouroboros.contracts.realtime import RealtimeInput, RealtimeSetupError, canonical_json
-    selected = RealtimeInput('synthetic', canonical_json([{'role': 'system', 'content': 'rules'},
-        {'role': 'user', 'content': [{'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,eA=='}}]}]),
-        '[]', 100, 'nano', 'core', 'view')
-    with pytest.raises(RealtimeSetupError, match='vision_unsupported'):
-        loaded_provider('grok_realtime:grok')['session'](selected, LiveOptions(), observe=lambda *_: None)
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='estimator'))
+    # An irreducible ordinary projection: the physical guard must still refuse.
+    monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', lambda plan, **kw: plan)
+    _, request, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    raw = request.prompt_tokens_bounded_estimate
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=raw + 10000 - 1))
+    async def consume(session):
+        pytest.fail('known overflowing physical request was dispatched')
+    with pytest.raises(RealtimeSetupError, match='context_capacity'):
+        asyncio.run(host.session(consume, LiveOptions()))
+    assert not any(session.opened for session in host_world.sessions)
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=raw + 10000 + 1))
+    async def allowed(session):
+        assert session.opened
+        host.response_started('fits')
+        host.response_done('fits', usage={}, raw_usage={}, status='completed')
+    asyncio.run(host.session(allowed, LiveOptions()))
+    from ouroboros.usage_accounting import read_usage_records
+    row, = read_usage_records(host.ctx.drive_root)
+    assert row['physical_context']['capacity_total_tokens'] == raw + 10001
+    assert row['physical_context']['measurement_density'] == 1.0
+
+
+def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_world):
+    from ouroboros.capability_evidence import resolve_main_token_density
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    options = LiveOptions(instructions='Feature instructions', languages=('ru-RU', 'en-US'))
+    _, cold, _ = session_candidate(host, host_world.provider['session'], options)
+    assert cold.physical_context.measurement_density == 1.0
+    # A caption describes native audio; it is not an addition to selected TEXT.
+    host.messages.append({'role': 'user', 'content': 'Native audio caption ' * 300})
+    host.response_started('density')
+    estimate = host._response_text_estimates[(0, 'density')]
+    assert estimate == host._selected_text_estimate
+    host.messages.pop()
+    host.response_done('density', usage={'text_input_tokens': estimate * 2,
+        'audio_input_tokens': 99999, 'image_input_tokens': 88888, 'video_input_tokens': 77777},
+        raw_usage={'input_tokens_details': {'text_tokens': estimate * 2, 'audio_tokens': 99999}}, status='completed')
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+    _, warm, _ = session_candidate(host, host_world.provider['session'], options)
+    assert warm.physical_context.measurement_density == 2
+    assert warm.prompt_tokens_estimate == warm.prompt_tokens_bounded_estimate * 2
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='estimator'))
+    _, raw, _ = session_candidate(host, host_world.provider['session'], options)
+    assert raw.physical_context.measurement_density == 1
+    assert raw.prompt_tokens_estimate == raw.prompt_tokens_bounded_estimate
+    host.response_started('grok')
+    host.response_done('grok', usage={'text_input_tokens': estimate * 3},
+        raw_usage={'input_tokens_details': {'text_tokens': estimate * 3}}, status='completed')
+    host.model = replace(host.model, facts=replace(host.model.facts, basis='provider'))
+    host.response_started('audio-only')
+    host.response_done('audio-only', usage={'audio_input_tokens': estimate * 4}, raw_usage={}, status='completed')
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+
+
+def test_instructions_and_provider_language_sentence_are_inside_fit(host_world):
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    _, plain, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    _, instructed, _ = session_candidate(host, host_world.provider['session'], LiveOptions(instructions='Owner instructions ' * 200))
+    _, language, _ = session_candidate(host, host_world.provider['session'], LiveOptions(
+        instructions='Owner instructions ' * 200, languages=('ru-RU', 'en-US')))
+    assert plain.prompt_tokens_bounded_estimate < instructed.prompt_tokens_bounded_estimate < language.prompt_tokens_bounded_estimate
+
+
+def test_call_tool_silent_replay_and_existing_row_change_receipt(host_world):
+    host = host_world.host
+    original = host.messages[0]
+    async def edit(host, args):
+        original['content'] = 'Changed existing system row.'
+        return 'done'
+    host.call_tools['set_test_language'] = replace(host.call_tools['set_test_language'], handler=edit)
+    call = {'id': 'local-1', 'type': 'function', 'function': {'name': 'set_test_language', 'arguments': '{}'}}
+    async def run():
+        rows = await host.tool_batch([call])
+        assert rows.silent == ('local-1',)
+        assert any(row['content'] == 'Changed existing system row.' for row in rows)
+        assert any(row.get('tool_call_id') == 'local-1' for row in rows)
+        replay = await host.tool_batch([call])
+        assert replay.silent == ('local-1',) and host.rounds == 1
+    asyncio.run(run())
+
+
+def test_tool_collision_refuses_but_distinct_feature_tools_join(host_world):
+    from ouroboros.live_conversation import ConversationHost
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    host = host_world.host
+    assert 'set_test_language' in {s['function']['name'] for s in host.schemas}
+    colliding = replace(host.call_tools['set_test_language'], name='read_file')
+    host.turn.feature = {**host.turn.feature, 'call_tools': (colliding,)}
+    with pytest.raises(RealtimeSetupError, match='tool_collision'):
+        ConversationHost(host.turn, host.ctx, host.messages, host.tools, host.task, '', host.hub)
+
+
+def test_captions_are_crash_durable_but_checkpoint_at_completed_turn(host_world, monkeypatch):
+    from ouroboros.dialogue_store import iter_rows
+    host = host_world.host
+    checkpoints = []
+    monkeypatch.setattr(host, 'checkpoint', checkpoints.append)
+    async def run():
+        await host.caption('owner', 'Durable owner speech', 'owner-1')
+        await host.caption('owner', 'Durable owner speech', 'owner-1')
+        await host.caption('ouroboros', 'Durable reply', 'answer-1', completed=True)
+    asyncio.run(run())
+    assert not checkpoints
+    rows = list(iter_rows(host.ctx.drive_root, 'chat'))
+    assert sum('Durable owner speech' in str(row) for row in rows) == 1
+    spoken = [entry.row for entry in iter_rows(host.ctx.drive_root, 'progress') if entry.row.get('spoken')]
+    assert len(spoken) == 1 and spoken[0]['text'] == 'Durable reply'
+    assert spoken[0]['spoken']['status'] == 'played' and spoken[0]['role'] == 'assistant'
+    # No start event still leaves a settled, unknown-priced response.
+    host.response_done('answer-1', usage={}, raw_usage={}, status='completed')
+    assert checkpoints == ['ready']
+
+
+def test_renewal_uses_reported_held_input_and_growth(host_world):
+    host = host_world.host
+    host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=20000, working_reserve_tokens=10000))
+    assert host.renewal_due() is False
+    host.response_done('one', usage={'text_input_tokens': 4000}, raw_usage={}, status='completed')
+    assert host.renewal_due() is False
+    host.response_done('two', usage={'text_input_tokens': 8000}, raw_usage={}, status='completed')
+    assert host.renewal_due() is True
+
+
+@pytest.mark.parametrize('surface', ['provider', 'feature'])
+@pytest.mark.parametrize('action', ['reload', 'disable'])
+def test_active_call_reload_waits_and_owner_disable_cancels(host_world, monkeypatch, surface, action):
+    from concurrent.futures import ThreadPoolExecutor
+    import contextvars
+    from ouroboros import call_peers, extension_loader as loader, extension_registry_state as registry
+    from ouroboros.contracts.live_conversation import LiveOptions
+    host = host_world.host
+    provider_name, feature_name = 'fixture', 'fixture-feature'
+    provider_bundle = registry._ExtensionRegistrations(generation_digest='generation',
+        realtime_providers=['fixture:voice'], api_instances=registry._extensions[provider_name].api_instances)
+    feature_bundle = registry._ExtensionRegistrations(generation_digest='generation', conversation_features=['fixture:call'])
+    monkeypatch.setitem(registry._extensions, provider_name, provider_bundle)
+    monkeypatch.setitem(registry._extensions, feature_name, feature_bundle)
+    monkeypatch.setitem(host.turn.feature, 'skill', feature_name)
+    monkeypatch.setattr(call_peers, 'get_hub', lambda call_id: host.hub)
+    started, release, ended = threading.Event(), threading.Event(), threading.Event()
+    sessions = []
+    async def handler(port):
+        async def consume(session):
+            sessions.append(session)
+            started.set()
+            while not release.is_set():
+                await asyncio.sleep(.01)
+        try:
+            await port.session(consume, LiveOptions())
+        finally:
+            ended.set()
+    monkeypatch.setitem(host.turn.feature, 'handler', handler)
+    name = provider_name if surface == 'provider' else feature_name
+    subject = SimpleNamespace(name=name)
+    current = {'skill': name, 'enabled': True, 'desired_live': True,
+               'loaded_present': True, 'live_loaded': False, 'reason': 'ready'}
+    monkeypatch.setattr(loader, 'runtime_state_for_skill_name', lambda *a, **kw: dict(current))
+    monkeypatch.setattr(loader, '_finalize_extension_reconcile', lambda *a, **kw: None)
+    loaded = []
+    monkeypatch.setattr(loader, 'load_extension', lambda *a, **kw: loaded.append(a[0]) or None)
+    def reconcile():
+        return loader.reconcile_extension(name, host.ctx.drive_root, lambda: {}, skills=[subject], repo_path='')
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        running = executor.submit(contextvars.copy_context().run, host.turn.run,
+            host.ctx, list(host.messages), host.tools, task=host.task, initial_effort='')
+        try:
+            wait_for(started.is_set, timeout=30)
+            if action == 'reload':
+                refused = reconcile()
+                assert refused['reason'] == 'live_call_active'
+                assert refused['action'] == 'extension_reload_pending'
+                assert not loaded and not ended.is_set()
+                release.set()
+                running.result(timeout=10)
+                assert reconcile()['action'] == 'extension_loaded'
+                assert loaded == [subject]
+            else:
+                current.update(enabled=False, desired_live=False, reason='disabled')
+                assert reconcile()['action'] == 'extension_unloaded'
+                result = running.result(timeout=10)
+                assert result[1]['reason_code'] == 'cancelled'
+                assert name not in registry._extensions and ended.is_set()
+            assert sessions[-1].closed
+        finally:
+            release.set()
+            running.result(timeout=10)
+
+
+def test_selected_text_estimator_excludes_media():
+    from ouroboros.realtime_setup import text_input_estimate
+    text = {'type': 'text', 'text': 'Selected text'}
+    def estimate(parts):
+        return text_input_estimate([{'role': 'user', 'content': parts}], [])
+    baseline = estimate([text])
+    assert estimate([text, {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + 'eA==' * 5000}},
+                     {'type': 'input_audio', 'input_audio': {'data': 'eA==' * 5000}}]) == baseline
+    assert estimate([{'type': 'text', 'text': 'More selected text ' * 100}]) > baseline
