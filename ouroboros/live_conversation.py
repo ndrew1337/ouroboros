@@ -217,6 +217,13 @@ class ConversationHost:
             raise RealtimeSetupError("tool_collision", "Call tools collide with ordinary tools: " + ", ".join(sorted(collisions)))
         self.schemas.extend({"type": "function", "function": {"name": tool.name, "description": tool.description,
             "parameters": dict(tool.parameters)}} for tool in self.call_tools.values())
+        if turn.spec.presence_binding_id:
+            from ouroboros.context import build_user_content
+            from ouroboros.context_budget import bound_host_row
+            # Presence's admitted task is the observed event, so its opening
+            # fact joins separately with the ordinary host-fact label.
+            messages.append(bound_host_row("call_open", build_user_content({
+                "text": self.opening, "metadata": {"host_fact": {"kind": "call_open"}}})))
         ctx.messages, ctx.active_context_mode, ctx.active_effort = messages, self.plan.initial_mode, effort
         ctx._execution_trace = self.trace
         self.executor = StatefulToolExecutor()
