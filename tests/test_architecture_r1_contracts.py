@@ -15,7 +15,7 @@ def _book(chapter):
     ("Local delete unloads and removes payload and the entire state directory under the lifecycle lock",
      "Local delete removes payload and records the uninstall tombstone"),
     ("without the configured GitHub token (this computer's git credentials still apply)", "HTTPS unauthenticated"),
-    ("with that token alone, without a credential helper", "retrying only auth refusals once with the configured token"),
+    ("authentication refusals once with it alone, without a credential helper", "retrying only auth refusals once with the configured token"),
     ("`pending_update` names the candidate release; payload/lifecycle snapshots are retained separately",
      "retain payload/lifecycle as `pending_update`"),
     ("Preflight failure persists as PENDING, never advisory-overridable BLOCKERS", ""),
