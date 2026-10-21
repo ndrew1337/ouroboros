@@ -489,7 +489,7 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     form.locator('[name="model"]').select_option(thinking['id'])
     assert_catalog_model(gemini, thinking)
     expect(form.locator('[name="thinking"]')).to_have_value(thinking['thinking_levels'][0])
-    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Engine’s default')
+    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Lowest (default)')
     form.locator('[name="thinking"]').select_option(thinking['thinking_levels'][-1])
     grok = by_id['grok_realtime:grok']
     form.locator('[name="provider"]').select_option(grok['id'])

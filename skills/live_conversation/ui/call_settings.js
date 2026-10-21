@@ -30,7 +30,7 @@ export function callSettingsHtml(config) {
     const knobs = {
         pause: field('pause', 'Pause before answering', 'select', ['short','normal','long']),
         interruptions: field('interruptions', 'Speaking interrupts Ouroboros', 'checkbox'),
-        thinking: field('thinking', 'Thinking', 'select', [{value:'',label:"Engine’s default"}, ...(model?.thinking_levels || [])]),
+        thinking: field('thinking', 'Thinking', 'select', [{value:'',label:'Lowest (default)'}, ...(model?.thinking_levels || [])]),
         search: field('search', 'Built-in search', 'checkbox'),
     };
     const notes = [];
