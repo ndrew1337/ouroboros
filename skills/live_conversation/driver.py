@@ -217,6 +217,16 @@ class _Call:
         await self.connected.wait()
         await self.session.send(command)
 
+    async def context_update(self, rows):
+        # Mailbox and peer rows are already canonical on the host. Check the
+        # resulting fit before adding them to this connection; a refit includes
+        # them in its selected input instead.
+        await self.connected.wait()
+        if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
+            self.request_renewal()
+        else:
+            await self.session.send(ContextUpdate(tuple(rows)))
+
     def request_renewal(self, *, resuming=False, within=None):
         # A fresh fit wins over a requested resume while the transport is live.
         self.resume = resuming if not self.renewing else self.resume and resuming
@@ -431,7 +441,7 @@ class _Call:
                 elif message["type"] == "context":
                     row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
                     await self.host.observe_context(row)
-                    await self.session.send(ContextUpdate((row,)))
+                    await self.context_update((row,))
             await asyncio.sleep(.01)
 
     async def mailbox(self):
@@ -439,5 +449,5 @@ class _Call:
             if not self.renewing:
                 mail = await self.host.mailbox()
                 if mail:
-                    await self.send(ContextUpdate(tuple(mail)))
+                    await self.context_update(mail)
             await asyncio.sleep(.25)

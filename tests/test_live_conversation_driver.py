@@ -680,3 +680,50 @@ def test_final_teardown_saves_partial_captions_once(stop):
                                   'heard':False, 'played_ms':0, 'interrupted':False, 'completed':False}]
         assert host.usage == [('start', 'pending')], 'host teardown owns the unreceipted reservation'
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('source', ['mailbox', 'peer'])
+@pytest.mark.parametrize('crosses_window', [False, True])
+def test_context_additions_refit_before_delivery_when_the_window_is_full(source, crosses_window):
+    from ouroboros.contracts.live_conversation import ContextUpdate
+    async def scenario():
+        host = Host()
+        queued = []
+        async def mailbox():
+            rows, queued[:] = list(queued), []
+            if rows:
+                host.context.extend(rows)
+                host.due = crosses_window
+            return rows
+        async def observe(row):
+            host.context.append(row)
+            host.due = crosses_window
+        host.mailbox, host.observe_context = mailbox, observe
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='must-not-resume-a-refit')
+            first.renewal_ready = False
+            await until(lambda: bool(first.sent))
+            if source == 'mailbox': queued.append({'role':'user', 'content':'New room message'})
+            else: host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'context', 'text':'Observed context'}))
+            await until(lambda: bool(host.context))
+            await asyncio.sleep(.04)
+            additions = [x for x in first.sent if isinstance(x, ContextUpdate)]
+            if crosses_window:
+                assert additions == [], 'an over-window addition must be kept for the fresh fit'
+            else:
+                assert additions == [ContextUpdate(tuple(host.context))]
+            assert len(host.sessions) == 1, 'the native quiet boundary still owns replacement'
+            first.renewal_ready = True
+            if crosses_window:
+                await until(lambda: len(host.sessions) == 2)
+                assert host.options[1].resume_handle == ''
+                assert not any(isinstance(x, ContextUpdate) for x in first.sent)
+            else:
+                await asyncio.sleep(.05)
+                assert len(host.sessions) == 1
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
