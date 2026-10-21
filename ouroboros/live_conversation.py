@@ -130,6 +130,7 @@ class LiveConversationTurn(RealtimeTurn):
                     await host.finish()
 
         reason, status, detail = "finished", "ok", ""
+        failure = None
         try:
             presence = (task.get("metadata") or {}).get("presence") or {}
             admitted_presence = (self.spec.opened_by == "skill"
@@ -147,8 +148,22 @@ class LiveConversationTurn(RealtimeTurn):
             reason = getattr(exc, "code", "") or ("cancelled" if isinstance(exc, asyncio.CancelledError) else "call_failed")
             status = "cancelled" if reason in {"cancelled", "finalize_requested", "owner_stop"} else "infra_failed"
             detail = str(exc).removeprefix(reason + ": ") if isinstance(exc, RealtimeSetupError) else ""
+            if reason == "call_failed":
+                import traceback
+                from ouroboros.observability import redact_projection
+                frames = traceback.extract_tb(exc.__traceback__)
+                failure = redact_projection({
+                    "class": type(exc).__name__, "message": str(exc),
+                    "origin": f"{frames[-1].filename}:{frames[-1].lineno} in {frames[-1].name}" if frames else "",
+                    "stack": [{"file": frame.filename, "line": frame.lineno, "function": frame.name}
+                              for frame in frames],
+                }).value
+                detail = "An unexpected error ended the call."
             if host is not None:
-                host.observe("host", canonical_json({"type": "call.ended", "reason": reason}))
+                if failure is not None:
+                    host.trace["failure"] = failure
+                host.observe("host", canonical_json({"type": "call.ended", "reason": reason,
+                    **({"failure": failure} if failure is not None else {})}))
         finally:
             if host is not None:
                 host.executor.shutdown(wait=True)
@@ -159,6 +174,7 @@ class LiveConversationTurn(RealtimeTurn):
                           "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
         return "Call ended. Its transcript is in this room.", {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
+            **({"failure": failure} if failure is not None else {}),
         }, host.trace if host is not None else {"reasoning_notes": [], "tool_calls": []}
 
 
