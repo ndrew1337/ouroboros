@@ -44,3 +44,15 @@ test('the Gemini engine choice carries its regional availability note only for G
     assert.match(callSettingsHtml({provider:gemini.id, catalogs:[gemini,catalog]}), note);
     assert.doesNotMatch(callSettingsHtml({provider:catalog.id, catalogs:[gemini,catalog]}), note);
 });
+
+test('memory disclosures keep the catalog window unit and measurement source', () => {
+    const render = basis => callSettingsHtml({provider:catalog.id, catalogs:[{...catalog, models:[{
+        ...catalog.models[0], facts:{conversation_window_tokens:80000, basis, source:'Measured route.'},
+    }]}]});
+    assert.match(render('estimator'), /80,000 tokens by Ouroboros(?:’|&#39;)s own estimate per session, then it renews\./);
+    assert.match(render('estimator'), /Measured route\./);
+    assert.doesNotMatch(render('estimator'), /provider tokens/);
+    assert.match(render('provider'), /80,000 provider tokens per session, then it renews\./);
+    assert.doesNotMatch(render('provider'), /own estimate/);
+    assert.match(callSettingsHtml({provider:'missing',catalogs:[]}), /memory window for this selection is not known/);
+});

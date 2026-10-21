@@ -40,7 +40,9 @@ export function callSettingsHtml(config) {
     }
     fields.push(field('instructions', 'Instructions for calls', 'textarea', undefined, 'Applies to the next call.'));
     const window = model?.facts?.conversation_window_tokens;
-    const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} tokens per session, then it renews.`
+    const unit = model?.facts?.basis === 'estimator' ? 'tokens by Ouroboros’s own estimate'
+        : model?.facts?.basis === 'provider' ? 'provider tokens' : 'tokens';
+    const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} ${unit} per session, then it renews.`
         : 'The memory window for this selection is not known.';
     return `<div class="settings-section-copy">Calls use this room’s ordinary memory and tools. Changes apply to the next call.</div>
         ${!catalog ? '<p class="settings-inline-note">The selected engine is not available. Enable an engine skill and grant its credential in Skills.</p>' : ''}
