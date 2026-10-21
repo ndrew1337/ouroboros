@@ -205,20 +205,6 @@ def enable_tools(
     return text
 
 
-def call_catalog_facts(loaded: int, not_loaded: List[Dict[str, Any]]) -> str:
-    """What a live call can load beyond its view, by namespace (an extension's skill named), so the
-    voice can enable a tool by name without a catalog look first."""
-    skills, counts = _namespace_skills(), {}
-    for row in not_loaded:
-        namespace = tool_namespace(str(row.get("name") or ""))
-        counts[namespace] = counts.get(namespace, 0) + 1
-    parts = [f"{name}{f' (skill {skills[name]})' if name in skills else ''}: {count}"
-             for name, count in sorted(counts.items())]
-    return (f"Your tool list holds {loaded} tools. {len(not_loaded)} more are callable, by namespace — "
-            + "; ".join(parts) + ". enable_tools loads tools by their names (a namespace or a skill's name answers "
-            "with its tools' names); list_available_tools(namespace=...) describes one namespace.")
-
-
 def _namespace_skills() -> Dict[str, str]:
     """Each loaded extension namespace and the skill it belongs to, so the overview can name the skill."""
     from ouroboros.extension_loader import _lock as ext_lock, _tools as ext_tools
