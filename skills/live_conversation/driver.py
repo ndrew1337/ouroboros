@@ -327,8 +327,12 @@ class _Call:
 
     async def provider(self):
         while True:
+            refusal = None
             for event in await self.session.receive():
                 data = event.data
+                if refusal is not None and not (event.kind == "response_done"
+                        or (event.kind == "caption" and data.get("final"))):
+                    continue
                 if event.kind == "ready":
                     self.input_rate, self.output_rate = data["input_rate"], data["output_rate"]
                     self.hub.set_engine_rates(self.input_rate, self.output_rate)
@@ -361,7 +365,14 @@ class _Call:
                 elif event.kind == "response_started":
                     response = data["response_id"]
                     if response not in self.started_responses:
-                        self.host.response_started(response)
+                        try:
+                            self.host.response_started(response)
+                        except RealtimeSetupError as exc:
+                            # This received batch may already contain the bill
+                            # and final transcript. Keep those receipts while
+                            # admitting no more playback or tool work.
+                            refusal = exc
+                            continue
                         self.started_responses.add(response)
                     if response not in self.receipts:
                         self.active_responses.add(response)
@@ -394,6 +405,8 @@ class _Call:
                     self.renewing = self.resume = True
                     self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     return
+            if refusal is not None:
+                raise refusal
 
     async def peers(self):
         while True:

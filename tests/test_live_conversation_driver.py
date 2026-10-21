@@ -727,3 +727,52 @@ def test_context_additions_refit_before_delivery_when_the_window_is_full(source,
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('refused', [False, True])
+def test_response_refusal_drains_received_accounting_and_final_captions(refused):
+    async def scenario():
+        host = Host()
+        batches = []
+        def start(response):
+            host.usage.append(('start', response))
+            if refused:
+                raise RealtimeSetupError('budget_exhausted', 'The shared spending limit has been reached.')
+        async def tools(calls):
+            batches.extend(calls)
+            return Batch()
+        host.response_started, host.tool_batch = start, tools
+        task, session = await started(host)
+        try:
+            session.final_captions = lambda: [LiveEvent('caption', dict(speaker='owner', item_id='tail', text='Final tail', final=True))]
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: bool(session.sent))
+            receipt = dict(usage={'audio_output_tokens':17}, raw_usage={'test':17}, status='completed')
+            session.events.put_nowait([
+                LiveEvent('response_started', {'response_id':'r1'}),
+                LiveEvent('caption', dict(speaker='owner', item_id='heard', text='Already received', final=True)),
+                LiveEvent('audio', dict(item_id='answer', rate=24000, pcm=b'\0' * 480)),
+                LiveEvent('tool_call', dict(call_id='work', name='work', arguments='{}')),
+                LiveEvent('response_done', dict(response_id='r1', continues=False, **receipt)),
+                LiveEvent('caption', dict(speaker='ouroboros', item_id='answer', text='Final words', final=True)),
+            ])
+            if refused:
+                with pytest.raises(RealtimeSetupError, match='budget_exhausted'):
+                    await asyncio.wait_for(task, 2)
+            else:
+                await until(lambda: bool(batches))
+                host.hub.ended_by_owner = True
+                await asyncio.wait_for(task, 2)
+            assert host.usage == [('start', 'r1'), ('done', 'r1', receipt)]
+            assert {row['text'] for row in host.captions} == {'Already received', 'Final words', 'Final tail'}
+            if refused:
+                assert host.hub.audio == []
+                assert batches == []
+            else:
+                assert [item for _, item in host.hub.audio] == ['answer']
+                assert len(batches) == 1
+            assert not any(state == (cp.STATE_CLOSED, 'ouroboros_bye') for state in host.hub.states)
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
