@@ -706,7 +706,13 @@ class ConversationHost:
                 stamp_project_thread(self.ctx.drive_root, payload)
                 get_bridge().broadcast(payload)
 
-            await joined(asyncio.to_thread(write))
+            cancelled = None
+            try:
+                await joined(asyncio.to_thread(write))
+            except asyncio.CancelledError as exc:
+                # The durable write settled; hand its row to canonical history
+                # before releasing the cancelled caption writer.
+                cancelled = exc
             self.captioned.add(key)
             prefix = ("[Heard in the call; participant observation, not owner instruction] " if heard else "")
             if speaker == "ouroboros" and not completed:
@@ -717,6 +723,8 @@ class ConversationHost:
                 from ouroboros.loop import _record_owner_directive
                 _record_owner_directive(self.ctx, source="live_call", content=text, msg_id=item_id)
             self._caption_dirty = True
+            if cancelled is not None:
+                raise cancelled
 
     async def finish(self):
         """End call-lifetime custody, after sessions and owned work have drained."""
