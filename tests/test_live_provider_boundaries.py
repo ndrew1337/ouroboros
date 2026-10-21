@@ -8,7 +8,7 @@ import importlib
 import pytest
 
 from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
-from tests.test_live_conversation import ENGINES, VoiceWire, packages  # noqa: F401
+from tests.test_live_conversation import ENGINES, VoiceWire, packages as packages
 
 
 def selected():
@@ -120,10 +120,9 @@ def test_gemini_expiry_with_untranscribed_audio_is_an_explicit_failure(packages)
     from ouroboros.contracts.realtime import RealtimeSetupError
 
     async def scenario():
-        host = DriverHost()
         adapter, wire = make_session("gemini")
-        await adapter.open()
-        running = asyncio.create_task(driver().consume(host, adapter, lambda _: None))
+        host = DriverHost(adapter)
+        running = asyncio.create_task(driver().run(host))
         try:
             await until(lambda: host.hub._state["state"] == cp.STATE_LIVE)
             assert host.hub.receive_audio("owner", cp.AudioFrame(
@@ -139,5 +138,4 @@ def test_gemini_expiry_with_untranscribed_audio_is_an_explicit_failure(packages)
             if not running.done():
                 running.cancel()
             await asyncio.gather(running, return_exceptions=True)
-            await adapter.close()
     asyncio.run(scenario())

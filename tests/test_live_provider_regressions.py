@@ -18,8 +18,8 @@ from tests._extension_loader_shared import _clear_loader_state  # noqa: F401
 from tests.test_live_conversation import packages as packages, VoiceWire, host_world as host_world
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.live_conversation import Audio, LiveEvent, LiveOptions, ToolOutputs
-from ouroboros.contracts.realtime import RealtimeInput, RealtimeSetupError, canonical_json
+from ouroboros.contracts.live_conversation import Audio, LiveConfig, LiveEvent, LiveOptions, ToolBatch, ToolOutputs
+from ouroboros.contracts.realtime import CatalogModel, RealtimeInput, RealtimeSetupError, canonical_json
 
 
 @pytest.fixture(autouse=True)
@@ -78,14 +78,50 @@ async def until(predicate, timeout=2):
 
 class DriverHost:
     """Probe only the real driver/hub/adapter seam; row writes are captured here."""
-    def __init__(self, *, meeting=False):
+    def __init__(self, transport, *, meeting=False):
         from ouroboros.call_peers import LiveCallHub
         self.hub = LiveCallHub(cp.CallSpec("focused-driver", 1, "synthetic", "model", ""))
         self.hub.join(cp.PeerInfo("owner", cp.PEER_OWNER, True, True), 24000)
         if meeting:
             self.hub.join(cp.PeerInfo("meeting", cp.PEER_MEETING, True, True, skill="synthetic"), 24000)
         self.rows, self.messages, self.schemas = [], [], []
-        self._tools_lock = asyncio.Lock()
+        self.config = LiveConfig(enabled=True, provider="synthetic:voice")
+        self.model = CatalogModel("synthetic-model", "Synthetic", vision=True)
+        self.state, self.usage = {}, []
+        self.opening = "The owner opened this synthetic call."
+        self.transport = transport
+        self.sessions, self.options, self.results = [], [], []
+
+    async def check(self):
+        pass
+
+    def renewal_due(self):
+        return False
+
+    async def session(self, consume, options):
+        transport = self.transport if not self.sessions else EventSession()
+        self.sessions.append(transport)
+        self.options.append(options)
+        try:
+            await transport.open()
+            result = await consume(transport)
+            self.results.append(result)
+            return result
+        finally:
+            await transport.close()
+
+    def response_started(self, response_id):
+        self.usage.append(("start", response_id))
+
+    def response_done(self, response_id, **receipt):
+        self.usage.append(("done", response_id, receipt))
+
+    async def tool_batch(self, calls):
+        assert not calls, "this synthetic scenario should not dispatch tools"
+        return ToolBatch()
+
+    async def observe_context(self, row):
+        self.messages.append(row)
 
     async def caption(self, **row):
         self.rows.append(row)
@@ -93,15 +129,23 @@ class DriverHost:
     async def mailbox(self):
         return []
 
-    def selected_input(self):
-        return None
-
-
 class EventSession:
     """Normalized events only, used to separate driver facts from adapter facts."""
+    renewal_ready = True
+
     def __init__(self):
         self.events = asyncio.Queue()
         self.sent = []
+        self.closed = False
+
+    async def open(self):
+        pass
+
+    async def close(self):
+        self.closed = True
+
+    def final_captions(self):
+        return []
 
     def put(self, *events):
         self.events.put_nowait(events)
@@ -178,11 +222,12 @@ def test_openai_schema_and_output_ack_gate_and_reject_mutation(packages, evidenc
 @pytest.mark.parametrize("timing", ["played_before_caption", "interrupted_before_caption", "meeting_ack"])
 def test_driver_late_caption_playback_evidence(packages, evidence, timing):
     async def run():
-        host, transport = DriverHost(meeting=timing == "meeting_ack"), EventSession()
-        running = asyncio.create_task(driver().consume(host, transport, lambda _: None))
+        transport = EventSession()
+        host = DriverHost(transport, meeting=timing == "meeting_ack")
+        running = asyncio.create_task(driver().run(host))
         try:
             transport.put(LiveEvent("ready", {"input_rate": 24000, "output_rate": 24000}))
-            transport.put(LiveEvent("response_started"), LiveEvent("audio", {
+            transport.put(LiveEvent("response_started", {"response_id": "answer"}), LiveEvent("audio", {
                 "rate": 24000, "pcm": b"\x00\x00" * 2400, "item_id": "spoken"}))
             await until(lambda: host.hub._turn["turn"] == cp.TURN_ANSWERING)
             if timing == "interrupted_before_caption":
@@ -194,10 +239,12 @@ def test_driver_late_caption_playback_evidence(packages, evidence, timing):
                 await asyncio.sleep(.04)
             transport.put(LiveEvent("caption", {"speaker": "ouroboros", "item_id": "spoken",
                 "text": "Late final speech.", "final": True}))
-            transport.put(LiveEvent("response_done", {"usage": {}}))
+            transport.put(LiveEvent("response_done", {"response_id": "answer", "usage": {},
+                "raw_usage": {}, "status": "completed", "continues": False}))
             await asyncio.sleep(.04)
             host.hub.receive_control("owner", {"type": "bye"})
-            assert await asyncio.wait_for(running, 2) == "ended"
+            await asyncio.wait_for(running, 2)
+            assert host.results == [None] and transport.closed
             evidence.update(timing=timing, rows=host.rows, sent=transport.sent)
             assert len(host.rows) == 1
             row = host.rows[0]
@@ -230,16 +277,16 @@ def test_gemini_late_caption_keeps_audio_item_identity(packages, evidence):
 
 def test_gemini_renewal_waits_for_untranscribed_input(packages, evidence):
     async def run():
-        host = DriverHost()
         adapter, wire = session("gemini")
-        await adapter.open()
-        running = asyncio.create_task(driver().consume(host, adapter, lambda _: None))
+        host = DriverHost(adapter)
+        running = asyncio.create_task(driver().run(host))
         try:
             await until(lambda: host.hub._state["state"] == cp.STATE_LIVE)
             assert host.hub.receive_audio("owner", cp.AudioFrame(
                 cp.FRAME_AUDIO_IN, host.hub.epoch, 0, 24000, 0, b"\x01\x00" * 960))
             await until(lambda: any("realtimeInput" in row for row in wire.sent))
             wire.put({"voiceActivity": {"type": "ACTIVITY_START"}})
+            wire.put({"sessionResumptionUpdate": {"resumable": True, "newHandle": "synthetic-resume"}})
             wire.put({"goAway": {"timeLeft": "1s"}})
             await asyncio.sleep(.08)
             evidence.update(wire=wire.sent, received=wire.received, ended_early=running.done(),
@@ -247,23 +294,25 @@ def test_gemini_renewal_waits_for_untranscribed_input(packages, evidence):
             assert not running.done(), "renewal discarded audio before its delayed input caption"
             wire.put({"serverContent": {"inputTranscription": {"text": "Delayed owner words", "finished": True},
                                        "turnComplete": True}})
-            assert await asyncio.wait_for(running, 2) == "renew"
+            await until(lambda: len(host.sessions) == 2)
+            assert host.results == ["synthetic-resume"]
+            assert host.options[1].resume_handle == "synthetic-resume"
             assert any(row["text"] == "Delayed owner words" for row in host.rows)
+            host.hub.receive_control("owner", {"type": "bye"})
+            await asyncio.wait_for(running, 2)
         finally:
             host.hub.close("fixture_done")
             if not running.done():
                 running.cancel()
             await asyncio.gather(running, return_exceptions=True)
-            await adapter.close()
     asyncio.run(run())
 
 
 def test_gemini_finished_output_caption_allows_renewal_after_playback(packages, evidence):
     async def run():
-        host = DriverHost()
         adapter, wire = session("gemini")
-        await adapter.open()
-        running = asyncio.create_task(driver().consume(host, adapter, lambda _: None))
+        host = DriverHost(adapter)
+        running = asyncio.create_task(driver().run(host))
         try:
             await until(lambda: host.hub._state["state"] == cp.STATE_LIVE)
             wire.put({"serverContent": {"modelTurn": {"parts": [{"inlineData": {
@@ -271,19 +320,23 @@ def test_gemini_finished_output_caption_allows_renewal_after_playback(packages, 
                 "outputTranscription": {"text": "Completed speech.", "finished": True}}})
             await until(lambda: bool(adapter.item))
             item_id = adapter.item
-            wire.put({"serverContent": {"turnComplete": True}, "goAway": {"timeLeft": "1s"}})
+            wire.put({"sessionResumptionUpdate": {"resumable": True, "newHandle": "synthetic-resume"},
+                      "serverContent": {"turnComplete": True}, "goAway": {"timeLeft": "1s"}})
             await asyncio.sleep(.04)
             assert not running.done(), "renewed before playback ACK"
             host.hub.receive_control("owner", {"type": "played", "item_id": item_id, "played_ms": 100})
-            assert await asyncio.wait_for(running, 2) == "renew"
+            await until(lambda: len(host.sessions) == 2)
+            assert host.results == ["synthetic-resume"]
+            assert host.options[1].resume_handle == "synthetic-resume"
             evidence.update(rows=host.rows, sent=wire.sent, received=wire.received)
             assert host.rows[0]["completed"] is True
+            host.hub.receive_control("owner", {"type": "bye"})
+            await asyncio.wait_for(running, 2)
         finally:
             host.hub.close("fixture_done")
             if not running.done():
                 running.cancel()
             await asyncio.gather(running, return_exceptions=True)
-            await adapter.close()
     asyncio.run(run())
 
 
@@ -307,8 +360,9 @@ def test_external_peer_caption_never_becomes_owner_directive(ordinary_host, evid
 
 def test_mixed_peer_audio_and_context_keep_provenance(packages, evidence):
     async def run():
-        host, transport = DriverHost(meeting=True), EventSession()
-        running = asyncio.create_task(driver().consume(host, transport, lambda _: None))
+        transport = EventSession()
+        host = DriverHost(transport, meeting=True)
+        running = asyncio.create_task(driver().run(host))
         try:
             transport.put(LiveEvent("ready", {"input_rate": 24000, "output_rate": 24000}))
             await until(lambda: host.hub._state["state"] == cp.STATE_LIVE)
