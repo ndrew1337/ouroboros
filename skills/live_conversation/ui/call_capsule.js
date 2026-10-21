@@ -50,6 +50,7 @@ const KEY = { tab: 'providers', focus: '' };
 const MODEL = { tab: 'advanced', focus: 'extension-settings-sections' };
 const BUDGET = { tab: 'behavior', focus: '' };
 const SWITCH = MODEL;
+const SPENDING_LIMIT = { words: 'The spending limit is reached', action: 'settings', settings: BUDGET };
 const REFUSED = { words: 'The voice service refused the call: “{detail}”', bare: 'The voice service refused the call', action: 'retry' };
 const UNREACHABLE = { words: 'Can’t reach the selected voice service', action: 'retry' };
 const NOT_STARTED = { words: 'The call could not start; the room has the details', action: 'retry' };
@@ -65,7 +66,8 @@ const ENDINGS = {
     owner_stop: { words: 'Call ended', calm: true },
     max_minutes: { words: 'The call reached its time limit', calm: true },
     peers_left: { words: 'Everyone left the call', calm: true },
-    budget_exceeded: { words: 'The spending limit is reached', action: 'settings', settings: BUDGET },
+    budget_exceeded: SPENDING_LIMIT,
+    budget_exhausted: SPENDING_LIMIT,
     missing_credential: NO_KEY,
     credential: NO_KEY,
     missing_credential_google: NO_KEY,
@@ -86,7 +88,6 @@ const ENDINGS = {
     // Admission refusals the server words itself; the table adds only the next step.
     call_model_missing: { action: 'settings', settings: MODEL },
     invalid_call_max_minutes: { action: 'settings', settings: MODEL },
-    budget_exhausted: { action: 'settings', settings: BUDGET },
     permission_denied: { sheet: true, words: 'Allow the microphone for Ouroboros in System Settings → Privacy & Security → '
         + 'Microphone (or in the browser’s site settings), then press Talk again.' },
     no_microphone: { sheet: true, words: 'No microphone was found. Connect one, then press Talk again.' },
@@ -167,8 +168,9 @@ function ending(view) {
     // An admission refusal is already in the owner's words; this page adds the one next step.
     if (view.words) return { ...sheet, tone: 'error', light: 'error', title: tx(view.words), formatted: true,
         actions: steps([view.action || entry?.action || 'retry']) };
-    if (!view.code || kind === 'finished') return { ...sheet, title: 'The call ended', sub: 'The room has its transcript' };
-    if (!entry?.words) return { ...sheet, title: 'The call ended', small: String(view.code) };
+    if (!detail && (!view.code || kind === 'finished')) return { ...sheet, title: 'The call ended', sub: 'The room has its transcript' };
+    if (!entry?.words) return { ...sheet, title: detail || 'The call ended', formatted: Boolean(detail),
+        tone: detail ? 'error' : '', light: detail ? 'error' : 'still', actions: steps([view.action || entry?.action]) };
     const template = detail && entry.words.includes('{detail}') ? entry.words : entry.bare || entry.words;
     const formatted = template.includes('{detail}');
     return { ...sheet, title: formatted ? fmt(template, { detail }) : template, formatted,

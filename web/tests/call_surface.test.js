@@ -111,8 +111,8 @@ test('a reasonless or unknown ending still shows the capsule: the call ended, an
         assert.deepEqual([p.mode, p.title, p.sub, p.small, p.actions], ['sheet', 'The call ended', 'The room has its transcript', '', []]);
     }
     const unknown = callPresentation(ended('a_code_from_the_future'));
-    assert.deepEqual([unknown.mode, unknown.title, unknown.small], ['sheet', 'The call ended', 'a_code_from_the_future']);
-    // Only an unknown code reaches the owner raw, in small print; known codes are words.
+    assert.deepEqual([unknown.mode, unknown.title, unknown.small], ['sheet', 'The call ended', '']);
+    // Ending codes stay internal; the owner sees words.
     for (const code of ['owner_bye', 'max_minutes', 'peers_left', 'budget_exceeded', 'missing_credential', 'authentication',
         'rate_limit', 'provider_closed', 'engine_unavailable', 'reconnect_failed',
         'preparation_failed', 'call_not_started', 'invalid_request', 'protocol', 'backpressure', 'provider_error',
@@ -609,4 +609,29 @@ test('credential connect refusals offer the same no-key sheet and Settings actio
         assert.equal(refused.actions[0].kind, 'settings');
         assert.equal(callPresentation({ state, code: 'provider_error' }).actions[0].kind, 'retry');
     }
+});
+
+test('shared-limit endings use the same words and action for both host codes', () => {
+    for (const state of ['failed', 'closed']) {
+        const budget = callPresentation({state, code:'budget_exhausted'});
+        assert.deepEqual(budget, callPresentation({state, code:'budget_exceeded'}));
+        assert.equal(budget.title, 'The spending limit is reached');
+        assert.equal(budget.actions[0].kind, 'settings');
+        assert.equal(budget.actions[0].tab, 'behavior');
+        assert.equal(callPresentation({state, code:'owner_bye'}).actions.length, 0);
+    }
+});
+
+test('unknown ending codes show the server sentence and never the raw code', () => {
+    for (const code of ['context_capacity', 'future_code', 'call_model_missing']) {
+        const sentence = 'This room cannot fit the selected voice model.';
+        const shown = callPresentation(ended(code, {detail:sentence, action:'settings'}));
+        assert.equal(shown.title, sentence);
+        assert.equal(shown.small, '');
+        assert.equal(shown.actions[0].kind, 'settings');
+        const bare = callPresentation(ended(code));
+        assert.equal(bare.title, 'The call ended');
+        assert.equal(bare.small, '');
+    }
+    assert.equal(callPresentation(ended('owner_bye', {detail:'Provider detail'})).title, 'Call ended');
 });
