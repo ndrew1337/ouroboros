@@ -36,12 +36,12 @@ def _runtime_projection(profile: Any, state: PresenceState) -> dict[str, Any]:
         "defaults": {
             "model_slot": defaults.model_slot,
             "inline_max_rounds": defaults.inline_max_rounds,
-            "execution": defaults.execution,
+            **({"execution": defaults.execution} if defaults.execution != "event" else {}),
         },
         "overrides": {
             "model_slot": overrides.model_slot,
             "inline_max_rounds": overrides.inline_max_rounds,
-            "execution": overrides.execution,
+            **({"execution": overrides.execution} if overrides.execution is not None else {}),
         },
         "state_fingerprint": presence_state_fingerprint(state),
         "workspace_root": state.workspace_root,
