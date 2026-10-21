@@ -206,8 +206,9 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline):
         return value
     provider = dict(skill='fixture', extension_generation='generation', content_hash='fixture-content',
         catalog=catalog, route=RealtimeRoute('fixture_live', 'wss://example.invalid/live', 'fixture::'), session=factory)
-    bundle = SimpleNamespace(generation_digest='generation', supervised_futures=[],
-                             api_instances=[SimpleNamespace(get_settings=lambda keys: dict(settings))])
+    bundle = registry._ExtensionRegistrations(generation_digest='generation',
+        realtime_providers=['fixture:voice'], conversation_features=['fixture:call'],
+        api_instances=[SimpleNamespace(get_settings=lambda keys: dict(settings))])
     monkeypatch.setitem(registry._extensions, 'fixture', bundle)
     monkeypatch.setitem(registry._realtime_providers, 'fixture:voice', provider)
     monkeypatch.setitem(registry._conversation_features, 'fixture:call', feature)
