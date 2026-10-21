@@ -165,6 +165,7 @@ def session_candidate(host, factory, options):
             host._selected_raw_estimate = raw
             host.plan = host.ctx.context_fit_plan = plan
             host.messages[:] = current
+            host._context_changed()
             host.ctx.active_context_mode = plan.initial_mode
             return session, request, {"fit": asdict(fit), "route_facts": asdict(facts),
                 "input_sha256": selected.sha256, "wire_sha256": sha256(wire),

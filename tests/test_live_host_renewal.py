@@ -45,3 +45,54 @@ def test_pending_context_counts_before_and_after_receipts(host_world):
             await host.session(consume, LiveOptions())
             host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=200000))
     asyncio.run(run())
+
+
+def test_idle_renewal_reuses_estimate_and_every_context_writer_invalidates(host_world, monkeypatch):
+    from ouroboros import context_fit, loop
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    estimate = context_fit.estimate_context_prompt_tokens
+    measured = []
+    def count(*args, **kwargs):
+        measured.append(1)
+        return estimate(*args, **kwargs)
+    async def consume(session):
+        monkeypatch.setattr(context_fit, 'estimate_context_prompt_tokens', count)
+        for _ in range(1000):
+            assert host.renewal_due() is False
+        assert measured == [], 'idle audio polls re-estimated unchanged history'
+
+        async def changed(action):
+            before = host._history_estimate()
+            await action()
+            measured.clear()  # tool fitting may measure its own physical candidate
+            after = host._history_estimate()
+            assert after > before
+            assert measured == [1]
+            for _ in range(1000):
+                assert host.renewal_due() is False
+            assert measured == [1]
+
+        async def mailbox():
+            host.incoming = queue.Queue()
+            host.incoming.put({'text': 'New owner context. ' * 20, 'msg_id': 'cache-mail'})
+            await host.mailbox()
+        async def enable():
+            await host.tool_batch([{'id': 'cache-enable', 'type': 'function', 'function': {
+                'name': 'enable_tools', 'arguments': '{"tools":"read_file"}'}}])
+            assert 'read_file' in {schema['function']['name'] for schema in host.schemas}
+        async def edit():
+            def in_place(calls, tools, logs, task_id, executor, messages, trace, emit, **kwargs):
+                messages[1]['content'] = 'Changed an existing row. ' * 100
+            monkeypatch.setattr(loop, 'handle_tool_calls', in_place)
+            await host.tool_batch([{'id': 'cache-edit', 'type': 'function',
+                'function': {'name': 'read_file', 'arguments': '{}'}}])
+        async def instructions():
+            session_candidate(host, host_world.provider['session'], LiveOptions(instructions='New instructions. ' * 100))
+        for action in (mailbox,
+                       lambda: host.observe_context({'content': 'New peer context. ' * 20}),
+                       lambda: host.caption('owner', 'New owner speech. ' * 20, 'cache-owner'),
+                       lambda: host.caption('ouroboros', 'New reply. ' * 20, 'cache-reply', completed=True),
+                       enable, edit, instructions):
+            await changed(action)
+    asyncio.run(host.session(consume, LiveOptions()))

@@ -234,6 +234,7 @@ class ConversationHost:
         self._physical_context = None
         self._held_input = self._growth = 0
         self._history_at_receipt = 0
+        self._history_version, self._history_cached_version, self._history_tokens = 0, -1, 0
         self._selected_text_estimate = self._selected_raw_estimate = 0
         self._session_instructions = ""
         self._response_text_estimates = {}
@@ -260,6 +261,7 @@ class ConversationHost:
         _, rebound = _setup_dynamic_tools(self.tools, self.schemas, self.messages, context_mode=mode)
         rebound.update(enabled)
         self._schemas_mode = mode
+        self._context_changed()
 
     def checkpoint(self, boundary):
         from types import SimpleNamespace
@@ -288,6 +290,7 @@ class ConversationHost:
                     defer_content_ack=True)
                 self.messages.extend(rows)
                 if rows:
+                    self._context_changed()
                     self.checkpoint("ready")
                 return controls
             controls = await joined(asyncio.to_thread(drain))
@@ -515,10 +518,17 @@ class ConversationHost:
                 prompt_chars=estimate * 4, prompt_tokens=text, source="live_text_usage",
                 route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS)
 
+    def _context_changed(self):
+        self._history_version += 1
+
     def _history_estimate(self):
         from ouroboros.context_fit import estimate_context_prompt_tokens
-        extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
-        return estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+        version = self._history_version
+        if self._history_cached_version != version:
+            extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
+            self._history_tokens = estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+            self._history_cached_version = version
+        return self._history_tokens
 
     def renewal_due(self):
         facts = self.model.facts
@@ -534,6 +544,7 @@ class ConversationHost:
         from ouroboros.context_budget import bound_host_row
         async with self._tools_lock:
             self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
+            self._context_changed()
 
     async def tool_batch(self, calls):
         """Serialize ordinary and feature tools; retain changes to existing rows too."""
@@ -566,16 +577,21 @@ class ConversationHost:
                 if maximum is not None and self.rounds > maximum:
                     raise RealtimeSetupError("round_limit", "ordinary tool round limit reached")
                 self.messages.append({"role": "assistant", "content": "", "tool_calls": fresh})
+                self._context_changed()
                 # A compact content receipt detects even in-place image/view edits,
                 # without retaining a second copy of the complete conversation.
                 before = tuple(sha256(canonical_json(row)) for row in self.messages)
                 await joined(asyncio.to_thread(self.checkpoint, "pre_effect"))
                 ordinary = [call for call in fresh if call["function"]["name"] not in self.call_tools]
                 if ordinary:
-                    await joined(asyncio.to_thread(handle_tool_calls, ordinary, self.tools,
-                        self.ctx.drive_root / "logs", self.ctx.task_id, self.executor, self.messages, self.trace,
-                        self.ctx.emit_progress_fn, tool_schemas=self.schemas, fit_candidate=functools.partial(
-                            _measure_tool_result_batch, self.ctx, round_id=self.ctx.task_id + ":call-tools")))
+                    try:
+                        await joined(asyncio.to_thread(handle_tool_calls, ordinary, self.tools,
+                            self.ctx.drive_root / "logs", self.ctx.task_id, self.executor, self.messages, self.trace,
+                            self.ctx.emit_progress_fn, tool_schemas=self.schemas, fit_candidate=functools.partial(
+                                _measure_tool_result_batch, self.ctx, round_id=self.ctx.task_id + ":call-tools")))
+                    finally:
+                        # Ordinary tools also edit existing rows and enable schemas.
+                        self._context_changed()
                 for call in fresh:
                     tool = self.call_tools.get(call["function"]["name"])
                     if tool is None:
@@ -589,6 +605,7 @@ class ConversationHost:
                     else:
                         result = await tool.handler(self, args)
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
+                    self._context_changed()
                     self.trace["tool_calls"].append({"name": tool.name, "call_id": call["id"], "result": str(result)})
                 changes = [copy.deepcopy(row) for i, row in enumerate(self.messages)
                            if i >= len(before) or sha256(canonical_json(row)) != before[i]]
@@ -665,6 +682,7 @@ class ConversationHost:
             if speaker == "ouroboros" and not completed:
                 prefix = "[Generated speech; " + ("interrupted" if interrupted else "playback unconfirmed") + "] "
             self.messages.append({"role": "assistant" if speaker == "ouroboros" else "user", "content": prefix + text})
+            self._context_changed()
             if speaker == "owner" and not heard and not self.turn.spec.presence_binding_id:
                 from ouroboros.loop import _record_owner_directive
                 _record_owner_directive(self.ctx, source="live_call", content=text, msg_id=item_id)
