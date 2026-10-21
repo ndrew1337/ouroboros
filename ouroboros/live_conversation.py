@@ -636,7 +636,9 @@ class ConversationHost:
                 return
 
             def write():
-                from supervisor.message_bus import get_bridge, log_chat, send_with_budget
+                from supervisor.message_bus import get_bridge, log_chat
+                from ouroboros.chat_references import projection_fields
+                from ouroboros.projects_registry import stamp_project_thread
 
                 spec = self.turn.spec
                 if spec.presence_binding_id:
@@ -645,36 +647,42 @@ class ConversationHost:
                             direction="out" if speaker == "ouroboros" else "in",
                             text=text, speaker_label=self.turn.spec.label, utterance_id=item_id):
                         raise RealtimeSetupError("history_write", "Presence caption could not be retained")
+                    return
                 elif speaker == "owner" and not heard:
                     message_id = f"call:{spec.call_id}:{item_id}"
                     row = log_chat("in", spec.chat_id, 1, text, source="live_call", sender_label="voice",
                         client_message_id=message_id, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root, require_write=True)
                     if not row:
                         raise RealtimeSetupError("history_write", "owner call caption was not recorded")
-                    get_bridge().broadcast({"type": "chat", "role": "user", "content": text, "ts": row.get("ts"),
-                        "source": "live_call", "chat_id": spec.chat_id, "task_id": self.ctx.task_id,
-                        "client_message_id": message_id})
-                elif speaker == "owner":
-                    send_with_budget(spec.chat_id, "Heard in the call: " + text, role="system",
-                        system_type="call_heard", narration=False, require_write=True, task_id=self.ctx.task_id,
-                        progress_meta={"source": "live_call", "call_id": spec.call_id, "item_id": item_id})
                 else:
                     from ouroboros import dialogue_store
-                    from ouroboros.chat_references import projection_fields
                     from ouroboros.utils import utc_now_iso
-                    meta = {"source": "live_call", "call_id": spec.call_id, "spoken": {
-                        "call_id": spec.call_id, "item_id": item_id, "played_ms": played_ms,
-                        "status": "interrupted" if interrupted else "played" if completed else "generated"}}
+                    spoken = speaker == "ouroboros"
+                    meta = {"source": "live_call", "call_id": spec.call_id}
+                    if spoken:
+                        meta["spoken"] = {"call_id": spec.call_id, "item_id": item_id, "played_ms": played_ms,
+                            "status": "interrupted" if interrupted else "played" if completed else "generated"}
+                    else:
+                        meta["item_id"] = item_id
                     # Keep spoken evidence on the canonical chat row. The generic
                     # chat writer's metadata projection does not carry this field.
                     row = {"ts": utc_now_iso(), "direction": "out", "chat_id": spec.chat_id,
-                           "task_id": self.ctx.task_id, "text": text, "format": "markdown",
-                           "role": "assistant", "type": "model_narration", "system_type": "model_narration",
-                           "narration": True, **meta}
-                    receipt = dialogue_store.append(self.ctx.drive_root, "chat", row, idempotent=True, feed=True)
-                    get_bridge().send_message(spec.chat_id, text, parse_mode="Markdown", ts=receipt.row["ts"],
-                        task_id=self.ctx.task_id, role="assistant", system_type="model_narration",
-                        progress_meta={**meta, "narration": True, **projection_fields(receipt.row)})
+                           "task_id": self.ctx.task_id, "text": text if spoken else "Heard in the call: " + text,
+                           "format": "markdown" if spoken else "", "role": "assistant" if spoken else "system",
+                           "type": "model_narration" if spoken else "call_heard",
+                           "system_type": "model_narration" if spoken else "call_heard", "narration": spoken, **meta}
+                    row = dialogue_store.append(self.ctx.drive_root, "chat", row, idempotent=True, feed=True).row
+
+                # Typed live_call rows belong to the room's call card. Publishing
+                # chat.outbound would also mirror each caption to external transports.
+                payload = {"type": "chat", "role": row.get("role") or "user", "content": row["text"],
+                    "ts": row["ts"], "source": "live_call", "chat_id": spec.chat_id, "task_id": self.ctx.task_id,
+                    "markdown": row.get("format") == "markdown", "is_progress": False}
+                payload.update({key: row[key] for key in ("client_message_id", "call_id", "item_id", "spoken",
+                    "system_type", "narration") if key in row})
+                payload.update(projection_fields(row))
+                stamp_project_thread(self.ctx.drive_root, payload)
+                get_bridge().broadcast(payload)
 
             await joined(asyncio.to_thread(write))
             self.captioned.add(key)
