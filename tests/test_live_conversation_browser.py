@@ -449,18 +449,34 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     navigate(page, 'settings')
     page.locator('[data-settings-tab="advanced"]').click()
     form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
-    expect(form.locator('[name="provider"] option')).to_have_count(3)
-    expect(form.locator('[name="model"] option')).to_have_count(3)
-    expect(form.locator('[name="voice"] option')).to_have_count(31)
-    expect(form.locator('[name="thinking"]')).to_have_count(0)
-    expect(form.locator('[data-call-memory]')).to_contain_text('92,000')
-    form.locator('[name="model"]').select_option('gemini-3.8-live-extended-thinking')
-    form.locator('[name="thinking"]').select_option('high')
-    form.locator('[name="provider"]').select_option('grok_realtime:grok')
-    expect(form.locator('[name="pause"], [name="thinking"], [name="interruptions"], [name="search"]')).to_have_count(0)
-    expect(form.locator('[data-call-knob-note="pause"]')).to_contain_text('decides itself')
-    expect(form.locator('[data-call-privacy]')).to_have_text('Call audio goes to xAI.')
-    expect(form.locator('[data-call-memory]')).to_contain_text('90,000')
+    catalogs = subscription_ui['call_config']['catalogs']
+    by_id = {catalog['id']: catalog for catalog in catalogs}
+    expect(form.locator('[name="provider"] option')).to_have_count(len(catalogs))
+    assert form.locator('[name="provider"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == list(by_id)
+
+    def assert_catalog_model(catalog, model):
+        assert form.locator('[name="model"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == [
+            '', *[item['id'] for item in catalog['models']]]
+        assert form.locator('[name="voice"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == [
+            '', *[voice['id'] for voice in model['voices']]]
+        for knob in ('pause', 'interruptions', 'thinking', 'search'):
+            expect(form.locator(f'[name="{knob}"]')).to_have_count(int(knob in model['honours']))
+            note = dict(model['notes']).get(knob)
+            if knob not in model['honours'] and note:
+                expect(form.locator(f'[data-call-knob-note="{knob}"]')).to_have_text(note)
+        expect(form.locator('[data-call-privacy]')).to_have_text(catalog['privacy'])
+        expect(form.locator('[data-call-memory]')).to_contain_text(f"{model['facts']['conversation_window_tokens']:,}")
+        expect(form.locator('[data-call-memory]')).to_contain_text(model['facts']['source'])
+
+    gemini = by_id['gemini_live:gemini']
+    assert_catalog_model(gemini, next(model for model in gemini['models'] if model['default']))
+    thinking = next(model for model in gemini['models'] if 'thinking' in model['honours'])
+    form.locator('[name="model"]').select_option(thinking['id'])
+    assert_catalog_model(gemini, thinking)
+    form.locator('[name="thinking"]').select_option(thinking['thinking_levels'][-1])
+    grok = by_id['grok_realtime:grok']
+    form.locator('[name="provider"]').select_option(grok['id'])
+    assert_catalog_model(grok, next(model for model in grok['models'] if model['default']))
     form.locator('[name="provider"]').select_option('openai_realtime:openai')
     expect(form.locator('[data-call-memory]')).to_contain_text('not yet measured')
     form.locator('[name="instructions"]').fill('Speak briefly in this synthetic call.')
