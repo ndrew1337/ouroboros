@@ -821,7 +821,9 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # (section 2); causal observations also use the existing ``logs/events.jsonl``.
 # Live calls retain conversation-wire.jsonl and the sibling extension-imports lock.
 # The unused realtime-wire and realtime-prepared probe writers are retired by the host lane.
-EXPECTED_SCAN_PATHS = 410
+# The host's exact-route tariff cache adds state/pricing/litellm.json.
+# PERSISTENCE names its overwrite lifetime; reconcile markers already exist on base.
+EXPECTED_SCAN_PATHS = 411
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
