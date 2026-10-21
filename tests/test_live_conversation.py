@@ -214,10 +214,10 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline):
     monkeypatch.setitem(registry._conversation_features, 'fixture:call', feature)
     spec = CallSpec('fixture-call', rooms['alpha'], live_config.provider, '', '', client_message_id='call:fixture-call:open')
     turn = LiveConversationTurn(feature, live_config, spec, publish=lambda event: None)
-    task = dict(id='fixture-call-task', type='task', text='The owner opened a call.', _is_direct_chat=True,
+    task = dict(id='fixture-call-task', type='task', text=turn.opening, _is_direct_chat=True,
         chat_id=spec.chat_id, model=turn.model, use_local_model=False,
         origin_message_ref={'chat_id': spec.chat_id, 'client_message_id': spec.client_message_id},
-        metadata={'execution_transport': turn.request})
+        metadata={'execution_transport': turn.request, 'host_fact': {'kind': 'call_open'}})
     write_task_result(env.drive_root, task['id'], STATUS_RUNNING, chat_id=spec.chat_id)
     _publish(env.drive_root)
     ctx = ToolContext(repo_dir=env.repo_dir, drive_root=env.drive_root, branch_dev='test', task_id=task['id'],
@@ -425,6 +425,18 @@ def test_finished_call_both_halves_reach_later_turn_memory(host_world):
     later = room_text(host.ctx.drive_root, {'id': 'later-text-turn', 'chat_id': host.turn.spec.chat_id})
     assert 'Remember the sapphire telescope?' in later
     assert 'The sapphire telescope is in the attic.' in later
+
+
+def test_selected_opening_is_one_labelled_host_fact(host_world):
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    session, _, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    rows = json.loads(session.selected.messages_json)
+    openings = [row for row in rows if host.opening in str(row['content'])]
+    assert len(openings) == 1
+    assert '[Host fact: a live call opened; not the owner\'s words]' in str(openings[0]['content'])
+    assert any(row['role'] == 'system' for row in rows)
 
 
 def test_renewal_uses_reported_held_input_and_growth(host_world):

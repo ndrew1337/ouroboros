@@ -203,8 +203,6 @@ class ConversationHost:
             raise RealtimeSetupError("tool_collision", "Call tools collide with ordinary tools: " + ", ".join(sorted(collisions)))
         self.schemas.extend({"type": "function", "function": {"name": tool.name, "description": tool.description,
             "parameters": dict(tool.parameters)}} for tool in self.call_tools.values())
-        from ouroboros.context_budget import bound_host_row
-        messages.append(bound_host_row("call_open", self.opening))
         ctx.messages, ctx.active_context_mode, ctx.active_effort = messages, self.plan.initial_mode, effort
         ctx._execution_trace = self.trace
         self.executor = StatefulToolExecutor()
