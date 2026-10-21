@@ -126,6 +126,8 @@ D20 = "Presence"
 "ouroboros/_usage_money.py" = "D16"
 "ouroboros/_usage_response.py" = "D16"
 "ouroboros/_usage_rows.py" = "D16"
+"ouroboros/_usage_settlement.py" = "D16"
+"ouroboros/live_usage.py" = "D16"
 "ouroboros/_usage_wait.py" = "D16"
 "ouroboros/agent.py" = "D01"
 "ouroboros/focus.py" = "D01"
@@ -182,6 +184,9 @@ D20 = "Presence"
 "ouroboros/markdown_source.py" = "D18"
 "ouroboros/reference_books.py" = "D18"
 "ouroboros/context.py" = "D03"
+"ouroboros/context_measurement.py" = "D03"
+"ouroboros/context_sections.py" = "D03"
+"ouroboros/section_floor.py" = "D03"
 "ouroboros/context_input_selection.py" = "D03"
 "ouroboros/context_runtime_facts.py" = "D03"
 "ouroboros/context_budget.py" = "D03"
@@ -454,6 +459,7 @@ D20 = "Presence"
 "ouroboros/presence_events.py" = "D20"
 "ouroboros/presence_runtime.py" = "D20"
 "ouroboros/pricing.py" = "D02"
+"ouroboros/pricing_catalog.py" = "D02"
 "ouroboros/process_census.py" = "D09"
 "ouroboros/process_containment.py" = "D09"
 "ouroboros/process_lifeline.py" = "D09"  # POSIX owner-death guardian of a test run's process tree
@@ -1081,6 +1087,7 @@ allowed = [
   "D16->D14",
   "D16->D17",
   "D16->D18",
+  "D16->D19",
   "D17->D01",
   "D17->D04",
   "D17->D05",

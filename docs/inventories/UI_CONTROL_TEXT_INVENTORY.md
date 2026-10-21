@@ -210,6 +210,7 @@ An owner intent that has a door is raised by exactly one module (`ouro:open-proj
 | event | raised by |
 |---|---|
 | `ouro:dashboard-subtab-shown` | modules/dashboard.js |
+| `ouro:extension-settings-mounted` | modules/settings.js ×2 |
 | `ouro:language-changed` | modules/i18n.js |
 | `ouro:layout-changed` | theme.js |
 | `ouro:open-project` | modules/project_reference.js |
@@ -220,7 +221,7 @@ An owner intent that has a door is raised by exactly one module (`ouro:open-proj
 | `ouro:project-created` | modules/work_portal.js |
 | `ouro:quiz-reply` | modules/quiz_submission.js |
 | `ouro:settings-subtab-shown` | modules/settings_ui.js |
-| `ouro:settings-updated` | modules/costs.js, modules/settings.js |
+| `ouro:settings-updated` | modules/costs.js, modules/settings.js ×2 |
 | `ouro:skill-lifecycle` | modules/speech_providers.js, modules/utils.js |
 | `ouro:task-continued` | modules/task_continue.js |
 | `ouro:theme-changed` | theme.js |
