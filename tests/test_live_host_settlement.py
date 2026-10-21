@@ -86,11 +86,11 @@ def test_connected_samples_share_watermark_and_settle_before_close_ends(host_wor
     assert all(row['cost_evidence']['raw_usage']['billable_audio_seconds'] == 999 for row in settled)
     assert host._connection_accounting is False and host_world.sessions[-1].closed
 
-    # Same provider response id belongs to a fresh physical connection. Its
-    # unknown quote stays unknown, and the previous watermark does not apply.
+    # A new response belongs to this call, while each physical connection has
+    # its own watermark. Its unknown quote stays unknown.
     host.quote = None
     async def next_connection(session):
-        host.response_done('same-id', usage={'connected_seconds': 2}, raw_usage={}, status='completed')
+        host.response_done('next-id', usage={'connected_seconds': 2}, raw_usage={}, status='completed')
         sample(session, 2)
         sample(session, 3)
     asyncio.run(host.session(next_connection, LiveOptions()))
@@ -168,3 +168,159 @@ def test_presence_caption_waits_for_store_and_keeps_participant_identity(host_wo
     assert rows[0]['sender_label'] == 'Meeting participant'
     assert rows[0]['source'] == 'presence:fixture-meeting'
     assert rows[0]['client_message_id'] == 'fixture-meeting:heard:heard-1'
+
+
+@pytest.fixture
+def abandonments(monkeypatch):
+    from ouroboros import live_usage
+    records = []
+    abandon = live_usage.abandon_live_response
+    def record(attempt, *, reason):
+        records.append((attempt._evidence['response_key'], reason))
+        abandon(attempt, reason=reason)
+    monkeypatch.setattr(live_usage, 'abandon_live_response', record)
+    return records
+
+
+def test_response_reservation_survives_resumed_connection(host_world, abandonments):
+    host = host_world.host
+    host.quote = tariff(input_cost_per_token=.001, output_cost_per_token=.002)
+    first = {}
+    async def begin(session):
+        host.response_started('resumed-answer')
+        first['row'], = ua.read_usage_records(host.ctx.drive_root)
+        first['text_estimate'] = host._selected_text_estimate
+        return 'fixture-resume-handle'
+    async def complete(session):
+        assert session.options.resume_handle == 'fixture-resume-handle'
+        host.response_started('resumed-answer')  # a replayed start keeps its original reservation
+        assert len(ua.read_usage_records(host.ctx.drive_root)) == 1
+        assert host._response_text_estimates['resumed-answer'] == first['text_estimate']
+        host.response_done('resumed-answer', usage=token_usage(text_input_tokens=12),
+                           raw_usage={'input_tokens': 12}, status='completed')
+    async def run():
+        handle = await host.session(begin, LiveOptions())
+        pending, = ua.read_usage_records(host.ctx.drive_root)
+        assert pending['state'] == 'dispatched' and not abandonments
+        host.quote = tariff(input_cost_per_token=100, output_cost_per_token=200)
+        await host.observe_context({'content': 'A new connection refits this later context.'})
+        await host.session(complete, LiveOptions(resume_handle=handle))
+        await host.finish()
+    asyncio.run(run())
+    row, = ua.read_usage_records(host.ctx.drive_root)
+    assert row['attempt_id'] == first['row']['attempt_id']
+    assert row['physical_context'] == first['row']['physical_context']
+    assert row['cost_evidence']['response_key'] == 'resumed-answer'
+    assert row['state'] == 'settled' and row['cost_usd'] == pytest.approx(.012)
+    assert not abandonments and not host.responses
+    assert host.connection_number == 2 and all(session.closed for session in host_world.sessions)
+
+
+def test_unfinished_response_is_abandoned_once_at_call_end(host_world, abandonments):
+    host = host_world.host
+    async def consume(session):
+        host.response_started('unfinished')
+    async def run():
+        await host.session(consume, LiveOptions())
+        row, = ua.read_usage_records(host.ctx.drive_root)
+        assert row['state'] == 'dispatched' and not abandonments
+        await host.finish()
+        await host.finish()
+    asyncio.run(run())
+    row, = ua.read_usage_records(host.ctx.drive_root)
+    assert row['state'] == 'unresolved' and row['reason'] == 'call_ended_without_receipt'
+    assert abandonments == [('unfinished', 'call_ended_without_receipt')]
+    assert not host.responses and not host._response_text_estimates
+
+
+@pytest.mark.parametrize('failure_stage', ['factory', 'open'])
+def test_failed_reopen_abandons_response_during_call_teardown(host_world, abandonments, monkeypatch, failure_stage):
+    from ouroboros import call_peers
+    from ouroboros.live_conversation import ConversationHost
+    host = host_world.host
+    observed = {}
+    factory = host_world.provider['session']
+    def reopen(*args, **kwargs):
+        options = args[1]
+        if options.resume_handle and failure_stage == 'factory':
+            raise RealtimeSetupError('resume_failed', 'fixture failed reopen')
+        session = factory(*args, **kwargs)
+        if options.resume_handle:
+            async def failed_open():
+                raise RealtimeSetupError('resume_failed', 'fixture failed reopen')
+            session.open = failed_open
+        return session
+    async def handler(port):
+        observed['port'] = port
+        async def begin(session):
+            port.response_started('unfinished-resume')
+            return 'fixture-resume-handle'
+        async def unreachable(session):
+            pytest.fail('a failed reopen cannot reach its consumer')
+        handle = await port.session(begin, LiveOptions())
+        observed['pending'], = ua.read_usage_records(port.ctx.drive_root)
+        await port.session(unreachable, LiveOptions(resume_handle=handle))
+    monkeypatch.setitem(host_world.provider, 'session', reopen)
+    monkeypatch.setitem(host.turn.feature, 'handler', handler)
+    monkeypatch.setattr(call_peers, 'get_hub', lambda call_id: host.hub)
+    monkeypatch.setattr(ConversationHost, 'warm', lambda self: None)
+    result = host.turn.run(host.ctx, list(host.messages), host.tools, task=host.task, initial_effort='')
+    assert result[1]['reason_code'] == 'resume_failed'
+    assert observed['pending']['state'] == 'dispatched'
+    row, = ua.read_usage_records(host.ctx.drive_root)
+    assert row['state'] == 'unresolved' and row['reason'] == 'call_ended_without_receipt'
+    assert abandonments == [('unfinished-resume', 'call_ended_without_receipt')]
+    assert not observed['port'].responses
+    assert all(session.closed for session in host_world.sessions)
+
+
+@pytest.mark.parametrize('resumed', [False, True])
+def test_extended_thinking_idle_receipt_is_not_charged_again(host_world, abandonments, resumed):
+    from ouroboros.contracts.live_conversation import LiveEvent
+    host = host_world.host
+    host.quote = tariff(input_cost_per_token=.001, output_cost_per_token=.002)
+    progress = LiveEvent('response_done', {
+        'response_id': 'thinking-answer', 'status': 'completed', 'continues': True,
+        'usage': token_usage(text_input_tokens=12, text_output_tokens=2, thinking_tokens=3),
+        'raw_usage': {'usageMetadata': {
+            'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+            'responseTokensDetails': [{'modality': 'TEXT', 'tokenCount': 2}],
+            'thoughtsTokenCount': 3}},
+    })
+    idle = replace(progress, data={**progress.data, 'continues': False})
+    first = {}
+    def forward(event):
+        # The feature handles continues as liveness and forwards this accounting
+        # payload through LiveHost's public port without manufacturing a receipt.
+        host.response_done(event.data['response_id'], usage=event.data['usage'],
+                           raw_usage=event.data['raw_usage'], status=event.data['status'])
+    async def begin(session):
+        host.response_started(progress.data['response_id'])
+        forward(progress)
+        first['rows'] = ua.read_usage_records(host.ctx.drive_root)
+        return 'fixture-resume-handle'
+    async def transition(session):
+        for _ in range(2):
+            forward(idle)
+        host.response_started(idle.data['response_id'])  # a replayed start stays deduplicated too
+        assert ua.read_usage_records(host.ctx.drive_root) == first['rows']
+        assert not abandonments and not host.responses
+        # Equal usage on a genuinely new native id is another billable response.
+        following = replace(idle, data={**idle.data, 'response_id': 'next-thinking-answer'})
+        host.response_started(following.data['response_id'])
+        forward(following)
+    async def same_connection(session):
+        await begin(session)
+        await transition(session)
+    async def run():
+        if resumed:
+            handle = await host.session(begin, LiveOptions())
+            await host.session(transition, LiveOptions(resume_handle=handle))
+        else:
+            await host.session(same_connection, LiveOptions())
+        await host.finish()
+    asyncio.run(run())
+    rows = ua.read_usage_records(host.ctx.drive_root)
+    assert [row['cost_evidence']['response_key'] for row in rows] == ['thinking-answer', 'next-thinking-answer']
+    assert [row['cost_usd'] for row in rows] == pytest.approx([.022, .022])
+    assert all(row['state'] == 'settled' for row in rows) and not abandonments

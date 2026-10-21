@@ -176,8 +176,9 @@ class LiveSession(Protocol):
 # connected_seconds cumulative growth across these samples and response_done;
 # it never sums watermarks or creates a synthetic response. close() publishes its
 # final sample before returning, even after Stop or exhausted admission: settlement
-# records spent usage and admits nothing new. Response ids dedupe per connection;
-# a new connection starts its own watermark. billable_audio_seconds is evidence.
+# records spent usage and admits nothing new. Response ids dedupe across the call,
+# including resumed connections; each connection starts its own time watermark.
+# billable_audio_seconds is evidence.
 # A factory may take further keyword-only test hooks of its own.
 SessionFactory = Callable[..., LiveSession]
 
@@ -246,11 +247,11 @@ class LiveHost(Protocol):
         """Add a peer's observation to history as a labelled row, never as owner words."""
 
     def response_started(self, response_id: str) -> None:
-        """Reserve this response against the shared limit; a refusal ends the call."""
+        """Reserve this response once per call, across resumed connections; refusal ends the call."""
 
     def response_done(self, response_id: str, *, usage: Mapping[str, Any], raw_usage: Mapping[str, Any],
                       status: str) -> None:
-        """Settle this response from its usage (unknown when unpriced, never zero)."""
+        """Settle this call-lifetime response id once (unknown when unpriced, never zero)."""
 
     def renewal_due(self) -> bool:
         """The session's held input reached the point where the route window needs a refit renewal."""

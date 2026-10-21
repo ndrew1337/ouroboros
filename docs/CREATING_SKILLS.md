@@ -1282,7 +1282,9 @@ time. The factory's `observe("usage", raw)` reports JSON
 `{"usage": {...}, "raw_usage": {...}}` for that physical connection; `close()` emits
 its final sample before returning. Samples and responses share one watermark. The host
 settles growth after Stop/budget exhaustion without admitting work or inventing responses;
-response IDs dedupe per connection. `billable_audio_seconds` remains evidence.
+response IDs dedupe across the call, including resumed connections. Reservations
+survive reconnects; final call teardown abandons responses without a receipt.
+`billable_audio_seconds` remains evidence.
 The host uses the retained exact LiteLLM quote. Unpriced
 usage remains unknown; settlement never silently fetches a newer tariff. Catalog warmup precedes the audio loop.
 
