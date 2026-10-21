@@ -13,10 +13,19 @@ def test_tier0_protected_core_declared():
     kept = {"system", "bible", "identity", "scratchpad"}
     assert kept <= set(cl.TIER0_ALWAYS_FULL)
     assert "memory_marks" in cl.TIER0_ALWAYS_FULL
-    assert cl.TIER0_WHOLE_OR_OUTLINE == {"knowledge_index"}
+    assert cl.TIER0_WHOLE_OR_OUTLINE == {"project_knowledge_index", "knowledge_index"}
     assert not cl.TIER0_WHOLE_OR_OUTLINE & cl.TIER0_ALWAYS_FULL
     assert "recent_dialogue" not in cl.TIER0_ALWAYS_FULL
     assert set(cl.TIER0_ALWAYS_FULL) == kept | {"memory_marks"}
+
+
+def test_index_floor_order_and_whole_or_outline_fact_have_one_owner():
+    from ouroboros import memory_floor
+
+    assert memory_floor.INDEX_STEPS is cl.INDEX_STEPS
+    assert cl.TIER0_WHOLE_OR_OUTLINE == frozenset(cl.INDEX_STEPS)
+    assert set(cl.INDEX_STEPS) == {"project_knowledge_index", "knowledge_index"}
+    assert not cl.TIER0_WHOLE_OR_OUTLINE & cl.TIER0_ALWAYS_FULL
 
 
 def test_the_memory_floor_never_takes_the_marks_it_keeps_in_tier_zero():

@@ -35,6 +35,7 @@ from typing import Callable, Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from ouroboros import context_budget
 from ouroboros.chat_chain import parse_address
+from ouroboros.context_layout import INDEX_STEPS as INDEX_STEPS
 from ouroboros import memory_view as mv
 from ouroboros import memory_view_legacy as legacy
 from ouroboros.utils import estimate_tokens
@@ -424,7 +425,6 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
 HOST_STEPS = ("runtime", "registry", "installed_skills",
               "drive_state", "shared_understanding", "pattern_register", "world", "subagents",
               "execution_reflections", "architecture_map", "development_map")
-INDEX_STEPS = ("project_knowledge_index", "knowledge_index")
 
 
 def _host_steps(sections, previous, *, measure, window, reserve, ratio, saving, root, task_id):
