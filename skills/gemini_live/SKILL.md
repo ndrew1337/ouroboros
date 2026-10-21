@@ -34,7 +34,9 @@ response settlement across a resumed connection; Stop still finalizes them.
 Native VAD and input transcription open input work; sent PCM (including silence)
 does not. Unfinished captions and unanswered tools keep renewal pending.
 Late output captions retain their audio item's identity; generation completion
-alone cannot release that caption barrier. A local schema change wakes the
+alone cannot release that caption barrier. Extended thinking finalizes received
+text at turnComplete/IDLE; later transcription tails emit a full replacement
+final for the same item, including across resumption. A local schema change wakes the
 receiver without cancelling its socket read. Expiry with pending work ends
 explicitly; Stop retains any known unfinished text as a partial transcript.
 Call instructions follow the host system text. Language hints, voice, pauses,
