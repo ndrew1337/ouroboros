@@ -9,9 +9,9 @@
     {"name": "templates", "category": ["writing"], "recommended": true, "default_on": true},
     {"name": "device_voice", "category": ["media"], "recommended": true, "default_on": true},
     {"name": "browser_speech", "category": ["media"]},
-    {"name": "live_conversation", "category": ["media"], "default_on": true},
-    {"name": "gemini_live", "category": ["media"], "default_on": true},
-    {"name": "grok_realtime", "category": ["media"], "default_on": true},
-    {"name": "openai_realtime", "category": ["media"], "default_on": true}
+    {"name": "live_conversation", "category": ["media"], "recommended": true, "default_on": true},
+    {"name": "gemini_live", "category": ["media"], "recommended": true, "default_on": true},
+    {"name": "grok_realtime", "category": ["media"], "recommended": true, "default_on": true},
+    {"name": "openai_realtime", "category": ["media"], "recommended": true, "default_on": true}
   ]
 }

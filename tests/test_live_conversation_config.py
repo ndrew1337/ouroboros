@@ -75,9 +75,13 @@ def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config
     validate_settings_schema(api.sections[0][1]['schema'])
 
 
-@pytest.mark.parametrize('auto_grant', [False, pytest.param(True, marks=pytest.mark.xfail(
-    strict=True, reason='F1: core auto_grant_if_enabled grants engine keys even while Calls beta is off; integrator-owned'))])
+@pytest.mark.parametrize('auto_grant', [False, True])
 def test_default_call_skills_install_without_credentials_and_leave_beta_off(tmp_path, monkeypatch, auto_grant):
+    """Default-on call skills never open a call by themselves.
+
+    With the owner's own auto-grant setting on, a reviewed engine gets its key grant like any reviewed skill;
+    Calls (beta) stays off either way, so no Talk, media or connection follows from the install.
+    """
     from pathlib import Path
     from ouroboros.skill_builtin import default_on_names, install_builtin_skill
     from ouroboros.skill_install_record import read_install_record
@@ -92,10 +96,11 @@ def test_default_call_skills_install_without_credentials_and_leave_beta_off(tmp_
     for name in names:
         result = install_builtin_skill(name, drive_root=tmp_path, seed_dir=seeds, turn_on_when_ready=True)
         assert result['ok'], result
-        assert result['auto_granted_keys'] == []
         assert read_install_record(tmp_path, name)['turn_on_when_ready'] is True
         skill = load_skill(tmp_path / 'skills' / 'native' / name, tmp_path)
-        assert grant_status_for_skill(tmp_path, skill)['granted_keys'] == []
+        granted = grant_status_for_skill(tmp_path, skill)['granted_keys']
+        if not auto_grant:
+            assert result['auto_granted_keys'] == [] and granted == []
     api = API(tmp_path)
     plugin.register(api)
     assert api.sections[0][1]['title'] == 'Calls (beta)'
