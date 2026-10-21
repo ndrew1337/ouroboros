@@ -96,6 +96,21 @@ def test_connected_seconds_and_unreported_usage(quote):
     assert live._price(value, token_usage(), {'input_tokens': 0})[0] == 0
 
 
+def test_explicit_unbilled_zero_and_additional_thinking_contract(quote):
+    _, value, _ = quote
+    # The provider declares its impossible axes; the host must not invent them.
+    usage = dict(text_input_tokens=100, audio_input_tokens=0, image_input_tokens=0,
+        video_input_tokens=0, cached_input_tokens=0, text_output_tokens=10,
+        audio_output_tokens=0, thinking_tokens=3)
+    assert live._price(value, usage, {})[0] == pytest.approx(.000304)
+    # Reasoning already included in text output is counted once by its producer.
+    assert live._price(value, {**usage, 'text_output_tokens': 13, 'thinking_tokens': 0}, {})[0] == pytest.approx(.000304)
+    for axis in ('video_input_tokens', 'thinking_tokens', 'audio_output_tokens'):
+        incomplete = {key: count for key, count in usage.items() if key != axis}
+        cost, evidence = live._price(value, incomplete, {})
+        assert cost is None and 'unknown_' + axis in evidence['unpriced']
+
+
 def test_shared_limit_refuses_next_response_but_keeps_late_charge(quote):
     root, value, _ = quote
     with ua.usage_scope(ua.UsageScope(drive_root=root, task_id='task-test', global_limit_usd=.001)):

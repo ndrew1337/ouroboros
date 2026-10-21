@@ -32,18 +32,22 @@ class RealtimeSetupError(ValueError):
         super().__init__(f"{code}: {detail}")
 
 
-# Host usage axes. A provider maps its own usage grammar to them for every final
-# response, even a failed or interrupted one. An axis it cannot name stays
-# absent, which means unknown, never zero. ``cached_input_tokens`` is part of the
-# input counts, whose modality split the raw usage may witness.
-# ``connected_seconds`` is a cumulative watermark for routes billed by connected
-# time: the seconds since the session opened, idle time and the closing tail
-# included; the host prices only its growth.
 USAGE_AXES = (
     "text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens",
     "cached_input_tokens", "text_output_tokens", "audio_output_tokens", "thinking_tokens",
     "connected_seconds",
 )
+"""Host usage axes for every final response, including failed/interrupted ones.
+
+A provider reports an explicit 0 for an axis its route never bills. An absent
+axis means unknown, never zero. ``cached_input_tokens`` is part of the input
+counts, whose modality split raw usage may witness. ``thinking_tokens`` is
+billed IN ADDITION to the output axes, never a subset: a provider whose reasoning
+count is already inside text output must not also report it as thinking.
+``connected_seconds`` is a cumulative watermark for routes billed by connected
+time: seconds since the physical connection opened, including idle and closing
+tail; the host prices only its growth. ``billable_audio_seconds`` stays evidence.
+"""
 
 # Call settings a model may honour. A knob the selected model does not honour
 # is not offered to the owner; the catalog says in one sentence why.
