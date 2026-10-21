@@ -34,6 +34,7 @@ def q(tmp_path, monkeypatch):
 
 
 def _row(q, schedule_id="s1", *, intent=None, cron=False, project_id="", chat_id=42, metadata=None, **extra):
+    from ouroboros.consciousness_authority import work_kind
     meta = dict(metadata or {})
     if intent is not None:
         meta["resource_intent"] = intent
@@ -45,6 +46,7 @@ def _row(q, schedule_id="s1", *, intent=None, cron=False, project_id="", chat_id
               **({"next_run_at": "2000-01-01T00:00:00+00:00"} if cron else {})}
     q.queue.upsert_scheduled_task({**record, **{k: v for k, v in extra.items() if k != "continuation_of"}},
                                   continuation_of=extra.get("continuation_of"),
+                                  writer_kind=work_kind(meta), writer_metadata=meta,
                                   host_followup={"followup_relation": {"kind": "independent"},
                                       "followup_origin": {"task_id": meta.get("origin_task_id", ""),
                                                           "root_task_id": meta.get("origin_root_task_id")
@@ -113,7 +115,8 @@ def test_a_named_continuation_is_outside_the_cap_but_not_outside_money(q, monkey
     _row(q, "cont", intent={"kind": "system_repo"}, metadata=wake, continuation_of={"task_id": "t0"})
     _row(q, "spont", intent={"kind": "system_repo"}, metadata=wake)
     # A payload cannot author the host fact.
-    q.queue.upsert_scheduled_task({**_rows(q)["spont"], "continuation_of": {"task_id": "forged"}})
+    q.queue.upsert_scheduled_task({**_rows(q)["spont"], "continuation_of": {"task_id": "forged"}},
+                                  writer_kind="consciousness", writer_metadata=wake)
     assert "continuation_of" not in _rows(q)["spont"]
     q.queue.check_scheduled_tasks()
     rows = _rows(q)

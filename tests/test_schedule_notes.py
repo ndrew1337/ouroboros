@@ -85,7 +85,7 @@ def test_an_overdue_note_still_arrives_and_shows_both_times(host):
     assert " · for Jan 1 " in signature and " · delivered " in signature, signature
 
 
-def test_an_overdue_note_reaches_extension_subscribers_on_a_provider_boot(host, monkeypatch):
+def test_an_overdue_note_reaches_extension_subscribers_on_a_provider_boot(host, monkeypatch, request):
     """The first scheduler tick may consume an overdue note and the event bus keeps no
     history, so a provider boot attaches the extensions' subscriptions (Telegram's
     ``chat.outbound``) before it starts the supervisor. Real lifespan, scheduler tick,
@@ -105,7 +105,7 @@ def test_an_overdue_note_reaches_extension_subscribers_on_a_provider_boot(host, 
     _note(host.queue)
     monkeypatch.setattr(srv.app.app.state, "drive_root", host.root, raising=False)
     monkeypatch.setattr(srv.app.app.state, "repo_dir", host.root / "repo", raising=False)
-    _patch_lifespan_for_drive_root_test(monkeypatch, srv, {})
+    _patch_lifespan_for_drive_root_test(monkeypatch, srv, {}, request)
     monkeypatch.setattr(srv, "has_startup_ready_provider", lambda _settings: True)
     monkeypatch.setattr(srv, "_boot_managed_update_tasks", lambda: None)
     monkeypatch.setattr(srv, "_open_dialogue", lambda *_a, **_k: None)  # this fixture's bus and bridge stay

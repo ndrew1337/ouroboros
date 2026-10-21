@@ -34,7 +34,7 @@ class FakeBridge:
 
 
 @pytest.fixture
-def panic_bridge(native_guard, monkeypatch):
+def panic_bridge(native_guard, monkeypatch):  # noqa: F811 — imported pytest fixture
     from ouroboros.server_control import PanicIngress
 
     bridge = FakeBridge()
@@ -49,20 +49,16 @@ def panic_bridge(native_guard, monkeypatch):
 
 
 def _seed_presence_behavior(data_dir: pathlib.Path, *, account_wide: bool = False) -> str:
-    from ouroboros.presence_bindings import (
-        PresenceBinding,
-        PresenceEndpoint,
-        new_presence_binding_id,
-        save_presence_binding,
-    )
-    from ouroboros.presence_capabilities import (
+    from ouroboros.presence_bindings import PresenceBinding, PresenceEndpoint
+    from tests.frozen_presence_bindings import new_presence_binding_id, save_presence_binding
+    from tests.frozen_presence_capabilities import (
         PresenceSelection,
         PresenceState,
         PresenceToolTarget,
         presence_state_fingerprint,
         save_presence_state,
     )
-    from ouroboros.presence_profile import parse_presence_profile, presence_request_fingerprint
+    from tests.frozen_presence_profile import parse_presence_profile, presence_request_fingerprint
     from ouroboros.skill_loader import load_skill
 
     skill_dir = data_dir / "skills" / "external" / "community-helper"
@@ -953,3 +949,9 @@ def test_chat_inject_allows_slash_command_caption_even_with_text(tmp_path: pathl
     assert response.status_code == 202
     assert bridge.messages[0]["text"] == "photo"
     assert bridge.messages[0]["image_caption"] == "/panic"
+
+
+@pytest.fixture(autouse=True)
+def _focus_authority_available(monkeypatch):
+    monkeypatch.setattr("ouroboros.presence_admission.focus_enabled", lambda _root: True)
+    monkeypatch.setattr("ouroboros.presence_admission.focus_allowance", lambda _root: {"status": "available", "remaining_usd": 10})

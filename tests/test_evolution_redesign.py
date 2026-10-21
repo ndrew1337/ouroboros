@@ -985,8 +985,12 @@ def test_memory_provenance_records_old_and_new_content(tmp_path):
     assert history[-1]["old_content"] == current.text
     assert history[-1]["new_content"] == "---\ntype: note\n---\nnew"
 
-    _update_identity(ctx, "I am v1 with enough detail to satisfy the identity update length gate.")
-    _update_identity(ctx, "I am v2 with enough detail to satisfy the identity update length gate.")
+    from hashlib import sha256
+    from ouroboros.memory import Memory
+    Memory(tmp_path).ensure_files()
+    identity = tmp_path / "memory/identity.md"
+    _update_identity(ctx, "I am v1 with enough detail to satisfy the identity update length gate.", sha256(identity.read_bytes()).hexdigest())
+    _update_identity(ctx, "I am v2 with enough detail to satisfy the identity update length gate.", sha256(identity.read_bytes()).hexdigest())
     identity_history = [
         json.loads(line)
         for line in (tmp_path / "memory" / "identity_journal.jsonl").read_text(encoding="utf-8").splitlines()

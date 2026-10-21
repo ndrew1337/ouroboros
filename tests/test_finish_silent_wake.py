@@ -21,7 +21,7 @@ from ouroboros.task_results import load_task_result
 from ouroboros.tools.registry import ToolRegistry
 
 TASK_ID = "wake-task"
-WAKE = {"initiator": "consciousness", "usage_category": CONSCIOUSNESS_CATEGORY, "wake_reason": "heartbeat"}
+WAKE = {"initiator": "consciousness", "usage_category": CONSCIOUSNESS_CATEGORY, "wake_reason": "heartbeat", "wake_cause": "own_clock"}
 
 
 def finish(answer=None, **kw):
@@ -117,11 +117,16 @@ def _no_post_task_model(monkeypatch):
 # --- clean silence: nothing published, everything retained ----------------------------
 
 @pytest.mark.parametrize("answer", [None, "", "Read the journal; nothing changed my view."])
-def test_clean_silent_wake_publishes_nothing_and_keeps_its_record(wake, answer):
-    text, usage, trace, bus = wake.run([finish(answer, silent=True)])
+@pytest.mark.parametrize("cause", ["own_clock", "focus"])
+def test_clean_silent_wake_publishes_nothing_and_keeps_its_record(wake, answer, cause):
+    metadata = {**WAKE, "wake_cause": cause}
+    if cause == "focus":  # the host stamps a focus with its place and its event
+        metadata.update(focus={"place_id": "place-1", "conversation_key": "slack:c1"},
+                        presence={"event": {"conversation_key": "slack:c1"}})
+    text, usage, trace, bus = wake.run([finish(answer, silent=True)], metadata=metadata)
     assert len(wake.calls) == 1 and usage.get("wake_silent") is True
     assert text == (answer or "")
-    pending, stored = emit(wake, text, usage, trace, bus=bus)
+    pending, stored = emit(wake, text, usage, trace, bus=bus, metadata=metadata)
     assert sends(pending) == [] and sends(drained(bus)) == [], "no final row, live or buffered"
     assert owed_rows(wake.root) == [], "boot replay owes nothing"
     assert stored["status"] == "completed" and stored.get("wake_silent") is True

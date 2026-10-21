@@ -149,7 +149,7 @@ def collect_routes(
         api_projects_create,
         api_projects_list,
     )
-    from ouroboros.gateway.state import api_contract, api_health, api_state
+    from ouroboros.gateway.state import api_consciousness, api_contract, api_health, api_state
     from ouroboros.gateway.skill_publish import skill_publish_routes
     from ouroboros.gateway.tasks import (
         api_task_artifact,
@@ -164,18 +164,18 @@ def collect_routes(
     from ouroboros.gateway import desktop_autostart as desktop_host
     from ouroboros.gateway.onboarding_host import api_onboarding_bootstrap, onboarding_page
     from ouroboros.gateway.owner_effort import api_owner_effort_range
+    from ouroboros.gateway.safety_settings import api_owner_safety_rules, api_owner_safety_model, api_owner_safety_mode
     from ouroboros.gateway.settings import (
         api_acknowledge_capability,
         api_onboarding,
         api_owner_auto_grant,
         api_owner_context_mode,
-        api_owner_safety_mode,
         api_owner_runtime_mode,
         api_settings_get,
         api_settings_post,
     )
     from ouroboros.gateway.settings_secrets import api_settings_secret
-    from ouroboros.gateway.presence_settings import api_owner_skill_presence_runtime
+    from ouroboros.gateway.places_api import places_routes
     from ouroboros.gateway.ws import ws_endpoint
     from ouroboros.gateway.call_ws import call_routes
     settings_handlers = settings_handlers or {}
@@ -188,6 +188,7 @@ def collect_routes(
         Route("/api/health", endpoint=api_health),
         Route("/api/contract", endpoint=api_contract, methods=["GET"]),
         Route("/api/state", endpoint=api_state),
+        Route("/api/consciousness", endpoint=api_consciousness, methods=["GET"]),
         Route("/api/widgets", endpoint=api_widgets, methods=["GET"]),
         Route("/api/widgets/fault", endpoint=api_widget_fault_post, methods=["POST"]),
         Route("/api/extensions", endpoint=api_extensions_index, methods=["GET"]),
@@ -212,7 +213,7 @@ def collect_routes(
             methods=["GET"],
         ),
         Route("/api/owner/skills/{skill}/attest-review", endpoint=api_owner_skill_attest_review, methods=["POST"]),
-        Route("/api/owner/skills/{skill}/presence-runtime", endpoint=api_owner_skill_presence_runtime, methods=["POST"]),
+        *places_routes(),
         Route("/api/skills/{skill}/grants", endpoint=api_skill_grants, methods=["POST"]),
         Route("/api/skills/{skill}/reconcile", endpoint=api_skill_reconcile, methods=["POST"]),
         Route("/api/marketplace/clawhub/search", endpoint=api_marketplace_search, methods=["GET"]),
@@ -249,6 +250,8 @@ def collect_routes(
         Route("/api/owner/context-mode", endpoint=api_owner_context_mode, methods=["POST"]),
         Route("/api/owner/effort-range", endpoint=api_owner_effort_range, methods=["POST"]),
         Route("/api/owner/safety-mode", endpoint=api_owner_safety_mode, methods=["POST"]),
+        Route("/api/owner/safety-rules", endpoint=api_owner_safety_rules, methods=["POST"]),
+        Route("/api/owner/safety-model", endpoint=api_owner_safety_model, methods=["POST"]),
         Route("/api/owner/capability-ack", endpoint=api_acknowledge_capability, methods=["POST"]),
         Route("/api/model-catalog", endpoint=api_model_catalog),
         Route("/api/projects", endpoint=api_projects_list, methods=["GET"]),

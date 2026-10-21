@@ -25,6 +25,7 @@ PROCESSING_PREFERENCES = ("standard", "fast", "economy")
 MODEL_ROLE_SETTINGS = {
     "main": "OUROBOROS_MODEL",
     "light": "OUROBOROS_MODEL_LIGHT",
+    "safety": "OUROBOROS_MODEL_SAFETY",
     "vision": "OUROBOROS_MODEL_VISION",
     "consciousness": "OUROBOROS_MODEL_CONSCIOUSNESS",
     "deep_review": "OUROBOROS_MODEL_DEEP_SELF_REVIEW",
@@ -94,6 +95,18 @@ def model_role_option(key: str, role: str, *, settings: dict | None = None) -> s
     default = 0 if key == MODEL_CONTEXT_WINDOWS_KEY else ""
     raw = (settings or {}).get(key, "") if settings is not None else runtime_setting(key, "")
     options, _canonical = normalize_model_role_options(key, raw)
+    if role == "safety":
+        # An empty Supervisor slot inherits the route's authored options as
+        # well as its model. An explicit Supervisor model ends that chain.
+        for candidate in ("safety", "light", "main"):
+            if options.get(candidate):
+                return options[candidate]
+            setting = MODEL_ROLE_SETTINGS[candidate]
+            model = (settings.get(setting, SETTINGS_DEFAULTS[setting]) if settings is not None
+                     else runtime_setting(setting, SETTINGS_DEFAULTS[setting]))
+            if str(model or "").strip():
+                break
+        return default
     family, separator, position = role.partition(":")
     if family == "fallback" and separator:
         try:
@@ -313,6 +326,12 @@ def _main_model() -> str:
 def get_light_model() -> str:
     """Light slot; empty falls back to Main (heavy/consciousness stay empty->main)."""
     return str(runtime_setting("OUROBOROS_MODEL_LIGHT", "") or "").strip() or _main_model()
+
+
+def get_safety_model() -> str:
+    """Safety Supervisor inherits Light, including its local route, then Main."""
+    return (str(runtime_setting("OUROBOROS_MODEL_SAFETY", "") or "").strip()
+            or slot_lane_label("light", get_light_model()))
 
 
 def get_heavy_model() -> str:

@@ -98,20 +98,124 @@ def is_consciousness_origin(metadata: Any) -> bool:
     return str(source.get("initiator") or "").strip() == CONSCIOUSNESS_INITIATOR
 
 
-def consciousness_origin_metadata(parent_metadata: Any) -> Dict[str, Any]:
-    """The origin keys a task started from a consciousness turn/tree inherits.
+# Why a consciousness turn runs: its own clock, or a focus in a place room.
+# A host fact stamped at the wake's start; descendants never inherit it (they
+# are work the wake started, not the wake).
+WAKE_CAUSE_OWN_CLOCK = "own_clock"
+WAKE_CAUSE_FOCUS = "focus"
+WAKE_CAUSES = (WAKE_CAUSE_OWN_CLOCK, WAKE_CAUSE_FOCUS)
 
-    Empty for any other parent. The child is a *started* root, so its ledger
-    category is ``consciousness_task``; the level rides along so the child's
-    own build derives the same ``disabled_tools``/``runtime_mode_cap``.
+# Whose life a piece of work belongs to: the owner's work or consciousness
+# (own wakes, place focuses and everything they start). Host-minted at root
+# admission and inherited by value; never accepted from tool arguments.
+WORK_KIND_OWNER = "owner"
+WORK_KIND_CONSCIOUSNESS = "consciousness"
+WORK_KINDS = (WORK_KIND_OWNER, WORK_KIND_CONSCIOUSNESS)
+
+
+def wake_cause(metadata: Any) -> str:
+    """The typed wake cause of a consciousness turn, ``""`` for anything else."""
+    source = metadata if isinstance(metadata, Mapping) else {}
+    cause = str(source.get("wake_cause") or "").strip()
+    return cause if cause in WAKE_CAUSES else ""
+
+
+def is_own_clock_wake(metadata: Any) -> bool:
+    """A consciousness turn its own clock started (the census's only "live wake")."""
+    return is_consciousness_origin(metadata) and wake_cause(metadata) == WAKE_CAUSE_OWN_CLOCK
+
+
+def is_focus_wake(metadata: Any) -> bool:
+    """A consciousness turn focused on a place room."""
+    return is_consciousness_origin(metadata) and wake_cause(metadata) == WAKE_CAUSE_FOCUS
+
+
+def work_kind(metadata: Any) -> str:
+    """Whose work this is: ``owner`` only with a positive owner fact, else ``consciousness``.
+
+    Order: the host-minted ``work_kind`` stamp; a consciousness origin; an owner
+    ingress mark. Unknown provenance is not the owner's.
     """
-    if not is_consciousness_origin(parent_metadata):
-        return {}
-    return {
+    source = metadata if isinstance(metadata, Mapping) else {}
+    stamped = str(source.get("work_kind") or "").strip()
+    if stamped in WORK_KINDS:
+        return stamped
+    if is_consciousness_origin(source) or any(key in source for key in (
+        "presence", "presence_binding_authority", "presence_root_carrier",
+    )):
+        return WORK_KIND_CONSCIOUSNESS
+    if source.get("owner_ingress") or source.get("origin_message_ref") or source.get("origin_suppressed"):
+        return WORK_KIND_OWNER
+    return WORK_KIND_CONSCIOUSNESS
+
+
+def consciousness_origin_metadata(parent_metadata: Any, *, started_root: bool = False) -> Dict[str, Any]:
+    """Copy host origin by value, never the wake identity itself.
+
+    Children keep the root's kind/cause; independent roots use ``started``.
+    Only a root occasioned by an addressed, confirmed-owner request changes kind.
+    The focus itself remains consciousness.
+    """
+    from copy import deepcopy
+
+    source = parent_metadata if isinstance(parent_metadata, Mapping) else {}
+    kind = work_kind(source)
+    focus = source.get("focus") or {}
+    if (started_root and is_focus_wake(source) and focus.get("addressed") is True
+            and (focus.get("actor") or {}).get("owner_confirmed") is True):
+        kind = WORK_KIND_OWNER
+    inherited = {"work_kind": kind}
+    for key in ("focus", "schedule_writer_kind", "origin_wake_task_id"):
+        if key in source:
+            inherited[key] = deepcopy(source[key])
+    if wake_cause(source):
+        inherited["origin_wake_task_id"] = str(source.get("task_id") or source.get("origin_wake_task_id") or "")
+    if kind == WORK_KIND_OWNER:
+        return inherited
+    inherited["consciousness_cause"] = "started" if started_root else str(source.get("consciousness_cause") or wake_cause(source) or "started")
+    if not is_consciousness_origin(source):
+        return inherited
+    return {**inherited,
         "initiator": CONSCIOUSNESS_INITIATOR,
         "usage_category": CONSCIOUSNESS_TASK_CATEGORY,
-        "consciousness_autonomy": normalize_level(parent_metadata.get("consciousness_autonomy")),
+        "consciousness_autonomy": normalize_level(source.get("consciousness_autonomy")),
     }
+
+
+def stamp_schedule_writer(record: Dict[str, Any], writer_kind: str, writer_metadata: Any,
+                          *, started_root: bool) -> None:
+    """Persist the next occurrence's origin from host writer facts, never the template.
+
+    Independent schedules use root-start semantics, including the confirmed-owner
+    exception. A related continuation keeps its caller's kind and cause.
+    """
+    source = writer_metadata if isinstance(writer_metadata, Mapping) else {}
+    kind = WORK_KIND_OWNER if writer_kind == WORK_KIND_OWNER else WORK_KIND_CONSCIOUSNESS
+    origin = consciousness_origin_metadata({**source, "work_kind": kind}, started_root=started_root)
+    record.update(writer_kind=origin["work_kind"], writer_origin=origin)
+
+
+def stamp_manifest_schedule(previous: Mapping[str, Any], current: Dict[str, Any]) -> None:
+    """A published skill authors changed schedule content; readiness resync does not."""
+    authored = ("task", "trigger", "timezone", "name", "description", "skill_content_hash")
+    if "writer_kind" not in previous or any(previous.get(k) != current.get(k) for k in authored):
+        current.update(writer_kind=WORK_KIND_CONSCIOUSNESS,
+                       writer_origin={"work_kind": WORK_KIND_CONSCIOUSNESS, "consciousness_cause": "started"})
+
+
+def stamp_scheduled_work(task: Dict[str, Any], record: Mapping[str, Any], raw_metadata: Mapping[str, Any]) -> None:
+    """Apply the last host writer's origin; template stamps are never authority."""
+    from ouroboros.schedule_contract import RESERVED_TEMPLATE_FIELDS
+    writer_kind = record.get("writer_kind")
+    if writer_kind not in {"owner", "consciousness"}:
+        legacy = {k: v for k, v in raw_metadata.items() if k not in RESERVED_TEMPLATE_FIELDS}
+        writer_kind = work_kind({"owner_ingress": record.get("source") == "owner", **legacy})
+    from copy import deepcopy
+    if "writer_origin" in record:
+        for key in ("initiator", "usage_category", "consciousness_autonomy", "consciousness_cause", "origin_wake_task_id", "focus"):
+            task["metadata"].pop(key, None)
+    task["metadata"].update(deepcopy(record.get("writer_origin") or {}))
+    task["metadata"].update(work_kind=writer_kind, schedule_writer_kind=writer_kind)
 
 
 def apply_consciousness_authority(task: Dict[str, Any]) -> Dict[str, Any]:

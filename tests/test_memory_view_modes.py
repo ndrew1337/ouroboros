@@ -221,7 +221,7 @@ def _built(tmp_path, monkeypatch, *, books=80_000, ratio=None):
     core = context._capture_context_core(env, memory, dict(_TASK), None, None)
     core = dataclasses.replace(core, architecture_md=core.architecture_md + "\n\n" + "word " * (books // 5))
     if ratio is not None:
-        monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a: ratio)
+        monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a, **_kw: ratio)
 
     def plan(window, *, status="asserted", preferred="max", tool_schemas=None):
         evidence = SimpleNamespace(route_fp="r", status=status, stale=status != "asserted", window_tokens=window)
@@ -295,7 +295,7 @@ def test_calibration_changes_measurement_without_selecting_different_max_books(t
     border = _needs(core, plan)["max"] - 50
     full = plan(10_000_000).messages_for("max")[0]["content"][0]
     for ratio in (0.98, 1.0, 1.02):
-        monkeypatch.setattr("ouroboros.context_fit._route_calibration_ratio", lambda *_a, _r=ratio: _r)
+        monkeypatch.setattr("ouroboros.context_fit._route_calibration_ratio", lambda *_a, _r=ratio, **_kw: _r)
         built = plan(border)
         assert built.initial_mode == "max"
         assert built.projection("max").calibration_ratio == ratio

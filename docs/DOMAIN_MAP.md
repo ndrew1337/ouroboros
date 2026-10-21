@@ -8,27 +8,27 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 
 | domain | name | modules | proposed |
 |---|---|---:|---:|
-| D01 | Agent core & main loop | 54 | 0 |
+| D01 | Agent core & main loop | 55 | 0 |
 | D02 | LLM client, routing & providers | 45 | 0 |
-| D03 | Context assembly, fit & compaction | 25 | 0 |
-| D04 | Tool execution: registry, access & typed results | 22 | 0 |
+| D03 | Context assembly, fit & compaction | 26 | 0 |
+| D04 | Tool execution: registry, access & typed results | 23 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 41 | 0 |
 | D06 | Review stack | 91 | 0 |
 | D07 | Delegation, subagents & Claudexor | 73 | 0 |
 | D08 | Supervisor: queue, workers, events & runtime control | 72 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 33 | 0 |
-| D11 | Gateway, server & Web UI | 102 | 0 |
-| D12 | Settings & configuration | 21 | 0 |
-| D13 | Safety, guards & runtime mode | 9 | 0 |
-| D14 | Skills & extensions | 72 | 0 |
-| D15 | Memory, knowledge, consciousness & self-evolution | 29 | 0 |
-| D16 | Observability, usage accounting & cost | 24 | 0 |
-| D17 | Projects, workspaces & task results | 46 | 0 |
+| D11 | Gateway, server & Web UI | 104 | 0 |
+| D12 | Settings & configuration | 22 | 0 |
+| D13 | Safety, guards & runtime mode | 11 | 0 |
+| D14 | Skills & extensions | 73 | 0 |
+| D15 | Memory, knowledge, consciousness & self-evolution | 31 | 0 |
+| D16 | Observability, usage accounting & cost | 26 | 0 |
+| D17 | Projects, workspaces & task results | 47 | 0 |
 | D18 | Launcher, packaging, platform & shared substrate | 32 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
-| D20 | Presence | 15 | 0 |
-| **total** | | **845** | **0** |
+| D20 | Presence | 20 | 0 |
+| **total** | | **864** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -48,14 +48,14 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 | **D10** | · | · | · | ✓ | ✓ | ✓ | · | ✓ | · | · | · | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | · |
 | **D11** | ✓ | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | · | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **D12** | · | ✓ | ✓ | · | · | · | ✓ | · | · | · | ✓ | · | ✓ | · | · | · | · | ✓ | · | · |
-| **D13** | ✓ | ✓ | · | ✓ | · | · | · | · | · | · | · | ✓ | · | · | · | · | ✓ | ✓ | · | · |
+| **D13** | ✓ | ✓ | · | ✓ | · | · | · | · | · | · | · | ✓ | · | · | ✓ | · | ✓ | ✓ | · | ✓ |
 | **D14** | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | ✓ | · | · | ✓ | ✓ | ✓ | ✓ | · |
 | **D15** | ✓ | · | ✓ | ✓ | · | · | · | · | · | · | · | ✓ | · | · | · | ✓ | ✓ | ✓ | ✓ | · |
 | **D16** | · | ✓ | · | · | · | ✓ | · | · | · | · | · | ✓ | · | ✓ | · | · | ✓ | ✓ | ✓ | · |
 | **D17** | ✓ | · | · | ✓ | ✓ | ✓ | · | ✓ | · | · | ✓ | ✓ | · | · | ✓ | ✓ | · | ✓ | ✓ | · |
 | **D18** | · | · | · | · | · | · | · | · | ✓ | ✓ | · | ✓ | · | · | · | · | · | · | · | · |
 | **D19** | · | · | · | · | · | · | · | · | · | · | · | · | · | ✓ | · | · | · | ✓ | · | · |
-| **D20** | · | · | · | ✓ | ✓ | · | · | · | · | · | · | · | · | ✓ | ✓ | · | ✓ | ✓ | ✓ | · |
+| **D20** | · | · | · | ✓ | ✓ | · | · | · | · | · | · | · | · | · | ✓ | · | ✓ | ✓ | ✓ | · |
 
 ## Cycle status
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **118**
+- lazy-only cross-domain pairs: **122**
   - D01->D10
   - D01->D11
   - D02->D05
@@ -137,9 +137,10 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D12->D17
   - D13->D05
   - D13->D06
+  - D13->D07
   - D13->D08
   - D13->D09
-  - D13->D15
+  - D13->D14
   - D14->D01
   - D14->D07
   - D14->D08
@@ -161,6 +162,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D16->D08
   - D16->D09
   - D16->D11
+  - D16->D15
   - D17->D02
   - D17->D07
   - D17->D09
@@ -183,6 +185,8 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D20->D09
   - D20->D11
   - D20->D12
+  - D20->D13
+  - D20->D14
   - D20->D16
 - dynamic-import cross-domain pairs: **0**
 
@@ -212,6 +216,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/live_works.py`
 - `ouroboros/loop.py`
 - `ouroboros/loop_budget.py`
+- `ouroboros/loop_completion_schema.py`
 - `ouroboros/loop_delivery.py`
 - `ouroboros/loop_forced_finalization.py`
 - `ouroboros/loop_llm_call.py`
@@ -316,6 +321,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/context_runtime_facts.py`
 - `ouroboros/context_sections.py`
 - `ouroboros/context_source_view.py`
+- `ouroboros/density_probe.py`
 - `ouroboros/main_context_authority.py`
 - `ouroboros/memory_floor.py`
 - `ouroboros/memory_view.py`
@@ -337,6 +343,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/tool_access_types.py`
 - `ouroboros/tool_access_user_files.py`
 - `ouroboros/tool_capabilities.py`
+- `ouroboros/tool_effects.py`
 - `ouroboros/tool_policy.py`
 - `ouroboros/tools/__init__.py`
 - `ouroboros/tools/arg_feedback.py`
@@ -738,6 +745,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/host_call.py`
 - `ouroboros/gateway/host_notify.py`
 - `ouroboros/gateway/host_service.py`
+- `ouroboros/gateway/host_service_places.py`
 - `ouroboros/gateway/logs.py`
 - `ouroboros/gateway/main_decisions.py`
 - `ouroboros/gateway/management_contracts.py`
@@ -750,11 +758,12 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/gateway/onboarding_host.py`
 - `ouroboros/gateway/owner_effort.py`
 - `ouroboros/gateway/owner_settings.py`
-- `ouroboros/gateway/presence_settings.py`
+- `ouroboros/gateway/places_api.py`
 - `ouroboros/gateway/projects.py`
 - `ouroboros/gateway/reply_preparation.py`
 - `ouroboros/gateway/router.py`
 - `ouroboros/gateway/routing_decision.py`
+- `ouroboros/gateway/safety_settings.py`
 - `ouroboros/gateway/schedule_contracts.py`
 - `ouroboros/gateway/schedules.py`
 - `ouroboros/gateway/schema.py`
@@ -820,6 +829,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/review_model_routes.py`
 - `ouroboros/review_run_isolation.py`
 - `ouroboros/runtime_limits.py`
+- `ouroboros/safety_config.py`
 - `ouroboros/search_routes.py`
 - `ouroboros/secret_masking.py`
 - `ouroboros/settings_defaults.py`
@@ -837,8 +847,10 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/argv_budget.py`
 - `ouroboros/credential_shapes.py`
 - `ouroboros/git_shell_policy.py`
+- `ouroboros/place_guard.py`
 - `ouroboros/runtime_mode_policy.py`
 - `ouroboros/safety.py`
+- `ouroboros/safety_records.py`
 - `ouroboros/shell_parse.py`
 - `ouroboros/tools/deliverables_shell.py`
 - `ouroboros/tools/shell_guards.py`
@@ -864,6 +876,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/extension_surface_names.py`
 - `ouroboros/extension_ui_validation.py`
 - `ouroboros/gateway/contributions.py`
+- `ouroboros/icon_geometry.py`
 - `ouroboros/marketplace/__init__.py`
 - `ouroboros/marketplace/adapter.py`
 - `ouroboros/marketplace/clawhub.py`
@@ -927,6 +940,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/consciousness.py`
 - `ouroboros/consciousness_allowance.py`
 - `ouroboros/consciousness_authority.py`
+- `ouroboros/consciousness_view.py`
 - `ouroboros/consciousness_wake.py`
 - `ouroboros/consolidator.py`
 - `ouroboros/dialogue_provenance.py`
@@ -940,6 +954,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/memory_inventory.py`
 - `ouroboros/memory_journal_compaction.py`
 - `ouroboros/memory_nomination_receipts.py`
+- `ouroboros/memory_publication.py`
 - `ouroboros/post_task_evolution.py`
 - `ouroboros/project_facts.py`
 - `ouroboros/reflection.py`
@@ -968,6 +983,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/live_usage.py`
 - `ouroboros/model_send_seal.py`
 - `ouroboros/observability.py`
+- `ouroboros/physical_attempt_context.py`
 - `ouroboros/process_logging.py`
 - `ouroboros/source_retention.py`
 - `ouroboros/storage.py`
@@ -976,6 +992,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/usage_admission.py`
 - `ouroboros/usage_journal.py`
 - `ouroboros/usage_ledger.py`
+- `ouroboros/usage_origin.py`
 - `ouroboros/usage_store.py`
 
 ### D17 — Projects, workspaces & task results
@@ -1005,6 +1022,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/projects_registry.py`
 - `ouroboros/promotion_intent.py`
 - `ouroboros/retention.py`
+- `ouroboros/room_membership.py`
 - `ouroboros/routing_wait.py`
 - `ouroboros/store.py`
 - `ouroboros/store_hot_facts.py`
@@ -1083,6 +1101,13 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 
 ### D20 — Presence
 
+- `ouroboros/conversation_lease.py`
+- `ouroboros/place_arrivals.py`
+- `ouroboros/place_intake.py`
+- `ouroboros/place_projection.py`
+- `ouroboros/place_reply.py`
+- `ouroboros/places.py`
+- `ouroboros/places_migration.py`
 - `ouroboros/presence_admission.py`
 - `ouroboros/presence_authority.py`
 - `ouroboros/presence_bindings.py`
@@ -1093,8 +1118,6 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/presence_delivery.py`
 - `ouroboros/presence_events.py`
 - `ouroboros/presence_observations.py`
-- `ouroboros/presence_profile.py`
 - `ouroboros/presence_recovery.py`
 - `ouroboros/presence_runner.py`
-- `ouroboros/presence_runtime.py`
 - `ouroboros/tools/presence.py`

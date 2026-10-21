@@ -152,6 +152,15 @@ def _describe_bg(request: Request) -> Callable[[bool], dict[str, Any]] | None:
     return _state_attr(request, "describe_bg_consciousness_state")
 
 
+async def api_consciousness(request: Request) -> JSONResponse:
+    """The Dashboard's consciousness panel: status, spend by cause, places and recent wakes (read-only)."""
+    describe = _state_attr(request, "describe_consciousness")
+    if describe is None:
+        return JSONResponse({"status": "unavailable", "places": [], "recent_wakes": []}, status_code=503,
+                            headers={"Cache-Control": "no-store"})
+    return JSONResponse(await asyncio.to_thread(describe), headers={"Cache-Control": "no-store"})
+
+
 def _state_snapshot(request: Request) -> Dict[str, Any]:
     """Collect every heavy synchronous input for the ``/api/state`` payload.
 

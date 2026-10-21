@@ -837,14 +837,6 @@ export function initSkills(ctx = {}) {
         if (goto) { selectTab(goto.dataset.skillsGoto); return; }
         const chip = event.target.closest('[data-installed-filter]');
         if (chip) { filter = chip.dataset.installedFilter; paintFilters(snapshot?.rawSkills ? projected() : null); applyInstalledFilter(); return; }
-        const resetRuntime = event.target.closest('[data-presence-runtime-reset]');
-        if (resetRuntime) {
-            const form = resetRuntime.closest('[data-presence-runtime-form]');
-            resetRuntime.disabled = true;
-            try { await savePresenceRuntime(form, true); } catch (err) { showToast(`${form?.dataset?.skillName || 'Skill'}: ${err.message || err}`, 'danger'); }
-            finally { resetRuntime.disabled = false; readInstalled({ quiet: true }); }
-            return;
-        }
         const menuTrigger = event.target.closest('[data-skill-menu-trigger]');
         if (menuTrigger) { openSkillMenu(menuTrigger); return; }
         const actionTarget = event.target.closest('[data-skill-action]');
@@ -867,26 +859,6 @@ export function initSkills(ctx = {}) {
             if (refresh) await readInstalled({ quiet: true });
         }
     };
-
-    async function savePresenceRuntime(form, reset = false) {
-        const name = String(form?.dataset?.skillName || '');
-        const expected = String(form?.dataset?.stateFingerprint || '');
-        if (!name || !expected) throw new Error('Presence runtime state is unavailable. Refresh and retry.');
-        const modelValue = reset ? '' : String(form.elements.model_slot?.value || '').trim();
-        const roundsValue = reset ? '' : String(form.elements.inline_max_rounds?.value || '').trim();
-        const rounds = roundsValue === '' ? null : Number(roundsValue);
-        if (rounds !== null && (!Number.isInteger(rounds) || rounds < 1)) throw new Error('Inline rounds must be a positive whole number.');
-        const result = await apiClient.savePresenceRuntime(name, {
-            expected_state_fingerprint: expected,
-            runtime_overrides: { model_slot: modelValue || null, inline_max_rounds: rounds },
-            ...(!reset ? { workspace_root: String(form.elements.workspace_root?.value || '').trim() } : {}),
-        });
-        // Cards are patched in place, so the open form takes the saved state's fingerprint from the answer;
-        // a later re-read never touches it, and a change made elsewhere still refuses this form's next save.
-        const saved = String(result?.presence_runtime?.state_fingerprint || '');
-        if (saved) form.dataset.stateFingerprint = saved;
-        showToast(`${name}: Presence runtime ${reset ? 'reset' : 'saved'} for new turns`, 'ok');
-    }
 
     // The switch: change, so keyboard and pointer activation match.
     const onChange = async (event) => {
@@ -912,15 +884,6 @@ export function initSkills(ctx = {}) {
             delete target.dataset.skillPending;
             if (refresh) readInstalled({ quiet: true });
         }
-    };
-    const onSubmit = async (event) => {
-        const form = event.target.closest?.('[data-presence-runtime-form]');
-        if (!form) return;
-        event.preventDefault();
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
-        try { await savePresenceRuntime(form); } catch (err) { showToast(`${form.dataset.skillName || 'Skill'}: ${err.message || err}`, 'danger'); }
-        finally { if (submit) submit.disabled = false; readInstalled({ quiet: true }); }
     };
     // A findings block is rendered collapsed; its list is built on first open
     // from the row already in memory (`toggle` does not bubble: capture).
@@ -1030,16 +993,16 @@ export function initSkills(ctx = {}) {
     searchInput.addEventListener('input', onSearch);
     root.addEventListener('click', onClick);
     container.addEventListener('change', onChange);
-    container.addEventListener('submit', onSubmit);
     container.addEventListener('toggle', onToggle, true);
     window.addEventListener('ouro:page-shown', onPageShown);
 
-    // Another surface asks for one installed skill's entry ({skill}) or a Browse search ({query}): the dictation
-    // chooser's engines (dictation_chooser.js).
+    // Another surface asks for one installed skill's entry ({skill}), a Browse search ({query}) or a Browse category
+    // ({category}): the dictation chooser's engines (dictation_chooser.js), a place's connector (place_sheet.js).
     const onOpenSkills = async (event) => {
-        const { skill = '', query = '' } = event?.detail || {};
+        const { skill = '', query = '', category = '' } = event?.detail || {};
         closeMenus();
         if (!await ctx.showPage?.('skills')) return;
+        if (!skill && category) { selectTab('browse'); await browse?.showCategory(category); return; }
         if (!skill) { selectTab('browse'); await browse?.searchFor(query); return; }
         selectTab('installed');
         const found = () => container.querySelector(`.skills-card[data-skill="${CSS.escape(skill)}"]`);
@@ -1072,7 +1035,6 @@ export function initSkills(ctx = {}) {
         searchInput.removeEventListener('input', onSearch);
         root.removeEventListener('click', onClick);
         container.removeEventListener('change', onChange);
-        container.removeEventListener('submit', onSubmit);
         container.removeEventListener('toggle', onToggle, true);
         window.removeEventListener('ouro:page-shown', onPageShown);
         window.removeEventListener('ouro:open-skills', onOpenSkills);

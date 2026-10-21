@@ -33,54 +33,13 @@ for _row in CONFIRMED_SOURCES["sources"]:
 
 
 @pytest.mark.parametrize("browser_name,width", [("chromium", 1440), ("webkit", 390)])
-def test_presence_workspace_save_and_runtime_reset_keep_owner_folder(skills_browser, browser_name, width):
+def test_retired_presence_runtime_has_no_form(skills_browser, browser_name, width):
     browser = getattr(skills_browser, browser_name).launch(headless=True)
     try:
         page = browser.new_page(viewport={"width": width, "height": 900})
-        skills = open_skills(page)
-        runtime = {
-            "defaults": {"model_slot": "main", "inline_max_rounds": 10},
-            "overrides": {}, "workspace_root": "/work/current",
-            "state_fingerprint": "a" * 64,
-        }
-        row = {**WEATHER, "enabled": True, "review_status": "clean", "review_gate": {"executable_review": True}}
-        skills.answers["/api/extensions"] = lambda _request: {"skills": [{**row, "presence_runtime": runtime}], "live": {}}
-        writes = []
-
-        def save(request):
-            body = request.post_data_json
-            assert body["expected_state_fingerprint"] == runtime["state_fingerprint"]
-            writes.append(body)
-            runtime["overrides"] = body["runtime_overrides"]
-            if "workspace_root" in body:
-                runtime["workspace_root"] = body["workspace_root"]
-            runtime["state_fingerprint"] = str(len(writes)) * 64
-            return {"ok": True, "skill": "weather", "presence_runtime": runtime}
-
-        skills.answers["/api/owner/skills/weather/presence-runtime"] = save
+        open_skills(page, extensions=[{**WEATHER, "presence_runtime": {"workspace_root": "/old"}}])
         page.goto(URL, wait_until="networkidle")
-        card = page.locator('.skills-card[data-skill="weather"]')
-        card.locator('.skills-details > summary').click()
-        form = card.locator('[data-presence-runtime-form]')
-        folder = form.locator('[name="workspace_root"]')
-        assert folder.input_value() == "/work/current"
-        selected = "/work/shared documents/quarterly reports"
-        folder.fill(selected)
-        form.locator('[name="model_slot"]').select_option("light")
-        capture(page, browser_name, width, "presence-workspace-edit")
-        assert folder.bounding_box()["width"] > 200
-        form.locator('button[type="submit"]').click()
-        page.wait_for_function("document.querySelector('[data-presence-runtime-form]').dataset.stateFingerprint === '1'.repeat(64)")
-        assert writes[0]["workspace_root"] == selected
-        assert writes[0]["runtime_overrides"]["model_slot"] == "light"
-        assert folder.input_value() == selected
-        form.locator('[data-presence-runtime-reset]').click()
-        page.wait_for_function("document.querySelector('[data-presence-runtime-form]').dataset.stateFingerprint === '2'.repeat(64)")
-        assert "workspace_root" not in writes[1]
-        assert writes[1]["runtime_overrides"] == {"model_slot": None, "inline_max_rounds": None}
-        assert folder.input_value() == selected
-        capture(page, browser_name, width, "presence-workspace-saved")
-        assert no_overflow(page)
+        assert page.locator('[data-presence-runtime-form]').count() == 0
     finally:
         browser.close()
 
@@ -172,7 +131,7 @@ def test_skills_primary_paints_while_optional_requests_remain_pending(skills_bro
 
 
 @pytest.mark.parametrize("browser_name", ["chromium", "webkit"])
-def test_skills_late_enrichment_preserves_presence_and_portalled_menu(skills_browser, browser_name):
+def test_skills_late_enrichment_preserves_input_and_portalled_menu(skills_browser, browser_name):
     browser = getattr(skills_browser, browser_name).launch(headless=True)
     skills = None
     try:
@@ -187,10 +146,11 @@ def test_skills_late_enrichment_preserves_presence_and_portalled_menu(skills_bro
         card = page.locator('.skills-card[data-skill="weather"]')
         card.wait_for()
         card.locator('.skills-details > summary').click()
+        card.locator('.skills-details').evaluate("node => node.insertAdjacentHTML('beforeend', '<form data-local-test-form><input name=inline_max_rounds></form>')")
         field = card.locator('[name="inline_max_rounds"]')
         field.fill("27")
         page.evaluate("""() => {
-            window.keptForm = document.querySelector('[data-presence-runtime-form]');
+            window.keptForm = document.querySelector('[data-local-test-form]');
             window.keptField = keptForm.elements.inline_max_rounds;
             keptField.focus();
             keptField.dispatchEvent(new CompositionEvent('compositionstart', {bubbles:true, data:'2'}));
@@ -200,7 +160,7 @@ def test_skills_late_enrichment_preserves_presence_and_portalled_menu(skills_bro
                  "source": "clawhub", "error": "Ghost install failed"}
         skills.release("/api/skills/lifecycle-queue", {"active": running, "events": [ghost]})
         page.wait_for_function("document.querySelector('.skills-card[data-skill=weather] .skills-card-status').textContent.includes('Turning off')")
-        assert page.evaluate("keptField === document.activeElement && keptField === document.querySelector('[name=inline_max_rounds]') && keptForm === document.querySelector('[data-presence-runtime-form]')")
+        assert page.evaluate("keptField === document.activeElement && keptField === document.querySelector('[name=inline_max_rounds]') && keptForm === document.querySelector('[data-local-test-form]')")
         assert field.input_value() == "27"
         assert card.locator('.skills-details').get_attribute('open') is not None
         assert card.locator('.skills-toggle').is_disabled()
@@ -270,9 +230,10 @@ def test_details_follow_the_listing_and_keep_what_the_owner_opened(skills_browse
         assert "Submitted v1.0 · PR #7" in publication.inner_text()
         card.locator('.skills-review-findings > summary').click()
         card.locator('.skills-review-findings li').first.wait_for()
+        card.locator('.skills-details').evaluate("node => node.insertAdjacentHTML('beforeend', '<form data-local-test-form><input name=inline_max_rounds></form>')")
         card.locator('[name="inline_max_rounds"]').fill("27")
         page.evaluate("""() => {
-            window.keptForm = document.querySelector('[data-presence-runtime-form]');
+            window.keptForm = document.querySelector('[data-local-test-form]');
             window.keptFindings = document.querySelector('.skills-review-findings');
         }""")
 
@@ -280,7 +241,7 @@ def test_details_follow_the_listing_and_keep_what_the_owner_opened(skills_browse
         refresh(page)
         assert publication.count() == 0, "the forgotten record is gone without a reload"
         assert card.locator('.skills-details').get_attribute('open') is not None
-        assert page.evaluate("keptForm === document.querySelector('[data-presence-runtime-form]')")
+        assert page.evaluate("keptForm === document.querySelector('[data-local-test-form]')")
         assert card.locator('[name="inline_max_rounds"]').input_value() == "27"
         assert page.evaluate("keptFindings === document.querySelector('.skills-review-findings') && keptFindings.open")
         assert card.locator('.skills-review-findings li').count() == 1
@@ -291,7 +252,7 @@ def test_details_follow_the_listing_and_keep_what_the_owner_opened(skills_browse
         refresh(page)
         assert card.locator('.skills-review-findings > summary').inner_text() == "2 review findings"
         assert card.locator('.skills-review-findings li').count() == 0, "the new block is built when opened"
-        assert page.evaluate("keptForm === document.querySelector('[data-presence-runtime-form]')")
+        assert page.evaluate("keptForm === document.querySelector('[data-local-test-form]')")
         capture(page, browser_name, 1280, "details-follow-listing")
     finally:
         browser.close()

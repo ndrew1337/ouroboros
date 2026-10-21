@@ -47,6 +47,7 @@ class PresenceTurnEvent:
     # Negotiated separately from receipts and never part of the event identity
     # (``presence_continuation``): 1 lets the transport take the initial envelope early.
     continuation_version: int = 0
+    facts: tuple[str, ...] | None = None
 
 
 def presence_turn_event(payload: Any, admission: PresenceAdmission, *,

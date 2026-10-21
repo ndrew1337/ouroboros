@@ -169,8 +169,9 @@ def test_observe_and_network_boundaries_preserve_inspection(tmp_path, owned):
 @pytest.mark.parametrize("granted", [False, True])
 def test_verified_presence_ceiling_is_the_authority_not_actor_identity(tmp_path, monkeypatch, owned, granted):
     from ouroboros import owner_pause
-    from ouroboros.presence_authority import build_presence_capability_ceiling, presence_ceiling_payload
-    from ouroboros.presence_capabilities import PresenceToolTarget
+    from ouroboros.presence_authority import presence_ceiling_payload
+    from tests.frozen_presence_authority import build_presence_capability_ceiling
+    from tests.frozen_presence_capabilities import PresenceToolTarget
     from tests.test_presence_authority import _resolution
 
     monkeypatch.setattr(owner_pause, "run_operation", lambda ctx, fn, *a, **kw: fn(*a, **kw))

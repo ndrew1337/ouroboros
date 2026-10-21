@@ -825,12 +825,14 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 407 -> 408: the upstream local evolution export adds task_results/artifacts/*/evolution-*.json.
 # 408 -> 409: ``state/body_adoption/installation_stop.py``, the stdlib Panic reader captured beside
 # the switch helper (body adoption row).
-# 409 -> 412 (live calls):
+# 409 -> 414: the place seam (one path the inherited pin missed) plus focus, the gate directory and its
+# author-census member family, documented in section 2.
+# 414 -> 417 (live calls):
 # Live calls retain conversation-wire.jsonl and the sibling extension-imports lock.
 # The unused realtime-wire and realtime-prepared probe writers are retired by the host lane.
 # The host's exact-route tariff cache adds state/pricing/litellm.json.
 # PERSISTENCE names its overwrite lifetime; reconcile markers already exist on base.
-EXPECTED_SCAN_PATHS = 412
+EXPECTED_SCAN_PATHS = 417
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

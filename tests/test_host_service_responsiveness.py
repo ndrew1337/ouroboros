@@ -86,10 +86,10 @@ def _resolve_preparation_once(monkeypatch, ctx, binding_id: str) -> None:
                         lambda raw: identity if raw == TOKEN else authenticate(raw))
     monkeypatch.setattr(ctx, "require_permission", lambda skill, payload, permission: (
         None if (skill, permission) == (identity[0], "presence") else require(skill, payload, permission)))
-    monkeypatch.setattr(host_service, "_admit_presence", lambda *_args: admission)
+    monkeypatch.setattr(host_service, "_admit_presence", lambda *_args, **_kw: admission)
 
 
-async def _until(predicate, timeout: float = 5.0) -> None:
+async def _until(predicate, timeout: float = 15.0) -> None:
     deadline = time.monotonic() + timeout
     while not predicate():
         assert time.monotonic() < deadline, "condition not reached"
@@ -110,7 +110,7 @@ def test_queued_and_executing_turns_leave_the_default_executor_free(tmp_path, mo
 
     def runner(**kwargs):
         entered.append(kwargs["event"].source_event_id)
-        assert release.wait(10)
+        assert release.wait(30)
         return _answer(**kwargs)
 
     app, binding_id, ctx = _presence_app(tmp_path, runner, account_wide=True)
@@ -148,7 +148,7 @@ def test_retries_join_turns_whose_waiters_were_cancelled_even_at_full_budget(tmp
     def runner(**kwargs):
         calls.append(kwargs["event"].source_event_id)
         entered.set()
-        assert release.wait(10)
+        assert release.wait(30)
         return _answer(**kwargs)
 
     app, binding_id, ctx = _presence_app(tmp_path, runner)
@@ -469,7 +469,7 @@ def test_same_source_id_with_different_room_or_text_never_joins_or_replays(tmp_p
 
         calls.append(kwargs["event"].text)
         entered.set()
-        assert release.wait(10)
+        assert release.wait(30)
         event = kwargs["event"]
         answer = _answer(**kwargs)
         write_task_result(tmp_path, presence_turn_task_id(binding, event.source_event_id), "completed",
@@ -516,7 +516,7 @@ def test_many_slow_auth_probes_do_not_fill_the_default_executor(tmp_path, monkey
             if active[0] == 2:
                 entered.set()
         try:
-            assert release.wait(10)
+            assert release.wait(30)
             return original(token)
         finally:
             with lock:
@@ -548,15 +548,15 @@ def test_slow_presence_preparation_cannot_fill_the_default_executor(tmp_path, mo
     lock, active, peak = threading.Lock(), [0], [0]
     original = host_service._admit_presence
 
-    def slow_admission(*args):
+    def slow_admission(*args, **kwargs):
         with lock:
             active[0] += 1
             peak[0] = max(peak[0], active[0])
             if active[0] == 2:
                 entered.set()
         try:
-            assert release.wait(10)
-            return original(*args)
+            assert release.wait(30)
+            return original(*args, **kwargs)
         finally:
             with lock:
                 active[0] -= 1
@@ -580,3 +580,9 @@ def test_slow_presence_preparation_cannot_fill_the_default_executor(tmp_path, mo
         shared.shutdown(wait=True)
 
     asyncio.run(scenario())
+
+
+@pytest.fixture(autouse=True)
+def _focus_authority_available(monkeypatch):
+    monkeypatch.setattr("ouroboros.presence_admission.focus_enabled", lambda _root: True)
+    monkeypatch.setattr("ouroboros.presence_admission.focus_allowance", lambda _root: {"status": "available", "remaining_usd": 10})

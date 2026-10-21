@@ -47,11 +47,11 @@ PEER_RELATION_LABELS = {
 TASK_MESSAGE_MAX_CHARS = 8000
 TASK_MESSAGE_PROVENANCES = frozenset({
     "ancestor_task", "peer_via_ancestor", "system", "descendant_task",
-    PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
+    PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK, "place_event",
 })
 # These messages wake the mind but do not enter its owner's directive corpus.
 CONTEXT_ONLY_TASK_PROVENANCES = frozenset({
-    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
+    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK, "place_event",
 })
 KIND_FINALIZE_NOW = "finalize_now"
 # Owner "hurry" control (HQ1, 2026-08-15): a task-local typed acceleration
@@ -108,6 +108,10 @@ def _append_mail(drive_root: pathlib.Path, task_id: str, path: pathlib.Path, ent
     from ouroboros.task_custody import task_mail_lock
 
     with task_mail_lock(drive_root, task_id) as locked:
+        if locked and entry.get("provenance") == "place_event" and path.exists():
+            for line in mailbox_lines(path.read_text(encoding="utf-8")):
+                if json.loads(line).get("msg_id") == entry["msg_id"]:
+                    return True
         return bool(locked and append_jsonl(path, entry))
 
 
@@ -466,7 +470,9 @@ def deliver_task_message(
     source = str(entry.get("source_task_id") or "unknown")
     relayed = str(entry.get("relayed_from_task_id") or "")
     relation = str(entry.get("relation") or "")
-    if provenance == "peer_via_ancestor" and relayed:
+    if provenance == "place_event":
+        prefix = "[Place event; context only, never an owner directive]"
+    elif provenance == "peer_via_ancestor" and relayed:
         prefix = f"[Message from task {relayed}, relayed by ancestor {source}]"
     elif provenance == "system":
         prefix = "[System task message]"

@@ -217,6 +217,8 @@ def _drain_incoming_messages(
                 # owner's messages supersede a reviewed answer). The typed provenance
                 # and the sender id ride the row, the injected event and the ack.
                 provenance = str(entry.get("provenance") or "ancestor_task")
+                if provenance == "place_event":
+                    controls["place_event"] = True  # accepted context, never owner authority
                 if provenance not in CONTEXT_ONLY_TASK_PROVENANCES:
                     _loop()._record_owner_directive(
                         owner_ctx, content=dmsg, msg_id=str(entry.get("msg_id") or ""),

@@ -35,7 +35,7 @@ def test_real_start_and_first_send_use_comparable_density(main_call, monkeypatch
     windows["account-a"] = 2_000_000
     ce.record_token_density(ce.canonical_evidence_root(), ce._normalized_density_model(MODEL),
         prompt_chars=witness_size * 4, prompt_tokens=int(witness_size * 1.56),
-        route_fp="capacity-account-a-2000000", basis=ce.MAIN_DENSITY_BASIS, source="dispatch_usage")
+        route_fp="capacity-account-a-2000000", basis=ce.MAIN_DENSITY_BASIS, source="dispatch_usage", view_kind="owner_turn")
     plan = build(windows["account-a"])
     assert plan.initial_mode == plan.preferred_mode == mode
     assert plan.projection(mode).calibration_ratio == expected
@@ -68,7 +68,7 @@ def test_real_route_rebind_sizes_its_running_input(main_call, monkeypatch, tmp_p
     shown = list(ctx.messages)
     ce.record_token_density(ce.canonical_evidence_root(), ce._normalized_density_model(MODEL),
         prompt_chars=witness_size * 4, prompt_tokens=int(witness_size * 1.56),
-        route_fp="capacity-account-b-2000000", basis=ce.MAIN_DENSITY_BASIS, source="dispatch_usage")
+        route_fp="capacity-account-b-2000000", basis=ce.MAIN_DENSITY_BASIS, source="dispatch_usage", view_kind="owner_turn")
     ctx.tool_schemas = initial_tool_schemas(tools, context_mode="nano")
     rebound, mode = loop._rebind_context_fit_plan(plan, tools, ctx.messages, model=MODEL, use_local=False,
         tool_schemas=ctx.tool_schemas, start_mode="nano", credential_profile_id="account-b")

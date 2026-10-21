@@ -915,7 +915,7 @@ def emit_task_results(
 
         send_event = project_terminal_result_event(env.drive_root, task, str(task.get("id") or ""), result_text=notice,
                                                    terminal_origin=TERMINAL_ORIGIN_HOST_NOTICE, base_event=send_event)
-    if not quiet:
+    if not quiet or _presence:
         pending_events.append(build_presence_result_event(
             task, text, ctx, terminal_origin=str(usage.get("terminal_origin") or ""),
             retain_scheduled_handoff=failed_or_forced,

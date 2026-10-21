@@ -21,6 +21,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/health",
     "GET /api/contract",
     "GET /api/state",
+    "GET /api/consciousness",
     "GET /api/settings",
     "POST /api/settings",
     "POST /api/settings/secret",
@@ -42,9 +43,14 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "POST /api/owner/context-mode",
     "POST /api/owner/effort-range",
     "POST /api/owner/safety-mode",
+    "POST /api/owner/safety-rules",
+    "POST /api/owner/safety-model",
     "POST /api/owner/capability-ack",
     "POST /api/owner/skills/{skill}/attest-review",
-    "POST /api/owner/skills/{skill}/presence-runtime",
+    "GET /api/places",
+    "POST /api/places",
+    "POST /api/places/{place_id}",
+    "DELETE /api/places/{place_id}",
     "POST /api/skills/{skill}/publish-preflight",
     "GET /api/model-catalog",
     "POST /api/tasks",
@@ -220,6 +226,7 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/health": Shape("200:HealthResponse"),
     "GET /api/contract": Shape("200:GatewayContractResponse"),
     "GET /api/state": Shape("200:StateResponse 500:ErrorResponse"),
+    "GET /api/consciousness": Shape("200:json 503:json", note="consciousness panel: status, spend by cause, places, recent wakes"),
     "GET /onboarding": Shape("200:html", query="builtin", note="selected setup or builtin wizard; builtin=1 forces builtin"),
     "GET /api/onboarding": Shape("200:html 204:empty", note="204: a ready provider exists, no setup needed"),
     "GET /api/onboarding/bootstrap": Shape("200:OnboardingBootstrapResponse", note="read-only; writes nothing"),
@@ -264,6 +271,8 @@ HTTP_SHAPES: dict[str, Shape] = {
     "POST /api/owner/context-mode": Shape(f"200:OwnerContextModeResponse {_SETTINGS_REFUSAL} 404:SettingsWriteRefusal", "OwnerContextModeRequest"),
     "POST /api/owner/effort-range": Shape(f"200:OwnerEffortRangeResponse {_SETTINGS_REFUSAL} 404:SettingsWriteRefusal", "OwnerEffortRangeRequest",
                                           note="helper min <= max; primary independent; optional project_id, otherwise Main"),
+    "POST /api/owner/safety-rules": Shape(f"200:OwnerSafetyRulesResponse {_SETTINGS_REFUSAL}", "OwnerSafetyRulesRequest"),
+    "POST /api/owner/safety-model": Shape(f"200:OwnerSafetyModelResponse {_SETTINGS_REFUSAL}", "OwnerSafetyModelRequest"),
     "POST /api/owner/safety-mode": Shape(f"200:OwnerSafetyModeResponse {_SETTINGS_REFUSAL}", "OwnerSafetyModeRequest"),
     "POST /api/owner/capability-ack": Shape(
         "200:ResponseLimitAckResponse|ContextWindowAckResponse 400:ErrorResponse", "CapabilityAckRequest",
@@ -271,10 +280,10 @@ HTTP_SHAPES: dict[str, Shape] = {
     "POST /api/owner/skills/{skill}/attest-review": Shape(
         "200,409:SkillReviewResponse 400:ErrorResponse", "SkillRevisionRequest",
         note=f"the owner's review verdict; 409 when refused (ok false); {_IN_LANE}"),
-    "POST /api/owner/skills/{skill}/presence-runtime": Shape(
-        "200:OwnerSkillPresenceRuntimeResponse 400:ErrorResponse 404:SkillActionRefusal "
-        "409:SkillActionRefusal|ErrorResponse", "OwnerSkillPresenceRuntimeRequest",
-        note="compare-and-set on expected_state_fingerprint (409 presence_state_conflict when it moved)"),
+    "GET /api/places": Shape("200:json", note="Places and installed connector declarations; §12 Places"),
+    "POST /api/places": Shape("200:json 400:json", "json", note="connect from a declared connector"),
+    "POST /api/places/{place_id}": Shape("200:json 400,409:json", "json", note="atomic owner-authored place choices"),
+    "DELETE /api/places/{place_id}": Shape("200:json 400:json", note="disconnect; room history stays"),
     "POST /api/skills/{skill}/publish-preflight": Shape(
         "200,400,404,409,503:SkillPublishPreflightResponse", "SkillPublishPreflightRequest",
         note="read-only; every status carries the same shape; state hard_block is a refusal; destination "

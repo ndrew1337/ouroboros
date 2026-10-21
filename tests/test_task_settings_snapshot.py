@@ -141,7 +141,8 @@ def test_two_overlapping_real_task_entries_keep_readers_and_behavior(monkeypatch
         old_ready.set()
         assert new_ready.wait(10)
         later = observe()
-        decision = (safety.check_safety("run_command", {"cmd": ["touch", "example"]})[0],
+        decision = (safety.check_safety("run_command", {"cmd": ["touch", "example"]},
+                    ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))[0],
                     skill_review_gate("blockers")["executable_review"])
         # The owner writer executes even inside an old task; its source stays LIVE.
         from ouroboros.gateway.owner_settings import _owner_update_settings
@@ -153,7 +154,8 @@ def test_two_overlapping_real_task_entries_keep_readers_and_behavior(monkeypatch
         value = observe()
         new_ready.set()
         assert finish.wait(10)
-        decision = (safety.check_safety("run_command", {"cmd": ["touch", "example"]})[0],
+        decision = (safety.check_safety("run_command", {"cmd": ["touch", "example"]},
+                    ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))[0],
                     skill_review_gate("blockers")["executable_review"])
         return value, decision
 

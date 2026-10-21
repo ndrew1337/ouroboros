@@ -48,6 +48,7 @@ class MainFitMeasurement:
     # a declared conversation window: the retained-conversation bound stays independent.
     accepted_input_tokens: Optional[int] = None
     window_reading_tokens: Optional[int] = None
+    view_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -110,7 +111,7 @@ def measure_main_fit(
     density, basis = ((1.0, "cold_estimate") if plan.window_basis == "estimator" else
                      (float(anchor.density), "fresh_route_usage") if anchor is not None else
                       resolve_main_token_density(canonical_evidence_root(), plan.route_fp, plan.model,
-                                                 estimate_tokens=raw_input))
+                                                 estimate_tokens=raw_input, view_kind=plan.view_kind))
     estimated_input = int(math.ceil(raw_input * density))
     ceiling = int(plan.output_reserve_tokens or 0)
     nano = profile.endswith("_nano")
@@ -135,6 +136,7 @@ def measure_main_fit(
     margin = reclaim_low_water_margin(target, capacity) if deficit > 0 else 0
     goal = deficit + margin
     measurement = MainFitMeasurement(
+        view_kind=plan.view_kind,
         route_fp=str(plan.route_fp or ""),
         round_id=str(round_id or ""),
         profile=profile,

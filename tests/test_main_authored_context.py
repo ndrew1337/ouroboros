@@ -26,6 +26,7 @@ def main_loop(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_CONTEXT_MODE", "max")
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     monkeypatch.setenv("OUROBOROS_MAX_ROUNDS", "12")
     monkeypatch.setenv("MCP_ENABLED", "false")
     monkeypatch.setattr(loop, "_maybe_inject_finalization_nudges", lambda *_args: False)

@@ -216,7 +216,7 @@ def _rebind(monkeypatch, root, plan, messages, *, window, ratio=1.0, status="ass
     registry._ctx._accumulated_usage = usage
     evidence = SimpleNamespace(route_fp=f"r-{window}", status=status, stale=status != "asserted", window_tokens=window)
     monkeypatch.setattr(ouroboros.context, "_context_fit_route", lambda *_a, **_kw: ({"model": "m2", "provider": "p"}, evidence))
-    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a: ratio)
+    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a, **_kw: ratio)
     rebound, mode = _rebind_context_fit_plan(plan, registry, messages, model="m2", use_local=False, start_mode="low",
                                              tool_schemas=[])
     events = [json.loads(line) for line in (root / "logs" / "events.jsonl").read_text(encoding="utf-8").splitlines()]
@@ -319,7 +319,7 @@ def test_a_cold_restore_sends_the_new_capture_at_its_own_level_not_refolded_to_t
     registry._ctx.owner_wait_callback = lambda *_a: None
     evidence = SimpleNamespace(route_fp="r", status="asserted", stale=False, window_tokens=1_000_000)
     monkeypatch.setattr(ouroboros.context, "_context_fit_route", lambda *_a, **_kw: ({"model": "m", "provider": "p"}, evidence))
-    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a: 1.0)
+    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     monkeypatch.setattr(ouroboros.loop, "get_context_mode", lambda: owner)
     state = {"messages": copy.deepcopy(restored), "trace": {}, "usage": {}, "seen": [], "owner_directives": [],
              "route": {"active_model": "m", "active_effort": "high", "active_use_local": False, "active_context_mode": ran},

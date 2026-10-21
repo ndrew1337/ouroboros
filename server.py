@@ -203,52 +203,11 @@ _dialogue_bridge: Any = None  # the chat bridge published at the store's publica
 _dialogue_lock = threading.Lock()
 
 
-def _clock_of(iso_value: Any) -> str:
-    """``HH:MM`` in the server's local time for an ISO instant (``?`` when absent)."""
-    from ouroboros.deadline_utils import parse_deadline_ts
-
-    parsed = parse_deadline_ts(str(iso_value or ""))
-    return parsed.astimezone().strftime("%H:%M") if parsed is not None else "?"
+from ouroboros.consciousness_view import _clock_of as _clock_of, describe_consciousness, describe_consciousness_state
 
 
 def _describe_bg_consciousness_state(requested_enabled: bool | None) -> dict:
-    """Project the alarm clock's snapshot into one honest status + detail line
-    (``None``: the stored control is unknown, never read as off — #1307)."""
-    snapshot = _consciousness.status_snapshot() if _consciousness else {}
-    outcome = str(snapshot.get("last_wake_outcome") or "")
-    next_at = _clock_of(snapshot.get("next_wake_at"))
-    if requested_enabled is None:
-        status, detail = "unknown", "The stored consciousness control is unknown: runtime state is unavailable or recovering."
-    elif not requested_enabled:
-        status, detail = "disabled", "Background consciousness is off."
-    elif not snapshot:
-        status, detail = "stopped", "Enabled in state, but the alarm clock was not constructed (supervisor init failed)."
-    elif snapshot.get("live_wake_task_id"):
-        status, detail = "thinking", f"Wake-up {snapshot['live_wake_task_id']} is running as a Main turn."
-    elif outcome == "skipped:waiting_for_first_conversation":
-        status, detail = "waiting_for_first_conversation", "No owner chat is bound yet; the first conversation binds it."
-    elif outcome == "skipped:allowance_exhausted":
-        spent, daily = snapshot.get("spent_24h_usd"), snapshot.get("daily_usd")
-        status = "allowance_exhausted"
-        at_least = "at least " if int(snapshot.get("unknown_unmetered") or 0) > 0 else ""
-        degraded = "; ledger integrity degraded" if snapshot.get("integrity_degraded") else ""
-        detail = (f"Daily allowance spent ({at_least}${float(spent or 0):.2f} of ${float(daily or 0):.2f} in the last 24 h{degraded}); "
-                  f"next check at {_clock_of(snapshot.get('allowance_resets_at')) if snapshot.get('allowance_resets_at') else next_at}.")
-    elif outcome == "skipped:allowance_unknown":
-        status, detail = "allowance_unknown", f"The usage ledger could not be read ({snapshot.get('last_error') or 'unknown error'}); retry at {next_at}."
-    elif outcome.startswith("rejected:"):
-        status, detail = "wake_rejected", f"The last wake-up was refused ({outcome.split(':', 1)[1]}); next attempt at {next_at}."
-    elif outcome in {"paused", "pausing"}:
-        status = "wake_paused"
-        detail = (f"The last wake-up returned while {outcome}; its task card shows the current state. "
-                  f"Next wake check at {next_at}.")
-    elif outcome == "unknown":
-        status, detail = "wake_outcome_unknown", f"The last wake-up's outcome is unconfirmed; next check at {next_at}."
-    elif outcome == "failed":
-        status, detail = "wake_failed", f"The last wake-up failed ({snapshot.get('last_error') or 'runner error'}); next attempt at {next_at}, backing off."
-    else:
-        status, detail = "sleeping", f"Sleeping until {next_at}."
-    return {**snapshot, "enabled": requested_enabled, "status": status, "detail": detail}
+    return describe_consciousness_state(_consciousness.status_snapshot() if _consciousness else {}, requested_enabled)
 
 
 def _start_supervisor_if_needed(settings: dict) -> bool:
@@ -480,7 +439,7 @@ def _handle_bridge_update_batch(bridge, updates, offset: int, ctx: Any, cursor: 
             # a bare `/review` (Telegram) runs on the Main model.
             parts = text.split(None, 1)
             ctx.queue_deep_self_review_task(reason="owner:/review", force=True, chat_id=chat_id, client_message_id=client_message_id,
-                                            reviewer=parts[1].strip() if len(parts) > 1 else "")
+                                            reviewer=parts[1].strip() if len(parts) > 1 else "", origin={"work_kind": "owner"})
         elif lowered.startswith("/evolve"):
             parts = lowered.split()
             action = parts[1] if len(parts) > 1 else "on"
@@ -1391,6 +1350,7 @@ app.app.state.supervisor_ready_event = _supervisor_ready  # type: ignore[attr-de
 app.app.state.supervisor_init_done_event = _supervisor_init_done  # type: ignore[attr-defined]
 app.app.state.get_supervisor_error = lambda: _supervisor_error  # type: ignore[attr-defined]
 app.app.state.describe_bg_consciousness_state = _describe_bg_consciousness_state  # type: ignore[attr-defined]
+app.app.state.describe_consciousness = lambda: describe_consciousness(_consciousness)  # type: ignore[attr-defined]
 app.app.state.startup_owner_command = _startup_owner_command
 app.app.state.request_restart = _request_restart_exit  # type: ignore[attr-defined]
 app.app.state.runtime_branch_defaults = _runtime_branch_defaults  # type: ignore[attr-defined]

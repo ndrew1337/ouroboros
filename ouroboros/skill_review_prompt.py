@@ -122,6 +122,13 @@ review enforcement mode.
 
 {checklist_section}
 
+Under permissions_honesty, compare each manifest tools: declaration with its
+implementation: effect read means no external mutation, message means words to
+people, write includes mixed operations (absent or unknown also means write).
+Check that target names every destination argument, including To/Cc/Bcc, and
+conversation/thread name the actual routing arguments. Caller-selected effect
+arguments cannot attest a read. Place connectors must declare every tool.
+
 ## Governance context — docs/ARCHITECTURE.md
 
 Use the named sections "Key Invariants", "Host Service, Companion Processes,

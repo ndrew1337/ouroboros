@@ -341,7 +341,7 @@ def test_skill_preflight_reports_missing_pluginapi_permissions(tmp_path, monkeyp
 @pytest.mark.serial
 def test_run_shell_writes_a_self_authored_marker_example(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
-    monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     ctx = _make_ctx(tmp_path)
     marker = ctx.repo_dir / "example" / ".self_authored.json"
     marker.parent.mkdir()

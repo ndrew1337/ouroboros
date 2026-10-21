@@ -105,7 +105,7 @@ EXPECTED_TOOLS = [
     "compact_context", "set_tool_timeout", "request_restart", "prepare_self_change",
     "inspect_harness", "maintain_harness", "inspect_subagent",
     "promote_to_stable", "schedule_subagent", "schedule_followup", "manage_schedules",
-    "configure_presence", "initiate_presence",
+    "configure_presence",
     "integrate_subagent_patch", "compare_subagent_patches",
     # C1: the explicit acceptance seam for a delegated run's captured patch —
     # a first-class tool, so the registry contract must name it.

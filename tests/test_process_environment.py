@@ -148,8 +148,9 @@ def test_tool_argument_log_redacts_nested_keys_before_projection(tmp_path):
 def test_restricted_service_refs_fail_before_settings_lookup(process_context, monkeypatch, actor):
     registry, ctx, workspace, _data = process_context
     if actor == 'presence':
-        from ouroboros.presence_authority import build_presence_capability_ceiling, presence_ceiling_payload
-        from ouroboros.presence_capabilities import PresenceResourceTarget, PresenceToolTarget
+        from ouroboros.presence_authority import presence_ceiling_payload
+        from tests.frozen_presence_authority import build_presence_capability_ceiling
+        from tests.frozen_presence_capabilities import PresenceResourceTarget, PresenceToolTarget
         from tests.test_presence_authority import _resolution
 
         ceiling = build_presence_capability_ceiling(

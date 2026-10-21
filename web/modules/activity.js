@@ -251,7 +251,7 @@ export function scheduleOutcomeToast(action, outcome) {
     return outcome.status === 'suppressed' ? [`Schedule ${done}.`, 'info'] : null;
 }
 
-export function initActivity({ mount, ws } = {}) {
+export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
     if (!mount) return { refresh: () => {} };
     let busy = false;
     let refreshRevision = 0;
@@ -349,11 +349,12 @@ export function initActivity({ mount, ws } = {}) {
         ].filter(Boolean).join(' · ');
         return `<div class="activity-row">
             <div class="activity-row-main">
-                <span class="activity-name">Background consciousness</span>
+                <span class="activity-name">Consciousness</span>
                 <span class="activity-sub">${enabled ? 'enabled' : 'disabled'}${detail ? ` · ${detail}` : ''}${facts ? ` · ${facts}` : ''}</span>
             </div>
             <div class="activity-row-actions">
                 <button type="button" class="btn btn-xs btn-default" data-act="bg-toggle" data-enabled="${enabled ? '1' : '0'}"${ws ? '' : ' disabled'}>${enabled ? 'Stop' : 'Start'}</button>
+                <button type="button" class="btn btn-xs btn-ghost" data-act="bg-open" aria-label="Open Dashboard › Consciousness"${openDashboardTab ? '' : ' hidden'}>Details</button>
             </div>
         </div>`;
     }
@@ -486,6 +487,7 @@ export function initActivity({ mount, ws } = {}) {
         if (!btn || busy) return;
         const act = btn.dataset.act;
         const id = btn.dataset.id || '';
+        if (act === 'bg-open') { openDashboardTab?.('consciousness'); return; }
         if (act === 'task-control') {
             // S3 (Q2/HQ1): owner product-wide parity — the SAME three-action
             // dropdown as the Chat card (one shared module: same actions,

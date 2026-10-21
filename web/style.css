@@ -6235,24 +6235,6 @@ button.skills-mark { cursor: pointer; min-height: 0; }
 .skills-review-findings ul,
 .skills-card-warnings ul { margin: var(--space-1) 0 0; padding-left: 18px; color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
 .skills-review-reason { color: var(--text-meta); font-size: var(--type-meta); overflow-wrap: anywhere; white-space: pre-wrap; }
-.skills-presence-runtime {
-    width: min(100%, 620px);
-    margin-top: var(--space-2);
-    padding: var(--space-3);
-    border-radius: var(--radius-inner);
-    background: var(--surface-tray);
-    display: flex;
-    flex-wrap: wrap;
-    align-items: end;
-    gap: var(--space-2) var(--space-3);
-}
-.skills-presence-runtime-title { flex-basis: 100%; color: var(--text-primary); font-size: var(--type-meta); font-weight: 600; }
-.skills-presence-runtime label { display: grid; gap: var(--space-1); color: var(--text-meta); font-size: var(--type-meta); }
-.skills-presence-runtime input { width: 110px; }
-.skills-presence-runtime .skills-presence-workspace { flex: 1 1 100%; min-width: 0; }
-.skills-presence-workspace input { width: 100%; }
-.skills-presence-runtime-actions { display: flex; gap: var(--space-2); }
-.skills-presence-runtime > .muted { flex-basis: 100%; color: var(--text-meta); font-size: var(--type-meta); }
 
 /* Page chrome: the Installed search and quiet filters; Browse search, Source, Sort and Official only. */
 .skills-search-chrome .skills-search { flex: 1 1 260px; min-width: min(200px, 100%); }
@@ -9858,21 +9840,6 @@ body.keyboard-open .project-panel {
 .form-field input:not(.ui-control):not(.ui-checkbox):focus {
     border-color: var(--focus-accent-border);
     box-shadow: 0 0 0 3px var(--focus-accent-ring);
-}
-
-
-.skills-presence-runtime select:not(.ui-control),
-.skills-presence-runtime input:not(.ui-control) {
-    min-height: 32px;
-    border: 1px solid rgba(var(--neutral-rgb), 0.12);
-    border-radius: var(--radius-sm);
-    background: rgba(var(--menu-rgb), 0.8);
-    color: var(--text-primary);
-    padding: 5px 8px;
-}
-
-.skills-presence-runtime input:not(.ui-control) {
-    width: 110px;
 }
 
 

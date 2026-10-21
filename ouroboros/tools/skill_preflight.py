@@ -642,58 +642,6 @@ def _plugin_permission_findings(skill_dir: pathlib.Path, manifest: Optional[Skil
     return findings
 
 
-def _presence_profile_findings(
-    skill_dir: pathlib.Path,
-    manifest: SkillManifest,
-) -> List[Dict[str, Any]]:
-    """Validate the optional reviewed presence declaration without live state."""
-    try:
-        from ouroboros.presence_profile import (
-            PresenceProfileError,
-            parse_presence_profile,
-            presence_profile_fingerprint,
-        )
-    except Exception as exc:
-        log.exception("presence profile preflight failed")
-        return [{
-            "item": "presence_profile",
-            "ok": False,
-            "code": "presence_internal_error",
-            "field": "presence",
-            "detail": f"{type(exc).__name__}: presence validation failed",
-        }]
-    try:
-        profile = parse_presence_profile(manifest, skill_dir)
-    except PresenceProfileError as exc:
-        return [{
-            "item": "presence_profile",
-            "ok": False,
-            "code": exc.code,
-            "field": exc.field,
-            "detail": str(exc),
-        }]
-    except Exception as exc:
-        log.exception("presence profile preflight failed")
-        return [{
-            "item": "presence_profile",
-            "ok": False,
-            "code": "presence_internal_error",
-            "field": "presence",
-            "detail": f"{type(exc).__name__}: presence validation failed",
-        }]
-    if profile is None:
-        return []
-    return [{
-        "item": "presence_profile",
-        "ok": True,
-        "code": "",
-        "field": "presence",
-        "detail": "ok",
-        "profile_fingerprint": presence_profile_fingerprint(profile),
-        "capability_requests": len(profile.capability_requests),
-    }]
-
-
 def _handle_skill_preflight(
     ctx: ToolContext,
     skill: str = "",
@@ -722,7 +670,6 @@ def _handle_skill_preflight(
     manifest_findings: List[Dict[str, Any]] = []
     widget_findings: List[Dict[str, Any]] = []
     permission_findings: List[Dict[str, Any]] = []
-    presence_findings: List[Dict[str, Any]] = []
     manifest: Optional[SkillManifest] = None
     manifest_path = None
     for candidate in ("SKILL.md", "skill.json"):
@@ -739,7 +686,7 @@ def _handle_skill_preflight(
             manifest_findings.append({"item": "manifest_parse", "ok": True, "detail": "ok"})
             widget_findings.extend(_widget_schema_findings(skill_dir, manifest))
             permission_findings.extend(_plugin_permission_findings(skill_dir, manifest))
-            presence_findings.extend(_presence_profile_findings(skill_dir, manifest))
+            # Legacy presence declarations are migration input, not an executable profile.
             if manifest.entry:
                 entry = (skill_dir / manifest.entry).resolve()
                 ok = entry.is_file()
@@ -933,7 +880,6 @@ def _handle_skill_preflight(
         all(f.get("ok") for f in manifest_findings)
         and all(f.get("ok") for f in widget_findings)
         and all(f.get("ok") for f in permission_findings)
-        and all(f.get("ok") for f in presence_findings)
         and all(f.get("ok") for f in file_findings if not f.get("skipped"))
     )
     skipped_files = [f for f in file_findings if f.get("skipped")]
@@ -956,8 +902,6 @@ def _handle_skill_preflight(
         "omitted_files": omitted_files,
         "ok": bool(overall_ok),
     }
-    if presence_findings:
-        payload["presence"] = presence_findings
     notes: List[str] = []
     if skipped_files:
         notes.append(

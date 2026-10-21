@@ -105,7 +105,7 @@ def test_the_coordinator_records_every_step_and_stops_between_steps_only():
 # --- the lifespan ---------------------------------------------------------------------------
 
 @pytest.fixture
-def boot_app(tmp_path, monkeypatch):
+def boot_app(tmp_path, monkeypatch, request):
     """The real ASGI app on a temp root, the lifespan's patch helper of the extension tests."""
     import server as srv
     from tests.test_extensions_api import _patch_lifespan_for_drive_root_test
@@ -114,7 +114,7 @@ def boot_app(tmp_path, monkeypatch):
     drive_root.mkdir()
     srv.app.app.state.drive_root = drive_root
     srv.app.app.state.repo_dir = tmp_path / "repo"
-    _patch_lifespan_for_drive_root_test(monkeypatch, srv, {})
+    _patch_lifespan_for_drive_root_test(monkeypatch, srv, {}, request)
     monkeypatch.setattr(srv, "_boot_managed_update_tasks", lambda: None)
     monkeypatch.setattr("ouroboros.config.get_skills_repo_path", lambda: "")
     return srv, drive_root

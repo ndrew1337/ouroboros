@@ -327,8 +327,15 @@ def test_strict_child_schema_rejects_false_capture_and_wrong_receipt():
     assert set(vision_process._CAPTURE["properties"]) == {field.name for field in fields(ua.PhysicalAttemptCapture)}
     assert set(vision_process._CONTEXT["properties"]) == {field.name for field in fields(ua.PhysicalAttemptContext)}
     capture = asdict(ua.PhysicalAttemptCapture("a", MODEL, "claudexor", "released", "opaque"))
+    capture["physical_context"] = asdict(ua.PhysicalAttemptContext(
+        "owner_low", "low", "cold_estimate", "route", "round", None, None, False, False, view_kind="focus"))
     receipt = {"receipt_id": "ours", "custody": None, "capture": capture}
     vision_process._read_receipt(receipt, "ours")
+    assert vision_process._restore_capture(capture).physical_context.view_kind == "focus"
+    capture["physical_context"]["view_kind"] = ["focus"]
+    with pytest.raises(Exception):
+        vision_process._read_receipt(receipt, "ours")
+    capture["physical_context"]["view_kind"] = "focus"
     with pytest.raises(ValueError, match="another invocation"):
         vision_process._read_receipt(receipt, "theirs")
     capture["effort"] = ["not", "an", "evidence", "object"]

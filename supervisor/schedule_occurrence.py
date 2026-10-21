@@ -64,7 +64,7 @@ log = logging.getLogger(__name__)
 # Host-owned row fields: never authored by a payload, never copied into a task.
 OCCURRENCE_FIELDS = ("occurrence", "hold", "continuation_of", "delete_requested_at")
 _FINGERPRINT_FIELDS = ("task", "trigger", "timezone", "cron", "name", "description", "enabled", "manual_override",
-                       "followup_origin", "followup_relation")
+                       "followup_origin", "followup_relation", "writer_kind", "writer_origin")
 _SETTLED = "settled"
 
 

@@ -9,14 +9,15 @@ import sys
 import pytest
 
 from ouroboros.contracts.task_constraint import TaskConstraint
-from ouroboros.presence_authority import build_presence_capability_ceiling, presence_ceiling_payload
-from ouroboros.presence_capabilities import (
+from ouroboros.presence_authority import presence_ceiling_payload
+from tests.frozen_presence_authority import build_presence_capability_ceiling
+from tests.frozen_presence_capabilities import (
     PresenceProfileResolution,
     PresenceResourceTarget,
     PresenceSelection,
     PresenceToolTarget,
 )
-from ouroboros.presence_runtime import ResolvedPresenceRuntime
+from tests.frozen_presence_runtime import ResolvedPresenceRuntime
 from ouroboros.tool_access import (
     build_resolved_resource_binding,
     filesystem_affordance_map,

@@ -518,7 +518,8 @@ def test_server_boot_leaves_the_settings_bytes_alone(tmp_path, monkeypatch):
     from ouroboros import config as cfg
     from ouroboros.server_runtime import apply_runtime_provider_defaults
 
-    document = {"OUROBOROS_MODEL_HEAVY": "anthropic/claude-opus-" + "4.7"}
+    document = {"OUROBOROS_MODEL_HEAVY": "anthropic/claude-opus-" + "4.7",
+                "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE": "full"}
     assert apply_runtime_provider_defaults(dict(document))[1] is True, (
         "the fixture must give boot something it could persist")
     settings_path = tmp_path / "settings.json"

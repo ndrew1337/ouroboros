@@ -629,6 +629,7 @@ def _candidate_ineligible(queue, candidate, remaining, running, *, selected=(), 
     from supervisor.events_budget import budget_resume_dispatch_allowed
     from supervisor.state import EVOLUTION_BUDGET_RESERVE
     from supervisor.task_lifecycle import root_cancellation_fenced
+    from supervisor.consciousness_carriers import autonomous_work_enabled
 
     task_id = str(candidate.get("id") or "")
     root_task_id = str(candidate.get("root_task_id") or "").strip()
@@ -637,6 +638,8 @@ def _candidate_ineligible(queue, candidate, remaining, running, *, selected=(), 
             or candidate.get("_project_admission_restore_hold") or claim and claim.get("token") != own_claim):
         return True
     if _foreign_roots_refused(candidate):
+        return True
+    if not autonomous_work_enabled(candidate, _pool().DRIVE_ROOT):
         return True
     if remaining <= 0 and not candidate.get("_owner_wait_resume"):
         return True

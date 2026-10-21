@@ -26,6 +26,7 @@ TS = "2026-09-16T12:00:00Z"
 WAKE_META = {
     "initiator": "consciousness", "usage_category": "consciousness", "wake_reason": "heartbeat",
     "consciousness_autonomy": "act", "model_role": "consciousness",
+    "wake_cause": "own_clock", "consciousness_cause": "own", "work_kind": "consciousness",
 }
 
 

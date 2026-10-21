@@ -88,7 +88,7 @@ def test_consciousness_status_snapshot_exposes_the_alarm_facts(monkeypatch, tmp_
     monkeypatch.setattr(state, "load_state", lambda: {"bg_consciousness_enabled": True, "owner_chat_id": 1})
     monkeypatch.setattr(clock_module, "allowance_window", lambda root, now=None, **_display_read: {
         "status": "available", "limit_usd": 20.0, "settled_usd": 3.0, "accounted_usd": 3.0, "remaining_usd": 17.0, "resets_at": ""})
-    monkeypatch.setattr(BackgroundConsciousness, "_running_roots", staticmethod(lambda: 0))
+    monkeypatch.setattr("supervisor.queue.live_consciousness_roots", lambda: [])
     clock = BackgroundConsciousness(tmp_path, tmp_path / "repo", lambda: 1, now=1_800_000_000.0)
     snapshot = clock.status_snapshot()
 

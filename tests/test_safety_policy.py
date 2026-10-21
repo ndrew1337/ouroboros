@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import pathlib
 import tempfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -283,7 +284,7 @@ def test_llm_unparseable_response_blocks(monkeypatch):
     ok, msg = check_safety("create_github_issue", {"title": "x"})
 
     assert ok is False
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
     assert "repair retry" in msg
     assert len(stub.calls) == 2
 
@@ -343,7 +344,7 @@ def test_llm_api_failure_blocks(monkeypatch):
     ok, msg = check_safety("create_github_issue", {"title": "x"})
 
     assert ok is False
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
     assert "network down" in msg
 
 
@@ -680,7 +681,7 @@ def test_unknown_tool_with_no_safety_backend_fails_open_with_warning(monkeypatch
     stub = _StubLLMClient('{"status":"DANGEROUS","reason":"should not be called"}')
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("totally_new_tool_misconfigured", {"arg": 1})
+    ok, msg = check_safety("totally_new_tool_misconfigured", {"arg": 1}, ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))
     assert ok is True
     assert "SAFETY_WARNING" in msg
     assert "not configured" in msg
@@ -714,7 +715,7 @@ def test_openrouter_only_with_direct_provider_light_model_fails_open(monkeypatch
     stub = _StubLLMClient('{"status":"DANGEROUS","reason":"should not reach here"}')
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("totally_new_tool_mismatch", {"arg": 1})
+    ok, msg = check_safety("totally_new_tool_mismatch", {"arg": 1}, ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))
     assert ok is True
     assert "SAFETY_WARNING" in msg
     assert "provider key missing" in msg or "not configured" in msg
@@ -750,7 +751,7 @@ def test_mixed_remote_local_provider_mismatch_local_failure_fails_open(monkeypat
     stub = _StubLLMClient("unused", raise_exc=RuntimeError("local server down"))
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("totally_new_tool_mixed_config", {"arg": 1})
+    ok, msg = check_safety("totally_new_tool_mixed_config", {"arg": 1}, ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))
     assert ok is True
     assert "SAFETY_WARNING" in msg
     assert "Local safety runtime unreachable" in msg
@@ -779,7 +780,7 @@ def test_explicit_local_light_failure_still_blocks(monkeypatch):
 
     ok, msg = check_safety("some_tool", {"arg": 1})
     assert ok is False
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
 
 
 def test_local_fallback_runtime_error_fails_open_with_warning(monkeypatch):
@@ -805,7 +806,7 @@ def test_local_fallback_runtime_error_fails_open_with_warning(monkeypatch):
     stub = _StubLLMClient("unused", raise_exc=RuntimeError("local server down"))
     _patch_llm_client(monkeypatch, stub)
 
-    ok, msg = check_safety("totally_new_tool_local_down", {"arg": 1})
+    ok, msg = check_safety("totally_new_tool_local_down", {"arg": 1}, ctx=SimpleNamespace(task_metadata={"work_kind": "owner"}))
     assert ok is True
     assert "SAFETY_WARNING" in msg
     assert "Local safety runtime unreachable" in msg
@@ -920,22 +921,14 @@ def test_non_secret_keys_are_not_redacted(key):
     assert not _is_secret_key(key), f"{key!r} should NOT be classified as secret"
 
 
-def test_secret_crossing_truncation_boundary_is_still_redacted():
-    """Redaction must run BEFORE the 500-char message truncation so a
-    Bearer-style token that straddles the cutoff can't evade the regex."""
-    from ouroboros.safety import _format_messages_for_safety
+def test_complete_prompt_sources_are_redacted_without_truncation():
+    from ouroboros.safety import _build_check_prompt
 
     secret = "sk-crossingboundary1234567890ABCDEF"
-    # Place the secret so it starts well before the 500-char cutoff but
-    # extends past it; the pre-truncation redaction must catch the whole shape.
-    prefix = "A" * 480
-    long_text = prefix + secret + "B" * 200
-    output = _format_messages_for_safety([
-        {"role": "user", "content": long_text},
-    ])
-
-    assert "sk-crossingboundary" not in output
-    assert "REDACTED" in output
+    text = "A" * 480 + secret + "B" * 200 + "\nSOURCE_END"
+    prompt = _build_check_prompt("remote_write", {"text": "SUBJECT"}, [{"role": "user", "content": text}])
+    assert secret not in prompt and "REDACTED" in prompt
+    assert "SOURCE_END" in prompt and "SUBJECT" in prompt
 
 
 def test_check_safety_tolerates_none_arguments(monkeypatch):

@@ -211,7 +211,7 @@ def _call_light(drive_root: pathlib.Path, messages: List[Dict[str, Any]], *, cli
     if not available:
         raise LanguageResolveError("language_needs_model", "no credentialed model is configured for the light slot", 400)
     deadline_ts = time.time() + _timeout_sec()
-    with model_concurrency.model_call_slot(model, use_local, deadline_ts=deadline_ts):
+    with model_concurrency.model_call_scope(model, use_local, deadline_ts=deadline_ts):
         remaining = deadline_ts - time.time()
         if remaining <= 0:
             raise TimeoutError("the translation ceiling was spent waiting for a model slot")

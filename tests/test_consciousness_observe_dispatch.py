@@ -121,7 +121,8 @@ def test_observe_delegated_session_stays_readonly_when_access_is_omitted(tmp_pat
 
 def test_schedule_control_is_root_authority_but_reading_is_not(tmp_path):
     """A delegated task may LIST; only the root turn may change a schedule."""
-    child = _registry(tmp_path, {"delegation_role": "subagent"})
+    # The child of an owner task: the Supervisor does not hold it, so the refusal is the schedule tool's own.
+    child = _registry(tmp_path, {"delegation_role": "subagent", "work_kind": "owner"})
     listed = child.execute_result("manage_schedules", {"action": "list"})
     assert listed.status == "ok" and json.loads(listed.text)["tasks"] == []
     for action in ("disable", "delete", "restore"):
@@ -363,6 +364,7 @@ def test_observe_cannot_dispose_any_captured_patch_at_dispatch(tmp_path, monkeyp
     because the call never reaches the handler that would consult them.
     """
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "pro")  # the widest install still refuses
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     assert name in ca.OBSERVE_DISABLED
     calls: list = []
     wake = _registry(tmp_path, _wake_task("observe")["metadata"], task_id="wake-1")
@@ -376,7 +378,7 @@ def test_observe_cannot_dispose_any_captured_patch_at_dispatch(tmp_path, monkeyp
     act_calls: list = []
     act = _registry(tmp_path, _wake_task("act")["metadata"], task_id="wake-2")
     _probe_handler(act, name, act_calls)
-    # (a safety-backend note may ride behind the handler's text in a bare test env)
+    # The independent Safety assessment is disabled; this checks the autonomy boundary.
     assert act.execute(name, args).startswith("PROBE_REACHED_HANDLER")
     assert act_calls == [(name, args)]
 

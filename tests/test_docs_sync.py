@@ -264,11 +264,13 @@ def test_prompt_tool_names_resolve_to_registered_tools(tmp_path):
     registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
     registered = {schema["function"]["name"] for schema in registry.schemas()}
     universe = registered | PROMPT_NON_TOOL_IDENTIFIERS
+    from ouroboros.presence_context import PLACEHOLDERS as FOCUS_PLACEHOLDERS
     wake_universe = universe | set(PLACEHOLDERS)
     for rel, allowed in (
         ("prompts/SYSTEM.md", universe),
         ("prompts/SAFETY.md", universe),
         ("prompts/CONSCIOUSNESS.md", wake_universe),
+        ("prompts/FOCUS.md", universe | set(FOCUS_PLACEHOLDERS)),
     ):
         text = (root / rel).read_text(encoding="utf-8")
         unresolved = _prompt_backticked_identifiers(text) - allowed

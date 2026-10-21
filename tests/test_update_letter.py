@@ -380,7 +380,7 @@ def test_write_letter_shares_one_ceiling_between_the_slot_wait_and_the_call(lett
         yield
 
     real_now = ul.time.time()
-    monkeypatch.setattr(mc, "model_call_slot", slow_slot)
+    monkeypatch.setattr(mc, "model_call_scope", slow_slot)
     seen = {}
 
     def fake_chat(client, *, drive_root, **kwargs):
@@ -405,7 +405,7 @@ def test_write_letter_reports_a_ceiling_spent_on_the_slot_as_a_timeout(letter_en
         monkeypatch.setattr(ul.time, "time", lambda: real_now + 11.0)
         yield
 
-    monkeypatch.setattr(mc, "model_call_slot", exhausting_slot)
+    monkeypatch.setattr(mc, "model_call_scope", exhausting_slot)
     monkeypatch.setattr(ul, "_chat", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call past the ceiling")))
     record = ul.write_letter(_status(), _material(), drive_root=letter_env["drive"])
     assert record["state"] == "failed" and record["error_kind"] == "timeout"

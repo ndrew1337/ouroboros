@@ -202,6 +202,8 @@ def test_reply_later_is_consumed_once_then_a_hold_needs_new_selection(turn, monk
     from tests.test_presence_runner import _admission
     registry, calls, notes, run = turn
     registry._ctx.task_contract = {'capability_ceiling': presence_ceiling_payload(_admission().capability_ceiling)}
+    from tests.presence_legacy_helpers import register_legacy_completion
+    register_legacy_completion(registry)
     checked = hold_first_delivery(monkeypatch)
     text, _, _ = run([_call('message', ''), {'content': 'Chosen reply-later'},
         {'content': 'Interim, unselected'}, _call('message', 'Deliberately selected')])

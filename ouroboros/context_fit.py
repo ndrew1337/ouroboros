@@ -15,13 +15,15 @@ import math
 import pathlib
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import Any, Iterable, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Iterable, Callable, Dict, List, Mapping, Optional, Tuple
 
 from ouroboros.context_measurement import (
     ContextProfile as ContextProfile, MeasurementBasis as MeasurementBasis,
     MainFitMeasurement as MainFitMeasurement, MainFitDisposition as MainFitDisposition,
     measure_main_fit as measure_main_fit, reclaim_low_water_margin as reclaim_low_water_margin,
 )
+if TYPE_CHECKING:
+    from ouroboros.physical_attempt_context import PhysicalAttemptContext
 
 from ouroboros.context_layout import reference_doc_sections
 from ouroboros.section_floor import HostSection, section_views, _governance_blocks as _section_governance, _system_blocks
@@ -112,6 +114,7 @@ class ContextFitPlan:
     core: Optional["ContextCore"] = None  # the capture a new route re-renders the memory view from
     working_reserve_tokens: Optional[int] = None  # route working room, independent of the reply allowance
     window_basis: str = ""  # provider/estimator for a declared conversation window; empty for ordinary text
+    view_kind: str = ""
 
     def reproject_for_route(self, *, window_tokens: int, known_window: bool, ratio: float, output_reserve: int,
                             tool_schemas: Optional[List[Dict[str, Any]]], start_mode: Optional[str] = None,
@@ -479,6 +482,7 @@ def _route_calibration_ratio(
     route_fp: str,
     model: str,
     estimate_tokens: Optional[int] = None,
+    *, view_kind: str = "",
 ) -> float:
     """Fresh comparable-input exact-route/model witness, never an orphan maximum.
 
@@ -490,7 +494,8 @@ def _route_calibration_ratio(
         )
 
         root = drive_root if drive_root is not None else canonical_evidence_root()
-        return float(resolve_main_token_density(root, route_fp, model, estimate_tokens=estimate_tokens)[0])
+        return float(resolve_main_token_density(root, route_fp, model, estimate_tokens=estimate_tokens,
+                                               view_kind=view_kind)[0])
     except Exception:
         log.debug("Fresh route token calibration unavailable", exc_info=True)
         return 1.0
@@ -710,6 +715,10 @@ def build_context_fit_plan(
         preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
         known_window=known_window, output_reserve=output_reserve, working_reserve_tokens=working_reserve)
     governance = {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}
+    from ouroboros.memory_view import view_role
+
+    role = view_role({**task, "metadata": task.get("metadata") or meta})
+    view_kind = {"consciousness": "own_wake", "presence": "focus", "integrator": "owner_turn"}.get(role, role)
     ratio = 1.0
     if window_basis:
         # Route units apply before the first selection: a cold physical cut could otherwise
@@ -717,7 +726,8 @@ def build_context_fit_plan(
         if window_basis == "provider":
             rows, schemas = _whole_request(core, governance, preferred, tool_schemas)
             ratio = _route_calibration_ratio(None, str(evidence.route_fp or ""), str(route["model"] or ""),
-                estimate_context_prompt_tokens(rows, schemas, provider=str(route.get("provider") or "")))
+                estimate_context_prompt_tokens(rows, schemas, provider=str(route.get("provider") or "")),
+                view_kind=view_kind)
         contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
     else:
         # Ordinary text retains its existing cold starting view and comparable-input witness.
@@ -729,6 +739,7 @@ def build_context_fit_plan(
                  {"role": "user", "content": user_content}, *json.loads(core.supplementary_messages_json)],
                 list(select_tool_schemas(tool_schemas or [], context_mode=initial_mode).schemas),
                 provider=str(route.get("provider") or "")),
+            view_kind=view_kind,
         )
         if ratio != 1.0:
             contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
@@ -822,6 +833,7 @@ def build_context_fit_plan(
         sort_keys=True,
     )
     return ContextFitPlan(
+        view_kind=view_kind,
         core_sha256=hashlib.sha256(core_payload.encode("utf-8")).hexdigest(),
         preferred_mode=preferred,
         initial_mode=initial_mode,
@@ -847,4 +859,23 @@ def build_context_fit_plan(
         } if route["provider"] == "claudexor" else {},
         evidence_source=str(getattr(evidence, "source", "") or ""),
         core=core,
+    )
+
+
+def _physical_context_for_fit(disposition: Any) -> PhysicalAttemptContext:
+    from ouroboros.usage_accounting import PhysicalAttemptContext
+
+    measurement = disposition.measurement
+    return PhysicalAttemptContext(
+        view_kind=measurement.view_kind,
+        profile=measurement.profile,
+        rendered_mode=measurement.rendered_mode,
+        measurement_basis=measurement.measurement_basis,
+        route_fp=measurement.route_fp,
+        round_id=measurement.round_id,
+        target_total_tokens=measurement.target_total_tokens,
+        capacity_total_tokens=measurement.capacity_total_tokens,
+        context_target_miss=disposition.action == "send_target_miss",
+        automatic_pass_used=disposition.automatic_pass_used,
+        measurement_density=measurement.measurement_density,
     )

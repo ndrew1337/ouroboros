@@ -564,7 +564,7 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
         return
     # An owner message never wakes consciousness (owner decision В13): Main answers it itself.
     task_metadata = _scoped_task_metadata(project_id, task_metadata)
-    task_metadata = {**(task_metadata or {}), "client_message_id": client_message_id}
+    task_metadata = {**(task_metadata or {}), "client_message_id": client_message_id, "work_kind": "owner"}
     # The turn's origin identity rides UNCONDITIONALLY (not only when the
     # decision lane runs): a bare direct turn with no projects/roots yet — the
     # first-ever project creation — must still carry it so promote/route/bind

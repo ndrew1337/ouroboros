@@ -81,8 +81,9 @@ def _runtime_mode_for_browser(ctx: Any) -> str:
     """Read the effective mode for owner-control browser operations."""
     try:
         from ouroboros.config import get_runtime_mode
+        from ouroboros.consciousness_authority import effective_runtime_mode
 
-        return get_runtime_mode()
+        return effective_runtime_mode(get_runtime_mode(), getattr(ctx, "task_metadata", None))
     except Exception:
         return "advanced"
 

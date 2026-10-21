@@ -32,8 +32,7 @@ from ouroboros.server_control import dispatch_accepted_restart
 from ouroboros import chat_uploads
 from ouroboros.chat_uploads import store_upload
 from ouroboros.presence_delivery import (
-    DELIVERY_VERSION, PresenceDeliveryConflict, PresenceDeliveryRecorder,
-    delivery_reporting_version,
+    DELIVERY_VERSION, PresenceDeliveryRecorder,
 )
 from ouroboros.skill_loader import (
     find_skill,
@@ -436,7 +435,7 @@ async def _api_identity(request: Request) -> JSONResponse:
     from ouroboros.presence_continuation import CONTINUATION_VERSION
 
     return JSONResponse({"ok": True, "name": name, "description": description,
-                         "presence_delivery_version": DELIVERY_VERSION,
+                         "presence_delivery_version": DELIVERY_VERSION, "places_version": 1,
                          "presence_continuation_version": CONTINUATION_VERSION,
                          "notify_version": NOTIFY_VERSION})
 
@@ -797,238 +796,15 @@ def _presence_staged_files(
     return tuple(_skill_state_path(ctx, skill_name, raw, f"staged_files[{index}]") for index, raw in enumerate(value))
 
 
-async def _api_presence_delivery(request: Request) -> JSONResponse:
-    """Record exact provider receipts without sending or starting model work."""
-    ctx: HostServiceContext = request.app.state.host_service_context
-    try:
-        skill_name, _token_payload = await _authenticated(ctx, request.headers.get("x-skill-token", ""), "presence")
-    except HostServiceAuthError as exc:
-        return _presence_error(str(exc), 403, "presence_auth_blocked", "blocked")
-    except OSError:
-        return _presence_error("presence authentication unavailable", 500, "presence_auth_unavailable", "retry")
-    if not ctx.rate_limiter.allow(f"{skill_name}:presence_delivery"):
-        return _presence_error("rate limit exceeded", 429, "presence_rate_limited", "retry")
-    # Receipts, turns and inject have separate in-flight budgets: five long turns must
-    # not starve the receipts those turns' own sends produce.
-    if not ctx._enter_inflight(f"{skill_name}:delivery"):
-        return _presence_error("too many in-flight presence requests", 429, "presence_capacity_full", "retry")
-    try:
-        payload = await request.json()
-        result = await run_sync_to_completion(ctx.presence_deliveries.record, skill_name, payload)
-        return JSONResponse(result)
-    except PresenceDeliveryConflict as exc:
-        return _presence_error(str(exc), 409, "presence_receipt_conflict", "rejected")
-    except (ValueError, TypeError) as exc:
-        return _presence_error(str(exc), 400, "presence_receipt_invalid", "rejected")
-    except store.StoreMigrating:  # the receipt's earlier rows are in saved history that is still being upgraded
-        return _presence_error("presence delivery history is still importing; retry the same receipt", 503,
-                               "presence_history_importing", "retry")
-    except Exception:
-        log.warning("Presence delivery history write failed for skill %s", skill_name, exc_info=True)
-        return _presence_error("presence delivery history write failed; retry the same receipt", 503,
-                               "presence_receipt_unwritable", "retry")
-    finally:
-        ctx._leave_inflight(f"{skill_name}:delivery")
-
-
-def _presence_error(message: str, status: int, code: str, disposition: str, **facts: Any) -> JSONResponse:
-    """Add transport recovery facts without changing the legacy HTTP/error contract.
-
-    The producer chooses semantics, not the status class: a stale token is blocked,
-    an origin mismatch rejected, and a failed history write retryable.
-    """
-    return JSONResponse({"ok": False, "error": message, "code": code,
-                         "disposition": disposition, **facts}, status_code=status)
-
-
-def _presence_exception(exc: Exception, status: int) -> JSONResponse:
-    code = str(getattr(exc, "code", "presence_admission_failed"))
-    disposition = "blocked"
-    if code in {"chat_log_unwritable", "presence_result_missing", "presence_bindings_unreadable",
-                "presence_resources_unavailable", "presence_attempt_outcome_unknown",
-                "presence_result_unreadable", "presence_event_identity_unproven",
-                "presence_start_unwritable"}:
-        disposition = "retry"
-    elif code in {"presence_attachment_admission_rejected", "presence_binding_wrong_transport",
-                  "presence_conversation_key_required", "presence_admission_conversation_mismatch",
-                  "presence_event_identity_conflict"}:
-        disposition = "rejected"
-    if getattr(exc, "disposition", "") in {"retained", "retry"}:
-        disposition = exc.disposition  # the runner holds the durable attempt authority
-    facts = {"field": getattr(exc, "field", "presence")}
-    if getattr(exc, "turn_ref", ""):
-        facts["turn_ref"] = exc.turn_ref
-        facts["delivery_reporting_version"] = getattr(exc, "delivery_reporting_version", 0)
-    if getattr(exc, "work_ref", ""):
-        facts["work_ref"] = exc.work_ref
-    manifest = getattr(exc, "attachment_manifest", None)
-    if isinstance(manifest, list):
-        facts["attachment_manifest"] = [dict(row) for row in manifest if isinstance(row, dict)]
-    return _presence_error(str(exc), status, code, disposition, **facts)
-
-
-def _admit_presence(ctx: HostServiceContext, skill_name: str, binding_id: str) -> Any:
-    from ouroboros.loop import _resolve_loop_max_rounds
-    from ouroboros.presence_admission import admit_presence_turn
-
-    return admit_presence_turn(
-        drive_root=ctx.data_dir,
-        authenticated_transport_skill=skill_name,
-        binding_id=binding_id,
-        global_max_rounds=_resolve_loop_max_rounds(),
-    )
-
-
-async def _api_presence_turn(request: Request) -> JSONResponse:
-    """Run one non-owner event under a host-resolved reviewed profile ceiling.
-
-    Authentication, admission and file confinement run off the event loop. The turn is
-    host work this request only waits on (``presence_runner.PresenceTurnExecutions``): it
-    queues on the gate as a coroutine and runs on its own thread. Both versions release
-    the request reservation at a qualified park (or terminal settlement); version 1
-    returns the initial envelope while version 0's HTTP waiter stays open until the
-    terminal result. A retry of the same event joins the retained execution.
-    """
-
-    ctx: HostServiceContext = request.app.state.host_service_context
-    try:
-        skill_name, _token_payload = await _authenticated(ctx, request.headers.get("x-skill-token", ""), "presence")
-    except HostServiceAuthError as exc:
-        return _presence_error(str(exc), 403, "presence_auth_blocked", "blocked")
-    except OSError:
-        return _presence_error("presence authentication unavailable", 500, "presence_auth_unavailable", "retry")
-    if not ctx.rate_limiter.allow(f"{skill_name}:presence"):
-        return _presence_error("rate limit exceeded", 429, "presence_rate_limited", "retry")
-    if await _bounded_host_read(ctx, functools.partial(store.migrating, ctx.data_dir)):  # P1: the turn writes its result
-        return _presence_error("the task store is importing; retry shortly", 503, "migrating", "retry")
-    from ouroboros.presence_admission import PresenceAdmissionError
-    from ouroboros.presence_continuation import continuation_version, turn_response
-    from ouroboros.presence_runner import (
-        PresenceTurnError,
-        presence_turn_event,
-        PresenceTurnNotStarted,
-        presence_turn_replay,
-        presence_turn_task_id,
-        presence_event_identity,
-    )
-
-    try:
-        payload = await request.json()
-        if not isinstance(payload, dict) or set(payload) - {
-            "binding_id", "event", "staged_files", "delivery_reporting_version", "continuation_version",
-        }:
-            return _presence_error("invalid presence payload", 400, "presence_payload_invalid", "rejected")
-        reporting_version = delivery_reporting_version(payload.get("delivery_reporting_version", 0))
-        continuing = continuation_version(payload.get("continuation_version", 0))
-        admission = await _bounded_host_read(
-            ctx, functools.partial(_admit_presence, ctx, skill_name, str(payload.get("binding_id") or "")))
-        try:
-            event = presence_turn_event(payload.get("event"), admission,
-                                        reporting_version=reporting_version, continuing=continuing)
-        except PresenceTurnError as exc:
-            errors = {
-                "presence_event_invalid": (400, "invalid presence event"),
-                "presence_origin_mismatch": (403, "presence event does not match its owner-created binding"),
-                "presence_identity_missing": (400, "presence event is missing identity facts"),
-            }
-            if exc.code not in errors:
-                raise
-            status, message = errors[exc.code]
-            return _presence_error(message, status, exc.code, "rejected")
-        staged_files = await _bounded_host_read(
-            ctx, functools.partial(_presence_staged_files, ctx, skill_name, payload.get("staged_files")))
-        turn_id = presence_turn_task_id(admission.binding_id, event.source_event_id)
-        identity = presence_event_identity(admission.binding_id, event)
-        # A settled turn answers from its durable row without queueing behind its conversation.
-        result = await _bounded_host_read(ctx, functools.partial(
-            presence_turn_replay, ctx.data_dir, turn_id, event.conversation_key, identity, continuing))
-        if result is None:
-            budget = f"{skill_name}:presence"
-            execution, _started = ctx.presence_turns.start_or_join(
-                turn_id, identity=identity,
-                reserve=functools.partial(ctx._enter_inflight, budget),
-                release=functools.partial(ctx._leave_inflight, budget),
-                admit=functools.partial(ctx.admit_presence_gate, event.conversation_key),
-                run=lambda lease: ctx.presence_runner(
-                    admission=admission, event=event, staged_files=staged_files, admitted=lease,
-                ),
-            )
-            if execution is None:
-                return _presence_error("too many in-flight presence requests", 429, "presence_capacity_full", "retry")
-            # A version-1 consumer takes a continuing author's initial envelope; v0 waits for its terminal.
-            result = await asyncio.wrap_future(execution.initial if continuing else execution.result)
-        return JSONResponse(turn_response(result, continuing))
-    except json.JSONDecodeError:
-        return _presence_error("invalid json", 400, "presence_payload_invalid", "rejected")
-    except (PresenceAdmissionError, PresenceTurnError) as exc:
-        return _presence_exception(exc, 409)
-    except PresenceTurnNotStarted as exc:
-        return _presence_error(str(exc), 503, "presence_turn_not_started", "retry")
-    except OSError as exc:
-        return _presence_error(str(exc), 400, "presence_io_unavailable", "retry")
-    except ValueError as exc:
-        return _presence_error(str(exc), 400, "presence_payload_invalid", "rejected")
-    except Exception as exc:
-        log.debug("Host service presence turn failed", exc_info=True)
-        return _presence_error(str(exc), 500, "presence_turn_unavailable", "retry")
-
-
-def _presence_work_view(
-    ctx: HostServiceContext, skill_name: str, work_ref: str, binding_id: str,
-) -> tuple[int, Dict[str, Any]]:
-    from ouroboros.presence_bindings import load_presence_binding
-    from ouroboros.task_results import load_task_result
-
-    load_presence_binding(ctx.data_dir, skill_name, binding_id)
-    stored = load_task_result(ctx.data_dir, work_ref) or {}
-    metadata = stored.get("metadata") if isinstance(stored.get("metadata"), dict) else {}
-    presence = metadata.get("presence") if isinstance(metadata.get("presence"), dict) else {}
-    if str(presence.get("binding_id") or "") != binding_id:
-        return 404, {"ok": False, "error": "presence work reference not found",
-                     "code": "presence_work_not_found", "disposition": "rejected"}
-    from ouroboros.presence_recovery import retained_work_view
-
-    return retained_work_view(stored, work_ref, ctx.data_dir)
-
-
-async def _api_presence_work(request: Request) -> JSONResponse:
-    """Read a correlated late result, or retain an attributed inbox observation."""
-    ctx: HostServiceContext = request.app.state.host_service_context
-    try:
-        skill_name, _token_payload = await _authenticated(ctx, request.headers.get("x-skill-token", ""), "presence")
-    except HostServiceAuthError as exc:
-        return _presence_error(str(exc), 403, "presence_auth_blocked", "blocked")
-    except OSError:
-        return _presence_error("presence authentication unavailable", 500, "presence_auth_unavailable", "retry")
-    work_ref = str(request.path_params.get("work_ref") or "").strip()
-    binding_id = str(request.query_params.get("binding_id") or "").strip()
-    try:
-        if request.method == "POST":
-            from ouroboros.presence_bindings import load_presence_binding
-            from ouroboros.presence_observations import record_transport_queue
-
-            payload = await request.json()
-            if not isinstance(payload, dict) or set(payload) != {"binding_id", "transport_queue"}:
-                raise ValueError("expected binding_id and transport_queue")
-            binding_id = str(payload["binding_id"] or "").strip()
-            await _bounded_host_read(ctx, functools.partial(load_presence_binding, ctx.data_dir, skill_name, binding_id))
-            body = await asyncio.to_thread(record_transport_queue, ctx.data_dir, work_ref, binding_id,
-                                            payload["transport_queue"])
-            return JSONResponse(body)
-        status, body = await asyncio.to_thread(_presence_work_view, ctx, skill_name, work_ref, binding_id)
-    except (ValueError, json.JSONDecodeError) as exc:
-        if getattr(exc, "code", ""):
-            return _presence_exception(exc, 404)
-        return _presence_error(str(exc), 400, "presence_observation_invalid", "rejected")
-    except store.StoreMigrating:
-        return _presence_error("the task store is importing; retry shortly", 503, "migrating", "retry")
-    except Exception as exc:
-        code = str(getattr(exc, "code", ""))
-        if code:
-            return _presence_exception(exc, 404)
-        log.debug("Host service presence work lookup failed", exc_info=True)
-        return _presence_error("presence work lookup failed", 500, "presence_work_unavailable", "retry")
-    return JSONResponse(body, status_code=status)
+# Compatibility import surface; implementation is owned by the places handler module.
+from ouroboros.gateway.host_service_places import (  # noqa: E402
+    _admit_presence as _admit_presence,
+    _api_presence_delivery as _api_presence_delivery,
+    _api_presence_turn as _api_presence_turn,
+    _api_presence_work as _api_presence_work,
+    _api_presence_place as _api_presence_place,
+    _presence_work_view as _presence_work_view,
+)
 
 
 async def _api_chat_decision(request: Request) -> JSONResponse:
@@ -1526,6 +1302,7 @@ def create_host_service_app(
             Route("/chat/cancel", _api_chat_cancel, methods=["POST"]),
             Route("/chat/decision", _api_chat_decision, methods=["POST"]),
             Route("/ui/language", _api_ui_language, methods=["POST"]),
+            Route("/presence/place", _api_presence_place, methods=["GET"]),
             Route("/presence/turn", _api_presence_turn, methods=["POST"]),
             Route("/presence/delivery", _api_presence_delivery, methods=["POST"]),
             Route("/presence/work/{work_ref}", _api_presence_work, methods=["GET", "POST"]),

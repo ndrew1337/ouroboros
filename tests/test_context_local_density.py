@@ -51,7 +51,8 @@ def test_local_witness_reaches_startup_rebind_and_first_round(routes, monkeypatc
     local, remote, _foreign = routes
     for model, route, ratio in (("local-model", local, 1.4), (MODEL, remote, 0.9)):
         ce.record_token_density(tmp_path, model, prompt_chars=600_000 * 4,
-                                prompt_tokens=int(600_000 * ratio), route_fp=route, basis=ce.MAIN_DENSITY_BASIS)
+                                prompt_tokens=int(600_000 * ratio), route_fp=route, basis=ce.MAIN_DENSITY_BASIS,
+                                view_kind="owner_turn")
     env, memory, _rooms = world(tmp_path / "world")
     task = {"type": "task", "text": "word " * 480_000, "id": "local-density", "chat_id": 1}
     core = context._capture_context_core(env, memory, task, None, None)

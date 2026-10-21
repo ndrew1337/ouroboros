@@ -112,7 +112,27 @@ class _FakeUvicornServer:
         await asyncio.sleep(0)
 
 
-def _patch_lifespan_for_drive_root_test(monkeypatch, srv, settings: dict):
+def _patch_lifespan_for_drive_root_test(monkeypatch, srv, settings: dict, request):
+    # These two lifecycle tests own the import thread their TestClient starts.
+    import threading
+    imports = []
+    original_import = srv.store_switch._run
+
+    def tracked_import(*args, **kwargs):
+        imports.append(threading.current_thread())
+        return original_import(*args, **kwargs)
+
+    def join_imports():
+        for thread in imports:
+            thread.join(60)
+            assert not thread.is_alive(), "the fixture's store import did not stop"
+
+    async def no_host_listener(*_args):
+        pass
+
+    monkeypatch.setattr(srv.store_switch, "_run", tracked_import)
+    monkeypatch.setattr(srv.server_boot, "serve_host_service", no_host_listener)
+    request.addfinalizer(join_imports)
     monkeypatch.setattr(srv, "load_settings", lambda: dict(settings))
     monkeypatch.setattr(srv, "save_settings", lambda *_a, **_k: None)
     monkeypatch.setattr(srv, "apply_runtime_provider_defaults", lambda s: (s, False, []))
@@ -142,7 +162,7 @@ def _boot_step_ended(client, name: str, timeout: float = 30.0) -> None:
     raise AssertionError(f"boot step {name} did not end")
 
 
-def test_testclient_lifespan_reload_all_uses_app_state_drive_root(tmp_path, monkeypatch):
+def test_testclient_lifespan_reload_all_uses_app_state_drive_root(tmp_path, monkeypatch, request):
     from starlette.testclient import TestClient
     import server as srv
     from ouroboros import extension_loader
@@ -157,6 +177,7 @@ def test_testclient_lifespan_reload_all_uses_app_state_drive_root(tmp_path, monk
         monkeypatch,
         srv,
         {"OUROBOROS_SKILLS_REPO_PATH": str(repo_root), "OUROBOROS_RUNTIME_MODE": "advanced"},
+        request,
     )
     monkeypatch.setattr("ouroboros.config.get_skills_repo_path", lambda: str(repo_root))
     calls: list[tuple[pathlib.Path, str | None]] = []
@@ -172,7 +193,7 @@ def test_testclient_lifespan_reload_all_uses_app_state_drive_root(tmp_path, monk
     assert calls == [(drive_root, str(repo_root))]
 
 
-def test_testclient_settings_hot_reload_uses_app_state_drive_root(tmp_path, monkeypatch):
+def test_testclient_settings_hot_reload_uses_app_state_drive_root(tmp_path, monkeypatch, request):
     from starlette.testclient import TestClient
     import server as srv
     from ouroboros import extension_loader
@@ -186,7 +207,7 @@ def test_testclient_settings_hot_reload_uses_app_state_drive_root(tmp_path, monk
     srv.app.app.state.drive_root = drive_root  # type: ignore[attr-defined]
     srv.app.app.state.repo_dir = tmp_path / "repo"  # type: ignore[attr-defined]
     settings = {"OUROBOROS_SKILLS_REPO_PATH": str(old_repo), "OUROBOROS_RUNTIME_MODE": "advanced"}
-    _patch_lifespan_for_drive_root_test(monkeypatch, srv, settings)
+    _patch_lifespan_for_drive_root_test(monkeypatch, srv, settings, request)
     # The POST persists through the gateway's owner writer (``config.SETTINGS_PATH``), not
     # through the ``server.save_settings`` name patched above: keep the document it writes
     # in this test's tree instead of the worker-shared pytest data root.
@@ -257,105 +278,7 @@ def test_api_extensions_index_lists_extension_skills(tmp_path, monkeypatch):
         _stop_patches(patches)
 
 
-def test_reviewed_presence_runtime_card_projection_and_owner_cas(tmp_path, monkeypatch):
-    from ouroboros.presence_capabilities import load_presence_state
-    from ouroboros.skill_loader import SkillReviewState, compute_content_hash, save_review_state
-
-    skills_root = tmp_path / "skills"
-    skill_dir = _write_ext(
-        skills_root,
-        "presence_ext",
-        permissions=[],
-        plugin="def register(api):\n    pass\n",
-        presence=(
-            "presence:\n"
-            "  instructions: Participate when useful.\n"
-            "  runtime_defaults:\n"
-            "    model_slot: light\n"
-            "    inline_max_rounds: 10\n"
-        ),
-    )
-    monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(skills_root))
-    client, drive_root, patches = _make_client(tmp_path, monkeypatch)
-    try:
-        content_hash = compute_content_hash(skill_dir, manifest_entry="plugin.py")
-        save_review_state(
-            drive_root,
-            "presence_ext",
-            SkillReviewState(status="pass", content_hash=content_hash),
-        )
-        review_path = drive_root / "state" / "skills" / "presence_ext" / "review.json"
-        review_before = review_path.read_bytes()
-
-        row = next(
-            item for item in client.get("/api/extensions").json()["skills"]
-            if item["name"] == "presence_ext"
-        )
-        runtime = row["presence_runtime"]
-        assert runtime["defaults"] == {"model_slot": "light", "inline_max_rounds": 10}
-        assert runtime["overrides"] == {"model_slot": None, "inline_max_rounds": None}
-        assert runtime["workspace_root"] == ""
-        workspace = tmp_path / "presence-workspace"
-        workspace.mkdir()
-
-        update = client.post(
-            "/api/owner/skills/presence_ext/presence-runtime",
-            json={
-                "expected_state_fingerprint": runtime["state_fingerprint"],
-                "runtime_overrides": {"model_slot": "main", "inline_max_rounds": 7},
-                "workspace_root": str(workspace),
-            },
-        )
-        assert update.status_code == 200, update.text
-        updated_runtime = update.json()["presence_runtime"]
-        assert updated_runtime["overrides"] == {"model_slot": "main", "inline_max_rounds": 7}
-        assert updated_runtime["workspace_root"] == str(workspace)
-        assert review_path.read_bytes() == review_before
-        assert load_presence_state(drive_root, "presence_ext").runtime_overrides.model_slot == "main"
-
-        conflict = client.post(
-            "/api/owner/skills/presence_ext/presence-runtime",
-            json={
-                "expected_state_fingerprint": runtime["state_fingerprint"],
-                "runtime_overrides": {"model_slot": "light", "inline_max_rounds": 5},
-            },
-        )
-        assert conflict.status_code == 409
-        assert conflict.json()["code"] == "presence_state_conflict"
-
-        reset = client.post(
-            "/api/owner/skills/presence_ext/presence-runtime",
-            json={
-                "expected_state_fingerprint": updated_runtime["state_fingerprint"],
-                "runtime_overrides": {"model_slot": None, "inline_max_rounds": None},
-            },
-        )
-        assert reset.status_code == 200, reset.text
-        assert reset.json()["presence_runtime"]["overrides"] == {
-            "model_slot": None,
-            "inline_max_rounds": None,
-        }
-        assert reset.json()["presence_runtime"]["workspace_root"] == str(workspace)
-        invalid = client.post(
-            "/api/owner/skills/presence_ext/presence-runtime",
-            json={
-                "expected_state_fingerprint": reset.json()["presence_runtime"]["state_fingerprint"],
-                "runtime_overrides": {"model_slot": "main", "inline_max_rounds": 8},
-                "workspace_root": str(drive_root),
-            },
-        )
-        assert invalid.status_code == 400
-        assert load_presence_state(drive_root, "presence_ext").workspace_root == str(workspace)
-        refreshed = next(
-            item for item in client.get("/api/extensions").json()["skills"]
-            if item["name"] == "presence_ext"
-        )
-        assert refreshed["review_stale"] is False
-    finally:
-        _stop_patches(patches)
-
-
-def test_presence_runtime_controls_require_fresh_executable_review(tmp_path, monkeypatch):
+def test_retired_presence_runtime_is_absent_from_cards_and_routes(tmp_path, monkeypatch):
     skills_root = tmp_path / "skills"
     _write_ext(
         skills_root,
@@ -379,7 +302,7 @@ def test_presence_runtime_controls_require_fresh_executable_review(tmp_path, mon
                 "runtime_overrides": {"model_slot": None, "inline_max_rounds": None},
             },
         )
-        assert response.status_code == 409
+        assert response.status_code == 404
     finally:
         _stop_patches(patches)
 
@@ -2038,6 +1961,8 @@ def test_tool_registry_execute_dispatches_ext_tool(tmp_path, monkeypatch):
         save_review_state,
     )
 
+    monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     skills_root = tmp_path / "skills"
     drive_root = tmp_path / "drive"
     drive_root.mkdir()
@@ -2068,12 +1993,7 @@ def test_tool_registry_execute_dispatches_ext_tool(tmp_path, monkeypatch):
         assert schema is not None
         assert schema["function"]["name"] == tool_name
         result = tmp_reg.execute(tool_name, {"who": "phase5"})
-        # v5.1.2 iter-2: extension dispatch now goes through
-        # ``ouroboros.safety.check_safety``. In test envs without a
-        # safety backend, the supervisor returns a visible
-        # ``SAFETY_WARNING`` prefix while still letting the call run
-        # (fail-open). Assert the handler ran and produced its output;
-        # the warning prefix is acceptable.
+        # Safety is disabled above so this regression exercises extension dispatch.
         assert "hello phase5" in result, result
         # get_timeout honours the extension's declared timeout plus the v5.7.0
         # cleanup buffer used by async handlers (so the outer tool executor

@@ -52,7 +52,7 @@ def core(*, extra=(), memory=False):
 
 def plan_for(snapshot, monkeypatch, *, preferred="max", window=1_000_000, data_root=None):
     monkeypatch.setattr(cf, "_governance_blocks", lambda _env, _core, *, mode: ("MAX BOOK" if mode == "max" else "BOOK MAP", ""))
-    monkeypatch.setattr(cf, "_route_calibration_ratio", lambda *_a: 1.0)
+    monkeypatch.setattr(cf, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     evidence = SimpleNamespace(route_fp="synthetic-route", status="asserted", stale=False, window_tokens=window)
     return cf.build_context_fit_plan(SimpleNamespace(drive_root=data_root), snapshot, {"id": "task", "type": "task"},
         preferred_mode=preferred, tool_schemas=[], route_resolver=lambda *_a, **_k: ({"model": "m", "provider": "p"}, evidence))

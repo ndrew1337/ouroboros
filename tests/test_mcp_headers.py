@@ -295,6 +295,7 @@ def test_settings_writer_normalizes_its_own_copy_never_the_request_body(mcp_sett
 @pytest.mark.serial  # the shared fixture's module is serial: it re-points the Settings file
 def test_show_reads_one_exact_saved_header_value(reveal_settings):  # noqa: F811
     case = reveal_settings
+    case.settings["OUROBOROS_CONSCIOUSNESS_SAFETY_MODE"] = "full"
     case.settings["MCP_SERVERS"] = [
         {"id": "first-server", "headers": {"Authorization": BEARER, "X-Bad": 7, "Dup": "a", "dup": "b"}},
     ]

@@ -1,5 +1,5 @@
 """Rate-limit lane of the safety supervisor (PR: stop reporting safety-model rate
-limits as SAFETY_VIOLATION) plus the bounded conversation-transcript budget.
+limits as SAFETY_VIOLATION) plus complete retained source evidence.
 
 Split from tests/test_safety_policy.py at its 1600-line module gate; shares that
 module's stub-client idiom (the tiny ``_patch_llm_client`` shim is repeated here
@@ -96,6 +96,7 @@ class _DriveCtx:
 
     def __init__(self, root):
         self.task_id = "t-safety"
+        self.task_metadata = {"work_kind": "owner"}
         self.drive_root = str(root)
         self._logs = pathlib.Path(root) / "logs"
         self._logs.mkdir(parents=True, exist_ok=True)
@@ -162,13 +163,13 @@ def test_exception_shaped_rate_limit_blocks_unchecked_after_one_retry(monkeypatc
     (['Assessment: {"status":"SAFE","reason":"Scoped file read"}'], True),
     (["No JSON verdict", "Still no JSON verdict"], False),
 ])
-def test_subscription_safety_uses_light_pin_and_existing_text_verdict_parser(subscription_transport, monkeypatch, texts, allowed):
+def test_subscription_safety_uses_safety_pin_and_existing_text_verdict_parser(subscription_transport, monkeypatch, texts, allowed):
     import ouroboros.safety as safety
     from ouroboros.model_slots import MODEL_ACCOUNTS_KEY
 
     root, gateway, _ = subscription_transport
-    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"light": "account-b"}))
-    monkeypatch.setattr(safety, "get_light_model", lambda: MODEL)
+    monkeypatch.setenv(MODEL_ACCOUNTS_KEY, json.dumps({"safety": "account-b"}))
+    monkeypatch.setattr(safety, "get_safety_model", lambda: MODEL)
     monkeypatch.setattr(safety, "_resolve_safety_routing", lambda: (False, False, None))
     gateway.results = [result(cash=0, knowledge="exact") for _ in texts]
     gateway.dispatch = ["response_received"] * len(texts)
@@ -187,7 +188,7 @@ def test_subscription_safety_transient_429_keeps_one_retry_and_unavailable_outco
     import ouroboros.safety as safety
 
     root, gateway, _ = subscription_transport
-    monkeypatch.setattr(safety, "get_light_model", lambda: MODEL)
+    monkeypatch.setattr(safety, "get_safety_model", lambda: MODEL)
     monkeypatch.setattr(safety, "_resolve_safety_routing", lambda: (False, False, None))
     gateway.results = [result(outcome="failed", cash=0, knowledge="exact", problem={
         "code": "rate_limited", "message": "Request rate limit", "context": {"httpStatus": 429},
@@ -205,7 +206,7 @@ def test_subscription_safety_preserves_resource_and_owner_control(subscription_t
     from ouroboros.model_wait import ModelWaitInterrupted, task_model_wait_scope
 
     root, gateway, _ = subscription_transport
-    monkeypatch.setattr(safety, "get_light_model", lambda: MODEL)
+    monkeypatch.setattr(safety, "get_safety_model", lambda: MODEL)
     monkeypatch.setattr(safety, "_resolve_safety_routing", lambda: (False, False, None))
     ctx = _DriveCtx(root)
     if cause == "quota":
@@ -336,7 +337,7 @@ def test_single_rate_limit_then_success_returns_the_normal_verdict(monkeypatch, 
     assert ok is True
     assert msg == "", "a recovered check returns the ordinary SAFE verdict"
     assert len(stub.calls) == 2
-    assert _read_events(ctx) == [], "no audit row when the retry actually succeeded"
+    assert _read_events(ctx, "safety_check_rate_limited") == [], "no audit row when the retry actually succeeded"
 
 
 def test_structured_insufficient_quota_with_429_still_blocks(monkeypatch, tmp_path, _no_backoff):
@@ -352,15 +353,15 @@ def test_structured_insufficient_quota_with_429_still_blocks(monkeypatch, tmp_pa
 
     assert ok is False
     assert msg == (
-        "⚠️ SAFETY_VIOLATION: Safety check failed with error: "
-        "_QuotaError: Rate limit exceeded (insufficient_quota)"
+        "⚠️ SAFETY_UNAVAILABLE: Safety check failed with error: "
+        "_QuotaError: Rate limit exceeded (insufficient_quota). This call was not checked. Retry when review is available."
     )
     assert len(stub.calls) == 1, "a permanent class must not buy a retry"
     assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
-def test_non_rate_limit_exception_keeps_todays_violation_path(monkeypatch, tmp_path, _no_backoff):
-    """Every other exception class is byte-identical to today: block, one attempt."""
+def test_non_rate_limit_exception_is_an_unavailable_hold(monkeypatch, tmp_path, _no_backoff):
+    """An outage blocks without becoming a safety verdict: one attempt."""
     from ouroboros.safety import check_safety
 
     stub = _ScriptedLLMClient([RuntimeError("network down")])
@@ -371,56 +372,26 @@ def test_non_rate_limit_exception_keeps_todays_violation_path(monkeypatch, tmp_p
 
     assert ok is False
     assert msg == (
-        "⚠️ SAFETY_VIOLATION: Safety check failed with error: RuntimeError: network down"
+        "⚠️ SAFETY_UNAVAILABLE: Safety check failed with error: RuntimeError: network down. This call was not checked. Retry when review is available."
     )
     assert len(stub.calls) == 1
-    assert _read_events(ctx) == []
+    assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
-def test_conversation_section_is_bounded_newest_first_with_counted_marker():
-    """The CONVERSATION section is bounded, keeps the NEWEST rounds, and discloses
-    the exact number it dropped. The tool-arguments section is untouched."""
-    import re
-
-    from ouroboros.safety import _SAFETY_CONTEXT_CHAR_BUDGET, _build_check_prompt
+def test_prompt_keeps_all_source_messages_and_excludes_private_reasoning():
+    from ouroboros.safety import _build_check_prompt
 
     messages = [{"role": "user", "content": f"round{i} " + "x" * 400} for i in range(40)]
-    messages[-1] = {"role": "user", "content": "NEWEST_ROUND_MARKER"}
-
+    messages += [{"role": "assistant", "content": "PRIVATE_REASONING"}, {"role": "tool", "content": "TOOL_NOISE"}]
     prompt = _build_check_prompt("run_command", {"cmd": ["echo", "hello"]}, messages)
-
-    head, context = prompt.split("Conversation context:\n", 1)
-    context = context.rsplit("\nIs this safe?", 1)[0]
-
-    assert len(context) <= _SAFETY_CONTEXT_CHAR_BUDGET
-    assert "NEWEST_ROUND_MARKER" in context, "the newest round must survive"
-    assert "round0 " not in context, "the oldest rounds must be dropped"
-
-    lines = context.splitlines()
-    matched = re.match(r"^\[… (\d+) older messages omitted\]$", lines[0])
-    assert matched, f"missing counted omission marker: {lines[0]!r}"
-    assert int(matched.group(1)) == len(messages) - (len(lines) - 1)
-
-    # The proposed call is the SUBJECT of the check and stays outside the budget.
-    assert '"cmd"' in head and "hello" in head
+    assert all(f"round{i} " in prompt for i in range(40))
+    assert "PRIVATE_REASONING" not in prompt and "TOOL_NOISE" not in prompt
+    assert '"cmd"' in prompt and "hello" in prompt
 
 
-def test_short_conversation_keeps_every_message_and_no_marker():
-    """Under budget: no marker, nothing dropped (the marker is not decoration)."""
-    from ouroboros.safety import _format_messages_for_safety
-
-    rendered = _format_messages_for_safety([
-        {"role": "user", "content": "first"},
-        {"role": "assistant", "content": "second"},
-    ])
-
-    assert rendered == "[user] first\n[assistant] second"
-    assert "omitted" not in rendered
-
-
-def test_rate_limit_retry_takes_one_slot_per_attempt(monkeypatch, tmp_path):
-    """model_concurrency caps CONCURRENT calls, so the retry must take a FRESH slot
-    and the backoff must sleep BETWEEN slot contexts — never inside a held one."""
+def test_rate_limit_retry_scopes_each_attempt_before_backoff(monkeypatch, tmp_path):
+    """Each high-level retry carries its own deadline scope; backoff is outside.
+    Physical capacity and retained sender lifetime are tested at the send seam."""
     import contextlib
 
     import ouroboros.safety as safety
@@ -430,7 +401,7 @@ def test_rate_limit_retry_takes_one_slot_per_attempt(monkeypatch, tmp_path):
     state = {"acquired": 0, "depth": 0, "slept_at_depth": []}
 
     @contextlib.contextmanager
-    def _counting_slot(model, use_local=False, deadline_ts=None):
+    def _counting_scope(model, use_local=False, deadline_ts=None):
         state["acquired"] += 1
         state["depth"] += 1
         try:
@@ -438,7 +409,7 @@ def test_rate_limit_retry_takes_one_slot_per_attempt(monkeypatch, tmp_path):
         finally:
             state["depth"] -= 1
 
-    monkeypatch.setattr(model_concurrency, "model_call_slot", _counting_slot)
+    monkeypatch.setattr(model_concurrency, "model_call_scope", _counting_scope)
     monkeypatch.setattr(
         safety, "_safety_rate_limit_backoff",
         lambda ctx: state["slept_at_depth"].append(state["depth"]),
@@ -451,9 +422,9 @@ def test_rate_limit_retry_takes_one_slot_per_attempt(monkeypatch, tmp_path):
     ok, _ = check_safety("create_github_issue", {"title": "x"}, ctx=ctx)
 
     assert ok is False, "double rate limit ends in the typed blocked outcome"
-    assert state["acquired"] == 2, "one slot per attempt, not one slot around both"
-    assert state["slept_at_depth"] == [0], "the backoff must not run inside a held slot"
-    assert state["depth"] == 0, "every acquired slot is released"
+    assert state["acquired"] == 2, "one deadline scope per attempt"
+    assert state["slept_at_depth"] == [0], "backoff is outside the attempt scope"
+    assert state["depth"] == 0, "every attempt scope exits"
 
 
 def test_rate_limit_backoff_is_capped_by_the_task_deadline(monkeypatch):
@@ -493,11 +464,11 @@ def test_server_outage_is_not_a_rate_limit_and_still_blocks(monkeypatch, tmp_pat
 
     assert ok is False
     assert msg == (
-        "⚠️ SAFETY_VIOLATION: Safety check failed with error: "
-        "_ServerError: Service Unavailable"
+        "⚠️ SAFETY_UNAVAILABLE: Safety check failed with error: "
+        "_ServerError: Service Unavailable. This call was not checked. Retry when review is available."
     )
     assert len(stub.calls) == 1, "an outage must not buy the rate-limit retry"
-    assert _read_events(ctx) == []
+    assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
 def test_read_timeout_is_not_a_rate_limit_and_still_blocks(monkeypatch, tmp_path, _no_backoff):
@@ -514,9 +485,9 @@ def test_read_timeout_is_not_a_rate_limit_and_still_blocks(monkeypatch, tmp_path
     ok, msg = check_safety("create_github_issue", {"title": "x"}, ctx=ctx)
 
     assert ok is False
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
     assert len(stub.calls) == 1
-    assert _read_events(ctx) == []
+    assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
 def test_http200_body_transient_that_is_not_429_still_blocks(monkeypatch, tmp_path, _no_backoff):
@@ -536,7 +507,7 @@ def test_http200_body_transient_that_is_not_429_still_blocks(monkeypatch, tmp_pa
     ok, msg = check_safety("create_github_issue", {"title": "x"}, ctx=ctx)
 
     assert ok is False
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
     assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
@@ -578,31 +549,6 @@ def test_local_fallback_lane_rate_limit_takes_the_audited_fail_open(monkeypatch,
     assert _read_events(ctx2) == []
 
 
-def test_omission_marker_space_is_reserved_inside_the_budget():
-    """Boundary case: the messages tile the budget so tightly that the MARKER'S OWN
-    length decides the final cut. Without the reservation the last line still fits, the
-    marker is appended after the check, and the section overflows the budget."""
-    import re
-
-    from ouroboros.safety import _SAFETY_CONTEXT_CHAR_BUDGET, _format_messages_for_safety
-
-    # Each message renders to exactly 40 chars ("[user] " is 7).
-    messages = [{"role": "user", "content": "y" * 33} for _ in range(130)]
-    context = _format_messages_for_safety(messages)
-
-    assert len(context) <= _SAFETY_CONTEXT_CHAR_BUDGET, (
-        "the marker must be paid for INSIDE the budget, not appended after the check"
-    )
-    # Prove the case is genuinely tight: one more 40-char line would have fit if the
-    # marker had cost nothing, so this test fails the moment the reserve is dropped.
-    assert len(context) > _SAFETY_CONTEXT_CHAR_BUDGET - 80
-
-    lines = context.splitlines()
-    matched = re.match(r"^\[… (\d+) older messages omitted\]$", lines[0])
-    assert matched, f"missing counted omission marker: {lines[0]!r}"
-    assert int(matched.group(1)) == len(messages) - (len(lines) - 1)
-
-
 def test_marker_bearing_5xx_message_is_not_a_rate_limit_and_still_blocks(monkeypatch, tmp_path, _no_backoff):
     """The markers are SUBSTRINGS, so `429`/`rpm`/`tpm` occur inside the request ids and
     hostnames real outages carry. A KNOWN non-429 status must never reach the text
@@ -618,10 +564,10 @@ def test_marker_bearing_5xx_message_is_not_a_rate_limit_and_still_blocks(monkeyp
     ok, msg = check_safety("create_github_issue", {"title": "x"}, ctx=ctx)
 
     assert ok is False, "a marker inside a request id must not wave a 5xx outage through"
-    assert "SAFETY_VIOLATION" in msg
+    assert "SAFETY_UNAVAILABLE" in msg
     assert "req_1f429ab0" in msg
     assert len(stub.calls) == 1
-    assert _read_events(ctx) == []
+    assert _read_events(ctx, "safety_check_rate_limited") == []
 
 
 def test_statusless_rate_limit_text_takes_the_typed_blocked_outcome(monkeypatch, tmp_path, _no_backoff):
@@ -656,7 +602,7 @@ def test_body_shaped_quota_refusal_on_a_429_still_blocks(monkeypatch, tmp_path, 
     _patch_llm_client(monkeypatch, stub)
     ctx = _DriveCtx(tmp_path)
     ok, msg = check_safety("create_github_issue", {"title": "x"}, ctx=ctx)
-    assert ok is False and "SAFETY_VIOLATION" in msg
+    assert ok is False and "SAFETY_UNAVAILABLE" in msg
     # today's blocking path for an empty body IS the parse lane incl. its one repair
     # retry; the point here is the rate-limit fail-open lane must NOT engage.
     assert len(stub.calls) == 2

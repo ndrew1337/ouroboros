@@ -985,7 +985,8 @@ class OuroborosAgent:
         settings_snapshot = actor_settings_snapshot(
             settings_snapshot, task, getattr(self.env, "budget_drive_root", None) or self.env.drive_root)
 
-        from ouroboros.usage_accounting import UsageScope, usage_scope
+        from ouroboros.usage_accounting import usage_scope
+        from ouroboros.usage_origin import task_usage_scope
         from ouroboros.model_wait import task_model_wait_scope
         from ouroboros.utils import in_worker_process
 
@@ -1012,16 +1013,8 @@ class OuroborosAgent:
                 # failure that persists meets the loop's own technical rail before any paid call.
                 log.warning("Billing authority unavailable at start of %s: %s", task_id, exc)
                 billing = {"root_limit_usd": root_limit if root_limit > 0 else None}
-            scope = UsageScope(
-                drive_root=budget_root,
-                task_id=task_id,
-                root_task_id=root_task_id,
-                parent_task_id=parent_task_id,
-                category=str(metadata.get("usage_category") or task.get("type") or "task"),
-                source="agent.task",
-                root_cost_ceiling_usd=task.get("root_cost_ceiling_usd") or metadata.get("root_cost_ceiling_usd"),
-                **billing,
-            )
+            scope = task_usage_scope(task, drive_root=budget_root, root_task_id=root_task_id,
+                                     parent_task_id=parent_task_id, billing=billing)
             with usage_scope(scope), task_model_wait_scope(
                 task=task, drive_root=self.env.drive_root, event_queue=self._event_queue,
                 worker_slot_held=in_worker_process(),

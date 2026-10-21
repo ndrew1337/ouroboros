@@ -186,7 +186,8 @@ def upsert_scheduled_task(record: Dict[str, Any], *, drive_root: pathlib.Path | 
                           actor: str = "", task_id: str = "", reason: str = "",
                           host_followup: dict | None = None,
                           continuation_of: Optional[Dict[str, Any]] = None,
-                          new_resource_intent: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                          new_resource_intent: Optional[Dict[str, Any]] = None,
+                          writer_kind: str = "consciousness", writer_metadata: Any = None) -> Dict[str, Any]:
     """Create or replace a scheduled task record.
 
     Returns the stored row plus an ``audit`` field: ``recorded`` when both audit
@@ -207,7 +208,7 @@ def upsert_scheduled_task(record: Dict[str, Any], *, drive_root: pathlib.Path | 
         schedule_id = str(incoming.get("id") or "").strip() or uuid.uuid4().hex[:8]
         incoming["id"] = schedule_id
         existing = next((item for item in tasks if str(item.get("id") or "") == schedule_id), None)
-        from supervisor.followup_policy import HOST_FIELDS, origin_of, normalize_template, policy_view, control_guard
+        from supervisor.followup_policy import HOST_FIELDS, origin_of, normalize_template, policy_view, control_guard, relation_kind
         # Host-only keyword is never populated from a template or public payload.
         for key in HOST_FIELDS:
             incoming.pop(key, None)
@@ -225,6 +226,9 @@ def upsert_scheduled_task(record: Dict[str, Any], *, drive_root: pathlib.Path | 
         elif origin_of(incoming):
             # Normalization below drops template lineage; keep its provenance.
             incoming["followup_origin"] = origin_of(incoming)
+        from ouroboros.consciousness_authority import stamp_schedule_writer
+        stamp_schedule_writer(incoming, writer_kind, writer_metadata,
+                              started_root=relation_kind(incoming) == "independent")
         incoming["task"] = normalize_template(incoming)
         _require_template_effort(incoming["task"])  # refused before the audit intent: nothing changed
         if incoming.get("followup_origin"):
@@ -289,7 +293,8 @@ def upsert_scheduled_task(record: Dict[str, Any], *, drive_root: pathlib.Path | 
 def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
                           actor: str, task_id: str = "",
                           drive_root: pathlib.Path | None = None,
-                          expected_hold_id: str = "", relation: str = "") -> Dict[str, Any]:
+                          expected_hold_id: str = "", relation: str = "",
+                          writer_kind: str = "consciousness", writer_metadata: Any = None) -> Dict[str, Any]:
     """Apply one owner-governed future-dispatch mutation, audited intent-first.
 
     Affects DISPATCH only: a task already admitted from this schedule keeps
@@ -307,7 +312,7 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
         return {"ok": False, "changed": False, "status": "reason_required",
                 "schedule_id": wanted, "audit": "not_written"}
     root = pathlib.Path(drive_root or _store._queue().DRIVE_ROOT)
-    from supervisor.followup_policy import origin_of, policy_view, resolve_relation, restore_followup
+    from supervisor.followup_policy import origin_of, policy_view, resolve_relation, restore_followup, relation_kind
     resolved = None
     if operation == "restore" and relation:
         observed = next((r for r in load_schedule_store(root)["tasks"] if r.get("id") == wanted), {})
@@ -334,7 +339,8 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
             if operation == "restore" and (expected_hold_id or resolved or current.get("followup_hold") or
                     (not _is_consumed_once(current) and policy_view(root, data, current).get("hold"))):
                 return restore_followup(root, data, current, expected_hold_id=expected_hold_id,
-                                        resolved=resolved, actor=actor, task_id=task_id, reason=reason)
+                                        resolved=resolved, actor=actor, task_id=task_id, reason=reason,
+                                        writer_kind=writer_kind, writer_metadata=writer_metadata)
             before = dict(current)
             from supervisor.schedule_occurrence import remember_claim_basis
 
@@ -365,7 +371,6 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
                     current["manual_override"] = "deleted"
                     status = "suppressed"
                 else:
-                    from supervisor.followup_policy import relation_kind
                     from supervisor.schedule_occurrence import deletion_settled, owed
 
                     status, owes = "deleted", owed(current, drive_root=root)
@@ -432,6 +437,9 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
             changed = status not in UNCHANGED_STATUSES
             if changed:
                 if not removed:
+                    from ouroboros.consciousness_authority import stamp_schedule_writer
+                    stamp_schedule_writer(current, writer_kind, writer_metadata,
+                                          started_root=relation_kind(current) == "independent")
                     current["updated_at"] = utc_now_iso()
                 data["tasks"] = tasks
                 _write_scheduled_tasks(data, root)

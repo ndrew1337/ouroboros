@@ -98,6 +98,7 @@ def _episode(tmp_path, monkeypatch, model, selection):
 
     repo, drive, workspace = tmp_path / "repo", tmp_path / "data", tmp_path / "workspace"
     cfg = keyless_settings(model, OUROBOROS_CONTEXT_MODE="max", OUROBOROS_REASONING_SUMMARY="off",
+        OUROBOROS_CONSCIOUSNESS_SAFETY_MODE="off",
         OUROBOROS_MODEL_LIGHT="openai-compatible::mock-model-rebound",
         OUROBOROS_SUBAGENTS={"enabled": True, "items": [{"subagent_id": "scout",
             "recommended_use": "Inspect declared observations", "effort": "medium",

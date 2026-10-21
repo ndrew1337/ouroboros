@@ -87,7 +87,7 @@ _RUNTIME_OWNED_FIELDS: tuple[str, ...] = (
 _AUDIT_ROW_KEYS: tuple[str, ...] = (
     "id", "name", "enabled", "source", "skill", "trigger", "timezone",
     "created_at", "updated_at", "last_run_at", "last_task_id", "completed_at",
-    "next_run_at", "manual_override",
+    "next_run_at", "manual_override", "writer_kind",
     "followup_relation", "followup_origin", "followup_hold", "followup_wait",
 )
 # ``manage_schedules`` is a model-facing tool.  Keep one page comfortably below
@@ -594,10 +594,7 @@ def sync_skill_schedules(skills: List[Any], *, drive_root: pathlib.Path | None =
                     dict(record.get("trigger") or {}) != trigger
                     or str(record.get("timezone") or "") != str(spec.get("timezone") or "")
                 )
-                # The suppression marker is keyed by the SCHEDULE ID, so an owner
-                # decision survives a manifest edit that changes the row's content
-                # under the same id — the resync reconciles what the row says, not
-                # whether the owner still wants it to fire.
+                # Owner suppression survives content edits under the same schedule id.
                 manual_override = str(record.get("manual_override") or "").strip().lower()
                 next_record = {
                     **record,
@@ -625,6 +622,8 @@ def sync_skill_schedules(skills: List[Any], *, drive_root: pathlib.Path | None =
                     "skill_content_hash": str(getattr(skill, "content_hash", "")),
                     "updated_at": utc_now_iso(),
                 }
+                from ouroboros.consciousness_authority import stamp_manifest_schedule
+                stamp_manifest_schedule(record, next_record)
                 if timing_changed or not next_record.get("next_run_at"):
                     next_record["next_run_at"] = _schedule_next_run(next_record)
                 if next_record != record:
@@ -777,10 +776,10 @@ def _task_from_schedule(record: Dict[str, Any], *, task_id: str = "") -> Dict[st
         if task.get("deadline_at"):
             task["task_contract"]["deadline_at"] = task["deadline_at"]
     bind_task(_queue().DRIVE_ROOT, task, record)
+    from ouroboros.consciousness_authority import stamp_scheduled_work
+    stamp_scheduled_work(task, record, raw_metadata)
     task["task_contract"] = build_task_contract(apply_consciousness_authority(task))
     workspace = task["task_contract"]["workspace"]
-    # Presence-bound work (a speaker's follow-up, or one acting for a descendant's binding)
-    # runs in the folder its inherited contract admitted, with canonical shared memory.
     if presence_metadata_binding(metadata) is not None and workspace["root"]:
         task.update(
             workspace_root=workspace["root"], workspace_mode=workspace["mode"],

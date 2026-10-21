@@ -10,7 +10,7 @@ from typing import Any, Mapping, Optional
 
 from ouroboros.contracts.skill_manifest import SkillManifest, SkillManifestError
 from ouroboros.contracts.skill_payload_policy import is_skill_payload_control_filename
-from ouroboros.presence_runtime import PresenceRuntimeDefaults, PresenceRuntimeError
+from tests.frozen_presence_runtime import PresenceRuntimeDefaults, PresenceRuntimeError
 
 PRESENCE_PROFILE_SCHEMA_VERSION = 1
 PRESENCE_CAPABILITY_KINDS = frozenset({"tool", "script", "resource"})

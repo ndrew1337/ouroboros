@@ -501,6 +501,11 @@ class _ModelInvocation:
                    operation_id=self.operation_id, route=route, unknown=unknown, same_operation_recoverable=rejoinable)
 
     def receive(self) -> dict:
+        from ouroboros.model_concurrency import model_call_slot
+        with model_call_slot(self.target.get("usage_model", ""), route=self.target, check=self.check_control):
+            return self._receive()
+
+    def _receive(self) -> dict:
         outage_started = None
         detail: dict = {}
         while True:

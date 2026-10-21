@@ -128,6 +128,11 @@ def subscription_ui():
                 body = {"ok": True, "runtime_mode": "advanced", "restart_required": False}
             elif path == "/api/settings":
                 body = {"ok": True, "saved": True}
+            elif path == "/api/owner/safety-model":
+                # Save writes the checker's changed keys first (models, their flags and per-slot
+                # options, the Agents roster), in the gateway's owner transaction.
+                settings.update(payload.get("settings") or {})
+                body = {"ok": True}
         elif path == "/api/claudexor/status":
             body = fixture["status"]
         elif path == "/api/settings":
@@ -187,6 +192,19 @@ def subscription_ui():
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+
+
+def settings_saves(ui):
+    """What each Settings Save wrote: its generic body together with the checker's keys the same
+    Save sent first through the owner transaction (`/api/owner/safety-model`)."""
+    saves, checker = [], {}
+    for path, body in ui["posts"]:
+        if path == "/api/owner/safety-model":
+            checker = {**checker, **(body.get("settings") or {})}
+        elif path == "/api/settings":
+            saves.append({**body, **checker})
+            checker = {}
+    return saves
 
 
 def capture(page, name):

@@ -531,15 +531,6 @@ export const apiClient = {
         items, ...(expectedContentHash ? { expected_content_hash: expectedContentHash } : {}),
         ...(enableAfterGrant ? { enable_after_grant: true } : {}),
     }, { headers: { Prefer: 'respond-async' } }),
-    /**
-     * @param {string} skill
-     * @param {import('./api_types.js').OwnerSkillPresenceRuntimeRequest} payload
-     * @returns {Promise<import('./api_types.js').OwnerSkillPresenceRuntimeResponse>}
-     */
-    savePresenceRuntime: (skill, payload) => jsonPost(
-        `/api/owner/skills/${encodeURIComponent(skill)}/presence-runtime`,
-        payload,
-    ),
     projectFromTask: (taskId, id, name) => jsonPost('/api/projects/from-task', { task_id: taskId, id, name }),
     /** @param {import('./api_types.js').ProjectCreateRequest} payload */
     projectCreate: (payload) => jsonPost('/api/projects', payload),

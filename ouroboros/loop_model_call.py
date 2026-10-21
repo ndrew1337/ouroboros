@@ -5,6 +5,8 @@ split); loop.py re-exports every name."""
 
 from __future__ import annotations
 
+from ouroboros.context_fit import _physical_context_for_fit
+
 from ouroboros.config import runtime_setting
 
 import logging
@@ -594,6 +596,7 @@ def _rebind_context_fit_plan(
         str(getattr(evidence, "route_fp", "") or ""),
         str(route.get("model") or model),
         estimate_context_prompt_tokens(messages, tool_schemas, provider=str(route.get("provider") or "")),
+        view_kind=plan.view_kind,
     )
     from ouroboros.context_anchor import floored_window
 
@@ -831,21 +834,6 @@ def _measure_round_main_fit(
     _remember_main_fit(ctx, disposition)
     return disposition
 
-
-def _physical_context_for_fit(disposition: Any) -> PhysicalAttemptContext:
-    measurement = disposition.measurement
-    return PhysicalAttemptContext(
-        profile=measurement.profile,
-        rendered_mode=measurement.rendered_mode,
-        measurement_basis=measurement.measurement_basis,
-        route_fp=measurement.route_fp,
-        round_id=measurement.round_id,
-        target_total_tokens=measurement.target_total_tokens,
-        capacity_total_tokens=measurement.capacity_total_tokens,
-        context_target_miss=disposition.action == "send_target_miss",
-        automatic_pass_used=disposition.automatic_pass_used,
-        measurement_density=measurement.measurement_density,
-    )
 
 
 def _measure_main_context_view(plan, messages, schemas, mode, effort, round_id, usage=None) -> dict:

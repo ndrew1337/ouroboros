@@ -408,8 +408,10 @@ def test_skill_review_contract_fingerprint_preserves_legacy_and_tracks_rows(monk
     # then removed the advisory-evidence input from the prompt builder (no
     # advisory critic feeds the skill reviewer), which moved it once more. PR #1981
     # made context_snapshot_discipline a severity-driven item (skill_review_status),
-    # an aggregation-vocabulary change that lapses replay by design.
-    assert legacy == "ffa677071aa64ae27816aa1e1290ede58f012a7527a0ad22012583b641106cfb"
+    # an aggregation-vocabulary change that lapses replay by design. The reviewer now also
+    # compares each declared tool effect with its implementation (places), a prompt change
+    # that lapses replay once more.
+    assert legacy == "5b7f0fe9d0398de964854ca1ec5257c085ab61d04294338e0319c764737f8194"
     legacy_delivery = {
         "legacy_skill_fingerprint": True,
         "models": ["m1", "m2"], "routes": ["api_chat", "api_chat"],

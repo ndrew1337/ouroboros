@@ -407,10 +407,11 @@ def stream_row(stream: str, columns: Dict[str, Any]) -> bool:
 
 
 def _row(record: sqlite3.Row) -> Row:
-    return Row(record["stream"], record["seq"], decode(record["body"]), record["dispatch"], record["length"])
+    from ouroboros.place_arrivals import project_source
+    return Row(record["stream"], record["seq"], project_source(record), record["dispatch"], record["length"])
 
 
-_SELECT = "SELECT stream, seq, body, dispatch, length FROM dialogue"
+_SELECT = "SELECT stream, seq, body, dispatch, dispatch_input, length FROM dialogue"
 
 
 # --- the one writer seam ---------------------------------------------------------------------

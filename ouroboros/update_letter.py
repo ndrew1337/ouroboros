@@ -510,7 +510,7 @@ def write_letter(
         # hand the transport a second full window and double the ceiling behind the owner's
         # "Checking…" button.
         deadline_ts = time.time() + _letter_timeout_sec()
-        with model_concurrency.model_call_slot(model, use_local, deadline_ts=deadline_ts):
+        with model_concurrency.model_call_scope(model, use_local, deadline_ts=deadline_ts):
             remaining = deadline_ts - time.time()
             if remaining <= 0:
                 record.update(error_kind="timeout",

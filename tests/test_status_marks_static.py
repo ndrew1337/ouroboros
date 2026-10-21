@@ -22,7 +22,7 @@ from typing import Iterator
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 WEB = REPO_ROOT / "web"
 SHEETS = ("web/ui.css", "web/style.css", "web/settings.css", "web/model_roles.css", "web/model_wait.css",
-          "web/room_work.css", "web/onboarding.css", "web/cards.css")
+          "web/room_work.css", "web/onboarding.css", "web/cards.css", "web/consciousness.css")
 CATEGORIES = ("owner", "warning", "system", "data", "palette")
 
 # category | sheet | [at-rule context » ]selector | properties
@@ -113,6 +113,7 @@ system | web/style.css | .skill-review-summary-button:hover | background
 system | web/style.css | .skill-review-summary-main | color
 system | web/style.css | .skill-review-toggle-label | color
 system | web/style.css | :root[data-theme="light"] .skill-review-summary-main | color
+system | web/consciousness.css | .place-sheet-section p.place-silent-card | background, border-left, color
 # Data categories, not statuses: the Logs task category, code highlighting, the Storage temporary segment.
 data | web/style.css | .log-type.tasks | color
 data | web/style.css | .md-code-block .hljs-class .hljs-title | color

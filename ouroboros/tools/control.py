@@ -347,6 +347,7 @@ def get_tools() -> List[ToolEntry]:
                            "Project rooms included — identity is the same continuous file in every room.",
             "parameters": {"type": "object", "properties": {
                 "content": {"type": "string", "description": "Full identity content (prefer evolving over rewriting from scratch)"},
+                "expected_revision": {"type": "string", "description": "Required for an existing identity: source_revision (SHA-256 of bytes) from read_file. A stale revision refuses with the current revision."},
             }, "required": ["content"]},
         }, _update_identity),
         ToolEntry("toggle_evolution", {

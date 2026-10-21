@@ -1708,7 +1708,7 @@ the crimson ink; a work card offers none.
 A skill adds controls only where the host opens a place (the composer's "+"
 menu and capsule row, a saved reply's actions), and the host draws them: the
 skill's label verbatim, one glyph from the host set, the host's capsule or
-icon control, never the skill's markup. In "+", after Attach file, each skill
+icon control, never the skill's markup. Connector icons may supply reviewed SVG geometry, painted by the host in monochrome currentColor with a fallback glyph and an adjacent visible label. In "+", after Attach file, each skill
 has a section under its name with its items in the owner's order; the host's
 own items close the menu under Ouroboros's name: Add dictation… while no
 engine can dictate here, and Make a button with Ouroboros…, which starts a request in

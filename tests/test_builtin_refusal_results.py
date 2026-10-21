@@ -105,7 +105,7 @@ def test_knowledge_and_registry_argument_refusals_leave_files_untouched(tmp_path
 
 
 def test_presence_contract_refusal_and_valid_completion_remain_distinct():
-    from ouroboros.tools.presence import _finish_presence
+    from tests.presence_legacy_helpers import _finish_presence
 
     ctx = SimpleNamespace(task_contract={})
     result = _call(ctx, _finish_presence, "message", "hello")

@@ -348,14 +348,14 @@ class _Transport:
 
 
 def _seed_behavior(data_root: pathlib.Path) -> None:
-    from ouroboros.presence_capabilities import (
+    from tests.frozen_presence_capabilities import (
         PresenceSelection,
         PresenceState,
         PresenceToolTarget,
         presence_state_fingerprint,
         save_presence_state,
     )
-    from ouroboros.presence_profile import parse_presence_profile, presence_request_fingerprint
+    from tests.frozen_presence_profile import parse_presence_profile, presence_request_fingerprint
     from ouroboros.skill_loader import SkillReviewState, load_skill, save_enabled, save_review_state
 
     skill_dir = data_root / "skills" / "external" / BEHAVIOR_SKILL
@@ -399,12 +399,8 @@ def _seed_behavior(data_root: pathlib.Path) -> None:
 
 def _seed_transport(data_root: pathlib.Path, name: str) -> _Transport:
     from ouroboros.gateway.host_service import AUTH_TOKEN_FILENAME
-    from ouroboros.presence_bindings import (
-        PresenceBinding,
-        PresenceEndpoint,
-        new_presence_binding_id,
-        save_presence_binding,
-    )
+    from ouroboros.presence_bindings import PresenceBinding, PresenceEndpoint
+    from tests.frozen_presence_bindings import new_presence_binding_id, save_presence_binding
     from ouroboros.skill_loader import (
         SkillReviewState,
         compute_content_hash,

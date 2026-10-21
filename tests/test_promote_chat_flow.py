@@ -309,26 +309,6 @@ def _managed_swarm_ctx(tmp_path, **overrides):
     return types.SimpleNamespace(**values)
 
 
-def test_presence_promotion_keeps_its_host_scope_and_records_handoff(tmp_path, monkeypatch):
-    from ouroboros.tools.control import _start_task
-
-    _confirm_promote(monkeypatch)
-    presence = {"binding_id": "presence-binding"}
-    ctx = _managed_swarm_ctx(tmp_path, project_id="alpha", task_metadata={"presence": presence})
-    out = _start_task(
-        ctx, "Audit and fix the issue", title="Issue audit and fix", project_id="beta", project_name="Injected Project",
-        workspace_root="/tmp/foreign", workspace="none",
-        source="https://example.invalid/repo.git",
-    )
-    assert out.startswith("OK: task")
-    evt = ctx.pending_events[0]
-    assert evt["presence"] == presence
-    assert evt["project_id"] == evt["project_name"] == evt["workspace_root"] == evt["workspace"] == evt["source"] == ""
-    assert "force_plan" not in evt
-    assert ctx._swarm_handoff_attempt["status"] == "scheduled"
-    assert ctx._swarm_handoff_attempt["task_id"] == evt["task_id"]
-
-
 def test_managed_swarm_can_choose_a_named_project_for_later_work(tmp_path, monkeypatch):
     """The admitted root chooses the ordinary project and source selectors."""
     from ouroboros.project_facts import project_id_from_display_name
@@ -512,16 +492,14 @@ def test_source_prepared_promote_announces_started_for_flow_created_project(
 
 def test_worker_admits_promoted_presence_with_same_verified_ceiling(tmp_path, monkeypatch):
     import supervisor.workers as workers
-    from ouroboros.presence_authority import (
-        build_presence_capability_ceiling,
-        presence_ceiling_payload,
-    )
-    from ouroboros.presence_capabilities import (
+    from ouroboros.presence_authority import presence_ceiling_payload
+    from tests.frozen_presence_authority import build_presence_capability_ceiling
+    from tests.frozen_presence_capabilities import (
         PresenceProfileResolution,
         PresenceSelection,
         PresenceToolTarget,
     )
-    from ouroboros.presence_runtime import ResolvedPresenceRuntime
+    from tests.frozen_presence_runtime import ResolvedPresenceRuntime
 
     resolution = PresenceProfileResolution(
         active=(PresenceSelection("1" * 64, PresenceToolTarget("builtin", "chat_history")),),

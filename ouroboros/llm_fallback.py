@@ -17,6 +17,8 @@ import logging
 import time
 from typing import Any, Dict, Optional
 
+from ouroboros.model_concurrency import limit_physical_send
+
 from ouroboros.llm_attempt import (
     _attempt_request,
     _candidate_before_dispatch,
@@ -381,7 +383,7 @@ class _RecoveryLadderMixin:
             try:
                 result = _execute_candidate(
                     request,
-                    dispatch,
+                    limit_physical_send(target, dispatch),
                     _candidate_before_dispatch(candidate, request),
                 )
                 note_wire_send_succeeded(last_physical_attempt_capture())
@@ -549,7 +551,7 @@ class _RecoveryLadderMixin:
             try:
                 result = await _execute_candidate_async(
                     request,
-                    dispatch,
+                    limit_physical_send(target, dispatch),
                     _candidate_before_dispatch(candidate, request),
                 )
                 note_wire_send_succeeded(last_physical_attempt_capture())

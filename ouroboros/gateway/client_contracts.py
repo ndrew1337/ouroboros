@@ -133,6 +133,7 @@ class SetupInitialState(TypedDict):
     ``contract.providerFields[].stateKey`` (a configured secret reads as ``secretPlaceholder``,
     never the secret), per ``contract.budgetFields[].stateKey`` and per ``contract.modelSlots[].stateKey``."""
 
+    safetyModel: str
     providerProfile: str
     reviewEnforcement: str
     runtimeMode: str
@@ -279,7 +280,25 @@ class OwnerEffortRangeRequest(TypedDict):
 
 
 class OwnerSafetyModeRequest(TypedDict):
+    kind: NotRequired[Literal["your_work", "consciousness"]]
     mode: Literal["full", "light", "off"]
+
+
+class OwnerSafetyRulesRequest(TypedDict):
+    rules: str
+
+
+class OwnerSafetyRulesResponse(TypedDict):
+    ok: bool
+    rules: str
+
+
+class OwnerSafetyModelRequest(TypedDict):
+    settings: Dict[str, Any]
+
+
+class OwnerSafetyModelResponse(TypedDict):
+    ok: bool
 
 
 class OwnerEnabledRequest(TypedDict):
@@ -546,7 +565,7 @@ __all__ = [
     "SettingsReadResponse", "SettingsWriteRefusal",
     "AuthLoginRequest", "AuthLoginResponse",
     "ContractBody", "ContractHttpEntry", "ContractWsEntry", "ContractWs", "GatewayContractResponse",
-    "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerEnabledRequest",
+    "OwnerRuntimeModeRequest", "OwnerContextModeRequest", "OwnerEffortRangeRequest", "OwnerSafetyModeRequest", "OwnerSafetyRulesRequest", "OwnerSafetyRulesResponse", "OwnerSafetyModelRequest", "OwnerSafetyModelResponse", "OwnerEnabledRequest",
     "SettingsSecretRequest", "SettingsSecretResponse", "ChatUploadDeleteRequest", "ChatUploadDeleteResponse",
     "ProjectListResponse", "ProjectCreateResponse", "ProjectUpdateRequest", "ProjectUpdateResponse",
     "ProjectFromTaskRequest", "ProjectTaskBinding", "ProjectFromTaskResponse",

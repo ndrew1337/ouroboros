@@ -54,6 +54,7 @@ def test_mcp_initialization_pause_fences_call_across_async_runner(tmp_path, monk
     _running(tmp_path, workers)
     registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
     registry._ctx.task_id = registry._ctx.root_task_id = "root"
+    registry._ctx.task_metadata = {"work_kind": "owner"}  # an owner task's minted kind
     sent = []
     initialized = []
     monkeypatch.setattr(registry, "_mcp_name_miss", lambda _name: None)
@@ -408,6 +409,7 @@ def test_timed_out_mcp_runner_cannot_start_after_caller_return(tmp_path, monkeyp
     _running(tmp_path, workers)
     registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
     registry._ctx.task_id = registry._ctx.root_task_id = "root"
+    registry._ctx.task_metadata = {"work_kind": "owner"}  # an owner task's minted kind
     monkeypatch.setattr(registry, "_mcp_name_miss", lambda _name: None)
     release, entered = threading.Event(), threading.Event()
     threads, sent = [], []

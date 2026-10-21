@@ -315,14 +315,16 @@ def test_lane_two_is_one_host_line_per_root_task_with_typed_facts_by_address(tmp
     _snapshot, text = _view(tmp_path, MAIN_TASK)
     lane2 = _section(text, "### Task facts of this conversation").split("\n")[1:]
     by_task = {line.split("; task ", 1)[1].split("]", 1)[0]: line for line in lane2 if "; host; task " in line}
-    assert set(by_task) == {"pre1", "root1", "pres1", "root2", "root3", "root5", "root6"} and len(lane2) == 7
+    assert set(by_task) == {"pre1", "root1", "root2", "root3", "root5", "root6"} and len(lane2) == 6
     root1 = by_task["root1"]
     assert root1 == (f"[{_ts(4)}; host; task root1] Completed. Root task root1.; children 1 (failed 1); rows 5; "
                      f"get_task_result(task_id='root1'); {_addr(rows[2])}..{_addr(rows[7])}; "
                      f"late review evidence: {_addr(rows[7])}")
     assert by_task["root2"].startswith(f"[{_ts(18)}; host; task root2] host facts for root2: status=running; "
                                        "result: get_task_result(task_id=root2); rows 1;")
-    assert f"delivery failed: {_addr(rows[15])}" in by_task["pres1"]
+    assert "pres1" not in by_task  # place delivery facts belong only to their conversation
+    _place, place_text = _view(tmp_path, {"id": "p", "chat_id": 777, "metadata": PRESENCE})
+    assert f"delivery failed: {_addr(rows[15])}" in place_text
     assert by_task["root3"].startswith(f"[{_ts(21)}; host; task root3] running or unreported; last row task_started "
                                        f"by host, 12 chars, {_addr(rows[19])}")
     # A running root with a child: its status comes from fields, never from the last row's text.
@@ -417,11 +419,11 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     snapshot, text = _view(tmp_path, MAIN_TASK)
     facts = snapshot.room["facts"]
     assert facts == mi.room_facts(store, "1", mi.open_room_rows(tmp_path, "1"), row_lineage(tmp_path), 0)
-    chars = sum(len(row["text"]) for row in rows if row["chat_id"] in (1, 777))  # the transport's rows are Main's too
-    assert facts == {"rows": 22, "people": 4, "mine": 4, "task_facts": 14, "chars": chars, "earliest": _ts(2),
+    chars = sum(len(row["text"]) for row in rows if row["chat_id"] in (1, 777) and row.get("type") != "presence_delivery")  # the transport's rows are Main's too
+    assert facts == {"rows": 21, "people": 4, "mine": 4, "task_facts": 13, "chars": chars, "earliest": _ts(2),
                      "latest": _ts(27), "notes": 0, "pages": 0, "last_covered": ""}
     head = f"## This room (Main) — head {store.room_head('1')}; open 2026-09-05 10:02 → 2026-09-05 10:27; people 4, mine 4, "
-    assert f"{head}task facts 14, ~{chars} chars; my notes not yet sealed: 0; no page of this room yet\n" in text
+    assert f"{head}task facts 13, ~{chars} chars; my notes not yet sealed: 0; no page of this room yet\n" in text
     live = _section(text, "## Live rooms")
     assert (f"### Project Beta [chat_id={beta}] — open 2026-09-05 10:15 → 2026-09-05 10:16; people 1, mine 1, task facts 0, "
             f"~20 chars; my notes not yet sealed: 0; no page of this room yet\nmemory_read(room_id='{beta}', rows=true)") in live
@@ -441,10 +443,10 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     facts = snapshot.room["facts"]
     assert facts == mi.room_facts(store, "1", mi.open_room_rows(tmp_path, "1"), row_lineage(tmp_path), 1)
     sealed = sum(len(rows[i]["text"]) for i in range(3, 9))
-    assert facts == {"rows": 16, "people": 4, "mine": 2, "task_facts": 10, "chars": chars - sealed, "earliest": _ts(2),
+    assert facts == {"rows": 15, "people": 4, "mine": 2, "task_facts": 9, "chars": chars - sealed, "earliest": _ts(2),
                      "latest": _ts(27), "notes": 1, "pages": 1, "last_covered": _ts(10)}
     head = f"## This room (Main) — head {store.room_head('1')}; open 2026-09-05 10:02 → 2026-09-05 10:27; people 4, mine 2, "
-    assert (f"{head}task facts 10, ~{chars - sealed} chars; my notes not yet sealed: 1; pages of this room: 1, "
+    assert (f"{head}task facts 9, ~{chars - sealed} chars; my notes not yet sealed: 1; pages of this room: 1, "
             "last covered row 2026-09-05 10:10\n") in text
     assert "sealed up to" not in text and "sealed through" not in text and "frontier" not in text
     quiet = [room for room in snapshot.live_rooms if not room["notes"] and not room["words"]]
@@ -547,7 +549,8 @@ def test_each_role_sees_its_parts_of_the_live_view(tmp_path):
     assert "please look at X" in _section(wake_text, "### Open conversation since")
     assert "### Main — " not in wake_text  # Main is this room, not a live-room line
     live = _section(wake_text, "## Live rooms")
-    assert "alpha words" in live and "beta words" in live and "transport words" in live  # people's words, verbatim
+    assert "alpha words" in live and "beta words" in live
+    assert "transport words" not in live and wake_text.count("transport words") == 1
     assert "alpha reply" not in wake_text and "beta reply" not in wake_text  # my replies there: one read by address
     assert f"memory_read(room_id='{rooms['alpha']}', rows=true)" in live
     assert "alpha words" not in main_text and "beta words" not in main_text  # the Main turn keeps its one line per room

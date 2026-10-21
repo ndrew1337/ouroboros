@@ -795,12 +795,18 @@
  * @property {string} label
  * @property {string} title
  * @property {string} icon
+ * @property {Object<string,string>=} icon_spec
  * @property {number} order
  * @property {Object=} action
  * @property {{url:string,refresh_s:number}=} source
  * @property {string=} runtime
  * @property {string=} route_url
  * @property {string=} destination
+ * @property {string=} scope
+ * @property {string[]=} wakes
+ * @property {string=} settings
+ * @property {string=} read_only
+ * @property {Object[]=} tools
  * @property {string[]=} languages
  * @property {string[]=} formats
  * @property {string=} install_size

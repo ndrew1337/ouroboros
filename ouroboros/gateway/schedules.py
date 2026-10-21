@@ -112,7 +112,7 @@ async def api_schedules_upsert(request: Request) -> JSONResponse:
 
         try:
             stored = upsert_scheduled_task(
-                record, drive_root=request_drive_root(request), actor="owner:gateway",
+                record, drive_root=request_drive_root(request), actor="owner:gateway", writer_kind="owner",
                 reason=str(body.get("reason") or "").strip(), new_resource_intent=new_intent)
         except ScheduleRefused as refusal:
             # 409 when the write could not be made SAFELY (its audit is down);
@@ -149,7 +149,7 @@ async def api_schedules_action(request: Request) -> JSONResponse:
         if not reason:
             return json_error("reason is required for a schedule lifecycle action", 400)
         return JSONResponse(mutate_scheduled_task(
-            action, schedule_id, reason=reason, actor="owner:gateway",
+            action, schedule_id, reason=reason, actor="owner:gateway", writer_kind="owner",
             drive_root=request_drive_root(request), expected_hold_id=str(body.get("expected_hold_id") or ""),
             relation=str(body.get("relation") or ""),
         ))
@@ -165,7 +165,7 @@ async def api_schedules_delete(request: Request) -> JSONResponse:
         from supervisor.queue import mutate_scheduled_task
 
         return JSONResponse(mutate_scheduled_task(
-            "delete", schedule_id, reason="owner deleted the schedule", actor="owner:gateway",
+            "delete", schedule_id, reason="owner deleted the schedule", actor="owner:gateway", writer_kind="owner",
             drive_root=request_drive_root(request),
         ))
     except Exception as exc:

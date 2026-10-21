@@ -158,6 +158,7 @@ def test_public_null_target_never_selects_internal_hub_transport(tmp_path, gh_ca
         ctx.task_metadata = {"_project_room_note": "registry unavailable"}
     monkeypatch.setenv("GH_REPO", "unrelated/wrong-repo")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry.set_context(ctx)
     result = registry.execute_result(name, {**args, "repo": None})
@@ -174,6 +175,7 @@ def test_required_target_is_an_error_then_a_valid_call_has_no_stale_failure(tmp_
     ctx, _ = _context(tmp_path, "room")
     ctx.task_metadata = {}
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
     registry.set_context(ctx)
     refused = registry.execute_result(name, args)
@@ -244,7 +246,7 @@ def test_cli_store_metadata_enables_only_cli_tools_without_probing(tmp_path, mon
 @pytest.mark.parametrize("bound,explicit", [(False, False), (False, True), (True, True)])
 def test_presence_repository_selection_keeps_host_argument_authority(tmp_path, gh_calls, bound, explicit):
     from ouroboros.presence_authority import PresenceCapabilityCeiling, PresenceToolGrant, presence_ceiling_payload
-    from ouroboros.presence_capabilities import PresenceArgumentBinding
+    from tests.frozen_presence_capabilities import PresenceArgumentBinding
     from ouroboros.tools.registry import ToolRegistry
 
     bindings = (PresenceArgumentBinding(("repo",), "static", static_value="owner/allowed"),) if bound else ()

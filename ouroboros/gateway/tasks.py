@@ -88,6 +88,7 @@ from ouroboros.workspace_executor import normalize_executor_ref
 log = logging.getLogger(__name__)
 
 _RESERVED_METADATA_KEYS = frozenset({
+    "work_kind", "schedule_writer_kind", "wake_cause", "focus", "consciousness_cause", "origin_wake_task_id",
     "task_id",
     "parent_task_id",
     "root_task_id",
@@ -106,8 +107,7 @@ _RESERVED_METADATA_KEYS = frozenset({
     "executor_ref",
     "workspace_executor",
     "project_id",
-    # The owner door's stamp (read as ``run_origin.owner_ingress`` by the corpus
-    # label and the routing issuer) belongs to owner routing, never to a caller.
+    # Owner provenance belongs to the host, never to a caller.
     "origin_message_ref",
     "origin_suppressed",
 })
@@ -625,7 +625,7 @@ def _create_task_from_body(request: Request, body: Any) -> JSONResponse:
         return attachment_error
     from ouroboros.artifacts import attachment_manifest_projection
     metadata.setdefault("session_id", str(body.get("session_id") or uuid.uuid4().hex))
-    metadata.setdefault("actor_id", str(body.get("actor_id") or "cli"))
+    metadata.setdefault("actor_id", str(body.get("actor_id") or "cli")); metadata["work_kind"] = "owner"
     metadata.setdefault("source", str(body.get("source") or "api_task"))
     # Owner Surface Fact: assembled at its PRODUCER. An external admission
     # carries no browser observables, and a caller-built descriptor must not

@@ -380,6 +380,7 @@ def start_evolution_campaign(objective: str = "", *, source: str = "owner", orig
     try:
         campaign = _read_evolution_campaign()
         owner_start = str(source or "") in _OWNER_START_SOURCES
+        origin = {**(origin or {}), "work_kind": "owner"} if owner_start else origin
         if not owner_start and evolution_stop_reason(campaign):
             return {}  # a received Stop yields only to the owner's own start (#1307)
         prior_campaign_id = str(campaign.get("id") or "")
@@ -410,12 +411,11 @@ def start_evolution_campaign(objective: str = "", *, source: str = "owner", orig
             if not str(campaign.get("source") or "").strip() and source:
                 campaign["source"] = str(source)
             if (str(source or "") in ("owner", "owner_chat") and campaign.get("status") == "paused"
-                    and consciousness_origin_metadata(campaign)):
-                # The owner's explicit start ADOPTS a paused consciousness campaign: its cycles are
-                # the owner's work now, no longer bound by the consciousness allowance (BIBLE P0).
-                for key in ("initiator", "usage_category", "consciousness_autonomy"):
+                    and campaign.get("initiator") == "consciousness"):
+                # Owner adoption replaces the campaign's inherited authority (BIBLE P0).
+                for key in ("initiator", "usage_category", "consciousness_autonomy", "consciousness_cause", "origin_wake_task_id", "focus"):
                     campaign.pop(key, None)
-                campaign["adopted_by_owner_at"] = now
+                campaign.update(work_kind="owner", adopted_by_owner_at=now)
             campaign.update({k: v for k, v in consciousness_origin_metadata(origin).items() if not campaign.get(k)})
             campaign["status"] = "active"
             campaign.pop("pause_reason", None)

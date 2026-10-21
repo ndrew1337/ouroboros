@@ -1244,7 +1244,7 @@ def _send_main_candidate(
     binding = (contextlib.nullcontext() if physical_context is None and predicate is None else
                bind_physical_attempt_context(physical_context, candidate_predicate=predicate))
     # Main's clock line per physical send; the consumed one joins ``canonical_messages``.
-    with model_concurrency.model_call_slot(model, use_local, deadline_ts), binding, main_send_scope(send_clock_policy, canonical_messages):
+    with model_concurrency.model_call_scope(model, use_local, deadline_ts), binding, main_send_scope(send_clock_policy, canonical_messages):
         return llm.chat(**kwargs)
 
 

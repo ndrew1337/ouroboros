@@ -407,11 +407,11 @@ def test_model_id_classifiers_preserve_the_prior_ordered_vocabulary():
     from devtools.benchmarks.common.model_slots import _ACTIVE_FIXED_MODEL_KEYS
     from devtools.benchmarks.programbench.run_programbench_e2e import _MODEL_ID_SLOT_KEYS
 
-    # Exact pre-subscription vocabulary minus the reviewer carriers (the review
+    # Model-ID vocabulary includes the independent Supervisor, minus reviewer carriers (the review
     # pool lives in the roster, OUROBOROS_SUBAGENTS): adding role metadata must not
     # drop a fallback list, resurrect Heavy, or widen model-ID admission.
     prior = (
-        "OUROBOROS_MODEL", "OUROBOROS_MODEL_LIGHT", "OUROBOROS_MODEL_VISION",
+        "OUROBOROS_MODEL", "OUROBOROS_MODEL_LIGHT", "OUROBOROS_MODEL_SAFETY", "OUROBOROS_MODEL_VISION",
         "OUROBOROS_MODEL_CONSCIOUSNESS", "OUROBOROS_MODEL_FALLBACKS",
         "OUROBOROS_WEBSEARCH_MODEL",
     )

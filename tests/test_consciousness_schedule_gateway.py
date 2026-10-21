@@ -179,7 +179,9 @@ def test_the_gateway_action_and_the_agent_tool_mean_the_same_thing(tmp_path, mon
 
     assert by_owner["status"] == by_agent["status"] == "updated"
     assert by_owner["ok"] is by_agent["ok"] is True
-    ignore = {"updated_at"}
+    assert owner_row["writer_kind"] == owner_row["writer_origin"]["work_kind"] == "owner"
+    assert agent_row["writer_kind"] == agent_row["writer_origin"]["work_kind"] == "consciousness"
+    ignore = {"updated_at", "writer_kind", "writer_origin"}
     assert {k: v for k, v in owner_row.items() if k not in ignore} == \
            {k: v for k, v in agent_row.items() if k not in ignore}
     # Both wrote the same audit shape; only the actor and the reason differ.

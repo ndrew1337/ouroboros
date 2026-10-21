@@ -15,6 +15,8 @@ import json
 import logging
 from typing import Any, Dict, List, Optional, Tuple
 
+from ouroboros.model_concurrency import limit_physical_send
+
 from ouroboros.anthropic_native_custody import (
     anthropic_replay_scoped,
     mark_replayed_receipts_consumed,
@@ -566,7 +568,7 @@ class _AnthropicLaneMixin:
             try:
                 result = _execute_candidate(
                     request,
-                    _post,
+                    limit_physical_send(target, _post),
                     _candidate_before_dispatch(candidate, request),
                 )
                 note_wire_send_succeeded(last_physical_attempt_capture())

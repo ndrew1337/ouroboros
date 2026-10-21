@@ -64,6 +64,7 @@ def test_virtual_install_becomes_operable_without_reload(skills_browser, browser
         assert card.locator('.skills-details').count() == 0
         weather_card = page.locator('.skills-card[data-skill="weather"]')
         weather_card.locator('.skills-details > summary').click()
+        weather_card.locator('.skills-details').evaluate("node => node.insertAdjacentHTML('beforeend', '<input name=inline_max_rounds>')")
         field = weather_card.locator('[name="inline_max_rounds"]')
         field.fill("27")
         page.evaluate("""() => {
