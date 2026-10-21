@@ -33,7 +33,7 @@ HELD_AUDIO_SPANS = {}
 RESUMPTIONS = {}
 RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
                  'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
-                 'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final',
+                 'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final', 'output_caption',
                  'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth', 'input_modalities')
 INPUT_MODALITIES = frozenset({'text', 'audio', 'image', 'video'})
 
@@ -217,6 +217,7 @@ class GeminiSession(JsonSession):
         self.response_complete = False
         self.input_pending = self.input_final = self.input_boundary = False
         self.output_pending = self.output_final = False
+        self.output_caption = None
         self.usage = {}
         # Prompt usage includes retained turns, so keep this evidence until a
         # fresh session. An unrecognized resume handle has unknown prior media.
@@ -325,6 +326,7 @@ class GeminiSession(JsonSession):
 
     async def convert(self, event):
         result = []
+        thinking = 'thinkingConfig' in self.events[0]['setup']['generationConfig']
         content = event.get('serverContent', {})
         calls = []
         for call in event.get('toolCall', {}).get('functionCalls', []):
@@ -361,6 +363,7 @@ class GeminiSession(JsonSession):
                 self.native_response = native_response
                 self.response_complete = False
                 self.output_pending = self.output_final = False
+                self.output_caption = None
                 result.append(LiveEvent('response_started', {'response_id': self.response}))
             if not self.response_complete:
                 self.turn_busy = True
@@ -387,6 +390,16 @@ class GeminiSession(JsonSession):
                     self.input_final = False
                     result.append(LiveEvent('input_started'))
                 elif speaker == 'ouroboros':
+                    if thinking and self.output_final:
+                        # IDLE can precede a transcription tail. Revise the same
+                        # completed item with its full text, never a second row.
+                        if part.get('text'):
+                            previous = self.output_caption
+                            self.text[speaker] = [self.item, (previous[1] if previous else '') + part['text']]
+                            final = self.finish_text(speaker)
+                            result.append(LiveEvent('caption', {**final.data, **({'replace': True} if previous else {})}))
+                            self.output_pending = False
+                        continue
                     self.output_pending = True
                 if speaker not in self.text:
                     self.text[speaker] = ['local_' + uuid4().hex if speaker == 'owner' else self.item, '']
@@ -421,6 +434,11 @@ class GeminiSession(JsonSession):
         if content.get('turnComplete'):
             # Generation completion may precede outputTranscription. Keep both
             # the response and audio item identity until that caption arrives.
+            if thinking and content.get('interactionStatus') == 'IDLE':
+                self.output_final = True
+                if 'ouroboros' in self.text:
+                    result.append(self.finish_text('ouroboros'))
+                    self.output_pending = False
             if 'owner' in self.text:
                 result.append(self.finish_text('owner'))
                 self.input_final = True
@@ -473,6 +491,8 @@ class GeminiSession(JsonSession):
 
     def finish_text(self, speaker):
         item, text = self.text.pop(speaker)
+        if speaker == 'ouroboros':
+            self.output_caption = (item, text)
         return LiveEvent('caption', {'speaker': speaker, 'item_id': item, 'text': text, 'final': True})
 
     def final_captions(self):
