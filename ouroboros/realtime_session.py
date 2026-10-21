@@ -52,11 +52,15 @@ class JsonSession:
         value = json.loads(raw)
         if not isinstance(value, dict):
             raise RealtimeSetupError("wire", "provider event must be an object")
-        if "error" in value:
+        if "error" in value and not self.is_benign_error(value):
             # Raw evidence is retained in the task. Provider text may echo credentials;
             # it never crosses the owner UI as a formatted exception.
             raise RealtimeSetupError("provider_error", "provider refused a live event; see the task evidence")
         return value
+
+    def is_benign_error(self, event):
+        """Only a provider can recognize an expected error for its own request."""
+        return False
 
     def final_captions(self):
         """Known but unfinished text at actual teardown; no new wire work."""

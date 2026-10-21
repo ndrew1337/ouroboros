@@ -101,6 +101,7 @@ class OpenAISession(JsonSession):
         self.text = {}
         self.responses = set()
         self.cancelled = set()
+        self.pending_cancel = ""
         self.tools = tuple(json.loads(selected.tools_json))
         self.active_response = ""
         self.truncations = {}
@@ -177,6 +178,19 @@ class OpenAISession(JsonSession):
         await self.advance_context()
         return events
 
+    def is_benign_error(self, event):
+        error = event.get("error")
+        if (event.get("type") != "error" or not isinstance(error, dict) or not self.pending_cancel
+                or error.get("code") != "response_cancel_not_active"
+                or error.get("event_id") not in (None, "cancel_" + self.pending_cancel)
+                or error.get("response_id") not in (None, self.pending_cancel)
+                or event.get("response_id") not in (None, self.pending_cancel)):
+            return False
+        # The probe's error has no client event id and follows response.done.
+        # Allow one such reply to our cancel, only until the next response starts.
+        self.pending_cancel = ""
+        return True
+
     def check_output_bound(self, effective):
         if effective.get("max_output_tokens") != self.events[0]["session"]["max_output_tokens"]:
             raise RealtimeSetupError("session_mismatch", "OpenAI changed max_output_tokens")
@@ -235,12 +249,17 @@ class OpenAISession(JsonSession):
             if self.truncations.pop(item, None) != event.get("audio_end_ms"):
                 raise RealtimeSetupError("provider_truncation", "unrequested OpenAI truncation")
         if kind == "response.created":
+            self.pending_cancel = ""
             self.response_requested = False
             self.active_response = event["response"]["id"]
             return [LiveEvent("response_started", {"response_id": self.active_response})]
         if kind == "input_audio_buffer.speech_started":
             self.speech_active = True
             self.input_transcripts.add(item)
+            if self.options.interruptions and self.active_response:
+                # interrupt_response=true makes VAD cancel before notifying us.
+                # Keep the response active until its final usage receipt arrives.
+                self.cancelled.add(self.active_response)
             return [LiveEvent("input_started")] + ([LiveEvent("speech_started", {"item_id": item})] if self.options.interruptions else [])
         if kind == "input_audio_buffer.speech_stopped":
             self.speech_active = False
@@ -279,6 +298,8 @@ class OpenAISession(JsonSession):
             status = response.get("status", "incomplete")
             if status == "cancelled" and (rid in self.cancelled or (response.get("status_details") or {}).get("reason") == "turn_detected"):
                 status = "interrupted"
+            if response.get("status") == "cancelled":
+                self.cancelled.add(rid)
             events = [LiveEvent("response_done", {"usage": _usage(response), "raw_usage": response.get("usage") or {},
                 "response_id": rid, "status": status, "continues": False})]
             # A failed response still reports usage before the host stops it.
@@ -308,7 +329,9 @@ class OpenAISession(JsonSession):
         elif isinstance(command, Interrupt):
             if self.active_response and self.active_response not in self.cancelled:
                 self.cancelled.add(self.active_response)
-                await self.write({"type": "response.cancel", "response_id": self.active_response})
+                self.pending_cancel = self.active_response
+                await self.write({"type": "response.cancel", "response_id": self.active_response,
+                                  "event_id": "cancel_" + self.active_response})
             if command.item_id:
                 self.truncations[command.item_id] = command.played_ms
                 await self.write({"type": "conversation.item.truncate", "item_id": command.item_id,
