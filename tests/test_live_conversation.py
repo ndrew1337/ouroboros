@@ -326,7 +326,7 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     # A caption describes native audio; it is not an addition to selected TEXT.
     host.messages.append({'role': 'user', 'content': 'Native audio caption ' * 300})
     host.response_started('density')
-    estimate = host._response_text_estimates[(0, 'density')]
+    estimate = host._response_text_estimates['density']
     assert estimate == host._selected_text_estimate
     host.messages.pop()
     host.response_done('density', usage={'text_input_tokens': estimate * 2,

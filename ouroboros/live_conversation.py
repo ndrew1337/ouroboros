@@ -345,18 +345,13 @@ class ConversationHost:
                     # before ending this connection's accounting lifetime.
                     self._connection_accounting = False
                     self._connection_quote = None
-                    self._response_text_estimates.clear()
-                    for key, attempt in list(self.responses.items()):
-                        from ouroboros.live_usage import abandon_live_response
-                        abandon_live_response(attempt, reason="call_connection_closed_without_receipt")
-                        del self.responses[key]
                     if self._caption_dirty:
                         await joined(asyncio.to_thread(self.checkpoint, "ready"))
                         self._caption_dirty = False
 
     def _response_args(self, response_id):
         return dict(engine=self.turn.route.accounting_provider, model=self.turn.model,
-                    call_id=self.turn.spec.call_id, response_key=f"{self.connection_number}:{response_id}",
+                    call_id=self.turn.spec.call_id, response_key=response_id,
                     task_id=self.ctx.task_id, rendered_mode=self.plan.initial_mode, drive_root=self.ctx.drive_root,
                     quote=self._connection_quote if self._connection_accounting else self.quote,
                     physical_context=self._physical_context)
@@ -364,7 +359,7 @@ class ConversationHost:
     def response_started(self, response_id):
         from ouroboros.live_usage import reserve_live_response, record_refused_live_response
         from ouroboros.usage_accounting import BudgetExceeded
-        key = (self.connection_number, response_id)
+        key = response_id
         if key in self.responses or key in self.completed:
             return
         # Only the first response has the sealed selection as its known text
@@ -380,7 +375,7 @@ class ConversationHost:
 
     def response_done(self, response_id, *, usage, raw_usage, status):
         from ouroboros.live_usage import settle_live_response, record_refused_live_response
-        key = (self.connection_number, response_id)
+        key = response_id
         counts = self._connection_growth(usage)
         if key in self.completed:
             if "connected_seconds" in counts:
@@ -571,7 +566,19 @@ class ConversationHost:
             self._caption_dirty = True
 
     async def finish(self):
-        for job in list(self.tool_jobs):
-            await joined(job)
-        self.tool_jobs.clear()
-        await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
+        """End call-lifetime custody, after sessions and owned work have drained."""
+        from ouroboros.live_usage import abandon_live_response
+
+        try:
+            for job in list(self.tool_jobs):
+                await joined(job)
+        finally:
+            self.tool_jobs.clear()
+            try:
+                for key, attempt in list(self.responses.items()):
+                    abandon_live_response(attempt, reason="call_ended_without_receipt")
+                    del self.responses[key]
+            finally:
+                self._response_text_estimates.clear()
+                self._density_input = 0
+                await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
