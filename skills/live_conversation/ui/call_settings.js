@@ -52,6 +52,22 @@ export function callSettingsHtml(config) {
         <p class="settings-inline-note" data-call-memory>${esc(memory)} ${esc(model?.facts?.source || '')}</p>`;
 }
 
+/** A call setting saves as it changes; the Settings page's own Save Settings never reaches this form. */
+export const autosaves = name => CONFIG_FIELDS.some(spec => spec.name === name);
+
+/** Submit through the host's own Save, after a short pause, and after a Save still in flight. */
+export function scheduleSave(form, save, env = globalThis, delay = 150) {
+    let timer = 0;
+    const submit = () => {
+        if (save.disabled) { timer = env.setTimeout(submit, 300); return; }
+        form.requestSubmit(save);
+    };
+    return {
+        change() { env.clearTimeout(timer); timer = env.setTimeout(submit, delay); },
+        cancel() { env.clearTimeout(timer); },
+    };
+}
+
 export function mountCallSettings(form, { skill, env = globalThis, read = () => fetchJson(`/api/extensions/${encodeURIComponent(skill)}/config`) } = {}) {
     const fields = form.querySelector('.form-grid');
     const save = form.querySelector('button[type="submit"]');
@@ -59,19 +75,23 @@ export function mountCallSettings(form, { skill, env = globalThis, read = () => 
     let disposed = false, draft, devices = null;
     let stopDevices = () => {};
     save.disabled = true;
+    const autosave = scheduleSave(form, save, env);
     function paint() {
         fields.classList.remove('two');
         fields.innerHTML = callSettingsHtml(draft);
     }
     const changed = event => {
-        if (!draft || !['provider', 'model'].includes(event.target.name)) return;
-        Object.assign(draft, collectSafeFieldValues(form, CONFIG_FIELDS));
-        if (event.target.name === 'provider') draft.model = '';
-        draft.voice = '';
-        const catalog = draft.catalogs?.find(row => row.id === draft.provider);
-        const model = catalog?.models.find(row => draft.model ? row.id === draft.model : row.default);
-        draft.thinking = model?.thinking_levels?.[0] || '';
-        paint();
+        if (!draft || !autosaves(event.target.name)) return;
+        if (['provider', 'model'].includes(event.target.name)) {
+            Object.assign(draft, collectSafeFieldValues(form, CONFIG_FIELDS));
+            if (event.target.name === 'provider') draft.model = '';
+            draft.voice = '';
+            const catalog = draft.catalogs?.find(row => row.id === draft.provider);
+            const model = catalog?.models.find(row => draft.model ? row.id === draft.model : row.default);
+            draft.thinking = model?.thinking_levels?.[0] || '';
+            paint();
+        }
+        autosave.change();
     };
     form.addEventListener('change', changed);
     const ready = read().then(config => {
@@ -89,6 +109,7 @@ export function mountCallSettings(form, { skill, env = globalThis, read = () => 
     });
     return { ready, dispose() {
         disposed = true;
+        autosave.cancel();
         form.removeEventListener('change', changed);
         stopDevices(); devices?.remove();
     } };

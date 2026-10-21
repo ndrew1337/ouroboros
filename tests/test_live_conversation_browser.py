@@ -515,14 +515,24 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     expect(form.locator('[data-call-device-status]')).to_contain_text('soft note')
     browser.capture(page, f'call-settings-{width}')
     voice.no_page_scroll(page)
+    # Call settings save themselves as they change; the page's Save Settings never reaches this form.
+    form.locator('[name="provider"]').focus()   # leaving the instructions box commits them
+    for _ in range(100):
+        if (subscription_ui['call_saves']
+                and subscription_ui['call_saves'][-1].get('instructions') == 'Speak briefly in this synthetic call.'):
+            break
+        page.wait_for_timeout(50)
+    assert subscription_ui['call_saves'][-1]['provider'] == 'openai_realtime:openai'
+    assert subscription_ui['call_saves'][-1]['instructions'] == 'Speak briefly in this synthetic call.'
+    expect(form.locator('[data-extension-settings-status]')).not_to_contain_text('Saving')
     page.evaluate("window.__settingsSignals=[]; window.addEventListener('ouro:settings-updated', e => __settingsSignals.push(e.detail))")
     subscription_ui['call_save_error'] = True
-    form.locator('[name="enabled"]').uncheck()
-    form.locator('button[type="submit"]').click()
+    saves = len(subscription_ui['call_saves'])
+    form.locator('[name="enabled"]').uncheck()   # no Save click: the change itself saves
     expect(form.locator('[data-extension-settings-status]')).to_contain_text('Synthetic save failed')
-    assert page.evaluate('__settingsSignals.length') == 0
+    assert len(subscription_ui['call_saves']) == saves + 1 and page.evaluate('__settingsSignals.length') == 0
     subscription_ui['call_save_error'] = False
-    form.locator('button[type="submit"]').click()
+    form.locator('button[type="submit"]').click()   # the form's own Save still works
     page.wait_for_function('__settingsSignals.length === 1')
     assert subscription_ui['call_saves'][-1]['instructions'] == 'Speak briefly in this synthetic call.'
     assert not any('device' in key or key == 'echoCancellation' for key in subscription_ui['call_saves'][-1])

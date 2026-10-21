@@ -1,7 +1,7 @@
 import './fixtures/call_modules.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-const { callSettingsHtml } = await import('../../skills/live_conversation/ui/call_settings.js');
+const { callSettingsHtml, scheduleSave, autosaves } = await import('../../skills/live_conversation/ui/call_settings.js');
 
 const catalog = { id:'fixture:voice', label:'Fixture engine', privacy:'Synthetic audio stays here.', models:[
     {id:'first', label:'First model', default:true, vision:false, voices:[{id:'quiet',label:'Quiet'}], honours:['pause'],
@@ -78,4 +78,32 @@ test('an unavailable engine offers status guidance without making manual grants 
     assert.doesNotMatch(missing, /Enable an engine skill|grant its credential/);
     assert.doesNotMatch(available, /check its status in Skills/);
     assert.match(available, /ordinary memory and tools/);
+});
+
+test('a call setting saves itself through the host Save, once per burst and after a Save in flight', () => {
+    const timers = new Map(); let next = 0;
+    const env = { setTimeout: (fn) => { timers.set(++next, fn); return next; }, clearTimeout: id => timers.delete(id) };
+    const run = () => { const pending = [...timers.values()]; timers.clear(); pending.forEach(fn => fn()); };
+    const save = { disabled: false }, submitted = [];
+    const form = { requestSubmit: button => submitted.push(button) };
+    const autosave = scheduleSave(form, save, env);
+    autosave.change(); autosave.change(); autosave.change();
+    assert.equal(timers.size, 1);
+    run();
+    assert.deepEqual(submitted, [save]);
+    save.disabled = true;              // the host is still saving
+    autosave.change(); run();
+    assert.equal(submitted.length, 1);
+    save.disabled = false; run();
+    assert.equal(submitted.length, 2);
+    autosave.change(); autosave.cancel(); run();
+    assert.equal(submitted.length, 2);
+});
+
+test('only the declared call fields save themselves; device choices stay local', () => {
+    for (const name of ['enabled', 'provider', 'model', 'voice', 'instructions', 'pause', 'interruptions', 'thinking', 'search']) {
+        assert.equal(autosaves(name), true, name);
+    }
+    assert.equal(autosaves(''), false);
+    assert.equal(autosaves('microphone'), false);
 });
