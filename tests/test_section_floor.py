@@ -17,6 +17,40 @@ from tests import _memory_view_synthetic as syn
 RESERVE = 8_192
 
 
+@pytest.mark.parametrize("missing", ["window", "root", "task_id", "measure", "eligible"])
+def test_host_steps_do_not_measure_when_no_section_can_step(missing):
+    calls = []
+    args = dict(window=50_000, root="test-root", task_id="test-task", reserve=RESERVE,
+                ratio=1.0, saving=123, measure=lambda addressed: calls.append(dict(addressed)) or 1000)
+    sections = [HostSection("runtime", "whole " * 1000, "operative")]
+    if missing == "eligible":
+        sections = [HostSection("runtime", "whole " * 1000)]
+    else:
+        args[missing] = None
+    previous = [{"section_id": "registry", "reader": "test-reader"}]
+    assert memory_floor._host_steps(sections, previous, **args) == (previous, 123)
+    assert calls == []
+
+
+@pytest.mark.parametrize("window,saving,steps", [(20_000, 0, 0), (18_000, 0, 1), (20_000, 3000, 2)])
+def test_host_steps_measure_once_then_only_after_each_new_address(monkeypatch, window, saving, steps):
+    calls = []
+    sections = [HostSection(name, "whole " * 1000, "operative")
+                for name in ("runtime", "registry", "installed_skills")]
+    monkeypatch.setattr(memory_floor, "retain_section",
+                        lambda part, **_kw: {"section_id": part.section_id, "reader": "test-reader"})
+
+    def measure(addressed):
+        calls.append(tuple(addressed))
+        return 10_000 - len(addressed) * 2000
+
+    receipts, remaining = memory_floor._host_steps(sections, [], measure=measure, window=window,
+        reserve=RESERVE, ratio=1.0, saving=saving, root="test-root", task_id="test-task")
+    assert len(receipts) == steps and remaining == 0
+    assert len(calls) == 1 + steps
+    assert calls == [tuple(part.section_id for part in sections[:n]) for n in range(steps + 1)]
+
+
 @pytest.fixture(autouse=True)
 def capacity_facts(monkeypatch):
     monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 1.0)

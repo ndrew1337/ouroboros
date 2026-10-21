@@ -434,23 +434,27 @@ def _host_steps(sections, previous, *, measure, window, reserve, ratio, saving, 
     source handles precede pointers. A failed capture leaves the full bytes inline.
     Previously shown addresses stay addressed; their savings never pay a new deficit.
     """
-    if measure is None:
+    if measure is None or not window or not root or not task_id:
         return list(previous), saving
     receipts = list(previous)
     addressed = section_views(sections, receipts)
-    initial = measure(addressed)
+    candidates = [part for part in sections if part.section_id not in addressed
+                  and part.section_id not in PROTECTED and part.operative_view is not None
+                  and len(part.operative_view) < len(part.full_text)]
+    if not candidates:
+        return receipts, saving
+    initial = current = measure(addressed)
+    physical = floor_allowances(window_tokens=window, output_reserve_tokens=reserve,
+                                non_memory_tokens=0, calibration_ratio=ratio)["physical"]
+    if (physical is None or current <= physical) and saving == 0:
+        return receipts, 0
     order = {name: i for i, name in enumerate((*HOST_STEPS, *INDEX_STEPS))}
-    for part in sorted(sections, key=lambda p: (p.section_id in INDEX_STEPS,
+    for part in sorted(candidates, key=lambda p: (p.section_id in INDEX_STEPS,
                                                order.get(p.section_id, len(HOST_STEPS)))):
-        if part.section_id in addressed or part.section_id in PROTECTED or part.operative_view is None:
+        if part.section_id in addressed:
             continue
-        if not window or not root or not task_id or len(part.operative_view) >= len(part.full_text):
-            continue
-        current = measure(addressed)
-        physical = floor_allowances(window_tokens=window, output_reserve_tokens=reserve,
-                                    non_memory_tokens=0, calibration_ratio=ratio)["physical"]
         if (physical is None or current <= physical) and initial - current >= saving:
-            continue
+            break
         try:
             row = retain_section(part, root=root, task_id=task_id)
         except (OSError, ValueError):
@@ -462,4 +466,5 @@ def _host_steps(sections, previous, *, measure, window, reserve, ratio, saving, 
             continue
         addressed[part.section_id] = short
         receipts.append({**row, "tokens_saved": saved})
-    return receipts, max(0, saving - (initial - measure(addressed)))
+        current = measure(addressed)
+    return receipts, max(0, saving - (initial - current))
