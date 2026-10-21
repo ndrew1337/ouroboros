@@ -316,7 +316,7 @@ def _admit_chat_task(
     admitted: Dict[str, Any] = {
         "task": task, "agent": agent, "activity": activity, "registry": registry,
         "chat_id": chat_id, "client_msg_id": client_msg_id, "kind": kind,
-        "task_metadata": task_metadata,
+        "task_metadata": task_metadata, "realtime_turn": realtime_turn,
     }
     try:
         if agent is None:
@@ -566,6 +566,19 @@ def _report_direct_chat_error(admitted: Dict[str, Any], e: BaseException) -> Non
     import traceback
     task, chat_id, kind = admitted["task"], admitted["chat_id"], admitted["kind"]
     client_msg_id, task_metadata = admitted["client_msg_id"], admitted.get("task_metadata")
+    if admitted.get("realtime_turn") is not None:
+        from ouroboros.call_peers import close_hub
+        from ouroboros.live_conversation import LiveConversationTurn
+        from ouroboros.store import StoreBusy
+
+        turn = admitted["realtime_turn"]
+        if isinstance(turn, LiveConversationTurn):
+            # The live run normally closes its hub. Preparation can fail before it owns that duty.
+            # Close before logging too: a busy store must not strand the admitted call.
+            busy = isinstance(e, StoreBusy) or isinstance(e.__cause__, StoreBusy)
+            close_hub(turn.spec.call_id, "store_busy" if busy else "call_start_failed",
+                      detail=("The local store is busy. Please try the call again." if busy else
+                              "The call could not start. Please try again."))
     err_msg = f"⚠️ Error: {type(e).__name__}: {e}"
     append_jsonl(
         _pool().DRIVE_ROOT / "logs" / "supervisor.jsonl",
