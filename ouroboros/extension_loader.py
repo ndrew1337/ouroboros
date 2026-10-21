@@ -387,8 +387,7 @@ def reconcile_extension(
                 was_live = bundle.catalog_identity == extension_catalog_identity(subject, drive_root, settings_reader)
         if (state.get("reason") != "disabled" and not (was_live and state.get("desired_live"))
                 and (refusal := realtime_load_refusal(skill_name))):
-            # Keep the old live publication. The ordinary reconcile retries the
-            # current payload after this call exits; this is not a load failure.
+            # Keep the old publication; reconcile retries after the call (not a load failure).
             state.update(reason=refusal, action="extension_reload_pending")
             _finalize_extension_reconcile(state, drive_root, skill_name, reason=refusal, health_stamp=health_stamp)
             return state
@@ -605,11 +604,10 @@ def load_extension(
     """
     if drive_root is None:
         raise TypeError("load_extension requires explicit drive_root")
-    with _lifecycle_lock_for(skill.name):
-        if refusal := realtime_load_refusal(skill.name):
-            return refusal
-        return _load_extension_locked(skill, settings_reader, drive_root=drive_root,
-                                      skills=skills, repo_path=repo_path, _force_in_process=_force_in_process)
+    with _lifecycle_lock_for(skill.name):  # a live call's skill refuses an automatic reload
+        return realtime_load_refusal(skill.name) or _load_extension_locked(
+            skill, settings_reader, drive_root=drive_root, skills=skills, repo_path=repo_path,
+            _force_in_process=_force_in_process)
 
 
 def _load_extension_locked(skill, settings_reader, *, drive_root, skills, repo_path, _force_in_process):
