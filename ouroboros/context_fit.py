@@ -15,12 +15,17 @@ import math
 import pathlib
 from dataclasses import dataclass, field
 from types import SimpleNamespace
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Mapping, Optional, Tuple
+from typing import Any, Iterable, Callable, Dict, List, Mapping, Optional, Tuple
 
-if TYPE_CHECKING:
-    from ouroboros.context_anchor import InputAnchor
+from ouroboros.context_measurement import (
+    ContextProfile as ContextProfile, MeasurementBasis as MeasurementBasis,
+    MainFitMeasurement as MainFitMeasurement, MainFitDisposition as MainFitDisposition,
+    measure_main_fit as measure_main_fit, reclaim_low_water_margin as reclaim_low_water_margin,
+)
 
 from ouroboros.context_layout import reference_doc_sections
+from ouroboros.section_floor import HostSection, section_views, _governance_blocks as _section_governance, _system_blocks
+from ouroboros.section_floor import PATTERN_REGISTER_POINTER as PATTERN_REGISTER_POINTER
 from ouroboros.reference_books import ReferenceBook
 # Tool-result delivery (the whole-batch projection under the measured frame)
 # lives in ``tool_result_delivery``; the consolidator imports its contract here.
@@ -41,9 +46,6 @@ def extract_plain_text_from_content(content: Any) -> str:
     from ouroboros.loop_messages import _extract_plain_text_from_content
 
     return _extract_plain_text_from_content(content)
-
-ContextProfile = Literal["owner_max", "owner_low", "owner_nano", "task_local_low", "task_local_nano"]
-MeasurementBasis = Literal["fresh_route_usage", "fresh_model_usage", "cold_estimate"]
 
 
 @dataclass(frozen=True)
@@ -78,47 +80,6 @@ class ContextFitProjection:
 
 
 @dataclass(frozen=True)
-class MainFitMeasurement:
-    route_fp: str
-    round_id: str
-    profile: ContextProfile
-    rendered_mode: Literal["max", "low", "nano"]
-    estimated_input_tokens: int  # calibrated: the estimate times the fresh density
-    response_reserve_tokens: int  # the reply floor the fit leaves (Nano: min(8,192, ceiling); else the ceiling)
-    target_total_tokens: Optional[int]
-    capacity_total_tokens: Optional[int]
-    measurement_basis: MeasurementBasis
-    measurement_density: float
-    target_deficit_tokens: Optional[int]
-    capacity_deficit_tokens: Optional[int]
-    reclaim_goal_tokens: int
-    # Low-water margin the goal carries ABOVE the deficit (0 without a deficit):
-    # the pass is deficit-triggered but sized to land below the boundary.
-    low_water_margin_tokens: int = 0
-    raw_input_tokens: int = 0  # the same estimate before the density
-    # The reply allowance Main PLANS for this candidate (``context_budget.reply_allowance_tokens``);
-    # the send finalizer computes the sent value on the sealed candidate with the same rule.
-    reply_allowance_tokens: int = 0
-    # Provenance of the estimate (``InputAnchor``): the provider-reported input of the last request this
-    # model accepted in this conversation and its round, or None before this task has an anchor.
-    anchor_input_tokens: Optional[int] = None
-    anchor_round: Optional[int] = None
-    anchor_rewritten: bool = False
-    # The largest input this model accepted in this task; a stated window below it is no window
-    # (``capacity_total_tokens`` is then None and ``window_reading_tokens`` keeps the stated number).
-    accepted_input_tokens: Optional[int] = None
-    window_reading_tokens: Optional[int] = None
-
-
-@dataclass(frozen=True)
-class MainFitDisposition:
-    measurement: MainFitMeasurement
-    action: Literal["send", "send_target_miss"]
-    automatic_pass_used: bool
-    predicted_capacity_miss: bool
-
-
-@dataclass(frozen=True)
 class ContextFitPlan:
     """Task-local context fit decision for the ordinary Main agent path.
 
@@ -149,6 +110,8 @@ class ContextFitPlan:
     evidence_source: str = ""
     nano_projection: Optional[ContextFitProjection] = None
     core: Optional["ContextCore"] = None  # the capture a new route re-renders the memory view from
+    working_reserve_tokens: Optional[int] = None  # route working room, independent of the reply allowance
+    window_basis: str = ""  # provider/estimator for a declared conversation window; empty for ordinary text
 
     def reproject_for_route(self, *, window_tokens: int, known_window: bool, ratio: float, output_reserve: int,
                             tool_schemas: Optional[List[Dict[str, Any]]], start_mode: Optional[str] = None,
@@ -168,6 +131,9 @@ class ContextFitPlan:
         """
         from dataclasses import replace
 
+        ratio = 1.0 if self.window_basis == "estimator" else ratio
+        reserve_args = ({"working_reserve_tokens": self.working_reserve_tokens}
+                        if self.working_reserve_tokens is not None else {})
         contents, start, books = {}, start_mode or self.preferred_mode, ("max", "low")
         if current_messages is None:
             retained = self.projection(start).continuation_messages_json
@@ -175,7 +141,7 @@ class ContextFitPlan:
                 current_messages = [self.projection(start).system_message(), *json.loads(retained)]
         tail_json = (json.dumps(_request_tail(current_messages), ensure_ascii=False, sort_keys=True)
                      if current_messages is not None else None)
-        if self.core is not None and self.core.memory_view_json:
+        if self.core is not None:
             from ouroboros import memory_floor
             from ouroboros.context_budget import context_mode_limits
             from ouroboros.memory_view import snapshot_from_json
@@ -189,18 +155,20 @@ class ContextFitPlan:
                                                  supplementary_messages_json=self.core.supplementary_messages_json,
                                                  current_messages=current_messages)
                                  + tool_schema_tokens(list(sent))) * ratio)
-            request += context_mode_limits(start, self.preferred_mode, output_reserve)[1]
+            request += context_mode_limits(start, self.preferred_mode, output_reserve, **reserve_args)[1]
             deficit = max(request - window_tokens if known_window and window_tokens else 0, int(refused_tokens or 0))
             if deficit > 0 or select_mode:
-                snapshot = snapshot_from_json(self.core.memory_view_json)
+                snapshot = snapshot_from_json(self.core.memory_view_json) if self.core.memory_view_json else None
                 contents, start = _view_projections(
                     self.core, {form: _governance_blocks(None, self.core, mode=form) for form in books},
                     self.user_content_json, preferred=self.preferred_mode, start=start_mode, select=select_mode,
-                    tool_schemas=tool_schemas,
+                    tool_schemas=tool_schemas, working_reserve_tokens=self.working_reserve_tokens,
                     window_tokens=window_tokens, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
                     resident=True, current_messages=current_messages,  # actual running tail, enable_tools included
-                    kept={mode: memory_floor.kept_level(snapshot, self.projection(mode).memory_facts)
+                    kept={mode: memory_floor.kept_level(snapshot, self.projection(mode).memory_facts) if snapshot else None
                           for mode in memory_floor.MODES},
+                    kept_sections={mode: self.projection(mode).memory_facts.get("host_sections_addressed", ())
+                                   for mode in memory_floor.MODES},
                     saving={start: math.ceil(deficit / max(ratio, 0.01))})
 
         def narrowed(projection: ContextFitProjection) -> bool:
@@ -208,7 +176,9 @@ class ContextFitPlan:
             # cut window); equal counts from another level never keep a view's budget provenance.
             old, new = (dict(facts.get("floor") or {}) for facts in (projection.memory_facts or {},
                                                                      contents[projection.mode][1] or {}))
-            return any(old.get(key) != new.get(key) for key in ("steps", "by_budget", "target_tokens", "mode_switch"))
+            return (any(old.get(key) != new.get(key) for key in ("steps", "by_budget", "target_tokens", "mode_switch"))
+                    or projection.memory_facts.get("host_sections_addressed")
+                    != contents[projection.mode][1].get("host_sections_addressed"))
 
         def project(projection: Optional[ContextFitProjection]) -> Optional[ContextFitProjection]:
             if projection is not None and projection.mode in contents and narrowed(projection):
@@ -314,6 +284,15 @@ class ContextCore:
     memory_view_json: str = ""
     # Captured source rows follow the assignment, outside the immutable system view.
     supplementary_messages_json: str = "[]"
+    semi_stable_sections: Tuple[HostSection, ...] = ()
+    dynamic_head_sections: Tuple[HostSection, ...] = ()
+    dynamic_sections: Tuple[HostSection, ...] = ()
+    section_root: str = ""
+    section_task_id: str = ""
+
+
+def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[Any, ...]:
+    return _section_governance(env, core, mode=mode, reference_docs=reference_doc_sections)
 
 
 def _render_context_system_content(
@@ -330,44 +309,6 @@ def _render_context_system_content(
     window (``memory_floor.mode_views``); empty without a view.
     """
     return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode)
-
-
-def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[str, ...]:
-    # D-ARCH (owner, 2026-08-08): the reference-doc form follows the RENDERED
-    # mode directly — ARCHITECTURE is full in max for every task class and the
-    # nav map in low; DEVELOPMENT inclusion is the caller's mode-independent
-    # decision carried on the core (the former per-task force_low_docs lever is
-    # gone: workspace binding no longer shapes the docs).
-    static_parts = [core.base_prompt, "## BIBLE.md\n\n" + core.bible_md]
-    sections, development = reference_doc_sections(
-        env,
-        context_mode="low" if core.compact_reference_docs else mode,
-        include_development=core.docs_need_development,
-        architecture_text=core.architecture_md,
-        development_text=core.development_md,
-        books=core.reference_books,
-    )
-    static_parts.extend(sections)
-    static_parts.extend(core.reference_book_errors)
-    return ("\n\n".join(static_parts), development)
-
-
-# The Pattern Register's reader where a context carries no register body: a child's, and Nano's.
-PATTERN_REGISTER_POINTER = "Pattern Register details: knowledge_read(topic='patterns', scope='global')."
-
-
-def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = "", room: str = "",
-                   mode: str = "") -> List[Dict[str, Any]]:
-    # All stable items precede C, including D only when the captured core calls
-    # for the full handbook. Never create an empty cache boundary.
-    stable = (*governance, "\n\n".join(part for part in (core.semi_stable_text, story) if part))
-    head = core.dynamic_head_text  # Nano shows the register's reader; the core keeps the captured body
-    if mode == "nano" and core.pattern_register_text and head.count(core.pattern_register_text) == 1:
-        head = head.replace(core.pattern_register_text, PATTERN_REGISTER_POINTER)
-    return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
-            for text in stable if text.strip()] + [
-        {"type": "text", "text": "\n\n".join(part for part in (head, room, core.dynamic_text) if part)},
-    ]
 
 
 def seal_task_transcript(
@@ -591,111 +532,6 @@ def _route_calibration_ratio(
         return 1.0
 
 
-def reclaim_low_water_margin(
-    target_total_tokens: Optional[int], capacity_total_tokens: Optional[int],
-) -> int:
-    """Tokens a reclaim pass lands BELOW the binding boundary: ceil(boundary / divisor).
-
-    The boundary is the smaller known positive one of owner target T and route
-    capacity W; 0 when neither is known. The divisor is read at call time so
-    the SSOT constant stays the one place to change it.
-    """
-    from ouroboros.context_budget import RECLAIM_LOW_WATER_DIVISOR
-
-    known = [int(value) for value in (target_total_tokens, capacity_total_tokens)
-             if value is not None and int(value) > 0]
-    return int(math.ceil(min(known) / RECLAIM_LOW_WATER_DIVISOR)) if known else 0
-
-
-def measure_main_fit(
-    plan: ContextFitPlan,
-    messages: List[Dict[str, Any]],
-    tools: Optional[List[Dict[str, Any]]],
-    *,
-    profile: ContextProfile,
-    rendered_mode: Literal["max", "low", "nano"],
-    round_id: str,
-    automatic_pass_used: bool = False,
-    reasoning_effort: str = "",
-    anchor: Optional[InputAnchor] = None,
-    accepted_input_tokens: Optional[int] = None,
-) -> MainFitDisposition:
-    """Measure one sealed Main candidate against owner target T and route W.
-
-    The estimate is this conversation's own: ``anchor`` (``context_anchor.main_input_anchor``) scales the raw
-    estimate by the last accepted request of this model. Without one, a fresh same-model witness
-    of comparable input size calibrates it; absent that, it stays cold. A stated window below
-    ``accepted_input_tokens`` is no window (unknown). The deficits,
-    the reclaim goal (deficit + ``reclaim_low_water_margin``) and the reply allowance are facts for
-    the round and recovery. A known window with no tool-result room starts the same refusal
-    passes before sending (owner revision, 20 October 2026); an unknown window never does.
-    Both deficits count the reply floor the fit leaves (Nano: ``min(8192, C)``); the reply the
-    candidate will actually get is ``reply_allowance_tokens``.
-    """
-    from ouroboros.capability_evidence import canonical_evidence_root, is_known, resolve_main_token_density
-    from ouroboros.context_budget import (
-        OWNER_LOW_TARGET_TOKENS, OWNER_NANO_TARGET_TOKENS, NANO_MIN_HEADROOM_TOKENS, reply_allowance_tokens,
-    )
-
-    raw_input = int(estimate_context_prompt_tokens(messages, tools, provider=plan.provider, reasoning_effort=reasoning_effort))
-    density, basis = ((float(anchor.density), "fresh_route_usage") if anchor is not None else
-                      resolve_main_token_density(canonical_evidence_root(), plan.route_fp, plan.model,
-                                                 estimate_tokens=raw_input))
-    estimated_input = int(math.ceil(raw_input * density))
-    ceiling = int(plan.output_reserve_tokens or 0)
-    nano = profile.endswith("_nano")
-    reserve = min(NANO_MIN_HEADROOM_TOKENS, ceiling) if nano else ceiling
-    total = estimated_input + reserve
-    target = (OWNER_NANO_TARGET_TOKENS if profile == "owner_nano"
-              else OWNER_LOW_TARGET_TOKENS if profile == "owner_low" else None)
-    from ouroboros.context_anchor import floored_window
-
-    reading = int(plan.window_tokens or 0) if is_known(plan, require_fresh=True) else None
-    floored, known = floored_window(reading, reading is not None, accepted_input_tokens)
-    capacity = floored if known else None
-    target_deficit = max(0, total - target) if target is not None else None
-    capacity_deficit = max(0, total - capacity) if capacity is not None else None
-    deficit = max(
-        [value for value in (target_deficit, capacity_deficit) if value is not None]
-        or [0]
-    )
-    margin = reclaim_low_water_margin(target, capacity) if deficit > 0 else 0
-    goal = deficit + margin
-    measurement = MainFitMeasurement(
-        route_fp=str(plan.route_fp or ""),
-        round_id=str(round_id or ""),
-        profile=profile,
-        rendered_mode=rendered_mode,
-        estimated_input_tokens=estimated_input,
-        response_reserve_tokens=reserve,
-        target_total_tokens=target,
-        capacity_total_tokens=capacity,
-        measurement_basis=basis,
-        measurement_density=density,
-        target_deficit_tokens=target_deficit,
-        capacity_deficit_tokens=capacity_deficit,
-        reclaim_goal_tokens=goal,
-        low_water_margin_tokens=margin,
-        raw_input_tokens=raw_input,
-        reply_allowance_tokens=reply_allowance_tokens(
-            caller_max_tokens=ceiling, nano=nano, owner_nano=profile == "owner_nano",
-            input_tokens=estimated_input, raw_input_tokens=raw_input, window_tokens=capacity),
-        anchor_input_tokens=anchor.input_tokens if anchor is not None else None,
-        anchor_round=anchor.round if anchor is not None else None,
-        anchor_rewritten=bool(anchor is not None and anchor.rewritten),
-        accepted_input_tokens=accepted_input_tokens,
-        window_reading_tokens=reading,
-    )
-    action: Literal["send", "send_target_miss"] = (
-        "send_target_miss" if target_deficit and target_deficit > 0 else "send")
-    return MainFitDisposition(
-        measurement=measurement,
-        action=action,
-        automatic_pass_used=bool(automatic_pass_used),
-        predicted_capacity_miss=bool(capacity_deficit and capacity_deficit > 0),
-    )
-
-
 def _context_route(task: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Resolve the same effective settings and account identity on success or failure."""
     from ouroboros.capability_evidence import model_account_options
@@ -801,12 +637,13 @@ def _request_tokens(system_content: List[Dict[str, Any]], user_content_json: str
     return estimate_context_prompt_tokens([{"role": "system", "content": system_content}, *tail])
 
 
-def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...]], user_content_json: str, *, preferred: str,
+def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...]], user_content_json: str, *, preferred: str,
                       tool_schemas: Optional[List[Dict[str, Any]]], window_tokens: int, known_window: bool, output_reserve: int,
                       ratio: float, start: Optional[str] = None, resident: bool = False,
                       current_messages: Optional[List[Dict[str, Any]]] = None,
                       kept: Optional[Mapping[str, Any]] = None, saving: Optional[Mapping[str, int]] = None,
-                      select: Optional[str] = None,
+                      select: Optional[str] = None, kept_sections: Optional[Mapping[str, Iterable[Mapping]]] = None,
+                      working_reserve_tokens: Optional[int] = None,
                       ) -> Tuple[Dict[str, Tuple[List[Dict[str, Any]], Dict]], str]:
     """Each mode's ``(system content, view receipt)`` and the mode the task starts in.
 
@@ -819,22 +656,47 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[str, ...
     (``ContextFitPlan.reproject_for_route``).
     """
     form = {mode: "low" if core.compact_reference_docs or mode == "nano" else mode for mode in ("max", "low", "nano")}
-    if not core.memory_view_json:
-        return {mode: (_system_blocks(core, governance[form[mode]], mode=mode), {}) for mode in form}, start or preferred
     from ouroboros import memory_floor
     from ouroboros.memory_view import snapshot_from_json
     from ouroboros.tool_policy import select_tool_schemas
     names = [schema["function"]["name"] for schema in tool_schemas or []] if resident else None
     sent = {mode: select_tool_schemas(tool_schemas or [], context_mode=mode, schema_names=names) for mode in form}
-    fixed = {mode: _request_tokens(_system_blocks(core, governance[form[mode]], mode=mode), user_content_json,
-                supplementary_messages_json=core.supplementary_messages_json, current_messages=current_messages)
-             + tool_schema_tokens(list(sent[mode].schemas)) for mode in form}
-    views, start = memory_floor.mode_views(snapshot_from_json(core.memory_view_json), preferred=preferred, start=start,
+    sections = {mode: (*core.semi_stable_sections, *core.dynamic_sections,
+                       *(part for part in core.dynamic_head_sections
+                         if not (mode == "nano" and part.section_id == "pattern_register")),
+                       *(governance[form[mode]][0] if not isinstance(governance[form[mode]][0], str) else ()))
+                for mode in form}
+
+    def measure(mode, addressed, story="", room=""):
+        return (_request_tokens(_system_blocks(core, governance[form[mode]], story, room, mode=mode, addressed=addressed),
+                                user_content_json, supplementary_messages_json=core.supplementary_messages_json,
+                                current_messages=current_messages) + tool_schema_tokens(list(sent[mode].schemas)))
+
+    fixed = {mode: measure(mode, {}) for mode in form}
+    views, start = memory_floor.mode_views(snapshot_from_json(core.memory_view_json) if core.memory_view_json else None,
+        preferred=preferred, start=start, host_sections=sections, measure_fixed=measure,
+        section_root=core.section_root, section_task_id=core.section_task_id, kept_sections=kept_sections,
         fixed_tokens_by_mode=fixed, tool_names=None if tool_schemas is None else {m: sent[m].chosen for m in form},
         window_tokens=window_tokens, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
+        working_reserve_tokens=working_reserve_tokens,
         allow_mode_lowering=preferred != "max" or start in {"low", "nano"}, kept=kept, saving=saving, select=select)
-    return {mode: (_system_blocks(core, governance[form[mode]], story, room, mode), receipt)
+    return {mode: (_system_blocks(core, governance[form[mode]], story, room, mode,
+                                  section_views(sections[mode], receipt.get("host_sections_addressed", ()))), receipt)
             for mode, (story, room, receipt) in views.items()}, start
+
+
+def _whole_request(core, governance, mode, tool_schemas):
+    """Uncut selected text for a route's comparable density witness, before any floor step."""
+    from ouroboros.memory_view import snapshot_from_json, render_story, render_room
+    from ouroboros.tool_policy import select_tool_schemas
+
+    snapshot = snapshot_from_json(core.memory_view_json) if core.memory_view_json else None
+    story, room = (render_story(snapshot), render_room(snapshot)) if snapshot else ("", "")
+    form = "low" if core.compact_reference_docs or mode == "nano" else mode
+    messages = [{"role": "system", "content": _system_blocks(core, governance[form], story, room, mode)},
+                {"role": "user", "content": json.loads(core.user_content_json)},
+                *json.loads(core.supplementary_messages_json)]
+    return messages, list(select_tool_schemas(tool_schemas or [], context_mode=mode).schemas)
 
 
 def build_context_fit_plan(
@@ -875,32 +737,44 @@ def build_context_fit_plan(
     from ouroboros.tool_policy import select_tool_schemas
 
     output_reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local")), evidence=evidence)
+    route_facts = getattr(evidence, "route_facts", {}) or {}
+    working_reserve = route_facts.get("working_reserve_tokens")
+    window_basis = str(route_facts.get("basis") or "")
+    reserve_args = {"working_reserve_tokens": working_reserve} if working_reserve is not None else {}
     known_window = is_known(evidence, require_fresh=True)
     view_args = dict(
         preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
-        known_window=known_window, output_reserve=output_reserve)
+        known_window=known_window, output_reserve=output_reserve, working_reserve_tokens=working_reserve)
     governance = {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}
-    # Size the cold starting view before selecting a witness, just as round one does.
-    contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=1.0)
-    ratio = _route_calibration_ratio(
-        None,  # canonical host evidence, never a child task's own drive
-        str(evidence.route_fp or ""),
-        str(route["model"] or ""),
-        estimate_context_prompt_tokens(
-            [{"role": "system", "content": contents[initial_mode][0]},
-             {"role": "user", "content": user_content}, *json.loads(core.supplementary_messages_json)],
-            list(select_tool_schemas(tool_schemas or [], context_mode=initial_mode).schemas),
-            provider=str(route.get("provider") or "")),
-    )
-    if ratio != 1.0:
+    ratio = 1.0
+    if window_basis:
+        # Route units apply before the first selection: a cold physical cut could otherwise
+        # address sources that fit in provider units, or a density could cut an estimator window.
+        if window_basis == "provider":
+            rows, schemas = _whole_request(core, governance, preferred, tool_schemas)
+            ratio = _route_calibration_ratio(None, str(evidence.route_fp or ""), str(route["model"] or ""),
+                estimate_context_prompt_tokens(rows, schemas, provider=str(route.get("provider") or "")))
         contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
+    else:
+        # Ordinary text retains its existing cold starting view and comparable-input witness.
+        contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=1.0)
+        ratio = _route_calibration_ratio(
+            None, str(evidence.route_fp or ""), str(route["model"] or ""),
+            estimate_context_prompt_tokens(
+                [{"role": "system", "content": contents[initial_mode][0]},
+                 {"role": "user", "content": user_content}, *json.loads(core.supplementary_messages_json)],
+                list(select_tool_schemas(tool_schemas or [], context_mode=initial_mode).schemas),
+                provider=str(route.get("provider") or "")),
+        )
+        if ratio != 1.0:
+            contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
     input_source = None
 
     from ouroboros.context_budget import context_mode_limits
 
     # The task-input pointer is decided on the calibrated Nano request: the schemas it sends and its reply floor.
     nano_sent_tokens = tool_schema_tokens(list(select_tool_schemas(tool_schemas or [], context_mode="nano").schemas))
-    nano_reserve = context_mode_limits("nano", preferred, output_reserve)[1]
+    nano_reserve = context_mode_limits("nano", preferred, output_reserve, **reserve_args)[1]
     window = int(evidence.window_tokens or 0) if known_window else 0
 
     def nano_total(tokens: int) -> int:
@@ -965,6 +839,8 @@ def build_context_fit_plan(
             "architecture_md": core.architecture_md,
             "development_md": core.development_md,
             "semi_stable_text": core.semi_stable_text,
+            "host_sections": [(part.section_id, part.full_text, part.operative_view, part.reader)
+                              for part in (*core.semi_stable_sections, *core.dynamic_head_sections, *core.dynamic_sections)],
             "dynamic_head_text": core.dynamic_head_text,
             **({"pattern_register_text": core.pattern_register_text} if core.pattern_register_text else {}),
             "dynamic_text": core.dynamic_text,
@@ -992,6 +868,8 @@ def build_context_fit_plan(
         stale=bool(evidence.stale),
         window_tokens=int(evidence.window_tokens or 0),
         output_reserve_tokens=output_reserve,
+        working_reserve_tokens=working_reserve,
+        window_basis=window_basis,
         user_content_json=core.user_content_json,
         max_projection=max_projection,
         low_projection=low_projection,

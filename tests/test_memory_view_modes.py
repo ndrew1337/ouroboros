@@ -274,9 +274,12 @@ def test_owner_lower_mode_startup_still_selects_its_existing_sized_mode(tmp_path
     need = _needs(core, plan)
     for window in (10_000_000, need["low"] + 50, need["low"] - 50, 1):
         built = plan(window, preferred=preferred)
-        expected = "nano" if preferred == "nano" or window < need["low"] else "low"
+        # Host facts and the book maps now shrink before a lower memory mode is selected.
+        expected = "nano" if preferred == "nano" or window == 1 else "low"
         assert built.initial_mode == expected
         assert built.preferred_mode == preferred
+        if preferred == "low" and window == need["low"] - 50:
+            assert built.projection("low").memory_facts["host_sections_addressed"]
         assert built.projection(expected).memory_facts["floor"]["target_tokens"] == (
             {"low": cb.OWNER_LOW_TARGET_TOKENS, "nano": cb.OWNER_NANO_TARGET_TOKENS}[preferred]
             if expected == preferred else None)
@@ -459,16 +462,18 @@ def test_a_route_switch_keeps_the_owners_mode_and_starts_from_the_tasks_own(tmp_
     core, plan = _built(tmp_path / "w", monkeypatch)
     need = _needs(core, plan)
     # Built with the schemas the rebind sends (none), so the same window can render the same bytes.
-    lowered, roomy, owner_low = (plan(need["max"] - 50, tool_schemas=[]), plan(10_000_000, tool_schemas=[]),
+    # Leave a deficit beyond the host-section savings, so the window still lowers Max.
+    max_window = need["max"] - 5_000
+    lowered, roomy, owner_low = (plan(max_window, tool_schemas=[]), plan(10_000_000, tool_schemas=[]),
                                  plan(10_000_000, preferred="low", tool_schemas=[]))
     # A Low the window chose: a size refusal narrows it where even Max's shortest view cannot fit, which
     # names the switch. A view that fits is kept and claims no switch the window did not make.
-    assert lowered.reproject_for_route(window_tokens=need["max"] - 50, known_window=True, ratio=1.0, output_reserve=65_536,
+    assert lowered.reproject_for_route(window_tokens=max_window, known_window=True, ratio=1.0, output_reserve=65_536,
         tool_schemas=[], start_mode="low").low_projection.system_content_json == lowered.low_projection.system_content_json
-    lowered = lowered.reproject_for_route(window_tokens=need["max"] - 50, known_window=True, ratio=1.0,
+    lowered = lowered.reproject_for_route(window_tokens=max_window, known_window=True, ratio=1.0,
         output_reserve=65_536, tool_schemas=[], start_mode="low", refused_tokens=1)
     assert lowered.initial_mode == "low" and roomy.initial_mode == "max" and owner_low.initial_mode == "low"
-    for name, built, window in (("lowered", lowered, need["max"] - 50), ("task_local", roomy, 10_000_000),
+    for name, built, window in (("lowered", lowered, max_window), ("task_local", roomy, 10_000_000),
                                 ("owner_low", owner_low, 10_000_000)):
         root = tmp_path / name
         root.mkdir()

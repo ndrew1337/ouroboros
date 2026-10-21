@@ -18,6 +18,30 @@ from ouroboros.context import build_runtime_section, build_user_content
 
 from tests._context_shared import _make_health_env
 
+
+@pytest.mark.parametrize("host_fact", [None, {}, {"kind": "other"}, {"kind": "call_open"}])
+@pytest.mark.parametrize("attachment", [False, True])
+def test_call_open_is_labelled_before_attachment_and_presence_rendering(monkeypatch, host_fact, attachment):
+    from copy import deepcopy
+    from ouroboros import context
+
+    text = "  A live call opened.\n"
+    task = {"text": text, "metadata": {"host_fact": host_fact}}
+    original = deepcopy(task)
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,test"}}
+    monkeypatch.setattr(context, "_build_attachment_image_blocks", lambda _task: [image] if attachment else [])
+    seen = []
+    monkeypatch.setattr("ouroboros.presence_context.frame_presence_user_content",
+                        lambda source, content: seen.append((source, content)) or content)
+
+    expected = ("[Host fact: a live call opened; not the owner's words]\n\n" + text
+                if host_fact == {"kind": "call_open"} else text)
+    expected = [{"type": "text", "text": expected}, image] if attachment else expected
+    assert build_user_content(task) == expected
+    assert seen == [(task, expected)]
+    assert task == original  # attribution does not rewrite the source or choose different memory
+
+
 @pytest.mark.parametrize("enforcement", ["blocking", "advisory"])
 def test_force_plan_metadata_adds_structured_notice_without_rewriting_user_text(
     monkeypatch, enforcement,
