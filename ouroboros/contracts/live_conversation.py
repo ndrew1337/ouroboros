@@ -254,4 +254,11 @@ class LiveHost(Protocol):
         """Settle this call-lifetime response id once (unknown when unpriced, never zero)."""
 
     def renewal_due(self) -> bool:
-        """The session's held input reached the point where the route window needs a refit renewal."""
+        """Held input + pending history/schema growth + working reserve needs a refit.
+
+        Pending means rows/schemas added since the last usage receipt (or the
+        sealed selection before the first receipt), including mailbox, peer and
+        tool changes. Counts use the route's declared units and retain all rows.
+        Check after adding canonical context and before sending ContextUpdate or
+        ToolOutputs; when due, refit/reopen instead of sending the overflow.
+        """

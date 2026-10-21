@@ -219,6 +219,7 @@ class ConversationHost:
         self.responses, self.completed = {}, set()
         self._physical_context = None
         self._held_input = self._growth = 0
+        self._history_at_receipt = 0
         self._selected_text_estimate = self._selected_raw_estimate = 0
         self._session_instructions = ""
         self._response_text_estimates = {}
@@ -343,6 +344,7 @@ class ConversationHost:
                 session, request, evidence = session_candidate(self, provider["session"], options)
                 self._physical_context = request.physical_context
                 self._held_input = self._growth = 0
+                self._history_at_receipt = self._history_estimate()
                 self._meter_watermark = 0.0
                 receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
                     task_id=self.ctx.task_id, attempt_id=f"call-{self.turn.spec.call_id}-{self.connection_number}",
@@ -425,6 +427,7 @@ class ConversationHost:
             if self._held_input:
                 self._growth = max(self._growth, measured - self._held_input)
             self._held_input = measured
+            self._history_at_receipt = self._history_estimate()
         if self._caption_dirty:
             self.checkpoint("ready")
             self._caption_dirty = False
@@ -449,11 +452,20 @@ class ConversationHost:
                 prompt_chars=estimate * 4, prompt_tokens=text, source="live_text_usage",
                 route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS)
 
+    def _history_estimate(self):
+        from ouroboros.context_fit import estimate_context_prompt_tokens
+        extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
+        return estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+
     def renewal_due(self):
         facts = self.model.facts
-        return bool(facts.conversation_window_tokens is not None and self._held_input
-                    and self._held_input + self._growth + (facts.working_reserve_tokens or 0)
-                    >= facts.conversation_window_tokens)
+        if facts.conversation_window_tokens is None or not self._selected_raw_estimate and not self._held_input:
+            return False
+        density = (getattr(self._physical_context, "measurement_density", 1.0)
+                   if facts.basis == "provider" else 1.0)
+        held = self._held_input or math.ceil(self._selected_raw_estimate * density)
+        pending = math.ceil(max(0, self._history_estimate() - self._history_at_receipt) * density)
+        return held + pending + self._growth + (facts.working_reserve_tokens or 0) >= facts.conversation_window_tokens
 
     async def observe_context(self, row):
         from ouroboros.context_budget import bound_host_row
