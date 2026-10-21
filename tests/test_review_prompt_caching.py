@@ -249,9 +249,9 @@ def _main_loop_messages(system_ttl: dict) -> list:
             {"id": f"call_{idx}", "function": {"name": "zeta_tool", "arguments": "{}"}},
         ]})
         messages.append({"role": "tool", "tool_call_id": f"call_{idx}", "content": f"output {idx}"})
-    seal_task_transcript(messages, keep_active=2, min_prefix_tokens=0)
-    sealed = [m for m in messages if m["role"] == "tool" and isinstance(m["content"], list)]
-    assert len(sealed) == 1, "fixture must carry exactly one rolling cache anchor"
+    seal_task_transcript(messages, min_prefix_tokens=0)
+    sealed = [m for m in messages if "cache_control" in m]
+    assert [m["role"] for m in sealed] == ["tool"], "fixture must carry exactly one rolling cache anchor"
     return messages
 
 
@@ -270,7 +270,7 @@ def test_short_transcript_payload_declares_exactly_four_breakpoints(monkeypatch)
         ]},
         {"role": "user", "content": "task"},
     ]
-    seal_task_transcript(messages, keep_active=5, min_prefix_tokens=0)
+    seal_task_transcript(messages, min_prefix_tokens=0)
     payload, usage = _send_direct_anthropic(monkeypatch, messages, _tools())
 
     assert len(_deep_markers(payload)) == LLMClient._MAX_CACHE_BREAKPOINTS

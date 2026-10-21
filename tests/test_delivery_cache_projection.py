@@ -124,8 +124,8 @@ def test_typed_error_and_empty_result_remain_known_through_real_main_seals_and_a
             assert fact["facts"] == {"status": "error", "code": "SHELL_EXIT_ERROR", "is_error": True, "exit_code": 17}
             if row["tool_call_id"] == "process-2":
                 assert row["content"] == ""
-            else:
-                sealed_seen |= isinstance(row["content"], list)
+            else:  # the seal's host-only mark: the typed row keeps its exact text
+                sealed_seen |= "cache_control" in row and isinstance(row["content"], str)
     assert sealed_seen
     messages = f.inputs[7]["messages"]
     # Reclaim through the failed command, rather than stopping after the first
@@ -165,7 +165,7 @@ def test_cache_sealing_never_makes_a_changed_or_opaque_result_known(body):
                "exact", facts={"status": "ok", "is_error": False, "exit_code": 0})}
     messages = [{"role": "user", "content": "task"}, row]
     before = deepcopy(body)
-    seal_task_transcript(messages, keep_active=0, min_prefix_tokens=0)
+    seal_task_transcript(messages, min_prefix_tokens=0)
     assert read_tool_result_record(row)["state"] == "unknown"
     if isinstance(body, list):
         assert row["content"] == before
@@ -179,7 +179,7 @@ def test_cache_text_wrapper_preserves_text_boundaries_and_exact_empty_output():
             TOOL_RESULT_RECORD_KEY: make_tool_result_record({"tool_call_id": "same", "invocation_id": "host"}, value,
                                                            facts={"status": "error", "is_error": True, "exit_code": 17})}
         assert read_tool_result_record(row)["state"] == "recorded"
-        seal_task_transcript([{"role": "user", "content": "task"}, row], keep_active=0, min_prefix_tokens=0)
+        seal_task_transcript([{"role": "user", "content": "task"}, row], min_prefix_tokens=0)
         assert read_tool_result_record(row)["state"] == "recorded"
         if not value:
             assert row["content"] == ""

@@ -25,7 +25,7 @@ from ouroboros.gateway.attachment_contracts import (  # noqa: F401 -- public re-
     AttachmentManifestEntry, ChatAttachmentInbound, ChatAttachmentView,
 )
 from ouroboros.gateway.contributions import UiContribution, UiContributionsResponse, UiPreferencesResponse
-from ouroboros.gateway.widgets import ExtensionLiveSnapshot, WidgetTab, WidgetsResponse
+from ouroboros.gateway.widgets import ExtensionLiveSnapshot, WidgetFaultRequest, WidgetFaultResponse, WidgetTab, WidgetsResponse
 from ouroboros.gateway.decision_contracts import DecisionRequest, DecisionResponse  # noqa: F401 -- public re-exports
 from ouroboros.gateway.card_contracts import CardOutbound, CardStateOutbound  # noqa: F401 -- public re-exports
 from ouroboros.gateway.update_contracts import (  # noqa: F401 -- public re-exports
@@ -1476,7 +1476,7 @@ __all__ = [
     "ScheduledTasksResponse", "ScheduleUpsertResponse", "ScheduleDeleteResponse", "ScheduleActionResponse",
     "UploadResponse",
     "ExtensionsIndexResponse", "ExtensionLiveSnapshot", "WidgetTab",
-    "WidgetsResponse",
+    "WidgetsResponse", "WidgetFaultRequest", "WidgetFaultResponse",
     "SkillPublishPreflightResponse",
     "SkillLifecycleQueueResponse",
     "MarketplaceSearchResponse",

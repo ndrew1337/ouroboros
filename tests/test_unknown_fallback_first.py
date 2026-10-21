@@ -18,7 +18,8 @@ import ouroboros.loop_transport as loop_transport
 from ouroboros import owner_mailbox
 from ouroboros import usage_accounting as ua
 from ouroboros.loop import run_llm_loop
-from ouroboros.loop_model_call import _route_candidates, _route_facts_text
+from ouroboros.loop_model_call import _route_candidates
+from ouroboros.primary_route_observation import route_facts_text
 from ouroboros.model_slots import MODEL_ACCOUNTS_KEY
 from ouroboros.tools.control_runtime import _switch_model
 from ouroboros.tools.registry import ToolRegistry
@@ -385,15 +386,17 @@ def test_initial_route_records_a_role_slot_primary(tmp_path):
 
 def test_route_facts_name_both_bindings_the_dated_failure_and_the_choices():
     ctx = SimpleNamespace(primary_route={"model": "claudexor::codex=gpt-test", "use_local": False, "role": "main"})
-    text = _route_facts_text(ctx, model="fb/one", use_local=False, role="fallback:0",
-                             failed_model="claudexor::codex=gpt-test",
-                             failure={"failure_code": "subscription_window_exhausted", "ts": "2026-09-30T12:00:00Z",
-                                      "reset_at": "2026-09-30T18:00:00Z"}, waiter=None)
+    text = route_facts_text(ctx, model="fb/one", use_local=False, role="fallback:0",
+                            failed_model="claudexor::codex=gpt-test",
+                            failure={"failure_code": "subscription_window_exhausted", "ts": "2026-09-30T12:00:00Z",
+                                     "reset_at": "2026-09-30T18:00:00Z"}, waiter=None)
     assert text.startswith("[ROUTE FACTS]") and "(role main; account Auto)" in text and "(role fallback:0)" in text
     assert "subscription_window_exhausted at 2026-09-30T12:00:00Z" in text and "2026-09-30T18:00:00Z" in text
-    assert 'switch_model(primary="return")' in text and "No catalog check or timer" in text
-    assert _route_facts_text(SimpleNamespace(), model="m", use_local=False, role="r", failed_model="p",
-                             failure={}, waiter=None) == ""
+    # A primary observation may have just reported catalog or quota metadata: the facts no longer deny one.
+    assert 'switch_model(primary="return")' in text and "No catalog check" not in text
+    assert "No timer returns this task" in text and "never proves that the primary generates" in text
+    assert route_facts_text(SimpleNamespace(), model="m", use_local=False, role="r", failed_model="p",
+                            failure={}, waiter=None) == ""
 
 
 def test_route_facts_reach_only_the_acting_routes_own_next_round(monkeypatch):

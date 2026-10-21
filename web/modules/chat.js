@@ -447,6 +447,46 @@ export function createChatInstance({
             }).catch(() => {}).finally(() => managedTaskDetailReads.delete(childId));
         }
     }
+    // Root census rows omit children; complete work membership can admit their own
+    // result read before the root ends. Unknown/nonterminal replies retry on the
+    // existing refresh; a confirmed 404 waits for new card evidence or reconnect.
+    function settleAbsentChildren(snapshotRequestedAt) {
+        for (const [childId, record] of liveCardRecords) {
+            if (!record.isSubagent || record.finished || !record.root?.isConnected) continue;
+            if (workState.members.has(childId)) {
+                record.childDetailRead = undefined;
+                if (record.historicalUnavailable) withStableViewport(() => {
+                    setHistoricalUnavailable(record, false);
+                    renderLiveCardMeta(record);
+                    return true;
+                });
+                continue;
+            }
+            const observedAt = record.lastLiveObservedAt || 0;
+            const updates = record.updates;
+            if (!workState.complete || observedAt >= snapshotRequestedAt
+                    || (record.childDetailRead?.missing && record.childDetailRead.updates === updates)
+                    || managedTaskDetailReads.has(childId)
+                    || !subagentChildParents.has(childId)) continue;
+            // Queue departure and membership share this read; keep the visible hold
+            // until actual recovery or terminal evidence, not just absence.
+            record.projectHoldQueued = false;
+            const observation = record.childDetailRead = { updates };
+            managedTaskDetailReads.add(childId);
+            fetchTaskDetailStrict(childId).then((detail) => {
+                if (destroyed || ws.isConnected?.() === false || !workState.complete
+                        || liveCardRecords.get(childId) !== record || record.finished
+                        || workState.members.has(childId) || record.updates !== updates
+                        || record.childDetailRead !== observation) return;
+                if (detail === null) {
+                    observation.missing = true;
+                    withStableViewport(() => settleMissingTaskRecord(record));
+                } else if (isTerminalTaskDetail(detail)) {
+                    withStableViewport(() => routeSubagentTerminalToCard(childId, { ...detail, task_id: childId }));
+                }
+            }).catch(() => {}).finally(() => managedTaskDetailReads.delete(childId));
+        }
+    }
     let activeLiveGroupId = '';
     let pendingReconnectSync = false;  // Set when a fromReconnect sync arrives while one is already in-flight.
     let pendingReconnectBannerText = '';
@@ -563,6 +603,7 @@ export function createChatInstance({
         if (data) void refreshChildProjectHolds();
         const before = workState;
         workState = reconcileWorkState(workState, data, chatId, ws.isConnected?.() !== false);
+        if (Array.isArray(data?.works)) settleAbsentChildren(snapshotRequestedAt);
         applyCardWorkViews(liveCardRecords, workState);
         changedOffers(liveCardRecords, before, workState).forEach(syncCancelRunButton);
         syncHeaderControlState(data ?? { accounting: { available: false } });
@@ -965,6 +1006,18 @@ export function createChatInstance({
         if (!setHistoricalUnavailable(record, false, held)) return;
         renderLiveCardMeta(record);
         syncCancelRunButton(record);
+    }
+
+    function settleMissingTaskRecord(record) {
+        const historical = record.historicalTerminal;
+        if (historical) {
+            const changed = applyHistoricalModelExecution(record, historical) && renderLiveCardMeta(record);
+            return finishLiveCard(record.groupId, historical.phase) || changed;
+        }
+        const changed = setHistoricalUnavailable(record, true);
+        renderLiveCardMeta(record);
+        syncChatStatus();
+        return changed;
     }
 
     function markTaskCancelable(taskId = '') {
@@ -2727,6 +2780,7 @@ export function createChatInstance({
         }
         if (destroyed || !current()) return;
         reading.stick = true;
+        for (const record of liveCardRecords.values()) record.childDetailRead = undefined;
         reading.followAfterLayout();
         updateScrollButton();
     }
@@ -3119,17 +3173,7 @@ export function createChatInstance({
                 const vouched = !missingManagedTaskIds.has(taskId) || activeDirectActivities.has(taskId);
                 if (!vouched && detail === null) {
                     revokeManagedTaskCancelAuthority(taskId);
-                    const historical = currentRecord.historicalTerminal;
-                    if (historical) {
-                        if (applyHistoricalModelExecution(currentRecord, historical)) {
-                            changed = renderLiveCardMeta(currentRecord) || changed;
-                        }
-                        return finishLiveCard(taskId, historical.phase) || changed;
-                    }
-                    changed = setHistoricalUnavailable(currentRecord, true) || changed;
-                    renderLiveCardMeta(currentRecord);
-                    syncChatStatus();
-                    return changed;
+                    return settleMissingTaskRecord(currentRecord) || changed;
                 }
                 if (cancelPending || (!vouched && !isTerminalTaskDetail(detail))) {
                     if (currentRecord.isSubagent && detail?.status) missingManagedTaskIds.delete(taskId);
@@ -3448,6 +3492,7 @@ export function createChatInstance({
             }
             let changed = false;
             for (const [id, record] of liveCardRecords) {
+                record.childDetailRead = undefined;
                 changed = syncParkedPhase(record, 'unknown', activeDirectActivities.get(id)) || changed;
             }
             return changed;

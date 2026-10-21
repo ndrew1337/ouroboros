@@ -1073,6 +1073,11 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
                 subagent_id=selected_id,
             )
         if selected_snapshot is not None:
+            if access is None and str(options.get("continue_from") or "").strip():
+                # Omitted access keeps the continued run's own; only a chosen widening is refused.
+                from ouroboros.delegate_continuation import inherited_access
+
+                access = inherited_access(ctx, options["continue_from"])
             selected_snapshot = validate_subagent_snapshot(selected_snapshot, access=access)
         effort_choice = _leaf_effort_choice(ctx, selected_snapshot, effort_request, effort_choice, retry_token)
     except SubagentSelectionError as exc:

@@ -121,26 +121,39 @@ def produced_material(ctx: Any) -> Dict[str, Any]:
 
 def _declared_effects(ctx: Any, root: Any, task_id: str, issues: List[str]) -> List[Dict[str, Any]]:
     """Extension tools' own execution receipts (``PluginAPI.register_tool``): read exactly as the producer
-    wrote them, never inferred from a method or backend name."""
-    from ouroboros.artifacts import materialize_tool_result_source
+    wrote them, never inferred from a method or backend name. A call whose producer reported its own failure
+    (``TOOL_REPORTED_FAILURE``) may still declare what ran before it failed; a host-owned outcome (a timeout,
+    a refusal, a raised handler) declares nothing. Host notes trail the payload the model saw, so a noted
+    call is read from its retained producer payload, verified, and its notes ride beside the receipt."""
+    from ouroboros.artifacts import materialize_tool_result_source, read_actor_source_bytes
     from ouroboros.extension_surface_names import parse_extension_surface_name
+    from ouroboros.store import StoreError
 
     effects: List[Dict[str, Any]] = []
     trace = getattr(ctx, "_execution_trace", None) or {}
     for call in trace.get("tool_calls") or []:
-        if not isinstance(call, dict) or call.get("is_error") or not parse_extension_surface_name(str(call.get("tool") or "")):
+        if (not isinstance(call, dict) or not parse_extension_surface_name(str(call.get("tool") or ""))
+                or (call.get("is_error") and call.get("tool_result_code") != "TOOL_REPORTED_FAILURE")):
             continue
+        tool = str(call.get("tool") or "")
         try:
-            text, complete, gap = materialize_tool_result_source(root, task_id, call)
-            if not complete:
-                issues.append(f"effect receipt of {call.get('tool')} unavailable ({gap})")
-                continue
+            if "producer_source_ref" in call:
+                if not call["producer_source_ref"]:
+                    issues.append(f"effect receipt of {tool} unavailable (its producer payload was not retained)")
+                    continue
+                text = read_actor_source_bytes(root, task_id, call["producer_source_ref"]).decode("utf-8")
+            else:
+                text, complete, gap = materialize_tool_result_source(root, task_id, call)
+                if not complete:
+                    issues.append(f"effect receipt of {tool} unavailable ({gap})")
+                    continue
             payload = json.loads(text) if isinstance(text, str) else {}
-        except (OSError, ValueError, TypeError) as exc:
-            issues.append(f"effect receipt of {call.get('tool')} unreadable ({type(exc).__name__}: {exc})")
+        except (OSError, ValueError, TypeError, StoreError) as exc:
+            issues.append(f"effect receipt of {tool} unreadable ({type(exc).__name__}: {exc})")
             continue
         if isinstance(payload, dict) and payload.get("observed_effect") is True:
-            effects.append({"tool": str(call.get("tool") or ""), "receipt": text})
+            notes = [str(note) for note in call.get("host_annotations") or []]
+            effects.append({"tool": tool, "receipt": text, **({"host_notes": notes} if notes else {})})
     return effects
 
 
@@ -195,11 +208,17 @@ def answer_text(*, reply: str, produced: Dict[str, Any], verification: str) -> s
     is the subject's ``tree_sha``, the answer's own identity apart from what was asked."""
     files = [f"- {item['path']} ({item['kind']}; sha256 {item['sha256']}; {item['size']} bytes)"
              for item in produced.get("files") or []]
-    effects = [f"- effect declared by {item['tool']}: {item['receipt']}" for item in produced.get("effects") or []]
+    effects = [f"- effect declared by {item['tool']}: {item['receipt']}"
+               + (f"\n  host notes on this call: {json.dumps(item['host_notes'], ensure_ascii=False)}"
+                  if item.get("host_notes") else "")
+               for item in produced.get("effects") or []]
     gaps = [f"- not captured: {issue}" for issue in produced.get("issues") or []]
     return "\n".join([
         "## The reply", "", reply.strip() or "(no reply text)", "",
-        "## What the task produced", "", *(files + effects + gaps or ["(nothing produced beyond the reply)"]), "",
+        "## What the task produced", "",
+        *(["Effect receipts are the tool producer's reports of execution, not proof of a UI change or goal success.", ""]
+          if effects else []),
+        *(files + effects + gaps or ["(nothing produced beyond the reply)"]), "",
         "## Host-attested verification", "", verification, "",
     ])
 

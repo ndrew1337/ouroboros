@@ -816,7 +816,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         return [row for row in (rows or []) if isinstance(row, dict)]
 
     def quota_state(self, *, view: Optional[str] = None, model: Optional[str] = None,
-                    request_kind: Optional[str] = None) -> Dict[str, Any]:
+                    request_kind: Optional[str] = None, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         """GET one quota epoch; pass resource or freshness selectors to the engine.
 
         Old engines may ignore/refuse a selector; claudexor_observations owns fallback.
@@ -824,7 +824,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         query = {key: value for key, value in (
             ("view", view), ("model", model), ("requestKind", request_kind),
         ) if value is not None}
-        body = self._request("GET", "/v2/quota" + (f"?{urlencode(query)}" if query else ""))
+        body = self._request("GET", "/v2/quota" + (f"?{urlencode(query)}" if query else ""), timeout_sec=timeout_sec)
         return body if isinstance(body, dict) else {}
 
     def refresh_quota(self, *, target: Optional[Dict[str, str]] = None,
@@ -1182,14 +1182,14 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
     # -- account surfaces (D30: read/translate only; the daemon owns ALL auth
     # logic — profiles, login jobs, device-code custody, verification) ---------
 
-    def credential_profiles(self) -> Dict[str, Any]:
+    def credential_profiles(self, *, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         """GET /v2/credential-profiles — profiles + per-harness native rows.
 
         The daemon's payload already distinguishes the two verification
         truths the UI must show honestly (Q2-а): ``verification_source``
         ``local_store`` (material present, liveness UNPROVEN) vs ``vendor``
         (the vendor answered a request with this credential)."""
-        body = self._request("GET", "/v2/credential-profiles")
+        body = self._request("GET", "/v2/credential-profiles", timeout_sec=timeout_sec)
         return body if isinstance(body, dict) else {}
 
     def create_credential_profile(self, harness_id: str, profile_id: str,

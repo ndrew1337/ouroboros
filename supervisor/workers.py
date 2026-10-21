@@ -1727,12 +1727,14 @@ def _settle_cancelled_pending_row(
             "accounted_upper_bound_usd": None,
         }
     try:
+        from supervisor.cancel_publication import queued_address
         stored = write_task_result(
             DRIVE_ROOT, task_id, status_cancelled,
             strict_existing_dict=True,
             result=("Cancelled before this continuation started." if int(task.get("_attempt") or 1) > 1
                     else "Cancelled before start."), **cost_fields,
             **intent_outcome_fields(intent),
+            _field_projector=lambda existing, patch: {**queued_address(task, existing), **patch},
         ) or {}
         stored_status = str(stored.get("status") or "").strip()
         if not stored_status:

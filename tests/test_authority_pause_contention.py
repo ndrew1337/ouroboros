@@ -113,7 +113,7 @@ def test_real_loop_keeps_authority_interruption_resumable_after_contention(tmp_p
         assert attempts[0] is attempts[1]
         state = json.loads(read_actor_source_bytes(tmp_path, "member", parked.value.pause["source_ref"]))
         assert state["messages"][0]["role"] == "user"
-        assert state["messages"][0]["content"][0]["text"] == "keep this thought"
+        assert state["messages"][0]["content"] == "keep this thought"
     finally:
         release()
         bp.end_dispatch_fence("member")

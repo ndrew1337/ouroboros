@@ -830,7 +830,7 @@ def test_an_existing_unix_copy_is_turned_on_once_unless_the_owner_chose(data, mo
 
     _boot(data, monkeypatch)
 
-    assert skill_builtin._version(native / UNIX) == "0.5.0"
+    assert skill_builtin._version(native / UNIX) == "0.5.1"
     assert load_enabled(data, UNIX) is (choice is None)
     assert (state / "connections.json").read_bytes() == connections
     if choice is None:

@@ -224,7 +224,8 @@ def test_anthropic_preserves_the_message_seal_and_gives_schemas_only_a_free_slot
     assert len(kept) == len(_deep_markers(payload)) == 4
     has_book = book and mode == "max"
     assert ("cache_control" in payload["tools"][-1]) == (not has_book)
-    assert kept[-1]["text"] == ("result 0" if long else messages[1]["content"][-1]["text"])
+    # The newest tool result, or the task message itself: the seal changed neither row.
+    assert kept[-1]["text"] == ("result 5" if long else messages[1]["content"])
     assert any(block.get("text", "").startswith("## DEVELOPMENT.md\n") for block in kept) == has_book
     assert all(block["cache_control"] == {"type": "ephemeral", "ttl": "1h"} for block in kept)
     assert messages == canonical and tools == _tools()

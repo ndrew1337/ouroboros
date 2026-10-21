@@ -143,6 +143,7 @@ from ouroboros.tools.delegate_integration import (  # noqa: F401
     _resolve_retry_invocation,
     _resolved,
     _retry_binding_refusal,
+    _snapshot_facts,
     _validated_invocation,
     claimed_start_request,
     payload_host_instructions,
@@ -796,20 +797,6 @@ def _settle_refused_provision(ctx: ToolContext, gateway: Any, refusal: ToolResul
                        "detail": str(payload.get("detail") or "")})
 
 
-def _snapshot_facts(handle: Any) -> Dict[str, Any]:
-    """Disclosure on the start receipt: how big the private snapshot is and how long
-    it took to provision (#1241). Facts only — nothing refuses or truncates on them."""
-    if handle is None:
-        return {}
-    if getattr(handle, "adopted_from", ""):
-        return {"reused_from_run": handle.adopted_from}  # a continuation's predecessor snapshot
-    file_baseline = getattr(handle, "file_baseline", {}) or {}
-    return {"entries": int(getattr(handle, "entry_count", 0) or 0),
-            "untracked_files": len(getattr(handle, "untracked_baseline", {}) or {}) + len(file_baseline),
-            "file_input_bytes": sum(int(item.get("size", 0) or 0) for item in file_baseline.values()),
-            "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0)}
-
-
 def _retire_orphaned_registration(ctx: ToolContext, gateway: Any, project_id: str, *,
                                   definite_refusal: bool, reason: str,
                                   project_persistent: bool = False,
@@ -1358,14 +1345,17 @@ def get_tools() -> List[ToolEntry]:
                 "prompt": {"type": "string", "description":
                     "Direct start: a complete standalone task (why the work exists, decisions, material paths); "
                     "the session has none of my memory. The host appends my human's originating words verbatim. "
+                    "The run starts in my write root; a path named here does not move it: for another "
+                    "repository, schedule a child whose workspace is that repository. "
                     "Configured-session retry/replacement: optional advisory coordination only; "
                     "the host supplies the canonical work order."},
                 "subagent_id": {"type": "string", "description":
                     "Exact agent_session id from Available subagents, required for direct starts including continue_from. "
                     "Omit for the configured snapshot and retry_of. Schedule API actors as recursive children instead."},
                 "access": {"type": "string", "enum": list(SESSION_ACCESS_LOWERING), "description":
-                    "Lower native access to readonly or workspace_write; omit to inherit the captured profile "
-                    "(new mutating sessions default full). Explicit readonly authority wins. Omit on retry_of."},
+                    "Lower native access to readonly or workspace_write; omit to inherit the captured profile (new mutating "
+                    "sessions default full; continue_from keeps the continued run's when narrower). Explicit readonly "
+                    "authority wins. Omit on retry_of."},
                 "effort": {"type": "string", "enum": ["auto", *EFFORT_SCALE], "default": "auto", "description":
                     "The run's reasoning effort: auto/omitted = this room's primary clamped into its helper "
                     "bounds; outside those bounds it runs at the nearest bound. A row my human pinned or a level in "

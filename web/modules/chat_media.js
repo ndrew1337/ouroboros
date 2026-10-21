@@ -521,14 +521,38 @@ export function createChatMedia({
             play.innerHTML = media.paused ? MEDIA_ICONS.play : MEDIA_ICONS.pause;
             play.setAttribute('aria-label', media.paused ? tr('media.play', 'Play') : tr('media.pause', 'Pause'));
         };
-        const toggle = async () => {
+        let playIntent = 0;
+        const isCurrentPlay = (intent) => intent === playIntent && playerRegistry.has(media);
+        const requestPlay = async (restart = false) => {
+            const intent = ++playIntent;
             try {
-                if (media.paused) await media.play();
-                else media.pause();
-                syncPlay();
+                if (media.error) {
+                    const position = restart ? 0 : media.currentTime;
+                    const rate = media.playbackRate;
+                    // A failed resource stays failed until explicitly reloaded. Keep
+                    // load and play in this user gesture, never in an error retry loop.
+                    media.load();
+                    media.playbackRate = rate;
+                    if (Number.isFinite(position) && position > 0) media.currentTime = position;
+                }
+                if (restart) media.currentTime = 0;
+                await media.play();
+                if (isCurrentPlay(intent)) syncPlay();
             } catch (error) {
-                showToast(`Could not play media: ${error?.message || error}`, 'error');
+                if (isCurrentPlay(intent)) {
+                    // WebKit can leave a rejected play unpaused; restore the
+                    // control without initiating another attempt.
+                    if (media.error) media.pause();
+                    syncPlay();
+                    showToast(`Could not play media: ${error?.message || error}`, 'error');
+                }
             }
+        };
+        const toggle = () => {
+            if (media.paused || media.error) return requestPlay();
+            playIntent += 1;
+            media.pause();
+            syncPlay();
         };
         listen(play, 'click', toggle);
         if (!audio) listen(media, 'click', toggle);
@@ -555,11 +579,7 @@ export function createChatMedia({
             media.playbackRate = Number(rates.value) || 1;
             speed.textContent = `×${media.playbackRate}`;
         });
-        if (repeat) listen(repeat, 'click', async () => {
-            media.currentTime = 0;
-            try { await media.play(); } catch {}
-            syncPlay();
-        });
+        if (repeat) listen(repeat, 'click', () => requestPlay(true));
         if (mute) listen(mute, 'click', () => {
             media.muted = !media.muted;
             mute.innerHTML = media.muted ? MEDIA_ICONS.muted : MEDIA_ICONS.volume;

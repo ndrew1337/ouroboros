@@ -441,43 +441,48 @@ def blob_bytes(root: Any, ref: Any, *, expected_kind: Optional[str] = None, max_
     if max_bytes is not None and size > max_bytes:
         raise ValueError("blob exceeds byte limit")
     failure: Optional[Exception] = None
-    for candidate in _blob_roots(root, ref, sha256, kind):
-        loose = candidate / "observability" / "blobs" / f"{sha256}.{kind}.gz"
-        if admit is not None:
-            admit(loose)
-        try:
-            raw = read_loose_gzip(loose, max_bytes)
-            if size in (-1, len(raw)) and hashlib.sha256(raw).hexdigest() == sha256:
-                return raw
-            failure = EvidenceCorrupt("evidence_corrupt: observability blob ref failed size or sha256 verification")
-        except FileNotFoundError as exc:
-            failure = failure or exc
-        except ValueError as exc:
-            failure = exc
-        except (OSError, EOFError, zlib.error) as exc:
-            failure = exc  # retention repair distinguishes transient IO from damaged gzip
-        try:
-            placements = _placements(candidate, sha256=sha256, kind=kind)
-        except (OSError, EvidenceCorrupt) as exc:
-            failure = exc
-            continue
-        for located in placements:
+    try:
+        for candidate in _blob_roots(root, ref, sha256, kind):
+            loose = candidate / "observability" / "blobs" / f"{sha256}.{kind}.gz"
             if admit is not None:
-                admit(located[0])
+                admit(loose)
             try:
-                if max_bytes is not None and int(located[1]["size"]) > max_bytes:
-                    raise ValueError("blob exceeds byte limit")
-                raw = member_bytes(*located)
-                if size not in (-1, len(raw)):
-                    raise EvidenceCorrupt(f"evidence_corrupt: packed blob {sha256[:12]} size differs from its ref")
-                return raw
+                raw = read_loose_gzip(loose, max_bytes)
+                if size in (-1, len(raw)) and hashlib.sha256(raw).hexdigest() == sha256:
+                    return raw
+                failure = EvidenceCorrupt("evidence_corrupt: observability blob ref failed size or sha256 verification")
             except FileNotFoundError as exc:
                 failure = failure or exc
             except ValueError as exc:
                 failure = exc
-            except OSError:
-                failure = EvidenceCorrupt(f"evidence_corrupt: unreadable pack {located[0].name}")
-    raise failure or FileNotFoundError(str(root / "observability" / "blobs" / f"{sha256}.{kind}.gz"))
+            except (OSError, EOFError, zlib.error) as exc:
+                failure = exc  # retention repair distinguishes transient IO from damaged gzip
+            try:
+                placements = _placements(candidate, sha256=sha256, kind=kind)
+            except (OSError, EvidenceCorrupt) as exc:
+                failure = exc
+                continue
+            for located in placements:
+                if admit is not None:
+                    admit(located[0])
+                try:
+                    if max_bytes is not None and int(located[1]["size"]) > max_bytes:
+                        raise ValueError("blob exceeds byte limit")
+                    raw = member_bytes(*located)
+                    if size not in (-1, len(raw)):
+                        raise EvidenceCorrupt(f"evidence_corrupt: packed blob {sha256[:12]} size differs from its ref")
+                    return raw
+                except FileNotFoundError as exc:
+                    failure = failure or exc
+                except ValueError as exc:
+                    failure = exc
+                except OSError:
+                    failure = EvidenceCorrupt(f"evidence_corrupt: unreadable pack {located[0].name}")
+        raise failure or FileNotFoundError(str(root / "observability" / "blobs" / f"{sha256}.{kind}.gz"))
+    finally:
+        # The kept error's traceback holds this frame: kept past an exit, it is a cycle retaining the callers'
+        # frames and payloads until a GC pass. Every exit drops it; a raised error keeps its object and traceback.
+        failure = None
 
 
 def _handle_path(root: Any, task_id: str, rel_path: str) -> pathlib.Path:

@@ -200,32 +200,6 @@ def _route_candidates(tool_ctx: Any, active_model: str, active_use_local: bool, 
     return candidates
 
 
-def _route_facts_text(tool_ctx: Any, *, model: str, use_local: bool, role: str, failed_model: str,
-                      failure: Dict[str, Any], waiter: Any) -> str:
-    """Facts after a host-driven switch away from the primary; the acting model decides what follows."""
-    from ouroboros.model_slots import route_binding
-    from ouroboros.provider_models import provider_for_model
-
-    primary = getattr(tool_ctx, "primary_route", None)
-    if not isinstance(primary, dict) or not primary.get("model"):
-        return ""
-
-    def label(name: str, local: bool, route_role: str) -> str:
-        account = route_binding(name, local, route_role, overrides=waiter.overrides if waiter else None)[2]
-        managed = not local and provider_for_model(name) == "claudexor"
-        account_text = f"; account {account or 'Auto'}" if managed else ""
-        return f"{name}{' (local)' if local else ''} (role {route_role}{account_text})"
-
-    reset = str(failure.get("reset_at") or "")
-    return (f"[ROUTE FACTS] This task's primary route is {label(primary['model'], bool(primary['use_local']), primary['role'])}; "
-            f"{label(model, use_local, role)} answered this round after {failed_model} failed with "
-            f"{failure.get('failure_code') or 'an error'} at {failure.get('ts') or 'an unrecorded time'}"
-            f"{f' (its engine dated a reset at {reset})' if reset else ''}. Facts, not an instruction: stay on this "
-            "route, return with switch_model(primary=\"return\") (the next real request tests the primary; a refusal "
-            "there moves on to configured routes again), or return and wait for it with switch_model(primary=\"wait\"). "
-            "No catalog check or timer shows whether the primary serves now.")
-
-
 def _run_cross_model_fallback_chain(
     *, llm, ctx, tools, messages, active_model, active_use_local, tool_schemas,
     active_effort, max_retries, drive_logs, task_id, round_idx, event_queue,
@@ -244,6 +218,7 @@ def _run_cross_model_fallback_chain(
     from ouroboros.model_slots import MODEL_ACCOUNTS_KEY, model_role_option, task_model_binding, route_binding
     from ouroboros.model_wait import current_model_wait
     from ouroboros.loop_llm_call import _COOLDOWN_ERROR_KINDS as _cooldown_kinds
+    from ouroboros.primary_route_observation import failure_facts, route_facts_text
     from ouroboros.provider_models import provider_for_model
 
     def _cooled(model: str, use_local: bool, role: str) -> None:
@@ -265,8 +240,7 @@ def _run_cross_model_fallback_chain(
     # The round's own outage or unknown outcome remains its wait if no route answers.
     entry_model, entry_kind = active_model, str(accumulated_usage.get("_last_llm_error_kind") or "")
     own_wait = entry_kind in _ROUND_WAIT_KINDS
-    entry_failure = next((dict(ref) for ref in reversed(accumulated_usage.get("llm_call_refs") or [])
-                          if isinstance(ref, dict) and ref.get("failure_code")), {})
+    entry_failure = failure_facts(accumulated_usage)  # the failing attempt's own row, before any candidate adds one
     # A primary resource refusal returned here, not waited: the configured routes come
     # first, and the owner question is that refusal's own wait, asked after them.
     deferred, tools._ctx._deferred_resource_refusal = getattr(tools._ctx, "_deferred_resource_refusal", None), None
@@ -399,10 +373,10 @@ def _run_cross_model_fallback_chain(
                      .get("tool_calls") or [])
                 ),
             )
-            tools._ctx._route_facts_pending = "" if is_primary else _route_facts_text(
+            tools._ctx._route_facts_pending = "" if is_primary else route_facts_text(
                 tools._ctx, model=fallback_model, use_local=fallback_use_local, role=fallback_role,
-                failed_model=entry_model, failure={**entry_failure, "failure_code": entry_kind or
-                                                   entry_failure.get("failure_code")}, waiter=waiter)
+                failed_model=entry_model, failure=entry_failure, waiter=waiter, usage=accumulated_usage,
+                round_idx=round_idx)
             if not is_primary:
                 tools._ctx.route_wait_on_primary = False  # a declared wait belonged to the primary route
             break
@@ -459,9 +433,9 @@ def _run_cross_model_fallback_chain(
                 messages, retry_call.messages, retry_call.context_fit_plan, active_context_mode,
                 tool_schemas, accumulated_usage, handover_from_model=active_model,
                 handover_reason="owner_wait")
-            tools._ctx._route_facts_pending = _route_facts_text(
-                tools._ctx, model=active_model, use_local=active_use_local, role=role,
-                failed_model=entry_model, failure={**entry_failure, "failure_code": entry_kind}, waiter=waiter)
+            tools._ctx._route_facts_pending = route_facts_text(
+                tools._ctx, model=active_model, use_local=active_use_local, role=role, failed_model=entry_model,
+                failure=entry_failure, waiter=waiter, usage=accumulated_usage, round_idx=round_idx)
         else:
             active_model, active_use_local = retry_call.active_model, retry_call.active_use_local
             context_fit_plan = retry_call.context_fit_plan
@@ -912,6 +886,8 @@ def _presend_context_fit(ctx: _RoundModelCallContext | None = None):
             "_last_llm_provider_message": "", "_last_llm_status_code": None, "_last_llm_provider_code": "",
             "_last_llm_provider_fields": {}, "_last_llm_provider_message_cut": False,
         })
+        ctx.accumulated_usage["_last_llm_failure"] = {"model": ctx.active_model, "failure_code": "context_overflow",
+                                                    "error": ctx.accumulated_usage["_last_llm_error"]}
         _loop()._emit_checkpoint_event(ctx.event_queue, ctx.task_id, ctx.drive_logs, {
             "checkpoint_kind": "context_fit_refused", "round": ctx.round_idx, **refused,
         })
@@ -1361,6 +1337,7 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
 
 def _call_round_model(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:
     """Measure, dispatch, and recover a provider refusal or known-window prediction of no result room."""
+    ctx.accumulated_usage.pop("_last_llm_failure", None)
     from ouroboros.primary_route_observation import observe_primary_route
     observation = observe_primary_route(ctx)
     if observation:

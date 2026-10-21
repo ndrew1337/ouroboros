@@ -454,7 +454,7 @@ ouroboros/ — agent core and shared runtime (§6)
     extensions.py — Extensions/skills HTTP surface (routes: §4)
     contributions.py — Live contributions, offers, voice availability, captured assets and UI preference types (CLIENT_CONTRACT §11)
     extension_receipts.py — Process-qualified extension index/toggle/reconcile receipt projection
-    widgets.py — GET /api/widgets: the Widgets card list from the in-memory extension snapshot plus pinned cards; no discovery, reconcile, hashing or writes on the read path; homes the widget TypedDicts
+    widgets.py — passive GET /api/widgets; POST /api/widgets/fault (bounded, best-effort page reports to events log); widget TypedDicts (§3)
     skill_publish.py — Read-only publish preflight with scan cache; one five-state response; no task or GitHub effect (§6 Skill publication)
     marketplace.py, skill_sources.py, skill_my_skills.py — ClawHub; sources, catalog, installs; My skills
     skill_source_contracts.py — Source/catalog/install envelopes; browser twin skill_source_contract_types.js

@@ -369,6 +369,7 @@ export function initSkills(ctx = {}) {
         if (!snapshot?.rawSkills || destroyed) return;
         const skills = projected();
         const cards = new Map(Array.from(container.querySelectorAll(':scope > .skills-card')).map((card) => [card.dataset.skill, card]));
+        let replacementFocus = null;
         if (replace) {
             closeMenus();
             container.innerHTML = skills.map((skill) => renderInstalledSkillCard(skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions())).join('');
@@ -376,8 +377,22 @@ export function initSkills(ctx = {}) {
             for (const skill of [...skills].reverse()) {
                 const card = cards.get(skill.name);
                 if (card) {
-                    patchInstalledSkillEnrichment(card, skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions(),
-                        activeMenu?.card === card ? activeMenu.popover : card);
+                    // A queue placeholder has no controls to enrich. Replace only this
+                    // structural transition; real cards retain drafts and disclosures.
+                    if (card.hasAttribute('data-lifecycle-virtual') !== Boolean(skill.lifecycle_virtual)) {
+                        const ownsMenu = activeMenu?.card === card;
+                        const focused = card.contains(document.activeElement)
+                            || (ownsMenu && activeMenu.popover.contains(document.activeElement));
+                        if (ownsMenu) closeMenus();
+                        const template = document.createElement('template');
+                        template.innerHTML = renderInstalledSkillCard(skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions());
+                        const fresh = template.content.firstElementChild;
+                        card.replaceWith(fresh);
+                        if (focused) replacementFocus = fresh;
+                    } else {
+                        patchInstalledSkillEnrichment(card, skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions(),
+                            activeMenu?.card === card ? activeMenu.popover : card);
+                    }
                     cards.delete(skill.name);
                 } else {
                     const template = document.createElement('template');
@@ -393,6 +408,9 @@ export function initSkills(ctx = {}) {
         emptyEl.hidden = skills.length > 0;
         paintChrome();
         applyInstalledFilter();
+        if (replacementFocus && !replacementFocus.hidden) {
+            replacementFocus.querySelector('.skills-card-name')?.focus({ preventScroll: true });
+        }
         browse?.repaintStates();
         schedulePoll();
     }

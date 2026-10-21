@@ -460,6 +460,8 @@ export const apiClient = {
     reportI18nMissing: (payload) => jsonPost('/api/ui/i18n/missing', payload),
     /** The holds this page found (holds.js). @param {import('./client_contract_types.js').UiHoldsRequest} payload */
     reportUiHolds: (payload) => jsonPost('/api/ui/holds', payload),
+    /** A running module widget's fault (widget_module.js). @param {import('./client_contract_types.js').WidgetFaultRequest} payload */
+    reportWidgetFault: (payload) => jsonPost('/api/widgets/fault', payload),
     importI18n: (memoryDocument) => jsonPost('/api/ui/i18n/import', memoryDocument),
     exportI18nUrl: (language = '') => `/api/ui/i18n/export${language ? `?language=${encodeURIComponent(language)}` : ''}`,
     regenerateI18n: (payload = {}) => jsonPost('/api/ui/i18n/regenerate', payload),

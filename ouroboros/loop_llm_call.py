@@ -36,7 +36,7 @@ from ouroboros.transport_custody import attempt_custody_event_fields, is_pre_dis
 from ouroboros._usage_response import OUTPUT_LIMIT_FINISH_REASONS, output_exhaustion_facts, provider_cost_value as _provider_cost_value, response_finish_reason
 from ouroboros.usage_accounting import PhysicalAttemptContext, UsageAccountingError, bind_physical_attempt_context, current_usage_scope, last_physical_attempt_capture
 from ouroboros.contracts.record_contract import RECORD_CONTRACT_VERSION
-from ouroboros.event_usage import event_token_counts
+from ouroboros.event_usage import REPORTED_TOKENS_KEY, event_token_counts
 from ouroboros.utils import (
     append_jsonl,
     emit_cognitive_operation_event,
@@ -295,7 +295,8 @@ def _record_and_emit_empty_response(
         accumulated_usage["_last_llm_output_exhausted"] = output_exhaustion_facts(usage, sent)
     from ouroboros.loop_transport import stamp_owner_provider_message
     stamp_owner_provider_message(accumulated_usage, body_error)  # a body error's own sentence; a blank glitch has none
-    accumulated_usage.get("_last_llm_call_meta", {}).update(failure_code=kind)
+    failure = accumulated_usage["_last_llm_failure"] = accumulated_usage.get("_last_llm_call_meta", {})
+    failure.update(failure_code=kind, error=accumulated_usage["_last_llm_error"])
     return event_type, is_provider_glitch, permanent
 
 
@@ -913,11 +914,8 @@ def _record_llm_call_error(
     error: Exception,
     ctx: _LlmErrorContext,
 ) -> bool:
-    """Record and classify an LLM-round exception.
-
-    Emits live/durable error evidence, marks usage as infra-failed, and returns
-    whether the caller must stop retrying the unchanged request.
-    """
+    """Classify an LLM-round exception, emit live/durable evidence and mark usage infra-failed.
+    Return whether the caller must stop retrying the unchanged request."""
     safe_error = sanitize_tool_result_for_log(repr(error))
     classification = classify_llm_exception(error, safe_error)
     if ctx.task_type == "presence":  # stays True only while every attempt so far provably never started
@@ -981,11 +979,12 @@ def _record_llm_call_error(
     }
     if not append_jsonl(ctx.drive_logs / "events.jsonl", error_event) or not has_log_sink():
         emit_log_event(ctx.event_queue, error_event, log_label="LLM call error")
-    ctx.accumulated_usage.setdefault("llm_call_refs", []).append({
-        **{key: error_event[key] for key in ("ts", "llm_call_id", "model", "requested_profile", "observed_route")},
-        "failure_code": classification.kind, "reset_at": classification.reset_at,
-    })
-    ctx.accumulated_usage.update(_last_llm_error=_short_error_text(display_error), _last_llm_resource_refusal=model_wait_reason(error),
+    failure = {"error": _short_error_text(display_error), "resource_refusal": model_wait_reason(error),
+        **{key: error_event[key] for key in ("ts", "llm_call_id", "model", "requested_profile", "observed_route", "status_code", "provider_code")},
+        "failure_code": classification.kind, "reset_at": classification.reset_at}
+    ctx.accumulated_usage.setdefault("llm_call_refs", []).append(failure)
+    ctx.accumulated_usage["_last_llm_failure"] = failure  # reuse this attempt's row, not the wait's kind
+    ctx.accumulated_usage.update(_last_llm_error=failure["error"], _last_llm_resource_refusal=failure["resource_refusal"],
                                  _last_llm_error_kind=classification.kind, _last_llm_retry_same_request=will_retry, _last_llm_attempt_custody=custody_fields.get("attempt_custody_state", ""))
     if classification.reset_at:  # a disclosed fact for the terminal hint, never a retry schedule
         ctx.accumulated_usage["_last_llm_reset_at"] = classification.reset_at
@@ -1167,10 +1166,10 @@ def _record_round_cache_facts(
         cache_cold_restart = False if False in (low, high) else None if None in (low, high) else True
     accumulated_usage["_last_llm_round_finished_monotonic"] = now
     accumulated_usage["_last_prompt_cache_ttl"] = prompt_cache_ttl
-    accumulated_usage["_last_round_cache_usage"] = {
-        "round": round_idx, "model": model, "provider": provider,
-        **{key: usage.get(key) for key in ("prompt_tokens", "cached_tokens", "cache_write_tokens")},
-    }
+    accumulated_usage["_last_round_cache_usage"] = {  # also this accepted call's own money, as its producer stated it
+        "round": round_idx, "model": model, "provider": provider, "billing": (usage.get("cost_evidence") or {}).get("billing"),
+        **{key: usage.get(key) for key in ("prompt_tokens", "cached_tokens", "cache_write_tokens", "cost", "cost_final")},
+        REPORTED_TOKENS_KEY: reported}  # cache routing reads the billing-shaped counters above; route facts these
     return prompt_cache_ttl, cache_hit_rate, cache_cold_restart, gap_since_prev_round_sec, duration_ms
 
 
@@ -1233,7 +1232,7 @@ def _take_response_facts(usage: Dict[str, Any], msg: Dict[str, Any], accumulated
     model_facts = usage.get("claudexor") or {}
     accumulated_usage["_model_route"] = dict(model_facts.get("route") or {})
     accumulated_usage["_model_substitutions"] = model_facts.get("substituted") or []
-    for stale in ("_last_llm_error", "_last_llm_error_kind", "_last_llm_retry_same_request",
+    for stale in ("_last_llm_error", "_last_llm_error_kind", "_last_llm_failure", "_last_llm_retry_same_request",
                   "_last_llm_status_code", "_last_llm_provider_code", "_last_llm_provider_message",
                   "_last_llm_provider_fields", "_last_llm_provider_message_cut", "_last_llm_resource_refusal",
                   "_last_llm_output_exhausted", "_last_llm_attempt_custody"):
@@ -1363,6 +1362,7 @@ def call_llm_with_retry(
     activity_attempt = task_attempt if task_attempt is not None or not owner or owner.task_id != task_id else owner.attempt
     response_cache_bypass_requested = False
     for attempt in range(transient_budget):
+        accumulated_usage.pop("_last_llm_failure", None)  # a pre-send refusal cannot borrow the previous attempt
         if _deadline_not_dispatched(
             deadline_ts, accumulated_usage, drive_logs,
             task_id=task_id, model=model, round_idx=round_idx, round_id=round_id, reserve_sec=transport_reserve_sec,

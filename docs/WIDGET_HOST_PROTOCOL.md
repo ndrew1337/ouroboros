@@ -81,7 +81,7 @@ Generate a fresh random `nonce` string for every mount and embed it in the boots
 | `ouro-widget-download` | `id`, `name`, `source` | Save a `Blob`, a `data:` URL or a URL under the skill's prefix. |
 | `ouro-widget-open-external` | `id`, `url` | Open an external link. |
 | `ouro-widget-resize` | `height` | The measured content height in pixels (§5). |
-| `ouro-widget-error` | `kind: "error" \| "rejection" \| "csp"`, `message`, `source`, `line` | A fault inside the frame. Show it on the card. |
+| `ouro-widget-error` | `kind: "error" \| "rejection" \| "csp"`, `message`, `source`, `line` | A fault inside the frame. Show it on the card; builtin logging is described in §5. |
 | `ouro-widget-disposed` | | The frame finished its dispose hooks (§6). |
 
 `init.body` is a structured-clone value: `null`, a string, an `ArrayBuffer`, a typed-array view or a `Blob`. Preserve a view's offset and length. There is no base64 wrapper or required transfer list for request buffers. The builtin bridge posts the body without a transfer list; the page passes that cloned value to fetch. Response chunks have the separate transfer behavior below.
@@ -117,6 +117,10 @@ There is no default timeout. A positive `init.timeoutMs` aborts the request afte
 **Downloads.** A `Blob` or a `data:` URL is saved as it is. A URL must have the page's origin and lie under the skill's prefix; anything else fails. Answer with `result: {ok: true, ...}` or `{ok: false, error}`.
 
 **External links.** Open the link only while the page has a user activation. Answer with `result: {ok: true, ...}`, `{ok: false, degraded, ...}` when only a fallback (such as copying the link) was possible, or `{ok: false, error}`. The frame treats `ok` or `degraded` as success.
+
+**Faults.** Show the fault in the card's status (a card in a message shows it there) and leave the card running. The builtin host additionally posts it once per kind and message, at most 10 per mount, to `POST /api/widgets/fault` (`WidgetFaultRequest`): this card's own `skill`, `tab_id` and `revision`, `where: "board"` or `"message"`, and the frame's `kind`, `message` (clipped to 500 characters), `source` (200) and `line`; a value that is not a string is sent as `""`, a line that is not a whole number from 0 as `0`. Never take who the widget is from the message, and count per mount, not per frame: the widget's own code can read the nonce and post directly. Reporting is optional for other clients. A report is best effort: no retry, and a refusal changes nothing on the card. Until the stop finishes (§6) the frame still reports.
+
+The server normalizes unpaired UTF-16 surrogates in the clipped text to U+FFFD before writing UTF-8; valid emoji remain intact.
 
 ## 6. Stopping a widget
 

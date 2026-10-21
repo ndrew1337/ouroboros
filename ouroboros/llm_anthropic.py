@@ -221,12 +221,16 @@ class _AnthropicLaneMixin:
             if role == "system":
                 system_blocks.extend(self._anthropic_blocks_from_content(msg.get("content")))
                 continue
+            content = msg.get("content")
+            if role in {"user", "tool"} and isinstance(msg.get("cache_control"), dict):
+                # The seal's host-only row mark, rendered on this send copy only.
+                content = self._content_with_cache_boundary(content, msg["cache_control"])
 
             if role == "user":
                 self._coalesce_anthropic_message(
                     anthropic_messages,
                     "user",
-                    self._anthropic_blocks_from_content(msg.get("content")),
+                    self._anthropic_blocks_from_content(content),
                 )
                 continue
 
@@ -268,7 +272,7 @@ class _AnthropicLaneMixin:
                 tool_use_id = str(msg.get("tool_call_id") or "")
                 if not tool_use_id:
                     raise ValueError("Anthropic direct tool result is missing tool_call_id.")
-                raw_content = msg.get("content")
+                raw_content = content
                 # Anthropic accepts list tool_result content; stringify only scalars/dicts.
                 if isinstance(raw_content, list):
                     tool_result_content: Any = self._copy_messages_with_cache_policy(

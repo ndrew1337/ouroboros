@@ -43,7 +43,7 @@ runs in THAT snapshot, with the same execution root, baseline and binding, and
 takes its custody over, so the earlier work is captured once in the successor's
 cumulative patch. A predecessor whose patch was already applied or rejected is
 continued from a fresh snapshot of the target. The admission floors are unchanged:
-the continuation's access is the caller's own, never wider than the run it continues.
+an omitted access keeps the continued run's own when it is narrower, and a named one is never wider than it.
 
 The harness can execute model-generated commands under the operator's OS
 identity. It is not assumed hostile, but the host cannot review each command
@@ -60,7 +60,8 @@ capture even when the shared authority tree moved; the evidence names the
 changed paths and keeps authorship unknown. A ready-with-changes result retains
 its private artifact and the existing locked apply check decides whether
 integration is safe. Excluded nested repositories remain outside the snapshot
-inventory and are disclosed as an untracked residual.
+inventory, are named on the start receipt and disclosed as an untracked residual
+(an ignored clone is not inventoried, and a tracked submodule is not populated).
 
 A child or reviewer without write authority but with configured
 `workspace_write`/`full` access is an evidence-only investigation: the same

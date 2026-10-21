@@ -741,7 +741,8 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     facts = dict(money or {})
     parts.extend(_money_facts(facts))
     parts.append(f"quota {facts['quota']}" if facts.get("quota") is not None else "quota unknown")
-    parts.append(_cached_tariff_text(ctx))
+    parts.append(cached_tariff_text(ctx.active_model, getattr(ctx.context_fit_plan, "provider", ""),
+                                    usage.get("_context_prompt_estimate")))
     if tool_ctx is not None:
         try:  # a facts row never takes the round down: an unreadable clock is said, not raised
             parts.append(round_clock_fact(tool_ctx))
@@ -879,18 +880,16 @@ def _context_components(ctx: Any, *, measured: bool) -> list:
     return sorted(sizes, key=lambda item: item[1], reverse=True)[:3]
 
 
-def _cached_tariff_text(ctx: Any) -> str:
-    """Quote fresh exact-model endpoint rates when they agree; never invent a tariff."""
+def cached_tariff_text(model: str, provider: str, prompt: Optional[int]) -> str:
+    """Quote fresh exact-model endpoint rates when they agree, for the facts line and [ROUTE FACTS]; never invent one."""
     try:
         from ouroboros.pricing import get_pricing
         from ouroboros.provider_models import normalize_model_identity
 
-        model = normalize_model_identity(str(ctx.active_model or ""))
-        provider = str(getattr(ctx.context_fit_plan, "provider", "") or "")
+        model, provider = normalize_model_identity(str(model or "")), str(provider or "")
         catalog = get_pricing(provider=provider, model=model if provider == "openrouter" else "", allow_live_fetch=False)
         rows = list(catalog.values()) if provider == "openrouter" else [catalog[model]] if model in catalog else []
         quoted = []
-        prompt = ctx.accumulated_usage.get("_context_prompt_estimate")
         for row in rows:
             rates = row
             if getattr(row, "tiers", ()) and prompt is None:
@@ -952,7 +951,7 @@ def _own_focus_fact(ctx: Any) -> Tuple[str, str]:
 def append_context_facts(ctx: Any, *, money: Optional[Dict[str, Any]] = None) -> bool:
     """Append facts for this round's current route and working view, before dispatch.
 
-    An unchanged reprepare reuses the visible row, so its values are as of that row's
+    An unchanged or cache-marker-only reprepare reuses the row, with values as of its
     sample instant. A fallback, owner switch or recovery rewrite gets fresh facts
     rather than inheriting another route's window and tariff. Sent history is never
     rewritten; the producer-labelled standalone rows let refusal recovery address
@@ -963,7 +962,7 @@ def append_context_facts(ctx: Any, *, money: Optional[Dict[str, Any]] = None) ->
     usage = ctx.accumulated_usage
     plan = ctx.context_fit_plan
     focus_identity, focus_fact = _own_focus_fact(ctx)
-    source = [m for m in ctx.messages if m.get(HOST_CONTEXT_KIND_KEY) != CONTEXT_FACTS_NAME]
+    source = [{k: v for k, v in m.items() if k != "cache_control"} for m in ctx.messages if m.get(HOST_CONTEXT_KIND_KEY) != CONTEXT_FACTS_NAME]
     source.append({"role": "system", "content": json.dumps(ctx.tool_schemas, ensure_ascii=False, sort_keys=True)})
     key = (ctx.round_idx, ctx.active_model, ctx.active_context_mode, ctx.active_effort,
            str(getattr(plan, "route_fp", "")), str(getattr(plan, "status", "")),

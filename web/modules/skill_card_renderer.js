@@ -692,7 +692,7 @@ export function renderInstalledSkillCard(skill, reviewingSkills = new Set(), rep
             ${presenceRuntimeBlock(skill)}
         </div>
     </details>`;
-    return `<article class="skills-card skills-installed-card" data-skill="${safeName}"${model.needs ? ' data-needs-you' : ''}${reviewing ? ' data-reviewing="1"' : ''}${repairing ? ' data-repairing="1"' : ''}>
+    return `<article class="skills-card skills-installed-card" data-skill="${safeName}"${skill.lifecycle_virtual ? ' data-lifecycle-virtual' : ''}${model.needs ? ' data-needs-you' : ''}${reviewing ? ' data-reviewing="1"' : ''}${repairing ? ' data-repairing="1"' : ''}>
         <header class="skills-card-head">
             <div class="skills-card-title">
                 <div class="skills-head-title"><button type="button" class="skills-card-name" ${actionAttrs(skill.name, 'open_detail')}>${safeName}<span class="skills-card-name-more" aria-hidden="true">›</span></button><span class="skills-card-marks">${marks}</span></div>

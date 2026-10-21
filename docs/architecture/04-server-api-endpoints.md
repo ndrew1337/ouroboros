@@ -21,7 +21,8 @@ Every path-addressed `/api/files/*` operation resolves its requested `path` and 
 | GET | `/api/extensions/{skill}/manifest` | |
 | GET | `/api/extensions/{skill}/module/{entry:path}` | reviewed `.js`/`.mjs` from captured texts; `Access-Control-Allow-Origin: *` |
 | GET | `/api/extensions/{skill}/ui/{revision}/{path:path}` | captured page-module files of the live revision |
-| GET | `/api/widgets` | passive projection of live UI tabs and pinned cards; `Cache-Control: no-store` |
+| GET | `/api/widgets` | live UI tabs and pinned cards, passive; `Cache-Control: no-store` |
+| POST | `/api/widgets/fault` | a shown fault as one task-less `widget_fault` event, bounded |
 | GET | `/api/extensions/{skill}/settings_section` | |
 | ANY | `/api/extensions/{skill}/{rest:path}` | extension dispatch (§13) |
 | GET | `/api/skills/daemons` | |

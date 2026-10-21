@@ -311,99 +311,63 @@ def _render_context_system_content(
     return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode)
 
 
-def seal_task_transcript(
-    messages: List[Dict[str, Any]],
-    keep_active: int = 5,
-    min_prefix_tokens: int = 2048,
-) -> None:
+def seal_task_transcript(messages: List[Dict[str, Any]], min_prefix_tokens: int = 2048) -> None:
     """Mark ONE stable message-side boundary for provider prompt caching.
 
-    Until enough tool results exist to seal a rolling boundary among them, the
-    boundary is the task message itself: without it everything after the
-    SYSTEM markers -- the mutable context block and the task contract -- is
-    re-sent uncached every round, which is exactly the short-lived nanny and
-    leaf shape. The marker MIGRATES to the rolling tool seal in the same call
-    that first qualifies. Anthropic permits four breakpoints: A', optional D,
-    B and this one. The finalizer marks schemas only if a slot remains; keeping
-    both message boundaries could exceed the cap and lose the rolling seal.
+    The boundary is the newest user or tool row with text, so no tool result
+    waits outside it (#596) and a tool-free stretch advances it too (#1186).
+    Assistant turns, replayed native content included, never carry it; an
+    empty or opaque tool result is skipped (``logical_tool_result_text``). The
+    loop normally seals before fresh facts, clock and answer; a recovery
+    reseal can include existing facts. Until that prefix is worth a breakpoint the
+    task message is the anchor: without it everything after the SYSTEM markers
+    -- the mutable context block and the task contract -- is re-sent uncached
+    every round, the short-lived nanny and leaf shape. A message without text
+    is never marked: Anthropic rejects a marker on an empty text block.
+
+    The mark is host-only, a message-level ``cache_control``: the send copies
+    of marker-carrying routes render it on the row's last non-empty text block
+    and every other copy drops it, so canonical content, host-row bindings and
+    a marker-free route's bytes never change. Anthropic permits four
+    breakpoints: A', optional D, B and this one; the finalizer marks schemas
+    only if a slot remains. The old in-place seal is undone without another
+    shape change: a text-only tool list flattens to its exact text, as every
+    seal has done, and a block-list task message only loses its markers.
     """
     from ouroboros.tool_result_record import logical_tool_result_text
 
     for msg in messages:
-        if msg.get("role") != "tool":
-            continue
+        msg.pop("cache_control", None)  # this function's previous boundary
         content = msg.get("content")
-        if isinstance(content, list) and (plain := logical_tool_result_text(content)) is not None:
-            # Flatten the old sealed boundary before choosing a new one.
+        if msg.get("role") == "tool" and isinstance(content, list) and (
+                plain := logical_tool_result_text(content)) is not None:
             msg["content"] = plain
     first_user = next((m for m in messages if m.get("role") == "user"), None)
     if isinstance(first_user, dict) and isinstance(first_user.get("content"), list):
-        # Drop this function's own previous task-message marker, so exactly one
-        # message-side breakpoint survives whichever branch runs below.
         for block in first_user["content"]:
             if isinstance(block, dict):
                 block.pop("cache_control", None)
 
-    tool_indices = [
-        i for i, m in enumerate(messages)
-        if m.get("role") == "tool"
-    ]
-    if len(tool_indices) <= keep_active:
-        _mark_task_message(first_user)
-        return
+    def has_text(message: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(message, dict) or message.get("role") not in {"user", "tool"}:
+            return False
+        content = message.get("content")
+        if message["role"] == "tool":
+            return bool((logical_tool_result_text(content) or "").strip())
+        if isinstance(content, str):
+            return bool(content.strip())
+        return isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "").strip()
+            for block in content)
 
-    seal_candidate_idx = next((i for i in reversed(tool_indices[:len(tool_indices) - keep_active])
-                               if (logical_tool_result_text(messages[i].get("content")) or "").strip()), None)
-    if seal_candidate_idx is None:
-        _mark_task_message(first_user)
-        return
-
-    prefix_text_len = sum(
-        len(extract_plain_text_from_content(m.get("content", "")))
-        for m in messages[: seal_candidate_idx + 1]
-    )
-    prefix_tokens = prefix_text_len // 4  # rough 4-chars-per-token estimate
-
-    if prefix_tokens < min_prefix_tokens:
-        # Not yet a worthwhile rolling boundary: the task message stays the anchor.
-        _mark_task_message(first_user)
-        return
-
-    candidate = messages[seal_candidate_idx]
-    # An empty output remains exact; provider-only padding belongs to the send copy.
-    plain_text = logical_tool_result_text(candidate.get("content"))
-    candidate["content"] = [
-        {
-            "type": "text",
-            "text": plain_text,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
-def _mark_task_message(message: Optional[Dict[str, Any]]) -> None:
-    """Anchor the prefix on the task message's last non-empty text block.
-
-    Anthropic rejects a marker on an empty text block, so a task message with
-    no text at all is left unmarked rather than padded: the same rule the
-    rolling tool seal enforces on empty tool output."""
-    if not isinstance(message, dict):
-        return
-    content = message.get("content")
-    if isinstance(content, str):
-        if not content.strip():
-            return
-        content = [{"type": "text", "text": content}]
-        message["content"] = content
-    if not isinstance(content, list):
-        return
-    for block in reversed(content):
-        if (
-            isinstance(block, dict)
-            and block.get("type") == "text"
-            and str(block.get("text") or "").strip()
-        ):
-            block["cache_control"] = {"type": "ephemeral"}
-            return
+    index = next((i for i in range(len(messages) - 1, -1, -1) if has_text(messages[i])), None)
+    boundary = messages[index] if index is not None else None
+    if boundary is not None and boundary is not first_user and sum(
+            len(extract_plain_text_from_content(m.get("content", ""))) for m in messages[:index + 1]
+    ) // 4 < min_prefix_tokens:  # rough 4-chars-per-token estimate
+        boundary = first_user  # not yet a worthwhile rolling boundary: the task message anchors
+    if has_text(boundary):
+        boundary["cache_control"] = {"type": "ephemeral"}
 
 
 def tool_schema_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:

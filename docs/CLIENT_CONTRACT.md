@@ -566,6 +566,7 @@ A refused action answers `SkillActionRefusal`: `error`, the `status_code` it was
   - `declarative`: a component description the interface draws; the components are described in `docs/CREATING_SKILLS.md`.
   - `module`: reviewed JavaScript run in a sandboxed frame. [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) is the complete host protocol: frame, document policy, message grammar, fetch relay, events, theme, size, downloads, links and the dispose handshake.
 - `GET /api/extensions/{skill}/module/{entry}` serves reviewed module code (never cached, any origin may load it).
+- `POST /api/widgets/fault` (`WidgetFaultRequest`, `WidgetFaultResponse`) keeps one fault a running module widget's card shows as a `widget_fault` row of `GET /api/logs/events`: the card's `skill`, `tab_id` and `revision`, `where` (`board` or `message`) and the frame's `kind`, `message` (at most 500 characters), `source` (200) and `line`. The row has no task and is the page's report, not a verified execution. At most 10 rows per widget and 100 together are written per minute; past that the answer is `logged: false` and the widget's next row carries `suppressed_count`. `400` another shape, `413` a body past 8 KiB, `503` not written. A client may skip reporting.
 
 **Contributions (controls and speech engines):** `GET /api/ui/contributions`
 (`UiContributionsResponse`, `Cache-Control: no-store`) returns `contributions`,

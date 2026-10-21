@@ -412,6 +412,36 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
     return (replace(handle, path=str(pathlib.Path(handle.path) / folder)) if folder.parts else handle), None
 
 
+_NESTED_REPOSITORIES_SHOWN = 20
+
+
+def _snapshot_facts(handle: Any) -> Dict[str, Any]:
+    """Disclosure on the start receipt: how big the private snapshot is, how long it
+    took to provision (#1241) and which nested Git repositories it left out, so an
+    empty snapshot says why. Facts only — nothing refuses or truncates on them."""
+    if handle is None:
+        return {}
+    if getattr(handle, "adopted_from", ""):  # a continuation's predecessor snapshot
+        facts: Dict[str, Any] = {"reused_from_run": handle.adopted_from}
+    else:
+        file_baseline = getattr(handle, "file_baseline", {}) or {}
+        facts = {"entries": int(getattr(handle, "entry_count", 0) or 0),
+                 "untracked_files": len(getattr(handle, "untracked_baseline", {}) or {}) + len(file_baseline),
+                 "file_input_bytes": sum(int(item.get("size", 0) or 0) for item in file_baseline.values()),
+                 "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0)}
+    nested = sorted(str(row.get("path") or "") for row in getattr(handle, "excluded_untracked", ()) or ()
+                    if isinstance(row, dict) and row.get("reason") == "nested_repository")
+    if nested:
+        facts["nested_repositories_excluded"] = nested[:_NESTED_REPOSITORIES_SHOWN]
+        if len(nested) > _NESTED_REPOSITORIES_SHOWN:
+            facts["nested_repositories_excluded_count"] = len(nested)
+        facts["nested_repositories_note"] = (
+            "Untracked Git repositories (paths relative to the snapshot's repository root) are not in this snapshot: "
+            "the run neither works in them nor captures changes there. A child whose workspace is one of them can."
+            + (" The full list is in this snapshot's baseline manifest." if len(nested) > _NESTED_REPOSITORIES_SHOWN else ""))
+    return facts
+
+
 def _record_baseline_manifest(drive: pathlib.Path, task_id: str, invocation_id: str,
                               handle: Any, **extra: Any) -> None:
     """The forensic baseline record beside the capture-to-be. Fail-soft: the BINDING

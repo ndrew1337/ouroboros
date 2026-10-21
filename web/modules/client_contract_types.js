@@ -834,6 +834,26 @@
  */
 
 /**
+ * `POST /api/widgets/fault` (`gateway/widgets.py`): one fault a mounted module widget's card shows; identity is
+ * the page's mount, the rest the frame's clipped report.
+ * @typedef {Object} WidgetFaultRequest
+ * @property {string} skill
+ * @property {string} tab_id
+ * @property {string} revision
+ * @property {'board'|'message'} where
+ * @property {'error'|'rejection'|'csp'} kind
+ * @property {string} message
+ * @property {string} source
+ * @property {number} line
+ */
+
+/**
+ * @typedef {Object} WidgetFaultResponse
+ * @property {boolean} ok
+ * @property {boolean} logged
+ */
+
+/**
  * `POST`/`DELETE /api/cards/{card_id}/pin`.
  * @typedef {Object} CardPinResponse
  * @property {boolean} ok
