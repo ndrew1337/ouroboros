@@ -1,4 +1,4 @@
-"""xAI Voice is a separate wire consumer: cumulative captions and outer usage.
+"""xAI Voice is a separate wire consumer: native captions and outer usage.
 
 Protocol: https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
 Read 2026-10-21; R6 observed outer response.done.usage is retained verbatim.
@@ -319,11 +319,11 @@ class GrokSession(JsonSession):
                     'response.audio_transcript.done', 'response.output_audio_transcript.done',
                     'conversation.item.input_audio_transcription.completed'}:
             owner = kind.startswith('conversation.')
-            # R6: repeated "completed" events can still be in_progress, and
-            # cumulative text can revise earlier words. Carry replacement end-to-end.
+            # R6: owner "completed" events can still have in_progress status.
+            # Deltas append; only a full transcript replaces the earlier words.
             final = (event.get('status') == 'completed' if owner else kind.endswith('.done'))
             return [LiveEvent('caption', {'speaker': 'owner' if owner else 'ouroboros', 'item_id': item,
-                'text': event.get('transcript', event.get('delta', '')), 'final': final, 'replace': True})]
+                'text': event.get('transcript', event.get('delta', '')), 'final': final, 'replace': 'transcript' in event})]
         if kind == 'response.done':
             response = event.get('response', {})
             rid = response.get('id')
