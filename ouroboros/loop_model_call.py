@@ -595,9 +595,18 @@ def _rebind_context_fit_plan(
     )
     from ouroboros.context_anchor import floored_window
 
-    # A window this model already exceeded in this conversation is no window: a rotation never re-cuts by it.
-    window_tokens, known_window = floored_window(
-        int(getattr(evidence, "window_tokens", 0) or 0), is_known(evidence, require_fresh=True), _accepted)
+    # A declared conversation window (a realtime route's facts) keeps its own number and units;
+    # acceptance never becomes capacity. Every other route: a window this model already exceeded
+    # in this conversation is no window, so a rotation never re-cuts by it.
+    route_facts = getattr(evidence, "route_facts", {}) or {}
+    window_basis = str(route_facts.get("basis") or "")
+    if window_basis:
+        window_tokens, known_window = (int(getattr(evidence, "window_tokens", 0) or 0),
+                                       is_known(evidence, require_fresh=True))
+        ratio = 1.0 if window_basis == "estimator" else ratio
+    else:
+        window_tokens, known_window = floored_window(
+            int(getattr(evidence, "window_tokens", 0) or 0), is_known(evidence, require_fresh=True), _accepted)
     output_reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local", use_local)), evidence=evidence)
     preferred = preferred_mode or getattr(plan, "preferred_mode", "")
     preferred = preferred if preferred in {"low", "max", "nano"} else "max"
@@ -617,6 +626,8 @@ def _rebind_context_fit_plan(
             "accountFingerprint": str(getattr(evidence, "account_fingerprint", "") or ""),
         } if route.get("provider") == "claudexor" else {},
         evidence_source=str(getattr(evidence, "source", "") or ""),
+        working_reserve_tokens=route_facts.get("working_reserve_tokens"),
+        window_basis=window_basis,
     ).reproject_for_route(  # the shown view kept while it fits this route's window, else narrowed
         window_tokens=window_tokens, known_window=known_window, ratio=ratio, output_reserve=output_reserve,
         tool_schemas=tool_schemas, start_mode=start_mode, current_messages=messages)

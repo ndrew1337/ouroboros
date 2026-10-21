@@ -102,9 +102,11 @@ def session_candidate(host, factory, options):
     plan, facts = host.plan, host.model.facts
     known = facts.conversation_window_tokens is not None
     window = facts.conversation_window_tokens or 0
+    # The plan keeps its reply allowance; the route's working room travels beside it
+    # and the ordinary ladder honours both. The physical guard below checks the larger.
     reserve = facts.working_reserve_tokens or plan.output_reserve_tokens
     plan = replace(plan, window_tokens=window, status="confirmed" if known else "unprobeable", stale=False,
-                   output_reserve_tokens=reserve)
+                   working_reserve_tokens=facts.working_reserve_tokens, window_basis=facts.basis)
     extra = [{"role": "system", "content": options.instructions}] if options.instructions else []
     rows = [*host.messages, *extra]
     raw = estimate_context_prompt_tokens(rows, host.schemas)
@@ -116,7 +118,7 @@ def session_candidate(host, factory, options):
     deficit, previous = 0, None
     while True:
         plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
-            output_reserve=reserve, tool_schemas=host.schemas, start_mode=plan.initial_mode,
+            output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode=plan.initial_mode,
             current_messages=rows, refused_tokens=deficit)
         current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
