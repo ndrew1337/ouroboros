@@ -122,18 +122,29 @@ class LiveConversationTurn(RealtimeTurn):
             work = _LoopWork()
             work.task = asyncio.current_task()
             with extension_work_scope(self.feature, work):
-                runner = asyncio.create_task(self.feature["handler"](host))
-                controls = asyncio.create_task(host.watch_controls())
+                children = ()
                 try:
+                    # The host is now registered: catch a disable during ordinary
+                    # preparation, while the hook covers any subsequent write.
+                    try:
+                        current_config = self.feature["configure"]()
+                    except Exception:
+                        current_config = self.config  # failed reads preserve the admitted snapshot
+                    if isinstance(current_config, LiveConfig) and not current_config.enabled:
+                        raise RealtimeSetupError("calls_disabled", "Calls (beta) are off.")
+                    await host.check()
+                    runner = asyncio.create_task(self.feature["handler"](host))
+                    controls = asyncio.create_task(host.watch_controls())
+                    children = (runner, controls)
                     done, _ = await asyncio.wait((runner, controls), return_when=asyncio.FIRST_COMPLETED)
                     if controls in done:
                         await controls
                     return await runner
                 finally:
-                    for child in (runner, controls):
+                    for child in children:
                         if not child.done():
                             child.cancel()
-                    for child in (runner, controls):
+                    for child in children:
                         try:
                             await joined(child)
                         except (asyncio.CancelledError, Exception):
