@@ -7,6 +7,7 @@ from pathlib import Path
 
 from ouroboros.contracts.live_conversation import LiveConfig
 from ouroboros.contracts.realtime import RealtimeSetupError
+from ouroboros.live_conversation import end_feature_calls
 
 # Calls are off until the owner turns them on; Gemini is the default engine.
 DEFAULTS = {"enabled": False, "provider": "gemini_live:gemini", "model": "", "voice": "", "instructions": "",
@@ -96,6 +97,7 @@ def register(api):
                     if "thinking" in model.honours and config.thinking and config.thinking not in model.thinking_levels:
                         raise RealtimeSetupError("configuration", "Choose a thinking level from the selected model's catalog.")
                 atomic_write_json(path, asdict(config))
+                if not config.enabled: end_feature_calls("live_conversation:call")
             except (ValueError, RealtimeSetupError) as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
         return JSONResponse(configuration_view(configure(), catalogs))

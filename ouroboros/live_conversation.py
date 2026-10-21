@@ -12,6 +12,7 @@ import functools
 import json
 import math
 import threading
+import weakref
 from contextlib import contextmanager
 from dataclasses import replace
 
@@ -20,6 +21,18 @@ from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json, sha
 from ouroboros.realtime_setup import _LoopWork, loaded_provider
 from ouroboros.realtime_session import joined
 from ouroboros.realtime_turn import RealtimeTurn
+
+
+_active_hosts = weakref.WeakSet()
+_active_hosts_lock = threading.Lock()
+
+
+def end_feature_calls(feature_key, *, reason="calls_disabled", detail="Calls (beta) are off."):
+    """Stop this feature's live calls after a confirmed settings write, on every surface."""
+    with _active_hosts_lock:
+        for host in tuple(_active_hosts):
+            if host.turn.feature["key"] == feature_key:
+                host._end_reason = (reason, detail)
 
 
 def loaded_feature(key):
@@ -228,6 +241,9 @@ class ConversationHost:
         self._connection_quote = None
         self._meter_watermark = 0.0
         self._caption_dirty = False
+        self._end_reason = None
+        with _active_hosts_lock:
+            _active_hosts.add(self)
 
     def checkpoint(self, boundary):
         from types import SimpleNamespace
@@ -295,6 +311,8 @@ class ConversationHost:
         from ouroboros.live_usage import check_live_budget
         from ouroboros.usage_accounting import BudgetExceeded
 
+        if self._end_reason is not None:
+            raise RealtimeSetupError(*self._end_reason)
         waiter = self.ctx.model_wait_context
         if waiter is None:
             raise RealtimeSetupError("host_control", "call has no ordinary model-wait owner")
@@ -611,6 +629,8 @@ class ConversationHost:
         """End call-lifetime custody, after sessions and owned work have drained."""
         from ouroboros.live_usage import abandon_live_response
 
+        with _active_hosts_lock:
+            _active_hosts.discard(self)
         try:
             for job in list(self.tool_jobs):
                 await joined(job)
