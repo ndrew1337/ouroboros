@@ -157,6 +157,7 @@ class GrokSession(JsonSession):
         self.context_lock = asyncio.Lock()
         self.response_requested = self.want_response = self.speech_active = self.vad_response_pending = False
         self.waiting_tools = set()
+        self.tool_calls = set()
         self.ready = False
         self.opened_at = None
         self.connected_seconds = 0.0
@@ -271,8 +272,18 @@ class GrokSession(JsonSession):
                 self.want_response, self.response_requested = False, True
                 await self.write({'type': 'response.create'})
 
+    def tool_call(self, call):
+        call_id = call['call_id']
+        if call_id in self.tool_calls:
+            return []
+        self.tool_calls.add(call_id)
+        self.waiting_tools.add(call_id)
+        return [LiveEvent('tool_call', {'call_id': call_id, 'name': call['name'], 'arguments': call['arguments']})]
+
     def convert(self, event):
         kind, item = event.get('type'), event.get('item_id', '')
+        if kind == 'response.function_call_arguments.done':
+            return self.tool_call(event)
         if kind == 'session.updated' and self.session_update is not None:
             actual = event.get('session', {})
             check_session_echo(self.session_update, actual)
@@ -338,8 +349,7 @@ class GrokSession(JsonSession):
                                                 'status': status, 'continues': False})]
             for call in response.get('output', []) if response.get('status') in {None, 'completed'} else ():
                 if call.get('type') == 'function_call':
-                    self.waiting_tools.add(call['call_id'])
-                    events.append(LiveEvent('tool_call', {'call_id': call['call_id'], 'name': call['name'], 'arguments': call['arguments']}))
+                    events.extend(self.tool_call(call))
             if response.get('status') not in {None, 'completed', 'cancelled'}:
                 events.append(LiveEvent('closed', {'reason': response.get('status'), 'resumable': False}))
             return events
