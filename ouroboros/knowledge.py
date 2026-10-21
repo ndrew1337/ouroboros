@@ -363,7 +363,7 @@ def render_knowledge_outline(rows: tuple[dict[str, Any], ...], legacy_context: s
         topic, title = str(row["topic"]), str(row.get("title") or row["topic"]).strip()
         line = f"- {topic}" + (f" — {_label(title)}" if title and title != topic else "")
         summary = row.get("summary")
-        if row.get("type") == PERSON_TYPE and isinstance(summary, str) and summary.strip():
+        if str(row.get("type") or "").strip().casefold() == PERSON_TYPE and isinstance(summary, str) and summary.strip():
             line += "\n" + "\n".join("  " + part for part in summary.splitlines())
         if row.get("read_error") or row.get("parse_error") or row.get("archive_error"):
             line += " (source metadata unavailable; read the original note)"
