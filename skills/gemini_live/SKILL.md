@@ -48,7 +48,13 @@ The catalog offers both models and 30 prebuilt voices. Its 92k o200k window is
 measured for the ordinary model and a labelled hypothesis for extended thinking;
 the documented 131,072 provider-token input limit is a separate quantity.
 Every completed response reports modality usage, cached input and thinking units
-where Gemini supplies them, with raw evidence and status; missing axes stay unknown.
+where Gemini supplies them, with raw evidence and status. Sparse modality lists
+prove omitted zeroes when their counts cover the reported total, or for an input
+modality never submitted to this session. Selected images and retained media
+across resumed connections count as submitted; an unknown resume has no such
+absence evidence. Missing lists, unaccounted modalities and missing cache or
+thinking counts stay unknown. Reported thinking tokens are billed in addition
+to response modalities; an explicitly empty cache list proves zero cached tokens.
 The provider accepts inline images and sends 16 kHz mono PCM input / 24 kHz output.
 Installing or granting it does not enable the Live Conversation beta.
 
