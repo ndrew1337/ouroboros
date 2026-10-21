@@ -573,6 +573,9 @@ def test_fresh_renewal_waits_for_every_quiet_barrier(source, barrier):
             if barrier == 'tools': released.set()
             if barrier == 'caption': first.emit('audio', item_id='spoken', rate=24000, pcm=b'\0' * 48000)
             if barrier in {'caption', 'playback'}:
+                # A peer can acknowledge only PCM the driver has delivered.
+                # emit() queues provider input; the peer task may run first.
+                await until(lambda: any(item == 'spoken' for _, item in host.hub.audio))
                 host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'spoken', 'played_ms':1000}))
             if barrier == 'native': first.renewal_ready = True
             await until(lambda: len(host.sessions) == 2)
