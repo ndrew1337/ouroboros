@@ -151,6 +151,7 @@ class GrokSession(JsonSession):
         self.pending, self.responses, self.active_response = [], set(), ''
         self.number = 0
         self.cancelled = set()
+        self.pending_cancel = ''
         self.truncations = {}
         self.context_queue, self.outstanding = [], {}
         self.session_update = None
@@ -233,6 +234,17 @@ class GrokSession(JsonSession):
         await self.advance_context()
         return events
 
+    def is_benign_error(self, event):
+        error = event.get('error')
+        if (event.get('type') != 'error' or not isinstance(error, dict) or not self.pending_cancel
+                or error.get('code') != 'response_cancel_not_active'
+                or error.get('event_id') is not None  # Our xAI cancel has no client event id.
+                or error.get('response_id') not in (None, self.pending_cancel)
+                or event.get('response_id') not in (None, self.pending_cancel)):
+            return False
+        self.pending_cancel = ''  # One reply to our cancel; all other errors remain fatal.
+        return True
+
     async def advance_context(self):
         async with self.context_lock:
             if (not self.ready or self.active_response or self.response_requested or self.vad_response_pending
@@ -299,11 +311,16 @@ class GrokSession(JsonSession):
             if self.truncations.pop(item, None) != event.get('audio_end_ms'):
                 raise RealtimeSetupError('provider_truncation', 'unrequested Grok truncation')
         if kind == 'response.created':
+            self.pending_cancel = ''
             self.response_requested = self.vad_response_pending = False
             self.active_response = event['response']['id']
             return [LiveEvent('response_started', {'response_id': self.active_response})]
         if kind == 'input_audio_buffer.speech_started':
             self.speech_active = True
+            if self.active_response:
+                # xAI's server VAD always interrupts. Drain usage before clearing
+                # active_response, but do not cancel it again from host Interrupt.
+                self.cancelled.add(self.active_response)
             return [LiveEvent('input_started'), LiveEvent('speech_started')]
         if kind == 'input_audio_buffer.speech_stopped':
             self.speech_active, self.vad_response_pending = False, True
@@ -346,6 +363,8 @@ class GrokSession(JsonSession):
             status = response.get('status', 'completed')
             if status == 'cancelled' and (rid in self.cancelled or (response.get('status_details') or {}).get('reason') == 'turn_detected'):
                 status = 'interrupted'
+            if response.get('status') == 'cancelled':
+                self.cancelled.add(rid)
             events = [LiveEvent('response_done', {'response_id': rid, 'usage': usage, 'raw_usage': raw,
                                                 'status': status, 'continues': False})]
             for call in response.get('output', []) if response.get('status') in {None, 'completed'} else ():
@@ -364,6 +383,7 @@ class GrokSession(JsonSession):
         elif isinstance(command, Interrupt):
             if self.active_response and self.active_response not in self.cancelled:
                 self.cancelled.add(self.active_response)
+                self.pending_cancel = self.active_response
                 await self.write({'type': 'response.cancel'})
             if command.item_id:
                 self.truncations[command.item_id] = command.played_ms
