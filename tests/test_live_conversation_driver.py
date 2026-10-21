@@ -791,3 +791,28 @@ def test_grok_feature_options_put_the_lowest_default_on_the_wire(configured):
         raise AssertionError('This test only inspects the physical setup; no network is allowed')
     session = GrokSession(selected, session_options(host), connect=never_connect, observe=lambda *args: None)
     assert session.events[0]['session']['reasoning'] == {'effort': 'high' if configured == 'high' else 'none'}
+
+
+@pytest.mark.parametrize('transport_closed', [False, True])
+def test_peer_poll_defers_a_pending_refit_after_the_transport_requests_resume(transport_closed):
+    from skills.live_conversation.driver import _Call
+    async def scenario():
+        host = Host()
+        checked = asyncio.Event()
+        async def check(): checked.set()
+        host.check = check
+        host.state.update(refit=True, resume_handle='latest-handle')
+        call = _Call(host)
+        call.session = Session()
+        call.response_open = True
+        call.renewing = call.resume = True
+        call.provider_closed = transport_closed
+        peer = asyncio.create_task(call.peers())
+        try:
+            await asyncio.wait_for(checked.wait(), 2)
+            assert call.resume is transport_closed, 'a dead transport must resume its active response before refitting'
+            assert host.state['refit'] is True, 'resumption must retain the later refit obligation'
+        finally:
+            peer.cancel()
+            await asyncio.gather(peer, return_exceptions=True)
+    asyncio.run(scenario())

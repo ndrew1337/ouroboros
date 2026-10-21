@@ -413,6 +413,10 @@ class _Call:
             await self.host.check()
             if self.hub.closed or self.hub.ended_by_owner:
                 return
+            if self.provider_closed:
+                # The ended transport owns this resume transition. Keep any
+                # pending refit for the resumed response's quiet boundary.
+                return
             if self.hub.peers():
                 self.empty_since = time.monotonic()
             elif time.monotonic() - self.empty_since >= 15:
