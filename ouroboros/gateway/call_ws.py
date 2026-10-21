@@ -106,7 +106,14 @@ async def serve_peer(websocket: WebSocket, hub: LiveCallHub, *, role: str,
                 if isinstance(frame, cp.VideoFrame):
                     hub.receive_video(peer_id, frame)
                 else:
-                    hub.receive_audio(peer_id, frame)
+                    while True:
+                        try:
+                            hub.receive_audio(peer_id, frame)
+                            break
+                        except CallPeerError as exc:
+                            if exc.code != "input_backpressure":
+                                raise
+                            await asyncio.sleep(SOCKET_POLL_SECONDS)
                 continue
             message = _control(event.get("text") or "")
             if sender is None:

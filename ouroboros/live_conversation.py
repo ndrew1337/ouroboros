@@ -192,14 +192,17 @@ class LiveConversationTurn(RealtimeTurn):
             try:
                 if host is not None:
                     host.executor.shutdown(wait=True)
-                    host.observe("host", canonical_json({"type": "call.input_audio",
-                        **hub.input_audio_evidence()}))
             finally:
                 with self._lock:
                     self._closed = True
-                close_hub(self.spec.call_id, reason, detail=detail)
-                self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
-                              "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
+                try:
+                    close_hub(self.spec.call_id, reason, detail=detail)
+                    if host is not None:
+                        host.observe("host", canonical_json({"type": "call.input_audio",
+                            **hub.input_audio_evidence()}))
+                finally:
+                    self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
+                                  "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
         return "Call ended. Its transcript is in this room.", {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
             **({"failure": failure} if failure is not None else {}),
@@ -416,6 +419,7 @@ class ConversationHost:
         from ouroboros.usage_accounting import PhysicalAttemptPreconditionFailed
 
         await self.check()
+        self.hub.pause_input()
         provider = loaded_provider(self.turn.provider)
         if provider["extension_generation"] != self.turn._generation:
             raise RealtimeSetupError("provider_changed", "selected loaded generation changed; start a new call")
