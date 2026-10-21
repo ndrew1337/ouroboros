@@ -798,8 +798,7 @@ def test_peer_poll_defers_a_pending_refit_after_the_transport_requests_resume(tr
     from skills.live_conversation.driver import _Call
     async def scenario():
         host = Host()
-        checked = asyncio.Event()
-        async def check(): checked.set()
+        async def check(): raise AssertionError('the peer loop must not repeat the host control watcher')
         host.check = check
         host.state.update(refit=True, resume_handle='latest-handle')
         call = _Call(host)
@@ -809,10 +808,118 @@ def test_peer_poll_defers_a_pending_refit_after_the_transport_requests_resume(tr
         call.provider_closed = transport_closed
         peer = asyncio.create_task(call.peers())
         try:
-            await asyncio.wait_for(checked.wait(), 2)
+            await until(lambda: peer.done() or not call.resume)
+            if peer.done(): await peer
             assert call.resume is transport_closed, 'a dead transport must resume its active response before refitting'
             assert host.state['refit'] is True, 'resumption must retain the later refit obligation'
         finally:
             peer.cancel()
             await asyncio.gather(peer, return_exceptions=True)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('check_delay', [0, .08])
+def test_owner_audio_at_fifty_frames_per_second_survives_slow_control_reads(check_delay):
+    from ouroboros.call_peers import LiveCallHub
+    from ouroboros.contracts.live_conversation import Audio
+    async def scenario():
+        host = Host()
+        host.hub = LiveCallHub(cp.CallSpec('audio-burst', 1, 'test', 'test'))
+        host.hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), 24000)
+        async def check(): await asyncio.sleep(check_delay)
+        host.check = check
+        task, session = await started(host)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: bool(session.sent))
+            # Each frame has a distinct PCM value, so count, order and content
+            # catch both dropped audio and duplicated/replaced frames.
+            expected = [index.to_bytes(2, 'little') * 480 for index in range(1, 121)]
+            clock = asyncio.get_running_loop()
+            start = clock.time()
+            for index, pcm in enumerate(expected):
+                await asyncio.sleep(max(0, start + index / 50 - clock.time()))
+                assert host.hub.receive_audio('owner', cp.AudioFrame(cp.FRAME_AUDIO_IN, 0, index, 24000, 0, pcm))
+            deadline = clock.time() + 1.5
+            while len([x for x in session.sent if isinstance(x, Audio)]) < len(expected) and clock.time() < deadline:
+                await asyncio.sleep(.01)
+            delivered = [x.pcm for x in session.sent if isinstance(x, Audio)]
+            assert delivered == expected, f'{len(delivered)}/{len(expected)} owner frames reached the provider'
+        finally:
+            host.hub.receive_control('owner', {'type': 'bye'})
+            await asyncio.wait_for(task, 2)
+            host.hub.close('finished')
+    asyncio.run(scenario())
+
+
+def test_due_audio_is_drained_before_another_control_or_renewal_poll():
+    from ouroboros.contracts.live_conversation import Audio
+    from skills.live_conversation.driver import _Call
+    async def scenario():
+        host = Host()
+        call = _Call(host)
+        call.session, call.input_rate = Session(), 24000
+        history = []
+        frames = [index.to_bytes(2, 'little') * 480 for index in range(1, 9)]
+        host.hub.events = [cp.PeerAudio('owner', cp.PEER_OWNER, pcm) for pcm in frames]
+        async def check(): history.append('check')
+        def renewal_due():
+            history.append('renewal')
+            return False
+        def next_event(_timeout):
+            if host.hub.events:
+                history.append('audio')
+                return host.hub.events.pop(0)
+            host.hub.ended_by_owner = True
+            return None
+        host.check, host.renewal_due, host.hub.next_event = check, renewal_due, next_event
+        await asyncio.wait_for(call.peers(), 2)
+        assert [x.pcm for x in call.session.sent if isinstance(x, Audio)] == frames
+        first, last = history.index('audio'), len(history) - 1 - history[::-1].index('audio')
+        assert history[first:last + 1] == ['audio'] * len(frames), history
+        assert 'check' not in history, 'the host owns continuous control monitoring'
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('reason', ['owner_stop', 'panic', 'budget_exhausted'])
+def test_host_control_watcher_ends_busy_audio_promptly_and_joins_the_driver(reason):
+    from ouroboros.contracts.live_conversation import Audio
+    from ouroboros.live_conversation import ConversationHost
+    async def scenario():
+        host = Host()
+        stop, checked = asyncio.Event(), asyncio.Event()
+        async def check():
+            await asyncio.sleep(.08)  # a strict store/budget read may be slow
+            if stop.is_set(): raise RealtimeSetupError(reason, 'Test control ended the call.')
+            checked.set()
+        host.check = check
+        task, session = await started(host)
+        controls = asyncio.create_task(ConversationHost.watch_controls(host))
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: bool(session.sent))
+            # All frames are already due. Even a send that completes without
+            # suspending must give the independent control watcher a turn.
+            frame = cp.PeerAudio('owner', cp.PEER_OWNER, b'\x01\x00' * 480)
+            host.hub.events = [frame] * 100_000
+            await checked.wait()
+            await until(lambda: any(isinstance(x, Audio) for x in session.sent))
+            assert not task.done(), 'ordinary control reads must keep the call alive'
+            checked.clear()
+            await asyncio.wait_for(checked.wait(), .4)
+            stop.set()
+            start = asyncio.get_running_loop().time()
+            with pytest.raises(RealtimeSetupError, match=reason):
+                await asyncio.wait_for(controls, .4)
+            # The real host cancels and joins the feature when its watcher ends.
+            task.cancel()
+            await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), .4)
+            assert asyncio.get_running_loop().time() - start < .4
+            assert host.hub.events, 'draining media must not starve the control watcher'
+            sent = len(session.sent)
+            await asyncio.sleep(.03)
+            assert len(session.sent) == sent, 'no audio can escape after the driver is joined'
+        finally:
+            for child in (task, controls): child.cancel()
+            await asyncio.gather(task, controls, return_exceptions=True)
     asyncio.run(scenario())
