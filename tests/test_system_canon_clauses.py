@@ -16,3 +16,20 @@ def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
     _contains(section, clause)
     with pytest.raises(AssertionError):
         _contains(" ".join(section.split()).replace(clause, ""), clause)
+
+
+@pytest.mark.parametrize("clause", [
+    "its route plus the facets it really runs with, defaults omitted",
+    "(the restart path checks it out when my working branch fails to import)",
+    "Their exact composition and room detail remain readable",
+    "not by merely reselecting the old one",
+    "MCP tools appear as `mcp_<server>__<tool>`",
+    "diagrams and plots",
+    "not by this read reach",
+    "generic offers that add nothing",
+])
+def test_compression_keeps_the_approved_behavioral_qualifiers(clause):
+    text = " ".join(SYSTEM.read_text().split())
+    _contains(text, clause)
+    with pytest.raises(AssertionError):
+        _contains(text.replace(clause, ""), clause)
