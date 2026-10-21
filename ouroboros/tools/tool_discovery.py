@@ -137,7 +137,13 @@ def list_available_tools(
                      " Use list_available_tools() for the namespace overview."]
     else:
         lines = [header, f"{len(rows)} callable tools. Namespaces — list_available_tools(namespace=...) lists one completely:"]
-        skills = _namespace_skills()
+        try:
+            skills = _namespace_skills()
+        except Exception as exc:
+            skills = {}
+            omission = {"surface": "extensions", "reason": "discovery_error", "error": f"{type(exc).__name__}: {exc}"}
+            if omission not in omissions:
+                omissions = [*omissions, omission]
         lines += [f"- {name}{f' (skill {skills[name]})' if name in skills else ''}: {len(items)} tools, "
                   f"{sum(item['loaded'] for item in items)} loaded" for name, items in sorted(groups.items())]
         # Names only here, so the overview stays bounded; namespace="builtin" adds purposes.

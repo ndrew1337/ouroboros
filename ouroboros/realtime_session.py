@@ -13,14 +13,18 @@ from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 
 
 async def joined(awaitable):
-    """Join owned work even when repeated Stop requests interrupt the waiter."""
+    """Settle owned work, then propagate cancellation of its waiter."""
     task = asyncio.ensure_future(awaitable)
+    cancelled = None
     while not task.done():
         try:
             await asyncio.shield(task)
-        except asyncio.CancelledError:
-            continue
-    return task.result()
+        except asyncio.CancelledError as exc:
+            cancelled = exc
+    result = task.result()
+    if cancelled is not None:
+        raise cancelled
+    return result
 
 
 class JsonSession:
@@ -68,6 +72,8 @@ class JsonSession:
 
     async def close(self):
         connection, self.connection = self.connection, None
-        if connection is not None:
-            await joined(connection.__aexit__(None, None, None))
-        self.ws = None
+        try:
+            if connection is not None:
+                await joined(connection.__aexit__(None, None, None))
+        finally:
+            self.ws = None

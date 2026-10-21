@@ -1,7 +1,7 @@
 """The synchronous audio boundary shared by socket peers and the live turn.
 
-Queues bound transport memory, not conversation length. Audio overflow discards
-oldest samples and exposes counters; control overflow refuses the slow peer.
+Queues bound transport memory, not conversation length. Input applies backpressure;
+discarded input has counted causes; control overflow refuses the slow peer.
 Mixing happens when the driver drains input, so simultaneously buffered microphones
 share one engine timeline instead of playing sequentially. A 20 ms mixer tick
 collects asynchronously arriving microphone frames before emitting each chunk. A mixed frame keeps a
@@ -143,6 +143,7 @@ class LiveCallHub(cp.CallHub):
         self.spec, self.call_id = spec, spec.call_id
         self._condition = threading.Condition(threading.RLock())
         self._peers: dict[str, _Peer] = {}
+        self._draining_peers: list[_Peer] = []
         self._grants: dict[tuple[str, str], PeerGrant] = {}
         self._events: deque = deque()
         self._video_pending: OrderedDict[str, cp.PeerVideo] = OrderedDict()
@@ -155,6 +156,8 @@ class LiveCallHub(cp.CallHub):
         self._mix_at = 0.0
         self._input_dropped_samples = 0
         self._input_dropped_ms = 0.0
+        self._input_drop_causes = {}
+        self._input_paused = False
         self._closed = False
         self._owner_bye = False
         self._ouroboros_bye = False
@@ -260,7 +263,10 @@ class LiveCallHub(cp.CallHub):
 
     def leave(self, peer_id: str, reason: str = "") -> None:
         with self._condition:
-            if self._peers.pop(peer_id, None) is not None:
+            peer = self._peers.pop(peer_id, None)
+            if peer is not None:
+                if any(track.samples for track in peer.tracks.values()):
+                    self._draining_peers.append(peer)
                 self._video_pending.pop(peer_id, None)
                 # Reserve MAX_PEERS extra lifecycle slots so a full control queue
                 # can never suppress the disconnect that frees its producer.
@@ -268,42 +274,77 @@ class LiveCallHub(cp.CallHub):
                 self._condition.notify_all()
 
     def input_audio_evidence(self) -> dict:
-        """Call-lifetime overflow totals; no audio or peer identity is recorded."""
+        """Discard totals in samples at their discard rate and milliseconds, by cause."""
         with self._condition:
             return {"dropped_samples": self._input_dropped_samples,
-                    "dropped_ms": self._input_dropped_ms}
+                    "dropped_ms": self._input_dropped_ms,
+                    "drop_causes": {cause: dict(counts) for cause, counts in self._input_drop_causes.items()}}
+
+    def _drop_input(self, cause, samples, rate):
+        if not samples:
+            return
+        milliseconds = samples * 1000 / rate
+        self._input_dropped_samples += samples
+        self._input_dropped_ms += milliseconds
+        counts = self._input_drop_causes.setdefault(cause, {"samples": 0, "ms": 0.0})
+        counts["samples"] += samples
+        counts["ms"] += milliseconds
+
+    def _discard_tracks(self, peer, cause):
+        self._drop_input(cause, sum(len(track.samples) for track in peer.tracks.values()), self._input_rate)
+        peer.tracks.clear()
+
+    def _audio_peers(self):
+        return (*self._peers.values(), *self._draining_peers)
+
+    def pause_input(self):
+        """Retain capture while the replacement provider has not declared Ready."""
+        with self._condition:
+            self._input_paused = True
 
     def receive_audio(self, peer_id: str, frame: cp.AudioFrame) -> bool:
         with self._condition:
+            if self._closed:
+                self._drop_input("call_closed", len(frame.pcm) // 2, frame.rate)
             self._live()
             peer = self._peers[peer_id]
             if not peer.info.mic or frame.kind != cp.FRAME_AUDIO_IN:
+                self._drop_input("audio_direction_forbidden", len(frame.pcm) // 2, peer.rate)
                 raise CallPeerError("audio_direction_forbidden")
             if frame.rate != peer.rate:
+                self._drop_input("audio_rate_mismatch", len(frame.pcm) // 2, peer.rate)
                 raise CallPeerError("audio_rate_mismatch")
             if len(frame.pcm) > cp.MAX_FRAME_PAYLOAD or len(frame.pcm) % 2:
+                self._drop_input("invalid_pcm", len(frame.pcm) // 2, peer.rate)
                 raise CallPeerError("invalid_pcm")
             delta = (frame.seq - peer.input_seq) & 0xFFFFFFFF if peer.input_seq is not None else 1
-            if frame.epoch != self._epoch or not 0 < delta < 0x80000000:
+            if frame.epoch != self._epoch:
+                self._drop_input("stale_epoch", len(frame.pcm) // 2, peer.rate)
                 return False
-            peer.input_seq = frame.seq
+            if not 0 < delta < 0x80000000:
+                self._drop_input("sequence", len(frame.pcm) // 2, peer.rate)
+                return False
             if peer.muted:
+                peer.input_seq = frame.seq
+                self._drop_input("muted", len(frame.pcm) // 2, peer.rate)
                 return False
             track = peer.tracks.get(frame.stream)
+            limit = self._input_rate * MIX_FRAME_MS * self._audio_limit // 1000
+            if track is not None and len(track.samples) >= limit:
+                # The socket retains this frame and retries; neither sequence nor
+                # resampler advances until there is room. At most one whole
+                # bounded input frame extends beyond the queue threshold.
+                raise CallPeerError("input_backpressure")
             if track is None:
                 if len(peer.tracks) >= MAX_STREAMS:
+                    self._drop_input("stream_capacity_full", len(frame.pcm) // 2, peer.rate)
                     raise CallPeerError("stream_capacity_full")
                 track = _Track(LinearResampler(frame.rate, self._input_rate))
                 peer.tracks[frame.stream] = track
-            if not any(t.samples for p in self._peers.values() for t in p.tracks.values()):
+            peer.input_seq = frame.seq
+            if not any(t.samples for p in self._audio_peers() for t in p.tracks.values()):
                 self._mix_at = time.monotonic() + MIX_FRAME_MS / 1000
             track.samples.extend(_samples(track.converter.feed(frame.pcm)))
-            limit = self._input_rate * MIX_FRAME_MS * self._audio_limit // 1000
-            excess = max(0, len(track.samples) - limit)
-            if excess:
-                self._input_dropped_samples += excess
-                self._input_dropped_ms += excess * 1000 / self._input_rate
-                del track.samples[:excess]
             self._condition.notify_all()
             return True
 
@@ -342,10 +383,12 @@ class LiveCallHub(cp.CallHub):
             if kind == "mute":
                 peer.muted = message["muted"]
                 if peer.muted:
-                    peer.tracks.clear()
+                    self._discard_tracks(peer, "muted")
 
     def _mix(self) -> cp.PeerAudio | None:
-        tracks = [(p, t) for p in self._peers.values() for t in p.tracks.values() if t.samples]
+        if self._input_paused:
+            return None
+        tracks = [(p, t) for p in self._audio_peers() for t in p.tracks.values() if t.samples]
         if not tracks or time.monotonic() < self._mix_at:
             return None
         self._mix_at += MIX_FRAME_MS / 1000
@@ -356,6 +399,7 @@ class LiveCallHub(cp.CallHub):
             for index in range(consumed):
                 mixed[index] += track.samples[index]
             del track.samples[:consumed]
+        self._draining_peers[:] = [peer for peer in self._draining_peers if any(t.samples for t in peer.tracks.values())]
         peers = {p.info.peer_id for p, _ in tracks}
         role = cp.PEER_MEETING if any(p.info.role == cp.PEER_MEETING for p, _ in tracks) else cp.PEER_OWNER
         return cp.PeerAudio(next(iter(peers)) if len(peers) == 1 else "mixed", role,
@@ -377,7 +421,7 @@ class LiveCallHub(cp.CallHub):
                 remaining = deadline - time.monotonic()
                 if self._closed or remaining <= 0:
                     return None
-                buffered = any(t.samples for p in self._peers.values() for t in p.tracks.values())
+                buffered = not self._input_paused and any(t.samples for p in self._audio_peers() for t in p.tracks.values())
                 wake_in = max(0, self._mix_at - time.monotonic()) if buffered else remaining
                 if self._video_pending:
                     wake_in = min(wake_in, max(0, self._last_video_at + 1.0 - time.monotonic()))
@@ -403,11 +447,17 @@ class LiveCallHub(cp.CallHub):
     def set_engine_rates(self, input_rate: int, output_rate: int) -> None:
         _rate(input_rate), _rate(output_rate)
         with self._condition:
+            self._input_paused = False
+            self._condition.notify_all()
             if (input_rate, output_rate) == (self._input_rate, self._output_rate):
                 return
+            previous_rate = self._input_rate
             self._input_rate, self._output_rate = input_rate, output_rate
-            for peer in self._peers.values():
-                peer.tracks.clear()
+            for peer in self._audio_peers():
+                if input_rate != previous_rate:
+                    for track in peer.tracks.values():
+                        track.samples = _samples(LinearResampler(previous_rate, input_rate).feed(_pcm(track.samples)))
+                        track.converter = LinearResampler(peer.rate, input_rate)
                 peer.converter = LinearResampler(output_rate, peer.rate)
             self.flush()
 
@@ -489,8 +539,9 @@ class LiveCallHub(cp.CallHub):
                 return
             self._closed = True
             self._grants.clear()
-            for peer in self._peers.values():
-                peer.tracks.clear()
+            for peer in self._audio_peers():
+                self._discard_tracks(peer, "call_closed")
+            self._draining_peers.clear()
             self.flush()
             if self._state.get("state") != cp.STATE_CLOSED:  # the driver's own closed state (and words) stands
                 self.send_state(cp.STATE_CLOSED, reason, detail=detail, action=action)

@@ -162,7 +162,7 @@ def handle_chat_direct(
     _handle_chat_direct_locked(
         chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
 
 
@@ -191,7 +191,7 @@ def _handle_chat_direct_locked(
     _run_chat_task(
         None, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
 
 
@@ -253,7 +253,7 @@ def _run_chat_task(
     admitted = _admit_chat_task(
         agent, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
     if admitted is not None:
         _execute_chat_task(admitted)
@@ -556,6 +556,7 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
         ok = True
     except Exception as e:
         from supervisor.direct_pause import recover_direct_pause
+        _close_failed_call(admitted, e)
         ok = recover_direct_pause(task)
         if not ok:
             _report_direct_chat_error(admitted, e)
@@ -564,11 +565,8 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
     return ok
 
 
-def _report_direct_chat_error(admitted: Dict[str, Any], e: BaseException) -> None:
-    """Record a direct-turn failure and conclude the turn in the chat."""
-    import traceback
-    task, chat_id, kind = admitted["task"], admitted["chat_id"], admitted["kind"]
-    client_msg_id, task_metadata = admitted["client_msg_id"], admitted.get("task_metadata")
+def _close_failed_call(admitted: Dict[str, Any], e: BaseException) -> None:
+    """Notify the admitted call independently of result-store recovery."""
     if admitted.get("realtime_turn") is not None:
         from ouroboros.call_peers import close_hub
         from ouroboros.live_conversation import LiveConversationTurn
@@ -582,6 +580,14 @@ def _report_direct_chat_error(admitted: Dict[str, Any], e: BaseException) -> Non
             close_hub(turn.spec.call_id, "store_busy" if busy else "call_start_failed",
                       detail=("The local store is busy. Please try the call again." if busy else
                               "The call could not start. Please try again."))
+
+
+def _report_direct_chat_error(admitted: Dict[str, Any], e: BaseException) -> None:
+    """Record a direct-turn failure and conclude the turn in the chat."""
+    import traceback
+    task, chat_id, kind = admitted["task"], admitted["chat_id"], admitted["kind"]
+    client_msg_id, task_metadata = admitted["client_msg_id"], admitted.get("task_metadata")
+    _close_failed_call(admitted, e)
     err_msg = f"⚠️ Error: {type(e).__name__}: {e}"
     append_jsonl(
         _pool().DRIVE_ROOT / "logs" / "supervisor.jsonl",

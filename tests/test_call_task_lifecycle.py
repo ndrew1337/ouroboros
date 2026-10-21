@@ -79,3 +79,38 @@ def test_pre_run_failure_closes_only_its_admitted_call(direct_call, monkeypatch,
         assert closed["reason"] == expected and closed["detail"]
         assert "synthetic" not in closed["detail"]
     assert bool(world.logs) is (case != "success")
+
+
+@pytest.mark.parametrize('failure', ['', 'project_source_unknown', 'store_busy'])
+def test_pre_live_failure_closes_before_busy_result_recovery(direct_call, monkeypatch, failure):
+    from ouroboros import budget_pause
+    from ouroboros.call_peers import get_hub
+    from ouroboros.store import StoreBusy
+    from supervisor import direct_pause, worker_chat_lane
+
+    world, retained, recovery_closed = direct_call, [], []
+    def run(task):
+        if failure == 'store_busy':
+            raise StoreBusy('synthetic store contention')
+        if failure:
+            raise ValueError(failure)
+        return []
+    admitted = worker_chat_lane._admit_chat_task(SimpleNamespace(handle_task=run), 1, 'Opening',
+        task_metadata={'execution_transport': world.turn.request}, realtime_turn=world.turn)
+    assert admitted is not None
+    def busy(*args):
+        recovery_closed.append(world.hub.closed)
+        raise StoreBusy('synthetic result store contention')
+    monkeypatch.setattr(budget_pause, 'budget_pause_row', busy)
+    monkeypatch.setattr(direct_pause, 'retain_direct_hold', lambda task, **kw: retained.append((task, kw)))
+    assert worker_chat_lane._execute_chat_task(admitted)
+    if failure:
+        assert recovery_closed == [True], 'call closure waited for result recovery'
+        assert retained == [(admitted['task'], {'unsaved': False})]
+        assert world.hub.closed and get_hub(world.turn.spec.call_id) is None
+        assert world.hub._state['reason'] == ('store_busy' if failure == 'store_busy' else 'call_start_failed')
+        assert world.hub._state['detail']
+    else:
+        assert not recovery_closed and not retained
+        assert not world.hub.closed and get_hub(world.turn.spec.call_id) is world.hub
+    assert not world.other.closed
