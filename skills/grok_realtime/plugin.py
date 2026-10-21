@@ -114,10 +114,11 @@ class GrokSession(JsonSession):
         while messages and messages[0]['role'] == 'system':
             system.extend(system_parts(messages.pop(0)['content']))
         self.tools = tuple(json.loads(selected.tools_json))
-        if any(message['role'] == 'system' for message in messages):
-            # xAI has no system-role conversation item. Keep the complete
-            # ordered role archive in instructions instead of silently coercing
-            # a later system row to user or dropping it.
+        if any(message['role'] == 'system' or message.get('tool_calls') for message in messages):
+            # xAI has no system-role item and its observed replay ACK empties
+            # function arguments (operator probe R3, 2026-10-21). Carry the
+            # complete ordered history in instructions, preserving roles and
+            # tool arguments/results without reissuing completed calls.
             for message in messages:
                 if message['role'] == 'system':
                     system_parts(message.get('content', ''))

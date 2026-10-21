@@ -20,6 +20,8 @@ not a fit target. This package never selects or cuts memory. Host facts keep the
 `Respond` opens the greeting only after setup acknowledgements. Call instructions
 follow host system text; language tags add a recognition sentence, not a session
 field. Silent tool outputs do not request another response.
+Selected history containing tool calls is carried as ordered, quoted JSON in
+instructions, preserving arguments and results without reissuing those calls.
 
 The provider reports modality usage when present, final response status, and
 cumulative connected seconds. Idle samples and the closing tail reach the host
