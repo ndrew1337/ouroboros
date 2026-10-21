@@ -1141,6 +1141,7 @@ def _capture_context_core(
             heading = "## Available subagents\n\n"
             rows = [f"- {row.get('subagent_id', '?')}: {row.get('route_class', '?')}, "
                     f"effort {row.get('effort', '?')}" + (", reviews" if row.get("review_eligible") else "")
+                    + ("\n  recommended_use: " + row["recommended_use"] if row.get("recommended_use") else "")
                     for row in subagent_catalog.get("rows", ())]
             semi_stable_parts.append(HostSection("subagents",
                 heading + json.dumps(subagent_catalog, ensure_ascii=False, indent=1), heading + "\n".join(rows)))
