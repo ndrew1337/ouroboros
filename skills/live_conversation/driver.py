@@ -139,6 +139,8 @@ class _Call:
         self.host, self.hub = host, host.hub
         self.tool_queue, self.rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
         self.connected = asyncio.Event()
+        self.tool_refit = asyncio.Event()
+        self.answer_after_refit = False
         self.session = self.last_session = None
         self.played, self.audio_ms, self.pending_spoken = {}, {}, {}
         self.interrupted, self.started_responses, self.active_responses = set(), set(), set()
@@ -178,6 +180,13 @@ class _Call:
             await self.host.check()
             if self.hub.closed or self.hub.ended_by_owner or self.hub.ended_by_ouroboros:
                 return
+            if self.tool_refit.is_set():
+                handle = ""
+                self.tool_refit.clear()
+                # The retired native tool obligation cannot hold this new
+                # interaction open. Unreceipted reservations remain host-owned.
+                self.active_responses.clear()
+                self.response_open = self.input_open = False
             if not handle:
                 self.host.state.pop("refit", None)
                 self.host.state.pop("resume_handle", None)
@@ -192,12 +201,23 @@ class _Call:
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
         resumed = replacing = False
-        children = [asyncio.create_task(action()) for action in (self.provider, self.peers, self.mailbox)]
+        peers = asyncio.create_task(self.peers())
+        children = [asyncio.create_task(self.provider()), peers, asyncio.create_task(self.mailbox())]
+        children.append(asyncio.create_task(self.tool_refit.wait()))
         try:
             done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
             for child in done:
                 await child
             await self.rows.join()
+            if self.tool_refit.is_set():
+                # Finish already-requested effects before fitting their rows.
+                # The withheld native result never participates in this wait.
+                await self.tool_queue.join()
+                if self.hub.ended_by_ouroboros:
+                    await peers  # a queued end_call still owns goodbye playback
+                    self.renewing = False
+                else:
+                    self.request_renewal()  # always a fresh fit, never a resume
             replacing = self.renewing
             resumed = replacing and self.resume
             return (self.host.state.get("resume_handle", "") if resumed else "") if self.renewing else None
@@ -306,7 +326,20 @@ class _Call:
             try:
                 await self.rows.join()
                 changes = await self.host.tool_batch(calls)
-                await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
+                if not self.tool_refit.is_set():
+                    await self.connected.wait()
+                if self.tool_refit.is_set() or self.host.renewal_due():
+                    if not self.hub.ended_by_ouroboros:
+                        # Results and execution receipts are already canonical.
+                        # Waiting for quiet would deadlock on the withheld result.
+                        self.answer_after_refit |= any(call["id"] not in changes.silent for call in calls)
+                        self.request_renewal()
+                        self.tool_refit.set()
+                        self.connected.clear()
+                    # A deliberate goodbye needs only playback, no further
+                    # native result or connection that could cut it short.
+                else:
+                    await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
                 if len(changes.silent) == len(calls) and not self.active_responses:
                     self.response_open = False
             finally:
@@ -334,12 +367,20 @@ class _Call:
                         or (event.kind == "caption" and data.get("final"))):
                     continue
                 if event.kind == "ready":
+                    if self.tool_refit.is_set():
+                        continue  # a late ready cannot release work to the retiring connection
                     self.input_rate, self.output_rate = data["input_rate"], data["output_rate"]
                     self.hub.set_engine_rates(self.input_rate, self.output_rate)
                     self.hub.send_state(cp.STATE_LIVE)
                     if not self.host.state.get("greeted"):
                         self.host.state["greeted"] = True
                         await self.session.send(Respond(self.host.opening))
+                    if self.answer_after_refit:
+                        self.answer_after_refit = False
+                        self.response_open = True
+                        await self.session.send(Respond("[Host fact; not owner words]\n"
+                            "The completed tool results are in the fitted history. Continue from those results; "
+                            "do not repeat the completed effects."))
                     self.connected.set()
                 elif event.kind == "audio":
                     if data["rate"] != self.output_rate:
