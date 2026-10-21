@@ -12,7 +12,7 @@ from tests.test_live_conversation import ROOT, VoiceWire, host_world as host_wor
 
 
 def host_events(host):
-    return [json.loads(row['raw']) for line in host.wire_path.read_text().splitlines()
+    return [json.loads(row['raw']) for line in host.wire_path.read_text(encoding="utf-8").splitlines()
             if (row := json.loads(line))['direction'] == 'host']
 
 

@@ -62,7 +62,7 @@ def admit_run(host, monkeypatch, ending='finished'):
 def audio_events(host):
     if not host.wire_path.exists():
         return []
-    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text().splitlines()]
+    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text(encoding="utf-8").splitlines()]
     return [event for event in events if event.get('type') == 'call.input_audio']
 
 

@@ -342,7 +342,7 @@ def test_retained_host_source_is_exact_immutable_and_readable(tmp_path, monkeypa
     changed = dataclasses.replace(section, full_text=section.full_text + "\nA new capture.")
     later = _host_facts(_plan(_core(root, [changed]), RESERVE + 800))[0]
     assert later["source_ref"]["path"] != ref["path"]
-    assert path.read_text() == section.full_text
+    assert path.read_text(encoding="utf-8") == section.full_text
 
 
 def test_failed_retention_keeps_the_whole_section(tmp_path, monkeypatch):

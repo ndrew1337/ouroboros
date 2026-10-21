@@ -21,7 +21,7 @@ def test_call_failure_preserves_sanitized_origin_and_stack(host_world, monkeypat
     monkeypatch.setitem(host.turn.feature, 'handler', failing_tool)
     sentence, metadata, trace = host.turn.run(host.ctx, host.messages, host.tools,
                                              task=host.task, initial_effort='')
-    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text().splitlines()]
+    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text(encoding="utf-8").splitlines()]
     ended = next(event for event in events if event.get('type') == 'call.ended')
     if unexpected:
         assert metadata['reason_code'] == 'call_failed'

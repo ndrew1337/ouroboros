@@ -147,7 +147,7 @@ def open_call_ui(ui, monkeypatch, *, width, scheme, engine="openai", enabled=Tru
             source = ROOT / "skills/live_conversation/ui" / relative
             assert source.is_relative_to(ROOT / "skills/live_conversation/ui") and source.is_file()
             route.fulfill(content_type="text/css" if source.suffix == ".css" else "text/javascript",
-                          body=source.read_text())
+                          body=source.read_text(encoding="utf-8"))
         elif path == "/api/extensions/live_conversation/config":
             ui["call_reads"].append(route.request.method)
             if route.request.method == 'POST':

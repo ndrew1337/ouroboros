@@ -133,7 +133,7 @@ def test_final_evidence_includes_input_discarded_by_close(host_world, monkeypatc
     hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), 24000)
     assert hub.receive_audio('owner', audio(hub, 0))
     host.turn.run(host.ctx, host.messages, host.tools, task=host.task, initial_effort='')
-    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text().splitlines()]
+    events = [json.loads(json.loads(line)['raw']) for line in host.wire_path.read_text(encoding="utf-8").splitlines()]
     [evidence] = [event for event in events if event.get('type') == 'call.input_audio']
     assert evidence['drop_causes'] == {'call_closed': {'samples': 137, 'ms': 137 * 1000 / 24000}}
     assert hub.closed

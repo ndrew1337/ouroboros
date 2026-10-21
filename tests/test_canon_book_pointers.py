@@ -30,7 +30,7 @@ def _assert_pointers(text):
 
 @pytest.mark.parametrize("path", ["BIBLE.md", "prompts/SYSTEM.md"])
 def test_canon_document_paths_and_named_book_sections_resolve(path):
-    _assert_pointers((ROOT / path).read_text())
+    _assert_pointers((ROOT / path).read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("pointer", [

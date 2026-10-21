@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _book(chapter):
-    return (ROOT / "docs/architecture" / chapter).read_text()
+    return (ROOT / "docs/architecture" / chapter).read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("fact,obsolete", [
@@ -31,7 +31,7 @@ def test_skill_lifecycle_facts_match_the_current_contract(fact, obsolete):
 def test_frozen_plugin_row_names_the_surface_and_host_mediated_permissions():
     text = _book("11-frozen-contracts-v1.md")
     row = next(line for line in text.splitlines() if line.startswith("| `PluginAPI`"))
-    module = ast.parse((ROOT / "ouroboros/contracts/plugin_api.py").read_text())
+    module = ast.parse((ROOT / "ouroboros/contracts/plugin_api.py").read_text(encoding="utf-8"))
     api = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PluginAPI")
     count = sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in api.body)
     assert count == 18 and f"{count}-method extension surface" in row
@@ -47,7 +47,7 @@ def test_host_relay_and_author_protocol_pointers_are_concrete():
     assert "durable" in relay and "logs/events.jsonl" in relay
     assert "author protocol" not in text
     assert "CREATING_SKILLS.md` `inject_chat`" in text
-    author = (ROOT / "docs/CREATING_SKILLS.md").read_text()
+    author = (ROOT / "docs/CREATING_SKILLS.md").read_text(encoding="utf-8")
     for heading in ("Presence continuation", "Reporting actual Presence delivery"):
         assert f'CREATING_SKILLS.md` “{heading}”' in text
         assert f"#### {heading}" in author

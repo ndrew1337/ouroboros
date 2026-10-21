@@ -11,7 +11,7 @@ def test_grok_window_uses_host_estimate_and_operator_probe_attribution(providers
     facts = providers["grok"].catalog.model().facts
     assert facts.conversation_window_tokens == 80_000 and facts.basis == "estimator"
     if surface == "skill":
-        text = (Path(__file__).resolve().parents[1] / "skills/grok_realtime/SKILL.md").read_text()
+        text = (Path(__file__).resolve().parents[1] / "skills/grok_realtime/SKILL.md").read_text(encoding="utf-8")
         assert f"{facts.conversation_window_tokens:,} tokens in Ouroboros's own estimate" in text
         assert "90,000 o200k tokens" not in text
     else:

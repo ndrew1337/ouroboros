@@ -134,7 +134,7 @@ def test_call_setup_copy_describes_default_on_skills_and_the_owner_flow(config_a
     api, _, _, _ = config_api
     intro = ' '.join(component['text'] for component in api.sections[0][1]['schema']['components']
                      if component['type'] == 'markdown')
-    skill = ' '.join((Path(__file__).resolve().parents[1] / 'skills/live_conversation/SKILL.md').read_text().split())
+    skill = ' '.join((Path(__file__).resolve().parents[1] / 'skills/live_conversation/SKILL.md').read_text(encoding="utf-8").split())
     for text in (intro, skill):
         assert 'on by default' in text
         assert 'turn on calls (beta)' in text.lower()

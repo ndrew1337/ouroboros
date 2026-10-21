@@ -12,7 +12,7 @@ def _contains(text, clause):
 
 def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
     clause = "when `owner_client` is absent I ask or hedge rather than assume a browser"
-    section = SYSTEM.read_text().split("## Environment and My Human", 1)[1].split("## Drift Detector", 1)[0]
+    section = SYSTEM.read_text(encoding="utf-8").split("## Environment and My Human", 1)[1].split("## Drift Detector", 1)[0]
     _contains(section, clause)
     with pytest.raises(AssertionError):
         _contains(" ".join(section.split()).replace(clause, ""), clause)
@@ -29,7 +29,7 @@ def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
     "generic offers that add nothing",
 ])
 def test_compression_keeps_the_approved_behavioral_qualifiers(clause):
-    text = " ".join(SYSTEM.read_text().split())
+    text = " ".join(SYSTEM.read_text(encoding="utf-8").split())
     _contains(text, clause)
     with pytest.raises(AssertionError):
         _contains(text.replace(clause, ""), clause)
