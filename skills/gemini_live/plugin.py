@@ -34,7 +34,8 @@ RESUMPTIONS = {}
 RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
                  'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
                  'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final',
-                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth')
+                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth', 'input_modalities')
+INPUT_MODALITIES = frozenset({'text', 'audio', 'image', 'video'})
 
 # Google's prebuilt voices with the one-word style its speech docs give each
 # (https://ai.google.dev/gemini-api/docs/speech-generation, read 2026-10-21).
@@ -81,21 +82,39 @@ def unique_tools(tools):
     return tuple(result.values())
 
 
-def normalize_usage(raw):
-    """Map only reported modalities; absent axes remain unknown, never zero."""
+def normalize_usage(raw, *, absent_inputs=()):
+    """Zero an omitted modality only with a complete split or unsent-input witness."""
     usage = {}
-    for field, direction in (('promptTokensDetails', 'input'), ('responseTokensDetails', 'output')):
-        for detail in raw.get(field) or ():
+    for field, direction, total_field in (('promptTokensDetails', 'input', 'promptTokenCount'),
+                                         ('responseTokensDetails', 'output', 'responseTokenCount')):
+        details = raw.get(field)
+        if not isinstance(details, list):
+            continue
+        modalities = INPUT_MODALITIES if direction == 'input' else {'text', 'audio'}
+        valid, summed = True, 0
+        for detail in details:
+            if not isinstance(detail, dict):
+                valid = False
+                continue
             key = f"{detail.get('modality', '').lower()}_{direction}_tokens"
             count = detail.get('tokenCount')
             if key in USAGE_AXES and type(count) is int and count >= 0:
                 usage[key] = usage.get(key, 0) + count
+                summed += count
+            else:
+                valid = False
+        total = raw.get(total_field)
+        complete = type(total) is int and total >= 0 and total == summed
+        if valid:
+            for modality in modalities:
+                if complete or (direction == 'input' and modality in absent_inputs):
+                    usage.setdefault(f'{modality}_{direction}_tokens', 0)
     for field, key in (('cachedContentTokenCount', 'cached_input_tokens'), ('thoughtsTokenCount', 'thinking_tokens')):
         count = raw.get(field)
         if type(count) is int and count >= 0:
             usage[key] = count
-    if 'cached_input_tokens' not in usage and raw.get('cacheTokensDetails'):
-        counts = [detail.get('tokenCount') for detail in raw['cacheTokensDetails']]
+    if 'cached_input_tokens' not in usage and isinstance(raw.get('cacheTokensDetails'), list):
+        counts = [detail.get('tokenCount') if isinstance(detail, dict) else None for detail in raw['cacheTokensDetails']]
         if all(type(count) is int and count >= 0 for count in counts):
             usage['cached_input_tokens'] = sum(counts)
     return usage
@@ -199,6 +218,11 @@ class GeminiSession(JsonSession):
         self.input_pending = self.input_final = self.input_boundary = False
         self.output_pending = self.output_final = False
         self.usage = {}
+        # Prompt usage includes retained turns, so keep this evidence until a
+        # fresh session. An unrecognized resume handle has unknown prior media.
+        self.input_modalities = set(INPUT_MODALITIES) if options.resume_handle else {'text'}
+        if len(self.events) > 1:
+            self.input_modalities.add('image')
         self.renewal_announced = False
         self.held_audio = self.audio_growth = 0
         self.interrupted = False
@@ -269,11 +293,16 @@ class GeminiSession(JsonSession):
             result = []
             if self.response and not self.response_complete and not self.resume_requested:
                 result.append(LiveEvent('response_done', {'response_id': self.response,
-                    'usage': normalize_usage(self.usage), 'raw_usage': dict(self.usage),
+                    'usage': self.normalized_usage(), 'raw_usage': dict(self.usage),
                     'status': 'incomplete', 'continues': False}))
                 self.response_complete = True
             return [*result, LiveEvent('closed', {'reason': 'transport_lost', 'resumable': self.resume_requested})]
         return await self.convert(event)
+
+    def normalized_usage(self):
+        usage = normalize_usage(self.usage, absent_inputs=INPUT_MODALITIES - self.input_modalities)
+        self.input_modalities.update(m for m in INPUT_MODALITIES if usage.get(f'{m}_input_tokens', 0) > 0)
+        return usage
 
     def retention_renewal(self, usage):
         """Port #1964's held-audio/drop rule; the host owns total-window growth."""
@@ -408,7 +437,7 @@ class GeminiSession(JsonSession):
                 self.response_complete = False
                 result.append(LiveEvent('response_started', {'response_id': self.response}))
             if self.response and not self.response_complete:
-                usage = normalize_usage(self.usage)
+                usage = self.normalized_usage()
                 self.last_done = {'response_id': self.response, 'usage': usage,
                     'raw_usage': dict(self.usage), 'status': 'interrupted' if self.interrupted else 'completed',
                     'continues': self.turn_busy}
@@ -461,9 +490,11 @@ class GeminiSession(JsonSession):
                 raise RealtimeSetupError('audio_format', 'Gemini expects PCM16 mono at 16000 Hz')
             # Continuous PCM includes silence. Only native VAD/transcription
             # can open an input boundary; sending a frame says nothing about it.
+            self.input_modalities.add('audio')
             await self.write({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
                 'data': base64.b64encode(command.pcm).decode()}}})
         elif isinstance(command, Video):
+            self.input_modalities.update(('image', 'video'))
             await self.write({'realtimeInput': {'video': {'mimeType': command.mime,
                 'data': base64.b64encode(command.data).decode()}}})
         elif isinstance(command, Interrupt):
