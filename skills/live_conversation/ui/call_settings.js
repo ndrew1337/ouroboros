@@ -46,7 +46,7 @@ export function callSettingsHtml(config) {
     const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} ${unit} per session, then it renews.`
         : 'The memory window for this selection is not known.';
     return `<div class="settings-section-copy">Calls use this room’s ordinary memory and tools. Changes apply to the next call.</div>
-        ${!catalog ? '<p class="settings-inline-note">The selected engine is not available. Enable an engine skill and grant its credential in Skills.</p>' : ''}
+        ${!catalog ? '<p class="settings-inline-note">The selected engine is not available. Choose another engine or check its status in Skills.</p>' : ''}
         <div class="form-grid two">${fields.map(spec => renderSafeField(spec, config, {fieldClass:'form-field'})).join('')}</div>
         ${notes.join('')}<p class="settings-inline-note" data-call-privacy>${esc(catalog?.privacy || '')}</p>
         <p class="settings-inline-note" data-call-memory>${esc(memory)} ${esc(model?.facts?.source || '')}</p>`;

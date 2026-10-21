@@ -127,3 +127,20 @@ def test_default_call_skills_install_without_credentials_and_leave_beta_off(tmp_
     assert api.sections[0][1]['title'] == 'Calls (beta)'
     assert api.feature['configure']().enabled is False
     assert plugin.configuration_view(api.feature['configure'](), [])['offered'] is False
+
+
+def test_call_setup_copy_describes_default_on_skills_and_the_owner_flow(config_api):
+    from pathlib import Path
+    api, _, _, _ = config_api
+    intro = ' '.join(component['text'] for component in api.sections[0][1]['schema']['components']
+                     if component['type'] == 'markdown')
+    skill = ' '.join((Path(__file__).resolve().parents[1] / 'skills/live_conversation/SKILL.md').read_text().split())
+    for text in (intro, skill):
+        assert 'on by default' in text
+        assert 'turn on calls (beta)' in text.lower()
+        assert 'choose an engine' in text.lower()
+        assert 'add its API key' in text
+        assert 'Enable this feature' not in text and 'Choose an enabled voice engine' not in text
+        assert 'grant that engine its credential' not in text
+    assert 'auto-grant' in skill and 'with it off' in skill
+    assert 'Calls are a beta, off by default' in skill

@@ -93,7 +93,8 @@ def register(api):
     api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir))
     api.register_route("config", settings, methods=["GET", "POST"])
     api.register_settings_section("conversation", title="Calls (beta)", schema={"components": [
-        {"type": "markdown", "text": "Choose an enabled voice engine. Calls use this room's ordinary memory and tools."},
+        {"type": "markdown", "text": "The call skills are on by default. To talk, turn on Calls (beta), choose an engine "
+         "and add its API key in Settings → Accounts."},
         {"type": "form", "route": "config", "method": "POST", "fields": [
             {"name": "enabled", "type": "checkbox", "label": "Calls (beta)", "default": False},
             {"name": "provider", "type": "select", "label": "Engine", "default": DEFAULTS["provider"], "options": []},
