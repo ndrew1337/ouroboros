@@ -96,7 +96,7 @@ def session_candidate(host, factory, options):
     from ouroboros.capability_evidence import is_known, resolve_main_token_density
     from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
     from ouroboros.llm_attempt import main_context_fit_refusal
-    from ouroboros.loop_model_call import _physical_context_for_fit
+    from ouroboros.loop_model_call import _main_context_profile, _physical_context_for_fit
     from ouroboros.usage_accounting import AttemptRequest
 
     plan, facts = host.plan, host.model.facts
@@ -122,7 +122,7 @@ def session_candidate(host, factory, options):
             current_messages=rows, refused_tokens=deficit)
         current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
-        fit = measure_main_fit(plan, rows, host.schemas, profile="owner_" + plan.initial_mode,
+        fit = measure_main_fit(plan, rows, host.schemas, profile=_main_context_profile(plan, plan.initial_mode),
             rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
         selected = input_from_context_plan(plan, model=host.turn.native_model, selected_tools=host.schemas,
             output_allowance_tokens=fit.measurement.reply_allowance_tokens, messages=current)
@@ -162,6 +162,14 @@ def session_candidate(host, factory, options):
             return session, request, {"fit": asdict(fit), "route_facts": asdict(facts),
                 "input_sha256": selected.sha256, "wire_sha256": sha256(wire),
                 "units": facts.basis}
+        if known and plan.initial_mode == "max":
+            # The ordinary pre-send rung after an actual Max overflow. Once
+            # Low is selected the same physical floor can continue to Nano.
+            plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
+                output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode="max",
+                current_messages=rows, select_mode="low")
+            previous, deficit = None, 0
+            continue
         if previous is not None and measured >= previous:
             raise RealtimeSetupError("context_capacity", "This room's context and working reserve do not fit this engine's window.")
         previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)

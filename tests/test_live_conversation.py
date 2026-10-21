@@ -164,7 +164,7 @@ class FakeSession:
 
 
 @pytest.fixture
-def host_world(tmp_path, monkeypatch, provider_catalog_offline):
+def host_world(tmp_path, monkeypatch, provider_catalog_offline, request):
     from ouroboros import config, context, extension_registry_state as registry
     from ouroboros.contracts.live_conversation import LiveConfig, CallTool
     from ouroboros.contracts.realtime import CatalogModel, ProviderCatalog, RouteFacts, RealtimeRoute
@@ -180,9 +180,14 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline):
     from supervisor import message_bus
 
     env, memory, rooms = world(tmp_path / 'world')
+    owner_mode, window = getattr(request, 'param', ('nano', 200000))
+    if hasattr(request, 'param'):
+        for relative in ('BIBLE.md', 'prompts/SYSTEM.md'):
+            shutil.copyfile(ROOT / relative, env.repo_dir / relative)
+        shutil.copytree(ROOT / 'docs', env.repo_dir / 'docs', dirs_exist_ok=True)
     monkeypatch.setattr(config, 'DATA_DIR', env.drive_root)
     monkeypatch.setenv('OUROBOROS_DATA_DIR', str(env.drive_root))
-    monkeypatch.setattr(context, 'get_context_mode', lambda: 'nano')
+    monkeypatch.setattr(context, 'get_context_mode', lambda: owner_mode)
     monkeypatch.setattr(message_bus, 'DATA_DIR', env.drive_root)
     monkeypatch.setattr(message_bus, '_BRIDGE', message_bus.LocalChatBridge())
     settings = {'TEST_CREDENTIAL': 'test-credential'}
@@ -197,7 +202,7 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline):
     feature = dict(skill='fixture', key='fixture:call', extension_generation='generation',
                    content_hash='fixture-content', configure=lambda: live_config, handler=handler, call_tools=(call_tool,))
     catalog = ProviderCatalog('Fixture engine', (CatalogModel('voice-test', 'Voice test',
-        RouteFacts(200000, 250000, 10000, 'provider', 'fixture', '2026-10-21'), default=True, vision=True),),
+        RouteFacts(window, 250000, 10000, 'provider', 'fixture', '2026-10-21'), default=True, vision=True),),
         ('TEST_CREDENTIAL',))
     sessions = []
     def factory(*args, **kw):
@@ -254,6 +259,44 @@ def test_typed_port_default_model_offer_and_unknown_model(host_world):
     state.settings['TEST_CREDENTIAL'] = 'test-credential'
     with pytest.raises(RealtimeSetupError, match='model_unavailable'):
         LiveConversationTurn(state.feature, replace(state.config, model='unknown'), host.turn.spec, publish=lambda _: None)
+
+
+@pytest.mark.parametrize('host_world', [(mode, window) for mode in ('max', 'low', 'nano')
+                                      for window in (92000, 500000)], indirect=True)
+def test_real_books_call_uses_ordinary_owner_mode_and_window_ladder(host_world):
+    from ouroboros.context_fit import estimate_context_prompt_tokens
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.loop_model_call import _main_context_profile
+
+    host = host_world.host
+    original = host.plan
+    facts = host.model.facts
+    options = LiveOptions(instructions='Speak naturally and use ordinary tools.')
+    rows = [*host.messages, {'role': 'system', 'content': options.instructions}]
+    args = dict(window_tokens=facts.conversation_window_tokens, known_window=True, ratio=1.0,
+                output_reserve=original.output_reserve_tokens, tool_schemas=host.schemas,
+                current_messages=rows)
+    ordinary = original.reproject_for_route(**args, start_mode=original.initial_mode)
+    projected = ordinary.reproject_transcript(host.messages, ordinary.initial_mode)
+    if (ordinary.initial_mode == 'max'
+            and estimate_context_prompt_tokens(projected, host.schemas) + facts.working_reserve_tokens > facts.conversation_window_tokens):
+        projected = [*projected, {'role': 'system', 'content': options.instructions}]
+        ordinary = ordinary.reproject_for_route(**{**args, 'current_messages': projected},
+                                                start_mode='max', select_mode='low')
+        ordinary = ordinary.reproject_for_route(**{**args, 'current_messages': ordinary.reproject_transcript(projected, 'low')},
+                                                start_mode='low')
+    expected = ordinary.reproject_transcript(host.messages, ordinary.initial_mode)[0]
+
+    async def consume(session):
+        assert session.opened
+        assert json.loads(session.selected.messages_json)[0] == expected
+        assert session.selected.mode == ordinary.initial_mode
+        assert host._physical_context.profile == _main_context_profile(ordinary, ordinary.initial_mode)
+    asyncio.run(host.session(consume, options))
+    assert host_world.sessions[-1].closed
+    assert host.plan.preferred_mode == original.preferred_mode
+    if facts.conversation_window_tokens == 500000:
+        assert host.plan.initial_mode == original.preferred_mode
 
 
 def test_every_session_refits_current_canonical_rows_and_options(host_world, monkeypatch):
