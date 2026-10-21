@@ -17,10 +17,16 @@ export function callSettingsHtml(config) {
     const catalogs = config.catalogs || [];
     const catalog = catalogs.find(row => row.id === config.provider);
     const model = catalog?.models.find(row => config.model ? row.id === config.model : row.default);
+    if (config.thinking && model?.thinking_levels?.length && !model.thinking_levels.includes(config.thinking)) {
+        config = {...config, thinking:model.thinking_levels[0]};
+    }
     const fields = [field('enabled', 'Calls (beta)', 'checkbox'),
         select('provider', 'Engine', catalogs, config.provider),
         select('model', 'Model', [{id:'',label:"Engine’s default model"}, ...(catalog?.models || [])], config.model),
         select('voice', 'Voice', [{id:'',label:"Engine’s default voice"}, ...(model?.voices || [])], config.voice)];
+    if (catalog?.id === 'gemini_live:gemini') {
+        fields[1].help = 'Google does not offer Gemini Live in Russia or Belarus.';
+    }
     const knobs = {
         pause: field('pause', 'Pause before answering', 'select', ['short','normal','long']),
         interruptions: field('interruptions', 'Speaking interrupts Ouroboros', 'checkbox'),
@@ -30,14 +36,14 @@ export function callSettingsHtml(config) {
     const notes = [];
     for (const [name, spec] of Object.entries(knobs)) {
         if (model?.honours?.includes(name)) fields.push(spec);
-        else {
-            const note = Object.fromEntries(model?.notes || [])[name];
-            if (note) notes.push(`<div class="settings-inline-note" data-call-knob-note="${name}">${esc(note)}</div>`);
-        }
+        const note = Object.fromEntries(model?.notes || [])[name];
+        if (note) notes.push(`<div class="settings-inline-note" data-call-knob-note="${name}">${esc(note)}</div>`);
     }
     fields.push(field('instructions', 'Instructions for calls', 'textarea', undefined, 'Applies to the next call.'));
     const window = model?.facts?.conversation_window_tokens;
-    const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} tokens per session, then it renews.`
+    const unit = model?.facts?.basis === 'estimator' ? 'tokens by Ouroboros’s own estimate'
+        : model?.facts?.basis === 'provider' ? 'provider tokens' : 'tokens';
+    const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} ${unit} per session, then it renews.`
         : 'The memory window for this selection is not known.';
     return `<div class="settings-section-copy">Calls use this room’s ordinary memory and tools. Changes apply to the next call.</div>
         ${!catalog ? '<p class="settings-inline-note">The selected engine is not available. Enable an engine skill and grant its credential in Skills.</p>' : ''}
@@ -61,7 +67,10 @@ export function mountCallSettings(form, { skill, env = globalThis, read = () => 
         if (!draft || !['provider', 'model'].includes(event.target.name)) return;
         Object.assign(draft, collectSafeFieldValues(form, CONFIG_FIELDS));
         if (event.target.name === 'provider') draft.model = '';
-        draft.voice = ''; draft.thinking = '';
+        draft.voice = '';
+        const catalog = draft.catalogs?.find(row => row.id === draft.provider);
+        const model = catalog?.models.find(row => draft.model ? row.id === draft.model : row.default);
+        draft.thinking = model?.thinking_levels?.[0] || '';
         paint();
     };
     form.addEventListener('change', changed);

@@ -37,3 +37,33 @@ test('an unavailable selected engine is named rather than silently replaced', ()
     assert.match(html, /not available/);
     assert.match(html, /value="missing:voice" selected/);
 });
+
+test('the Gemini engine choice carries its regional availability note only for Gemini', () => {
+    const note = /Google does not offer Gemini Live in Russia or Belarus\./;
+    const gemini = { ...catalog, id:'gemini_live:gemini', label:'Gemini' };
+    assert.match(callSettingsHtml({provider:gemini.id, catalogs:[gemini,catalog]}), note);
+    assert.doesNotMatch(callSettingsHtml({provider:catalog.id, catalogs:[gemini,catalog]}), note);
+});
+
+test('memory disclosures keep the catalog window unit and measurement source', () => {
+    const render = basis => callSettingsHtml({provider:catalog.id, catalogs:[{...catalog, models:[{
+        ...catalog.models[0], facts:{conversation_window_tokens:80000, basis, source:'Measured route.'},
+    }]}]});
+    assert.match(render('estimator'), /80,000 tokens by Ouroboros(?:’|&#39;)s own estimate per session, then it renews\./);
+    assert.match(render('estimator'), /Measured route\./);
+    assert.doesNotMatch(render('estimator'), /provider tokens/);
+    assert.match(render('provider'), /80,000 provider tokens per session, then it renews\./);
+    assert.doesNotMatch(render('provider'), /own estimate/);
+    assert.match(callSettingsHtml({provider:'missing',catalogs:[]}), /memory window for this selection is not known/);
+});
+
+test('thinking shows the lowest catalog fallback and labels a deliberate engine default with its note', () => {
+    const thinking = {...catalog.models[1], default:true, notes:[['thinking', 'The engine chooses its effort for a blank setting.']]};
+    const config = {provider:catalog.id, catalogs:[{...catalog,models:[thinking]}]};
+    assert.match(callSettingsHtml({...config, thinking:'obsolete'}), /value="small" selected/);
+    const blank = callSettingsHtml({...config, thinking:''});
+    assert.match(blank, /value="" selected>Engine’s default<\/option>/);
+    assert.match(blank, /data-call-knob-note="thinking">The engine chooses its effort for a blank setting\./);
+    assert.match(callSettingsHtml({...config, thinking:'large'}), /value="large" selected/);
+    assert.doesNotMatch(callSettingsHtml({provider:catalog.id,catalogs:[catalog]}), /name="thinking"/);
+});

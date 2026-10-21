@@ -66,7 +66,6 @@ test('each ending says what happened and offers its one next step', () => {
     const show = (view) => { const p = callPresentation(view); return [p.title, p.actions.map(a => a.label), p.tone]; };
     assert.deepEqual(show(ended('owner_bye')), ['Call ended', [], '']);
     assert.deepEqual(show(ended('owner_stop')), ['Call ended', [], '']);
-    assert.deepEqual(show(ended('max_minutes')), ['The call reached its time limit', [], '']);
     assert.deepEqual(show(ended('peers_left')), ['Everyone left the call', [], '']);
     assert.deepEqual(show(ended('budget_exceeded')), ['The spending limit is reached', ['Open Settings'], 'error']);
     for (const code of ['missing_credential', 'missing_credential_google'])
@@ -111,8 +110,8 @@ test('a reasonless or unknown ending still shows the capsule: the call ended, an
         assert.deepEqual([p.mode, p.title, p.sub, p.small, p.actions], ['sheet', 'The call ended', 'The room has its transcript', '', []]);
     }
     const unknown = callPresentation(ended('a_code_from_the_future'));
-    assert.deepEqual([unknown.mode, unknown.title, unknown.small], ['sheet', 'The call ended', 'a_code_from_the_future']);
-    // Only an unknown code reaches the owner raw, in small print; known codes are words.
+    assert.deepEqual([unknown.mode, unknown.title, unknown.small], ['sheet', 'The call ended', '']);
+    // Ending codes stay internal; the owner sees words.
     for (const code of ['owner_bye', 'max_minutes', 'peers_left', 'budget_exceeded', 'missing_credential', 'authentication',
         'rate_limit', 'provider_closed', 'engine_unavailable', 'reconnect_failed',
         'preparation_failed', 'call_not_started', 'invalid_request', 'protocol', 'backpressure', 'provider_error',
@@ -609,4 +608,75 @@ test('credential connect refusals offer the same no-key sheet and Settings actio
         assert.equal(refused.actions[0].kind, 'settings');
         assert.equal(callPresentation({ state, code: 'provider_error' }).actions[0].kind, 'retry');
     }
+});
+
+test('shared-limit endings use the same words and action for both host codes', () => {
+    for (const state of ['failed', 'closed']) {
+        const budget = callPresentation({state, code:'budget_exhausted'});
+        assert.deepEqual(budget, callPresentation({state, code:'budget_exceeded'}));
+        assert.equal(budget.title, 'The spending limit is reached');
+        assert.equal(budget.actions[0].kind, 'settings');
+        assert.equal(budget.actions[0].tab, 'behavior');
+        assert.equal(callPresentation({state, code:'owner_bye'}).actions.length, 0);
+    }
+});
+
+test('unknown ending codes show the server sentence and never the raw code', () => {
+    for (const code of ['context_capacity', 'future_code', 'call_model_missing']) {
+        const sentence = 'This room cannot fit the selected voice model.';
+        const shown = callPresentation(ended(code, {detail:sentence, action:'settings'}));
+        assert.equal(shown.title, sentence);
+        assert.equal(shown.small, '');
+        assert.equal(shown.actions[0].kind, 'settings');
+        const bare = callPresentation(ended(code));
+        assert.equal(bare.title, 'The call ended');
+        assert.equal(bare.small, '');
+    }
+    assert.equal(callPresentation(ended('owner_bye', {detail:'Provider detail'})).title, 'Call ended');
+});
+
+test('the real admission opening echo folds into one call card live and after reload', () => {
+    const { feed, doc, cards, card, lines, row } = feedFixture();
+    // supervisor/message_ingress.py's /api/call/open echo has no task_id.
+    const echo = { type: 'chat', role: 'system', content: 'The owner has just opened this call and can hear you now.',
+        client_message_id: 'call:c1:open', system_type: 'call_open', chat_id: 1, source: 'web',
+        text_placeholder: true, ingress_accepted: true };
+    const opening = row(echo.role, echo.content, { clientMessageId: echo.client_message_id, systemType: echo.system_type });
+    const ordinary = row('system', 'Unrelated notice', { clientMessageId: 'web:notice', systemType: 'notice' });
+    cards.scan();
+    assert.equal(opening.classList.contains('call-folded'), true);
+    assert.equal(ordinary.classList.contains('call-folded'), false);
+    assert.equal(card().dataset.callCard, 'live');
+    assert.deepEqual(lines(), []); // opening metadata is not a spoken utterance
+    const initial = card();
+    row('user', 'Hello', { clientMessageId: 'call:c1:owner-1', taskId: 'task-1' });
+    row('assistant', 'Welcome', { taskId: 'task-1', systemType: 'model_narration' });
+    cards.scan();
+    assert.equal(card(), initial);
+    assert.equal(feed.children.filter(n => n.className === 'call-card').length, 1);
+    assert.deepEqual(lines().map(([, text]) => text), ['YouHello', 'OuroborosWelcome']);
+    cards.destroy();
+    const reloaded = createCallCards({ feed, doc, live: () => '' });
+    assert.equal(opening.classList.contains('call-folded'), true);
+    assert.equal(card().dataset.callCard, 'ended');
+    assert.deepEqual(lines().map(([, text]) => text), ['YouHello', 'OuroborosWelcome']);
+    // Calls with only opening metadata remain independent; unrelated notices stay visible.
+    const another = row('system', echo.content, { clientMessageId: 'call:c2:open', systemType: 'call_open' });
+    reloaded.scan();
+    assert.equal(another.classList.contains('call-folded'), true);
+    assert.equal(feed.children.filter(n => n.className === 'call-card').length, 2);
+    assert.equal(ordinary.classList.contains('call-folded'), false);
+    reloaded.destroy();
+});
+
+test('obsolete time caps have no ending words or action; a deliberate goodbye names Ouroboros', () => {
+    for (const code of ['max_minutes', 'invalid_call_max_minutes']) {
+        const p = callPresentation(ended(code));
+        assert.equal(p.title, 'The call ended');
+        assert.deepEqual(p.actions, []);
+    }
+    const bye = callPresentation(ended('ouroboros_bye'));
+    assert.equal(bye.title, 'Ouroboros ended the call');
+    assert.equal(bye.tone, '');
+    assert.equal(callPresentation(ended('owner_bye')).title, 'Call ended');
 });

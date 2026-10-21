@@ -116,6 +116,7 @@ def test_port_greeting_options_usage_and_context():
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
+        assert not any(state[0] == cp.STATE_CLOSED for state in host.hub.states)
     asyncio.run(scenario())
 
 
@@ -267,11 +268,13 @@ def test_end_call_is_silent_and_waits_until_goodbye_audio_was_played(tmp_path):
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
             assert next(x for x in session.sent if isinstance(x, ToolOutputs)).silent == ('hangup',)
             assert host.hub.ended_by_ouroboros and not task.done()
+            assert not any(state[0] == cp.STATE_CLOSED for state in host.hub.states)
             host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':300}))
             await asyncio.sleep(.03)
             assert not task.done(), 'partial playback is not a completed goodbye'
             host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':1000}))
             await asyncio.wait_for(task, 2)
+            assert host.hub.states[-1] == (cp.STATE_CLOSED, 'ouroboros_bye')
         finally:
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
@@ -291,13 +294,13 @@ def test_options_only_forward_honoured_knobs(honoured):
 
 
 @pytest.mark.parametrize('levels', [('none', 'high'), ('minimal', 'low', 'medium', 'high', 'xhigh'), ('low', 'medium', 'high'), ()])
-@pytest.mark.parametrize('configured', ['none', 'low', 'high', 'xhigh', 'obsolete'])
+@pytest.mark.parametrize('configured', ['', 'none', 'low', 'high', 'xhigh', 'obsolete'])
 def test_thinking_requires_a_catalog_level(levels, configured):
     from skills.live_conversation.driver import session_options
     host = Host()
     host.model = replace(host.model, honours=frozenset({'thinking'}) if levels else frozenset(), thinking_levels=levels)
     host.config = replace(host.config, thinking=configured)
-    assert session_options(host).thinking == (configured if configured in levels else '')
+    assert session_options(host).thinking == (configured if configured in levels else levels[0] if levels else '')
 
 
 @pytest.mark.parametrize('silent', [(), ('call-id',)])
@@ -677,3 +680,114 @@ def test_final_teardown_saves_partial_captions_once(stop):
                                   'heard':False, 'played_ms':0, 'interrupted':False, 'completed':False}]
         assert host.usage == [('start', 'pending')], 'host teardown owns the unreceipted reservation'
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('source', ['mailbox', 'peer'])
+@pytest.mark.parametrize('crosses_window', [False, True])
+def test_context_additions_refit_before_delivery_when_the_window_is_full(source, crosses_window):
+    from ouroboros.contracts.live_conversation import ContextUpdate
+    async def scenario():
+        host = Host()
+        queued = []
+        async def mailbox():
+            rows, queued[:] = list(queued), []
+            if rows:
+                host.context.extend(rows)
+                host.due = crosses_window
+            return rows
+        async def observe(row):
+            host.context.append(row)
+            host.due = crosses_window
+        host.mailbox, host.observe_context = mailbox, observe
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='must-not-resume-a-refit')
+            first.renewal_ready = False
+            await until(lambda: bool(first.sent))
+            if source == 'mailbox': queued.append({'role':'user', 'content':'New room message'})
+            else: host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'context', 'text':'Observed context'}))
+            await until(lambda: bool(host.context))
+            await asyncio.sleep(.04)
+            additions = [x for x in first.sent if isinstance(x, ContextUpdate)]
+            if crosses_window:
+                assert additions == [], 'an over-window addition must be kept for the fresh fit'
+            else:
+                assert additions == [ContextUpdate(tuple(host.context))]
+            assert len(host.sessions) == 1, 'the native quiet boundary still owns replacement'
+            first.renewal_ready = True
+            if crosses_window:
+                await until(lambda: len(host.sessions) == 2)
+                assert host.options[1].resume_handle == ''
+                assert not any(isinstance(x, ContextUpdate) for x in first.sent)
+            else:
+                await asyncio.sleep(.05)
+                assert len(host.sessions) == 1
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('refused', [False, True])
+def test_response_refusal_drains_received_accounting_and_final_captions(refused):
+    async def scenario():
+        host = Host()
+        batches = []
+        def start(response):
+            host.usage.append(('start', response))
+            if refused:
+                raise RealtimeSetupError('budget_exhausted', 'The shared spending limit has been reached.')
+        async def tools(calls):
+            batches.extend(calls)
+            return Batch()
+        host.response_started, host.tool_batch = start, tools
+        task, session = await started(host)
+        try:
+            session.final_captions = lambda: [LiveEvent('caption', dict(speaker='owner', item_id='tail', text='Final tail', final=True))]
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: bool(session.sent))
+            receipt = dict(usage={'audio_output_tokens':17}, raw_usage={'test':17}, status='completed')
+            session.events.put_nowait([
+                LiveEvent('response_started', {'response_id':'r1'}),
+                LiveEvent('caption', dict(speaker='owner', item_id='heard', text='Already received', final=True)),
+                LiveEvent('audio', dict(item_id='answer', rate=24000, pcm=b'\0' * 480)),
+                LiveEvent('tool_call', dict(call_id='work', name='work', arguments='{}')),
+                LiveEvent('response_done', dict(response_id='r1', continues=False, **receipt)),
+                LiveEvent('caption', dict(speaker='ouroboros', item_id='answer', text='Final words', final=True)),
+            ])
+            if refused:
+                with pytest.raises(RealtimeSetupError, match='budget_exhausted'):
+                    await asyncio.wait_for(task, 2)
+            else:
+                await until(lambda: bool(batches))
+                host.hub.ended_by_owner = True
+                await asyncio.wait_for(task, 2)
+            assert host.usage == [('start', 'r1'), ('done', 'r1', receipt)]
+            assert {row['text'] for row in host.captions} == {'Already received', 'Final words', 'Final tail'}
+            if refused:
+                assert host.hub.audio == []
+                assert batches == []
+            else:
+                assert [item for _, item in host.hub.audio] == ['answer']
+                assert len(batches) == 1
+            assert not any(state == (cp.STATE_CLOSED, 'ouroboros_bye') for state in host.hub.states)
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('configured', ['', 'low', 'obsolete', 'none', 'high'])
+def test_grok_feature_options_put_the_lowest_default_on_the_wire(configured):
+    from ouroboros.contracts.realtime import RealtimeInput
+    from skills.grok_realtime.plugin import CATALOG, GrokSession
+    from skills.live_conversation.driver import session_options
+    host = Host()
+    host.model = CATALOG.models[0]
+    host.config = replace(host.config, thinking=configured, voice='')
+    selected = RealtimeInput(host.model.id, '[]', '[]', 256, 'nano', 'core', 'view')
+    def never_connect(*args, **kwargs):
+        raise AssertionError('This test only inspects the physical setup; no network is allowed')
+    session = GrokSession(selected, session_options(host), connect=never_connect, observe=lambda *args: None)
+    assert session.events[0]['session']['reasoning'] == {'effort': 'high' if configured == 'high' else 'none'}

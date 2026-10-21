@@ -119,8 +119,8 @@ def session_options(host, resume_handle=""):
     config, honours = host.config, host.model.honours
     languages = tuple(host.state.get("languages", ()))
     knobs = {key: getattr(config, key) for key in ("pause", "interruptions", "thinking", "search") if key in honours}
-    if knobs.get("thinking") not in host.model.thinking_levels:
-        knobs.pop("thinking", None)
+    if "thinking" in knobs and knobs["thinking"] not in host.model.thinking_levels:
+        knobs["thinking"] = host.model.thinking_levels[0]
     return LiveOptions(voice=config.voice, resume_handle=resume_handle,
         languages=languages if "languages" in honours else (),
         instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, languages_opening_sentence(languages), config.instructions))),
@@ -169,6 +169,8 @@ class _Call:
             finally:
                 writer.cancel()
                 await joined(asyncio.gather(writer, return_exceptions=True))
+        if self.hub.ended_by_ouroboros and not self.hub.ended_by_owner and not self.hub.closed:
+            self.hub.send_state(cp.STATE_CLOSED, "ouroboros_bye")
 
     async def connections(self):
         handle = ""
@@ -214,6 +216,16 @@ class _Call:
         # flight. Only the replacement's ready event releases its outputs.
         await self.connected.wait()
         await self.session.send(command)
+
+    async def context_update(self, rows):
+        # Mailbox and peer rows are already canonical on the host. Check the
+        # resulting fit before adding them to this connection; a refit includes
+        # them in its selected input instead.
+        await self.connected.wait()
+        if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
+            self.request_renewal()
+        else:
+            await self.session.send(ContextUpdate(tuple(rows)))
 
     def request_renewal(self, *, resuming=False, within=None):
         # A fresh fit wins over a requested resume while the transport is live.
@@ -315,8 +327,12 @@ class _Call:
 
     async def provider(self):
         while True:
+            refusal = None
             for event in await self.session.receive():
                 data = event.data
+                if refusal is not None and not (event.kind == "response_done"
+                        or (event.kind == "caption" and data.get("final"))):
+                    continue
                 if event.kind == "ready":
                     self.input_rate, self.output_rate = data["input_rate"], data["output_rate"]
                     self.hub.set_engine_rates(self.input_rate, self.output_rate)
@@ -349,7 +365,14 @@ class _Call:
                 elif event.kind == "response_started":
                     response = data["response_id"]
                     if response not in self.started_responses:
-                        self.host.response_started(response)
+                        try:
+                            self.host.response_started(response)
+                        except RealtimeSetupError as exc:
+                            # This received batch may already contain the bill
+                            # and final transcript. Keep those receipts while
+                            # admitting no more playback or tool work.
+                            refusal = exc
+                            continue
                         self.started_responses.add(response)
                     if response not in self.receipts:
                         self.active_responses.add(response)
@@ -382,6 +405,8 @@ class _Call:
                     self.renewing = self.resume = True
                     self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     return
+            if refusal is not None:
+                raise refusal
 
     async def peers(self):
         while True:
@@ -429,7 +454,7 @@ class _Call:
                 elif message["type"] == "context":
                     row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
                     await self.host.observe_context(row)
-                    await self.session.send(ContextUpdate((row,)))
+                    await self.context_update((row,))
             await asyncio.sleep(.01)
 
     async def mailbox(self):
@@ -437,5 +462,5 @@ class _Call:
             if not self.renewing:
                 mail = await self.host.mailbox()
                 if mail:
-                    await self.send(ContextUpdate(tuple(mail)))
+                    await self.context_update(mail)
             await asyncio.sleep(.25)
