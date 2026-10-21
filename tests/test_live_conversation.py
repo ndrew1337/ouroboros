@@ -180,11 +180,13 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline, request):
     from supervisor import message_bus
 
     env, memory, rooms = world(tmp_path / 'world')
-    owner_mode, window = getattr(request, 'param', ('nano', 200000))
+    owner_mode, window, basis = getattr(request, 'param', ('nano', 200000, 'provider'))
     if hasattr(request, 'param'):
         for relative in ('BIBLE.md', 'prompts/SYSTEM.md'):
             shutil.copyfile(ROOT / relative, env.repo_dir / relative)
         shutil.copytree(ROOT / 'docs', env.repo_dir / 'docs', dirs_exist_ok=True)
+        memory.identity_path().write_text(memory._default_identity())
+        memory.scratchpad_path().write_text(memory._default_scratchpad() + '\nCurrent project notes. ' * 180)
     monkeypatch.setattr(config, 'DATA_DIR', env.drive_root)
     monkeypatch.setenv('OUROBOROS_DATA_DIR', str(env.drive_root))
     monkeypatch.setattr(context, 'get_context_mode', lambda: owner_mode)
@@ -202,7 +204,7 @@ def host_world(tmp_path, monkeypatch, provider_catalog_offline, request):
     feature = dict(skill='fixture', key='fixture:call', extension_generation='generation',
                    content_hash='fixture-content', configure=lambda: live_config, handler=handler, call_tools=(call_tool,))
     catalog = ProviderCatalog('Fixture engine', (CatalogModel('voice-test', 'Voice test',
-        RouteFacts(window, 250000, 10000, 'provider', 'fixture', '2026-10-21'), default=True, vision=True),),
+        RouteFacts(window, 250000, 10000, basis, 'fixture', '2026-10-21'), default=True, vision=True),),
         ('TEST_CREDENTIAL',))
     sessions = []
     def factory(*args, **kw):
@@ -261,17 +263,21 @@ def test_typed_port_default_model_offer_and_unknown_model(host_world):
         LiveConversationTurn(state.feature, replace(state.config, model='unknown'), host.turn.spec, publish=lambda _: None)
 
 
-@pytest.mark.parametrize('host_world', [(mode, window) for mode in ('max', 'low', 'nano')
-                                      for window in (92000, 500000)], indirect=True)
+@pytest.mark.parametrize('host_world', [(mode, window, basis) for mode in ('max', 'low', 'nano')
+                                      for window, basis in ((80000, 'estimator'), (92000, 'provider'),
+                                                            (500000, 'provider'))], indirect=True)
 def test_real_books_call_uses_ordinary_owner_mode_and_window_ladder(host_world):
     from ouroboros.context_fit import estimate_context_prompt_tokens
     from ouroboros.contracts.live_conversation import LiveOptions
     from ouroboros.loop_model_call import _main_context_profile
+    from ouroboros.tool_policy import initial_tool_schemas
+    from skills.live_conversation.driver import CALL_INSTRUCTIONS, languages_opening_sentence
 
     host = host_world.host
     original = host.plan
     facts = host.model.facts
-    options = LiveOptions(instructions='Speak naturally and use ordinary tools.')
+    options = LiveOptions(instructions=CALL_INSTRUCTIONS + '\n' + languages_opening_sentence(('en-US',)),
+                          languages=('en-US',))
     rows = [*host.messages, {'role': 'system', 'content': options.instructions}]
     args = dict(window_tokens=facts.conversation_window_tokens, known_window=True, ratio=1.0,
                 output_reserve=original.output_reserve_tokens, tool_schemas=host.schemas,
@@ -286,10 +292,13 @@ def test_real_books_call_uses_ordinary_owner_mode_and_window_ladder(host_world):
         ordinary = ordinary.reproject_for_route(**{**args, 'current_messages': ordinary.reproject_transcript(projected, 'low')},
                                                 start_mode='low')
     expected = ordinary.reproject_transcript(host.messages, ordinary.initial_mode)[0]
+    expected_tools = initial_tool_schemas(host.tools, context_mode=ordinary.initial_mode)
+    expected_tools.extend(schema for schema in host.schemas if schema['function']['name'] in host.call_tools)
 
     async def consume(session):
         assert session.opened
         assert json.loads(session.selected.messages_json)[0] == expected
+        assert json.loads(session.selected.tools_json) == expected_tools
         assert session.selected.mode == ordinary.initial_mode
         assert host._physical_context.profile == _main_context_profile(ordinary, ordinary.initial_mode)
     asyncio.run(host.session(consume, options))

@@ -120,6 +120,13 @@ def session_candidate(host, factory, options):
         plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
             output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode=plan.initial_mode,
             current_messages=rows, refused_tokens=deficit)
+        if plan.initial_mode != host._schemas_mode:
+            # The ordinary ladder chose this mode. Rebind its starting tools,
+            # keeping explicit discovery, then fit the changed envelope once.
+            host._reselect_tools(plan.initial_mode)
+            rows = [*host.messages, *extra]
+            previous, deficit = None, 0
+            continue
         current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
         fit = measure_main_fit(plan, rows, host.schemas, profile=_main_context_profile(plan, plan.initial_mode),

@@ -208,6 +208,7 @@ class ConversationHost:
         if self.plan.model != turn.model or self.plan.provider != turn.route.accounting_provider:
             raise RealtimeSetupError("route", "call input must use the selected realtime route")
         self.schemas = initial_tool_schemas(tools, context_mode=self.plan.initial_mode)
+        self._schemas_mode = self.plan.initial_mode
         _reset_turn_state(ctx)
         self.schemas, _ = _setup_dynamic_tools(tools, self.schemas, messages, context_mode=self.plan.initial_mode)
         self.call_tools = {tool.name: tool for tool in turn.feature.get("call_tools", ())}
@@ -244,6 +245,21 @@ class ConversationHost:
         self._end_reason = None
         with _active_hosts_lock:
             _active_hosts.add(self)
+
+    def _reselect_tools(self, mode):
+        """Follow a lower fitted mode, retaining tools explicitly loaded this call."""
+        from ouroboros.loop import _setup_dynamic_tools
+        from ouroboros.tool_policy import initial_tool_schemas
+
+        enabled = set(self.ctx._actor_loaded_tool_names)
+        selected = initial_tool_schemas(self.tools, context_mode=mode)
+        names = {schema["function"]["name"] for schema in selected}
+        selected.extend(schema for schema in self.schemas
+                        if schema["function"]["name"] in (enabled | self.call_tools.keys()) - names)
+        self.schemas[:] = selected
+        _, rebound = _setup_dynamic_tools(self.tools, self.schemas, self.messages, context_mode=mode)
+        rebound.update(enabled)
+        self._schemas_mode = mode
 
     def checkpoint(self, boundary):
         from types import SimpleNamespace
