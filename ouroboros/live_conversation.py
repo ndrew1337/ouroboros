@@ -309,21 +309,50 @@ class ConversationHost:
 
     async def check(self):
         from ouroboros.live_usage import check_live_budget
+        from ouroboros.store import StoreBusy, acquisition_budget
         from ouroboros.usage_accounting import BudgetExceeded
 
-        if self._end_reason is not None:
-            raise RealtimeSetupError(*self._end_reason)
         waiter = self.ctx.model_wait_context
         if waiter is None:
             raise RealtimeSetupError("host_control", "call has no ordinary model-wait owner")
-        reason = await asyncio.to_thread(waiter.control_reason, strict_current=True)
-        if reason:
-            raise RealtimeSetupError(reason, "ordinary task control ended the call")
-        try:
-            await asyncio.to_thread(check_live_budget, engine=self.turn.route.accounting_provider,
-                                    model=self.turn.model, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root)
-        except BudgetExceeded as exc:
-            raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
+
+        def probe():
+            gap = None
+            try:
+                reason = waiter.control_reason(strict_current=True)
+                if reason:
+                    raise RealtimeSetupError(reason, "ordinary task control ended the call")
+            except StoreBusy as exc:
+                if exc.reason != "contention":
+                    raise
+                gap = exc
+            # Check money even when the control read has a transient gap. Neither
+            # unreadable authority admits an effect; the asynchronous owner waits.
+            with acquisition_budget(0):
+                check_live_budget(engine=self.turn.route.accounting_provider, model=self.turn.model,
+                                  task_id=self.ctx.task_id, drive_root=self.ctx.drive_root)
+            if gap is not None:
+                raise gap
+
+        while True:
+            if self._end_reason is not None:
+                raise RealtimeSetupError(*self._end_reason)
+            reading = asyncio.create_task(asyncio.to_thread(probe))
+            try:
+                await asyncio.shield(reading)
+                return
+            except asyncio.CancelledError:
+                try:
+                    await joined(reading)
+                except Exception:
+                    pass  # cancellation still owns this completed read, never a new effect
+                raise
+            except StoreBusy as exc:
+                if exc.reason != "contention":
+                    raise
+                await asyncio.sleep(.05)
+            except BudgetExceeded as exc:
+                raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
 
 
     async def watch_controls(self):
