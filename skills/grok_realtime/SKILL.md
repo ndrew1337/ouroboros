@@ -13,9 +13,10 @@ env_from_settings: [XAI_API_KEY]
 ---
 
 Registers `grok_realtime:grok` for ordinary host-selected context and tools.
-Grok Voice 3.0 has a measured conversation window of 90,000 o200k tokens
-(2026-10-21); the 231,828-token accepted input is separate evidence, not a fit
-target. This package never selects or cuts memory. Host facts keep their roles;
+Grok Voice 3.0 declares a conversation window of
+80,000 tokens in Ouroboros's own estimate (characters / 4), based on operator
+probes on 2026-10-21. The 231,828 o200k-token accepted input is separate evidence,
+not a fit target. This package never selects or cuts memory. Host facts keep their roles;
 `Respond` opens the greeting only after setup acknowledgements. Call instructions
 follow host system text; language tags add a recognition sentence, not a session
 field. Silent tool outputs do not request another response.

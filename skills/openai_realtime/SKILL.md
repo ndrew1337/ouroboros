@@ -30,6 +30,8 @@ The native per-response limit encodes allowances up to 4096 directly; larger
 allowances use `"inf"` (the model maximum). An unknown model maximum stays unknown.
 Usage reports text/audio/image/cache input and text/audio output independently,
 with raw usage and completion status, including interrupted or failed responses.
+Reasoning stays in raw usage and is already included in text output, never charged
+again as separate thinking tokens. Video has zero usage; frames are billed as images.
 There is no diagnostic probe or per-connection reservation in this package.
 
 Renewal opens a fresh host-refitted session; there is no resumption. Native

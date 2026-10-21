@@ -124,16 +124,17 @@ def layout(selected):
 
 
 def _usage(response):
-    """Reported modality axes only; totals are not a witness of their split."""
+    """Reported axes plus unbilled video; totals do not witness a modality split."""
     raw = response.get("usage") or {}
     inputs, outputs = raw.get("input_token_details") or {}, raw.get("output_token_details") or {}
     values = {"text_input_tokens": inputs.get("text_tokens"),
               "audio_input_tokens": inputs.get("audio_tokens"),
               "image_input_tokens": inputs.get("image_tokens"),
+              "video_input_tokens": 0,  # Frames are billed as images, never video.
               "cached_input_tokens": inputs.get("cached_tokens"),
               "text_output_tokens": outputs.get("text_tokens"),
               "audio_output_tokens": outputs.get("audio_tokens"),
-              "thinking_tokens": outputs.get("reasoning_tokens")}
+              "thinking_tokens": 0}  # Reasoning is already billed inside text output; raw usage retains it.
     return {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
 
 

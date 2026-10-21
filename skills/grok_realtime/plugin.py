@@ -1,4 +1,4 @@
-"""xAI Voice is a separate wire consumer: cumulative captions and outer usage.
+"""xAI Voice is a separate wire consumer: native captions and outer usage.
 
 Protocol: https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech
 Read 2026-10-21; R6 observed outer response.done.usage is retained verbatim.
@@ -29,7 +29,7 @@ CATALOG = ProviderCatalog(
     models=(CatalogModel(
         'grok-voice-3.0', 'grok-voice-3.0 \u2014 xAI\u2019s voice model',
         RouteFacts(conversation_window_tokens=80_000, working_reserve_tokens=10_000, basis='estimator',
-                   source='measured spoken-retention bound of session.instructions (owner probes)',
+                   source='measured spoken-retention bound of session.instructions (operator probes 21.10)',
                    observed='2026-10-21'),
         default=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
         thinking_levels=('none', 'high'), honours=frozenset({'languages', 'thinking'}),
@@ -99,11 +99,11 @@ def item_rows(message):
 
 
 def item_ack(event):
-    # xAI observation 20 Oct 2026: added(completed) is the only item ACK.
+    # xAI acknowledges with added; a present status must still be completed.
     kind = event.get('type')
     return (kind in {'conversation.item.created', 'conversation.item.done'}
             or (kind == 'conversation.item.added'
-                and event.get('item', {}).get('status') == 'completed'))
+                and event.get('item', {}).get('status', 'completed') == 'completed'))
 
 
 class GrokSession(JsonSession):
@@ -157,6 +157,7 @@ class GrokSession(JsonSession):
         self.context_lock = asyncio.Lock()
         self.response_requested = self.want_response = self.speech_active = self.vad_response_pending = False
         self.waiting_tools = set()
+        self.tool_calls = set()
         self.ready = False
         self.opened_at = None
         self.connected_seconds = 0.0
@@ -271,8 +272,18 @@ class GrokSession(JsonSession):
                 self.want_response, self.response_requested = False, True
                 await self.write({'type': 'response.create'})
 
+    def tool_call(self, call):
+        call_id = call['call_id']
+        if call_id in self.tool_calls:
+            return []
+        self.tool_calls.add(call_id)
+        self.waiting_tools.add(call_id)
+        return [LiveEvent('tool_call', {'call_id': call_id, 'name': call['name'], 'arguments': call['arguments']})]
+
     def convert(self, event):
         kind, item = event.get('type'), event.get('item_id', '')
+        if kind == 'response.function_call_arguments.done':
+            return self.tool_call(event)
         if kind == 'session.updated' and self.session_update is not None:
             actual = event.get('session', {})
             check_session_echo(self.session_update, actual)
@@ -308,11 +319,11 @@ class GrokSession(JsonSession):
                     'response.audio_transcript.done', 'response.output_audio_transcript.done',
                     'conversation.item.input_audio_transcription.completed'}:
             owner = kind.startswith('conversation.')
-            # R6: repeated "completed" events can still be in_progress, and
-            # cumulative text can revise earlier words. Carry replacement end-to-end.
+            # R6: owner "completed" events can still have in_progress status.
+            # Deltas append; only a full transcript replaces the earlier words.
             final = (event.get('status') == 'completed' if owner else kind.endswith('.done'))
             return [LiveEvent('caption', {'speaker': 'owner' if owner else 'ouroboros', 'item_id': item,
-                'text': event.get('transcript', event.get('delta', '')), 'final': final, 'replace': True})]
+                'text': event.get('transcript', event.get('delta', '')), 'final': final, 'replace': 'transcript' in event})]
         if kind == 'response.done':
             response = event.get('response', {})
             rid = response.get('id')
@@ -327,6 +338,7 @@ class GrokSession(JsonSession):
             inputs = {**(nested.get('input_token_details') or {}), **(outer.get('input_token_details') or {})}
             outputs = {**(nested.get('output_token_details') or {}), **(outer.get('output_token_details') or {})}
             values = {'text_input_tokens': inputs.get('text_tokens'), 'audio_input_tokens': inputs.get('audio_tokens'),
+                      'image_input_tokens': 0, 'video_input_tokens': 0,  # This route accepts neither modality.
                       'cached_input_tokens': inputs.get('cached_tokens'), 'text_output_tokens': outputs.get('text_tokens'),
                       'audio_output_tokens': outputs.get('audio_tokens'), 'thinking_tokens': outputs.get('reasoning_tokens')}
             usage = {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
@@ -338,8 +350,7 @@ class GrokSession(JsonSession):
                                                 'status': status, 'continues': False})]
             for call in response.get('output', []) if response.get('status') in {None, 'completed'} else ():
                 if call.get('type') == 'function_call':
-                    self.waiting_tools.add(call['call_id'])
-                    events.append(LiveEvent('tool_call', {'call_id': call['call_id'], 'name': call['name'], 'arguments': call['arguments']}))
+                    events.extend(self.tool_call(call))
             if response.get('status') not in {None, 'completed', 'cancelled'}:
                 events.append(LiveEvent('closed', {'reason': response.get('status'), 'resumable': False}))
             return events

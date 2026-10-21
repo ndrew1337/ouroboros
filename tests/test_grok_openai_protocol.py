@@ -81,7 +81,8 @@ class Wire:
                     self.session[key] = value
             self.put({"type": "session.updated", "session": self.session})
         elif event["type"] == "conversation.item.create":
-            self.put({"type": "conversation.item.done", "item": event["item"],
+            kind = "conversation.item.added" if self.engine == "grok" else "conversation.item.done"
+            self.put({"type": kind, "item": event["item"],
                       "previous_item_id": event.get("previous_item_id")})
         elif event["type"] == "conversation.item.truncate":
             self.put({"type": "conversation.item.truncated", "item_id": event["item_id"],

@@ -266,7 +266,7 @@ class OpenAISession(JsonSession):
             return [LiveEvent("caption", {"speaker": speaker, "item_id": item, "text": text, "final": True})]
         if kind == "conversation.item.input_audio_transcription.failed":
             self.input_transcripts.discard(item)
-            return [LiveEvent("closed", {"reason": "transcription_failed", "resumable": False})]
+            return []  # This caption failed; the model still received the audio.
         if kind == "response.done":
             response = event["response"]
             rid = response["id"]
