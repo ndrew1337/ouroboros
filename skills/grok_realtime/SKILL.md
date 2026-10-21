@@ -6,7 +6,7 @@ type: extension
 runtime: python3
 entry: plugin.py
 plugin_api:
-  version: "2.2"
+  version: "2.1"
   capabilities: [register_realtime_provider]
 permissions: [realtime_provider, net, read_settings]
 env_from_settings: [XAI_API_KEY]

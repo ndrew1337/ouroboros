@@ -360,35 +360,46 @@ class PluginAPIImpl:
 
     # --- registration ---
 
-    def register_realtime_provider(self, name: str, handler: Callable[..., Any], *, route: Any, session: Callable[..., Any] | None = None) -> None:
-        from ouroboros.contracts.realtime import RealtimeRoute
+    def register_realtime_provider(self, name: str, *, route: Any, session: Callable[..., Any], catalog: Any) -> None:
+        from ouroboros.contracts.realtime import ProviderCatalog, RealtimeRoute
 
         _reject_extension_child_side_effect("register_realtime_provider")
         self._require("realtime_provider")
         short = _assert_tool_name(name)
-        if not inspect.iscoroutinefunction(handler):
-            raise ExtensionRegistrationError("realtime provider setup handler must be async")
         if not isinstance(route, RealtimeRoute):
             raise ExtensionRegistrationError("realtime provider route must be a contracts.realtime.RealtimeRoute")
-        if session is not None and not callable(session):
+        if not callable(session):
             raise ExtensionRegistrationError("session must construct a live provider session")
+        if not isinstance(catalog, ProviderCatalog):
+            raise ExtensionRegistrationError("realtime provider catalog must be a contracts.realtime.ProviderCatalog")
         key = f"{self._skill}:{short}"
         with _lock:
             self._stage_surface_locked(_realtime_providers, self._staged.realtime_providers, key, {
-                "skill": self._skill, "handler": self._wrap_runtime_handler(handler), "route": route, "session": session,
+                "skill": self._skill, "route": route, "session": session, "catalog": catalog,
             }, "realtime provider")
 
-    def register_live_conversation(self, name: str, handler: Callable[..., Any], *, configure: Callable[[], dict]) -> None:
-        """An in-process conversation consumer; ordinary admission grants its host port."""
+    def register_live_conversation(self, name: str, handler: Callable[..., Any], *,
+                                   configure: Callable[[], Any], call_tools: Sequence[Any] = ()) -> None:
+        """An in-process conversation feature; ordinary admission grants its host port."""
+        from ouroboros.contracts.live_conversation import CallTool
+
         _reject_extension_child_side_effect("register_live_conversation")
         self._require("live_conversation")
         short = _assert_tool_name(name)
         if not inspect.iscoroutinefunction(handler) or not callable(configure):
             raise ExtensionRegistrationError("conversation requires an async handler and configuration reader")
+        tools = tuple(call_tools)
+        for tool in tools:
+            if not isinstance(tool, CallTool) or not inspect.iscoroutinefunction(tool.handler):
+                raise ExtensionRegistrationError("call tools must be contracts.live_conversation.CallTool with async handlers")
+            _assert_tool_name(tool.name)
+        if len({tool.name for tool in tools}) != len(tools):
+            raise ExtensionRegistrationError("call tool names must be unique")
         with _lock:
             self._stage_surface_locked(_conversation_features, self._staged.conversation_features,
                 f"{self._skill}:{short}", {"skill": self._skill,
-                "handler": self._wrap_runtime_handler(handler), "configure": configure}, "conversation feature")
+                "handler": self._wrap_runtime_handler(handler), "configure": configure,
+                "call_tools": tools}, "conversation feature")
 
     def register_tool(
         self,
