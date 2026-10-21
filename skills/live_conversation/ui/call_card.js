@@ -7,8 +7,8 @@
  * hidden (memory, replies, history and Copy keep reading them); a link Ouroboros sends during the
  * call stays an ordinary message.
  *
- * A row names its call's task: the owner's row carries the call id, every row the task id, so a
- * task is a call once one owner row of it is seen. A caption that arrives before that row opens the
+ * The opening echo names its call before a task exists; the owner's spoken row later names both.
+ * A task is a call once that owner row is seen. A caption that arrives before that row opens the
  * card at the room's end, and the row adopts it. Engines send partial captions as additions and the
  * final one whole; a room row for an utterance retires its caption (the chat paints the row first:
  * it subscribed first), so the words never show twice.
@@ -26,6 +26,10 @@ export function callMemberOf(node, callTasks) {
     if (list.contains('call-caption')) return null;
     const task = String(node.dataset?.taskId || '');
     const clientId = String(node.dataset?.clientMessageId || '');
+    const opening = /^call:([^:]+):open$/.exec(clientId);
+    if (opening && list.contains('system') && node.dataset.systemType === 'call_open') {
+        return { task, kind: 'opening', call: opening[1] };
+    }
     if (task && list.contains('user') && clientId.startsWith(CALL_PREFIX)) {
         return { task, kind: 'owner', call: clientId.slice(CALL_PREFIX.length).split(':')[0] };
     }
@@ -150,18 +154,22 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         const nodes = [...feed.children];
         for (const node of nodes) {
             const member = callMemberOf(node, callTasks);
-            if (member?.kind === 'owner' && !callTasks.has(member.task)) callTasks.set(member.task, member.call);
+            if (member?.call && member.task) callTasks.set(member.task, member.call);
         }
         const groups = new Map();
         for (const node of nodes) {
             const member = callMemberOf(node, callTasks);
             if (!member) continue;
-            if (!groups.has(member.task)) groups.set(member.task, []);
-            groups.get(member.task).push({ node, ...member });
+            const call = member.call || callTasks.get(member.task);
+            if (!groups.has(call)) groups.set(call, []);
+            groups.get(call).push({ node, ...member });
         }
         applying = true;
         try {
-            for (const [task, members] of groups) fold(cardForTask(task, callTasks.get(task)), members);
+            for (const [call, members] of groups) {
+                const task = members.find(member => member.task)?.task;
+                fold(task ? cardForTask(task, call) : cardForCall(call), members);
+            }
         } finally {
             applying = false;
         }
@@ -177,7 +185,7 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         const notices = [];
         for (const member of members) {
             member.node.classList.add('call-folded');
-            if (member.kind === 'work') continue;
+            if (member.kind === 'work' || member.kind === 'opening') continue;
             const text = spokenText(member.node);
             if (!text) continue;
             // The span runs from the first words to the call's end, its closing notice.

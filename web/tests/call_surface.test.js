@@ -635,3 +635,37 @@ test('unknown ending codes show the server sentence and never the raw code', () 
     }
     assert.equal(callPresentation(ended('owner_bye', {detail:'Provider detail'})).title, 'Call ended');
 });
+
+test('the real admission opening echo folds into one call card live and after reload', () => {
+    const { feed, doc, cards, card, lines, row } = feedFixture();
+    // supervisor/message_ingress.py's /api/call/open echo has no task_id.
+    const echo = { type: 'chat', role: 'system', content: 'The owner has just opened this call and can hear you now.',
+        client_message_id: 'call:c1:open', system_type: 'call_open', chat_id: 1, source: 'web',
+        text_placeholder: true, ingress_accepted: true };
+    const opening = row(echo.role, echo.content, { clientMessageId: echo.client_message_id, systemType: echo.system_type });
+    const ordinary = row('system', 'Unrelated notice', { clientMessageId: 'web:notice', systemType: 'notice' });
+    cards.scan();
+    assert.equal(opening.classList.contains('call-folded'), true);
+    assert.equal(ordinary.classList.contains('call-folded'), false);
+    assert.equal(card().dataset.callCard, 'live');
+    assert.deepEqual(lines(), []); // opening metadata is not a spoken utterance
+    const initial = card();
+    row('user', 'Hello', { clientMessageId: 'call:c1:owner-1', taskId: 'task-1' });
+    row('assistant', 'Welcome', { taskId: 'task-1', systemType: 'model_narration' });
+    cards.scan();
+    assert.equal(card(), initial);
+    assert.equal(feed.children.filter(n => n.className === 'call-card').length, 1);
+    assert.deepEqual(lines().map(([, text]) => text), ['YouHello', 'OuroborosWelcome']);
+    cards.destroy();
+    const reloaded = createCallCards({ feed, doc, live: () => '' });
+    assert.equal(opening.classList.contains('call-folded'), true);
+    assert.equal(card().dataset.callCard, 'ended');
+    assert.deepEqual(lines().map(([, text]) => text), ['YouHello', 'OuroborosWelcome']);
+    // Calls with only opening metadata remain independent; unrelated notices stay visible.
+    const another = row('system', echo.content, { clientMessageId: 'call:c2:open', systemType: 'call_open' });
+    reloaded.scan();
+    assert.equal(another.classList.contains('call-folded'), true);
+    assert.equal(feed.children.filter(n => n.className === 'call-card').length, 2);
+    assert.equal(ordinary.classList.contains('call-folded'), false);
+    reloaded.destroy();
+});
