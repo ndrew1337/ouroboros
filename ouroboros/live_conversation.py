@@ -569,14 +569,22 @@ class ConversationHost:
                         system_type="call_heard", narration=False, require_write=True, task_id=self.ctx.task_id,
                         progress_meta={"source": "live_call", "call_id": spec.call_id, "item_id": item_id})
                 else:
+                    from ouroboros import dialogue_store
+                    from ouroboros.chat_references import projection_fields
+                    from ouroboros.utils import utc_now_iso
                     meta = {"source": "live_call", "call_id": spec.call_id, "spoken": {
                         "call_id": spec.call_id, "item_id": item_id, "played_ms": played_ms,
                         "status": "interrupted" if interrupted else "played" if completed else "generated"}}
-                    # A queued progress event is not a durable caption. Use the
-                    # ordinary required writer before completing this receipt.
-                    send_with_budget(spec.chat_id, text, is_progress=True, task_id=self.ctx.task_id,
-                        role="assistant", system_type="model_narration", narration=True, require_write=True,
-                        progress_meta={**meta, "_is_direct_chat": True})
+                    # Keep spoken evidence on the canonical chat row. The generic
+                    # chat writer's metadata projection does not carry this field.
+                    row = {"ts": utc_now_iso(), "direction": "out", "chat_id": spec.chat_id,
+                           "task_id": self.ctx.task_id, "text": text, "format": "markdown",
+                           "role": "assistant", "type": "model_narration", "system_type": "model_narration",
+                           "narration": True, **meta}
+                    receipt = dialogue_store.append(self.ctx.drive_root, "chat", row, idempotent=True, feed=True)
+                    get_bridge().send_message(spec.chat_id, text, parse_mode="Markdown", ts=receipt.row["ts"],
+                        task_id=self.ctx.task_id, role="assistant", system_type="model_narration",
+                        progress_meta={**meta, "narration": True, **projection_fields(receipt.row)})
 
             await joined(asyncio.to_thread(write))
             self.captioned.add(key)

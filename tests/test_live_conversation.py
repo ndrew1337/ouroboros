@@ -403,12 +403,28 @@ def test_captions_are_crash_durable_but_checkpoint_at_completed_turn(host_world,
     assert not checkpoints
     rows = list(iter_rows(host.ctx.drive_root, 'chat'))
     assert sum('Durable owner speech' in str(row) for row in rows) == 1
-    spoken = [entry.row for entry in iter_rows(host.ctx.drive_root, 'progress') if entry.row.get('spoken')]
+    spoken = [entry.row for entry in iter_rows(host.ctx.drive_root, 'chat') if entry.row.get('spoken')]
     assert len(spoken) == 1 and spoken[0]['text'] == 'Durable reply'
     assert spoken[0]['spoken']['status'] == 'played' and spoken[0]['role'] == 'assistant'
+    assert spoken[0]['narration'] is True and spoken[0]['system_type'] == 'model_narration'
+    assert not [entry for entry in iter_rows(host.ctx.drive_root, 'progress') if entry.row.get('spoken')]
     # No start event still leaves a settled, unknown-priced response.
     host.response_done('answer-1', usage={}, raw_usage={}, status='completed')
     assert checkpoints == ['ready']
+
+
+def test_finished_call_both_halves_reach_later_turn_memory(host_world):
+    from tests._memory_view_context import room_text
+    host = host_world.host
+    async def run():
+        await host.caption('owner', 'Remember the sapphire telescope?', 'owner-memory')
+        await host.caption('ouroboros', 'The sapphire telescope is in the attic.', 'reply-memory', completed=True)
+        host.response_done('reply-memory', usage={}, raw_usage={}, status='completed')
+        await host.finish()
+    asyncio.run(run())
+    later = room_text(host.ctx.drive_root, {'id': 'later-text-turn', 'chat_id': host.turn.spec.chat_id})
+    assert 'Remember the sapphire telescope?' in later
+    assert 'The sapphire telescope is in the attic.' in later
 
 
 def test_renewal_uses_reported_held_input_and_growth(host_world):
