@@ -162,7 +162,7 @@ def handle_chat_direct(
     _handle_chat_direct_locked(
         chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
 
 
@@ -191,7 +191,7 @@ def _handle_chat_direct_locked(
     _run_chat_task(
         None, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
 
 
@@ -253,7 +253,7 @@ def _run_chat_task(
     admitted = _admit_chat_task(
         agent, chat_id, text, image_data,
         task_constraint=task_constraint, task_metadata=task_metadata,
-        realtime_turn=realtime_turn,
+        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
     )
     if admitted is not None:
         _execute_chat_task(admitted)
