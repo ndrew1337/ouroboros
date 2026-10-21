@@ -99,11 +99,11 @@ def item_rows(message):
 
 
 def item_ack(event):
-    # xAI observation 20 Oct 2026: added(completed) is the only item ACK.
+    # xAI acknowledges with added; a present status must still be completed.
     kind = event.get('type')
     return (kind in {'conversation.item.created', 'conversation.item.done'}
             or (kind == 'conversation.item.added'
-                and event.get('item', {}).get('status') == 'completed'))
+                and event.get('item', {}).get('status', 'completed') == 'completed'))
 
 
 class GrokSession(JsonSession):

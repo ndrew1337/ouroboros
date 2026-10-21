@@ -42,10 +42,12 @@ class AddedWire(Wire):
 
     def put(self, value):
         value = copy.deepcopy(value)
-        if value.get("type") == "conversation.item.done":
+        if value.get("type") in {"conversation.item.done", "conversation.item.added"}:
             value["type"] = "conversation.item.added"
             item = value["item"]
-            item["status"] = "in_progress" if self.fault == "in_progress" else "completed"
+            if self.fault != "absent":
+                item["status"] = (None if self.fault == "null" else
+                                  "in_progress" if self.fault == "in_progress" else "completed")
             if self.fault == "id":
                 item["id"] = "wrong-id"
             elif self.fault == "role":
@@ -56,21 +58,22 @@ class AddedWire(Wire):
 
 
 @pytest.mark.parametrize("phase", ["setup", "live"])
-@pytest.mark.parametrize("fault", ["", "in_progress", "id", "role", "text"])
-def test_added_ack_requires_completed_exact_item(providers, captured, phase, fault):
+@pytest.mark.parametrize("fault", ["", "absent", "in_progress", "null", "id", "role", "text"])
+def test_added_ack_requires_exact_item_and_no_incomplete_status(providers, captured, phase, fault):
     async def run():
         wire = AddedWire()
         adapter = make(providers, wire, captured)
         opening = None
+        blocked = fault not in {"", "absent"}
         try:
             if phase == "setup":
                 wire.fault = fault
                 opening = asyncio.create_task(adapter.open())
-                if fault in {"in_progress", "id"}:
+                if fault in {"in_progress", "null", "id"}:
                     done, _ = await asyncio.wait((opening,), timeout=.05)
                     assert not done
                     assert not any(row.get("session", {}).get("turn_detection") for row in wire.sent)
-                elif fault:
+                elif blocked:
                     with pytest.raises(RealtimeSetupError, match="item_mismatch"):
                         await asyncio.wait_for(opening, 1)
                 else:
@@ -86,9 +89,9 @@ def test_added_ack_requires_completed_exact_item(providers, captured, phase, fau
                         await adapter.receive()
                 else:
                     await adapter.receive()
-                    assert bool(adapter.outstanding) is bool(fault)
-                    assert any(row.get("type") == "response.create" for row in wire.sent) is (not fault)
-            if fault:
+                    assert bool(adapter.outstanding) is blocked
+                    assert any(row.get("type") == "response.create" for row in wire.sent) is (not blocked)
+            if blocked:
                 assert not any(row.get("type") == "response.create" for row in wire.sent)
         finally:
             if opening is not None and not opening.done():
