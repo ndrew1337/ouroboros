@@ -240,8 +240,10 @@ class LiveHost(Protocol):
         """Run ordinary and call tools on the serialized lane; return the history changes."""
 
     async def caption(self, speaker: str, text: str, item_id: str, *, heard: bool = False, played_ms: int = 0,
-                      interrupted: bool = False, completed: bool = False) -> None:
+                      interrupted: bool = False, completed: bool = False, replace: bool = False) -> None:
         """Write one final caption to history: owner words, a heard participant, or spoken output."""
+        # replace revises the same item's text, retaining identity and playback/provenance;
+        # unchanged replays do nothing. A replacement before the first write creates one row.
 
     async def observe_context(self, row: dict) -> None:
         """Add a peer's observation to history as a labelled row, never as owner words."""

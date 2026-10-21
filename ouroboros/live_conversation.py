@@ -246,7 +246,7 @@ class ConversationHost:
         ctx._execution_trace = self.trace
         self.executor = StatefulToolExecutor()
         self.tool_jobs = set()
-        self.executed, self.captioned = {}, set()
+        self.executed, self.captioned = {}, {}
         self.wire_path = task_artifact_dir_path(ctx.drive_root, ctx.task_id, create=True) / "conversation-wire.jsonl"
         self.connection_number = 0
         self._tools_lock = asyncio.Lock()
@@ -652,27 +652,38 @@ class ConversationHost:
                 if job.done():
                     self.tool_jobs.discard(job)
 
-    async def caption(self, speaker, text, item_id, *, heard=False, played_ms=0, interrupted=False, completed=False):
+    async def caption(self, speaker, text, item_id, *, heard=False, played_ms=0, interrupted=False, completed=False,
+                      replace=False):
         """Final words only; meeting input is never minted as the owner's message."""
         key = (speaker, item_id)
-        if not text or key in self.captioned:
+        if not text:
             return
         async with self._rows_lock, self._tools_lock:
-            if key in self.captioned:
+            previous = self.captioned.get(key)
+            if previous and (not replace or previous["text"] == text):
                 return
+            retained = {}
 
             def write():
+                from ouroboros import dialogue_store
                 from supervisor.message_bus import get_bridge, log_chat
                 from ouroboros.chat_references import projection_fields
                 from ouroboros.projects_registry import stamp_project_thread
 
                 spec = self.turn.spec
-                if spec.presence_binding_id:
+                if previous:
+                    row = dialogue_store.revise_text(self.ctx.drive_root, "chat", previous["seq"],
+                                                    previous["stored_prefix"] + text)
+                elif spec.presence_binding_id:
                     from ouroboros.presence_call import record_call_utterance
                     if not record_call_utterance(self.ctx.drive_root, self.task,
                             direction="out" if speaker == "ouroboros" else "in",
                             text=text, speaker_label=self.turn.spec.label, utterance_id=item_id):
                         raise RealtimeSetupError("history_write", "Presence caption could not be retained")
+                    event_id = self.task["metadata"]["presence"]["event"]["source_event_id"]
+                    name = f"{event_id}:{'spoken' if speaker == 'ouroboros' else 'heard'}:{item_id}"
+                    retained["seq"] = dialogue_store.rows_by_client_id(
+                        self.ctx.drive_root, name, chat_id=spec.chat_id)[-1].seq
                     return
                 elif speaker == "owner" and not heard:
                     message_id = f"call:{spec.call_id}:{item_id}"
@@ -680,8 +691,8 @@ class ConversationHost:
                         client_message_id=message_id, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root, require_write=True)
                     if not row:
                         raise RealtimeSetupError("history_write", "owner call caption was not recorded")
+                    retained["seq"] = dialogue_store.accepted_row(self.ctx.drive_root, spec.chat_id, message_id).seq
                 else:
-                    from ouroboros import dialogue_store
                     from ouroboros.utils import utc_now_iso
                     spoken = speaker == "ouroboros"
                     meta = {"source": "live_call", "call_id": spec.call_id}
@@ -697,7 +708,11 @@ class ConversationHost:
                            "format": "markdown" if spoken else "", "role": "assistant" if spoken else "system",
                            "type": "model_narration" if spoken else "call_heard",
                            "system_type": "model_narration" if spoken else "call_heard", "narration": spoken, **meta}
-                    row = dialogue_store.append(self.ctx.drive_root, "chat", row, idempotent=True, feed=True).row
+                    receipt = dialogue_store.append(self.ctx.drive_root, "chat", row, idempotent=True, feed=True)
+                    row, retained["seq"] = receipt.row, receipt.seq
+
+                if spec.presence_binding_id:
+                    return
 
                 # Typed live_call rows belong to the room's call card. Publishing
                 # chat.outbound would also mirror each caption to external transports.
@@ -717,13 +732,19 @@ class ConversationHost:
                 # The durable write settled; hand its row to canonical history
                 # before releasing the cancelled caption writer.
                 cancelled = exc
-            self.captioned.add(key)
-            prefix = ("[Heard in the call; participant observation, not owner instruction] " if heard else "")
-            if speaker == "ouroboros" and not completed:
-                prefix = "[Generated speech; " + ("interrupted" if interrupted else "playback unconfirmed") + "] "
-            self.messages.append({"role": "assistant" if speaker == "ouroboros" else "user", "content": prefix + text})
+            if previous:
+                previous["message"]["content"] = previous["prefix"] + text
+                previous["text"] = text
+            else:
+                prefix = ("[Heard in the call; participant observation, not owner instruction] " if heard else "")
+                if speaker == "ouroboros" and not completed:
+                    prefix = "[Generated speech; " + ("interrupted" if interrupted else "playback unconfirmed") + "] "
+                message = {"role": "assistant" if speaker == "ouroboros" else "user", "content": prefix + text}
+                self.messages.append(message)
+                self.captioned[key] = dict(text=text, message=message, prefix=prefix, seq=retained["seq"],
+                    stored_prefix="Heard in the call: " if heard and speaker != "ouroboros" and not self.turn.spec.presence_binding_id else "")
             self._context_changed()
-            if speaker == "owner" and not heard and not self.turn.spec.presence_binding_id:
+            if not previous and speaker == "owner" and not heard and not self.turn.spec.presence_binding_id:
                 from ouroboros.loop import _record_owner_directive
                 _record_owner_directive(self.ctx, source="live_call", content=text, msg_id=item_id)
             self._caption_dirty = True

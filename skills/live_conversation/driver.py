@@ -272,10 +272,10 @@ class _Call:
                 and self.session.renewal_ready)
 
     async def finish_spoken(self, item, *, interrupted=False, completed=False):
-        text = self.pending_spoken.pop(item, None)
-        if text is not None:
-            await self.rows.put(dict(speaker="ouroboros", text=text, item_id=item, heard=False,
-                played_ms=self.played.get(item, 0), interrupted=interrupted, completed=completed))
+        caption = self.pending_spoken.pop(item, None)
+        if caption is not None:
+            await self.rows.put(dict(speaker="ouroboros", item_id=item, heard=False,
+                played_ms=self.played.get(item, 0), interrupted=interrupted, completed=completed, **caption))
 
     async def caption(self, data):
         speaker, item = data["speaker"], data["item_id"]
@@ -287,7 +287,7 @@ class _Call:
             heard = speaker == "owner" and (self.meeting_audio or any(
                 peer.role == cp.PEER_MEETING and peer.mic for peer in self.hub.peers()))
             if speaker == "ouroboros":
-                self.pending_spoken[item] = text
+                self.pending_spoken[item] = dict(text=text, **({"replace": True} if data.get("replace") else {}))
                 if item in self.interrupted or (self.played.get(item, 0) > 0
                         and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20):
                     await self.finish_spoken(item, interrupted=item in self.interrupted, completed=item not in self.interrupted)
