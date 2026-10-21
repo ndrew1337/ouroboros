@@ -64,3 +64,36 @@ def test_grok_absent_image_video_are_zero_while_billable_usage_stays_reported(pr
     tariff = pricing_catalog.get_catalog_quote("xai/grok-test", provider="grok_realtime", drive_root=root, allow_live_fetch=False)
     cost, evidence = live_usage._price(tariff, usage, done.data["raw_usage"])
     assert cost == pytest.approx(.05) and not evidence["unpriced"]
+
+
+@pytest.mark.parametrize("text_in,audio_in,cached,text_out,audio_out,reasoning,total_out,expected", [
+    (32898, 0, 0, 131, 77, 73, 208, .068384),
+    (32978, 15, 0, 63, 120, 22, 183, .069010),
+    (33017, 32, 32896, 65, 166, 21, 231, .0109812),
+    (10, 20, 0, 40, 50, None, 90, .00169),
+])
+def test_openai_reasoning_stays_in_raw_text_usage_without_an_extra_charge(
+        providers, quote, text_in, audio_in, cached, text_out, audio_out, reasoning, total_out, expected):
+    root, tariff, _ = quote
+    # First three count combinations are the supplied probe receipts; all tariffs are fixtures.
+    raw = {"input_token_details": {"text_tokens": text_in, "audio_tokens": audio_in,
+                "image_tokens": 30 if reasoning is None else 0, "cached_tokens": cached,
+                "cached_tokens_details": {"text_tokens": cached}},
+           "output_tokens": total_out,
+           "output_token_details": {"text_tokens": text_out, "audio_tokens": audio_out}}
+    if reasoning is not None:
+        raw["output_token_details"]["reasoning_tokens"] = reasoning
+    original = copy.deepcopy(raw)
+    adapter, _ = make(providers, "openai")
+    done, = adapter.convert({"type": "response.done", "response": {"id": "r", "status": "completed", "usage": raw}})
+    usage = done.data["usage"]
+    cost, evidence = live_usage._price(tariff, usage, done.data["raw_usage"])
+    assert cost == pytest.approx(expected) and not evidence["unpriced"]
+    assert "thoughts_output_tokens" not in evidence["priced_usage"]
+    assert usage["thinking_tokens"] == 0  # zero additional billable thoughts, already inside text
+    assert usage["text_output_tokens"] + usage["audio_output_tokens"] == total_out
+    assert done.data["raw_usage"] == original and raw == original
+    attempt = reserve(root, tariff)
+    live_usage.settle_live_response(attempt, usage=usage, raw_usage=done.data["raw_usage"], status=done.data["status"])
+    row, = usage_accounting.read_usage_records(root)
+    assert row["cost_usd"] == pytest.approx(expected)
