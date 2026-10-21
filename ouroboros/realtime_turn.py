@@ -11,9 +11,10 @@ def recovery_refusal(task, turn):
     request = (task.get("metadata") or {}).get("execution_transport")
     if request is None:
         return ""
+    if isinstance(turn, RealtimeTurn) and turn.matches_live_request(request):
+        return ""
     task["_skip_post_task_synthesis"] = True
-    return ("" if isinstance(turn, RealtimeTurn) and turn.matches_live_request(request)
-            else "realtime_restart_required")
+    return "realtime_restart_required"
 
 
 class RealtimeTurn:

@@ -331,8 +331,6 @@ def _admit_chat_task(
             agent._realtime_turn = realtime_turn
             task["model"] = realtime_turn.model
             task["use_local_model"] = False
-            # A call authorizes no paid post-task work.
-            task["_skip_post_task_synthesis"] = True
         from ouroboros.consciousness_authority import apply_consciousness_authority
         from ouroboros.contracts.task_contract import attach_task_contract
 
