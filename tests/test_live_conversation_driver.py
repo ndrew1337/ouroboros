@@ -20,6 +20,7 @@ class Hub:
     def next_event(self, _timeout): return self.events.pop(0) if self.events else None
     def send_state(self, *args): self.states.append(args)
     def set_engine_rates(self, *_args): pass
+    def pause_input(self): pass
     def send_caption(self, *_args, **_kwargs): pass
     def send_turn(self, *_args): pass
     def send_activity(self, *_args): pass

@@ -25,8 +25,10 @@ def test_stopped_call_has_no_resume_release_but_text_still_does(is_call, tmp_pat
     raw = {"metadata": metadata, "_budget_pause_hold": {"reason": "owner_restart_hold"}}
     facts = wp._member_raw(parked, raw, wp._Observations(tmp_path), "call")
     state = ws.classify_member(parked, facts)
-    assert state["release"] == ("none" if is_call else "owner")
-    assert bool(state["turn"]) is (not is_call)
+    # A stopped call has ended: nobody resumes it. A text task keeps the release the stop view gives it.
+    assert (state["release"] == "none") is is_call
+    if is_call:
+        assert state["turn"] == [] and state.get("resumable") is False
     actions = {control["action"] for control in ws.controls_for(state, parked)}
     assert ("resume" in actions) is (not is_call)
     assert "stop" in actions
