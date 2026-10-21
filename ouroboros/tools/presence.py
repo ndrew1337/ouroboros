@@ -126,6 +126,7 @@ def _configure_presence(ctx: ToolContext, action: str, **params: Any) -> str:
                 "state_fingerprint": presence_state_fingerprint(updated),
             }, sort_keys=True)
         if selected == "runtime":
+            from ouroboros.presence_capabilities import _runtime_overrides_payload
             reset = bool(params.get("reset_runtime"))
             overrides = PresenceRuntimeOverrides() if reset else PresenceRuntimeOverrides(
                 model_slot=(str(params.get("model_slot") or "").strip() or None),
@@ -141,7 +142,7 @@ def _configure_presence(ctx: ToolContext, action: str, **params: Any) -> str:
             return json.dumps(
                 {
                     "ok": True,
-                    "runtime_overrides": asdict(overrides),
+                    "runtime_overrides": _runtime_overrides_payload(overrides),
                     "state_fingerprint": presence_state_fingerprint(updated),
                 },
                 sort_keys=True,
