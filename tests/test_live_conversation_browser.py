@@ -472,21 +472,30 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
         for knob in ('pause', 'interruptions', 'thinking', 'search'):
             expect(form.locator(f'[name="{knob}"]')).to_have_count(int(knob in model['honours']))
             note = dict(model['notes']).get(knob)
-            if knob not in model['honours'] and note:
+            if note:
                 expect(form.locator(f'[data-call-knob-note="{knob}"]')).to_have_text(note)
         expect(form.locator('[data-call-privacy]')).to_have_text(catalog['privacy'])
         expect(form.locator('[data-call-memory]')).to_contain_text(f"{model['facts']['conversation_window_tokens']:,}")
         expect(form.locator('[data-call-memory]')).to_contain_text(model['facts']['source'])
+        if model['facts']['basis'] == 'estimator':
+            expect(form.locator('[data-call-memory]')).to_contain_text('tokens by Ouroboros’s own estimate')
+        else:
+            expect(form.locator('[data-call-memory]')).to_contain_text('provider tokens')
 
     gemini = by_id['gemini_live:gemini']
     assert_catalog_model(gemini, next(model for model in gemini['models'] if model['default']))
+    expect(form).to_contain_text('Google does not offer Gemini Live in Russia or Belarus.')
     thinking = next(model for model in gemini['models'] if 'thinking' in model['honours'])
     form.locator('[name="model"]').select_option(thinking['id'])
     assert_catalog_model(gemini, thinking)
+    expect(form.locator('[name="thinking"]')).to_have_value(thinking['thinking_levels'][0])
+    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Engine’s default')
     form.locator('[name="thinking"]').select_option(thinking['thinking_levels'][-1])
     grok = by_id['grok_realtime:grok']
     form.locator('[name="provider"]').select_option(grok['id'])
     assert_catalog_model(grok, next(model for model in grok['models'] if model['default']))
+    expect(form.locator('[name="thinking"]')).to_have_value('none')
+    expect(form).not_to_contain_text('Google does not offer Gemini Live in Russia or Belarus.')
     form.locator('[name="provider"]').select_option('openai_realtime:openai')
     expect(form.locator('[data-call-memory]')).to_contain_text('not yet measured')
     form.locator('[name="instructions"]').fill('Speak briefly in this synthetic call.')

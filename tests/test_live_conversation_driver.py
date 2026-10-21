@@ -294,13 +294,13 @@ def test_options_only_forward_honoured_knobs(honoured):
 
 
 @pytest.mark.parametrize('levels', [('none', 'high'), ('minimal', 'low', 'medium', 'high', 'xhigh'), ('low', 'medium', 'high'), ()])
-@pytest.mark.parametrize('configured', ['none', 'low', 'high', 'xhigh', 'obsolete'])
+@pytest.mark.parametrize('configured', ['', 'none', 'low', 'high', 'xhigh', 'obsolete'])
 def test_thinking_requires_a_catalog_level(levels, configured):
     from skills.live_conversation.driver import session_options
     host = Host()
     host.model = replace(host.model, honours=frozenset({'thinking'}) if levels else frozenset(), thinking_levels=levels)
     host.config = replace(host.config, thinking=configured)
-    assert session_options(host).thinking == (configured if configured in levels else '')
+    assert session_options(host).thinking == (configured if configured in levels else levels[0] if levels else '')
 
 
 @pytest.mark.parametrize('silent', [(), ('call-id',)])
@@ -776,3 +776,18 @@ def test_response_refusal_drains_received_accounting_and_final_captions(refused)
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('configured', ['', 'low', 'obsolete', 'none', 'high'])
+def test_grok_feature_options_put_the_lowest_default_on_the_wire(configured):
+    from ouroboros.contracts.realtime import RealtimeInput
+    from skills.grok_realtime.plugin import CATALOG, GrokSession
+    from skills.live_conversation.driver import session_options
+    host = Host()
+    host.model = CATALOG.models[0]
+    host.config = replace(host.config, thinking=configured, voice='')
+    selected = RealtimeInput(host.model.id, '[]', '[]', 256, 'nano', 'core', 'view')
+    def never_connect(*args, **kwargs):
+        raise AssertionError('This test only inspects the physical setup; no network is allowed')
+    session = GrokSession(selected, session_options(host), connect=never_connect, observe=lambda *args: None)
+    assert session.events[0]['session']['reasoning'] == {'effort': 'high' if configured == 'high' else 'none'}
