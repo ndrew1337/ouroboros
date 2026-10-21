@@ -256,7 +256,8 @@ def view_facts(snapshot: mv.MemoryViewSnapshot, level: mv.FloorLevel, *, window_
 def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mode: str, window_tokens: Optional[int],
                          known_window: bool, output_reserve: Optional[int], ratio: float, non_memory_tokens: int,
                          lowered_from: Optional[str] = None, tool_names: Optional[Iterable[str]] = None,
-                         kept: Optional[mv.FloorLevel] = None, saving: int = 0) -> Tuple[str, str, Dict[str, Any]]:
+                         kept: Optional[mv.FloorLevel] = None, saving: int = 0,
+                         working_reserve_tokens: Optional[int] = None) -> Tuple[str, str, Dict[str, Any]]:
     """``(story text, room text, facts)`` of one mode's projection, the floor decided once.
 
     The window counts only when known and fresh (``known_window``). An owner target binds
@@ -268,7 +269,8 @@ def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mo
     What ``kept.by_budget`` counts the owner's mode target took (only it carries one), so the note
     and the fact name that budget in whatever mode the view is narrowed, hop after hop.
     """
-    target, reserve = context_budget.context_mode_limits(mode, owner_mode, output_reserve)
+    reserve_args = {"working_reserve_tokens": working_reserve_tokens} if working_reserve_tokens is not None else {}
+    target, reserve = context_budget.context_mode_limits(mode, owner_mode, output_reserve, **reserve_args)
     if kept is not None and kept.by_budget:
         target = context_budget.context_mode_limits(owner_mode, owner_mode, output_reserve)[0]
     window = int(window_tokens) if known_window and window_tokens else None
@@ -345,6 +347,7 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
                measure_fixed: Optional[Callable[..., int]] = None,
                section_root: str = "", section_task_id: str = "",
                kept_sections: Optional[Mapping[str, Iterable[Mapping]]] = None,
+               working_reserve_tokens: Optional[int] = None,
                ) -> Tuple[Dict[str, Tuple[str, str, Dict[str, Any]]], str]:
     """Every mode's ``(story text, room text, view receipt)`` and the mode the task starts in.
 
@@ -364,6 +367,7 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
     nothing shown unfolds.
     """
     window = int(window_tokens) if known_window and window_tokens else None
+    reserve_args = {"working_reserve_tokens": working_reserve_tokens} if working_reserve_tokens is not None else {}
     fixed_tokens_by_mode = dict(fixed_tokens_by_mode)
     requested_saving = dict(saving or {})
     saving = {}
@@ -377,7 +381,7 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
         measure = (lambda addressed, mode=mode: measure_fixed(mode, addressed, story, room)) if measure_fixed else None
         receipts[mode], remaining = _host_steps(
             parts, previous, measure=measure,
-            window=window, reserve=context_budget.context_mode_limits(mode, preferred, output_reserve)[1],
+            window=window, reserve=context_budget.context_mode_limits(mode, preferred, output_reserve, **reserve_args)[1],
             ratio=ratio, saving=requested_saving.get(mode, 0), root=section_root, task_id=section_task_id)
         if measure is not None:
             fixed_tokens_by_mode[mode] = measure_fixed(mode, section_views(parts, receipts[mode]))
@@ -386,7 +390,8 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
         host_mode(mode, shown if select and mode == select else mode)
     physical = (physical_mode(preferred, fixed_tokens_by_mode, minimal_view_tokens(snapshot, window_tokens=window),
                               window_tokens=window, known_window=known_window, calibration_ratio=ratio,
-                              reserve_by_mode={mode: context_budget.context_mode_limits(mode, preferred, output_reserve)[1]
+                              reserve_by_mode={mode: context_budget.context_mode_limits(mode, preferred, output_reserve,
+                                                                                     **reserve_args)[1]
                                                for mode in MODES})
                 if allow_mode_lowering and snapshot is not None else preferred)
     begin = (select if select in MODES
@@ -403,6 +408,7 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
         story, room, facts = render_view_for_mode(
             snapshot, mode=mode, owner_mode=preferred, window_tokens=window, known_window=known_window,
             output_reserve=output_reserve, ratio=ratio, non_memory_tokens=fixed_tokens_by_mode[mode],
+            working_reserve_tokens=working_reserve_tokens,
             lowered_from=preferred if mode == begin == physical != preferred else None,
             tool_names=(tool_names or {}).get(mode),
             kept=None if kept is None else kept.get(shown if carried and mode == begin else mode, mv.FULL_VIEW),
