@@ -17,6 +17,16 @@ from tests import _memory_view_synthetic as syn
 RESERVE = 8_192
 
 
+def test_host_ladder_lists_live_producers_and_keeps_only_the_actual_protected_core():
+    from ouroboros.context_layout import TIER0_ALWAYS_FULL
+
+    assert memory_floor.HOST_STEPS == ("runtime", "registry", "installed_skills", "drive_state",
+        "shared_understanding", "pattern_register", "world", "subagents", "execution_reflections",
+        "architecture_map", "development_map")
+    assert section_floor.PROTECTED == TIER0_ALWAYS_FULL
+    assert {"system", "bible", "identity", "scratchpad", "memory_marks"} <= section_floor.PROTECTED
+
+
 @pytest.mark.parametrize("missing", ["window", "root", "task_id", "measure", "eligible"])
 def test_host_steps_do_not_measure_when_no_section_can_step(missing):
     calls = []
@@ -187,7 +197,7 @@ def test_route_reprojection_only_narrows_and_recomputes_from_the_original_captur
 
 def test_physical_mode_lowering_carries_host_addresses_from_the_shown_view(tmp_path, monkeypatch):
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: 65_536)
-    core = _core(tmp_path, [_service("health_invariants", 12_000)], snapshot=syn.snapshot())
+    core = _core(tmp_path, [_service("runtime", 12_000)], snapshot=syn.snapshot())
     initial = _plan(core, 100_000, "low")
     assert _host_facts(initial, "low") and not _host_facts(initial, "nano")
     lowered = initial.reproject_for_route(window_tokens=60_000, known_window=True, ratio=1.0,

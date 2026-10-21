@@ -12,7 +12,7 @@ from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 from ouroboros.context_layout import TIER0_ALWAYS_FULL
 
 log = logging.getLogger(__name__)
-PROTECTED = TIER0_ALWAYS_FULL | {"task_contract_discipline", "task_input", "task_authority"}
+PROTECTED = TIER0_ALWAYS_FULL
 
 
 @dataclass(frozen=True, eq=False, repr=False)
