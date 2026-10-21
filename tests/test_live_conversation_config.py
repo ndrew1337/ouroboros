@@ -144,3 +144,17 @@ def test_call_setup_copy_describes_default_on_skills_and_the_owner_flow(config_a
         assert 'grant that engine its credential' not in text
     assert 'auto-grant' in skill and 'with it off' in skill
     assert 'Calls are a beta, off by default' in skill
+
+
+@pytest.mark.parametrize('engine', ['openai', 'gemini_extended'])
+@pytest.mark.parametrize('saved', [None, '', 'low', 'high'])
+def test_unset_thinking_uses_the_selected_catalog_lowest_level_without_changing_saved_choices(engine, saved):
+    from skills.live_conversation.driver import session_options
+    from skills.openai_realtime.plugin import CATALOG as OPENAI
+    from skills.gemini_live.plugin import CATALOG as GEMINI
+    model = OPENAI.models[0] if engine == 'openai' else next(model for model in GEMINI.models if model.thinking_levels)
+    raw = {} if saved is None else {'thinking': saved}
+    config = plugin.validate(raw)
+    host = SimpleNamespace(config=config, model=model, state={})
+    assert config.thinking == ('' if saved is None else saved)
+    assert session_options(host).thinking == (saved or ('minimal' if engine == 'openai' else 'low'))

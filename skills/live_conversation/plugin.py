@@ -11,7 +11,7 @@ from ouroboros.live_conversation import call_offer, end_feature_calls
 
 # Calls are off until the owner turns them on; Gemini is the default engine.
 DEFAULTS = {"enabled": False, "provider": "gemini_live:gemini", "model": "", "voice": "", "instructions": "",
-            "pause": "normal", "interruptions": True, "thinking": "low", "search": True}
+            "pause": "normal", "interruptions": True, "thinking": "", "search": True}
 
 
 def validate(value):
