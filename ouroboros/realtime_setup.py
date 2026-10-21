@@ -158,6 +158,8 @@ def session_candidate(host, factory, options):
             candidate_context_sha256=selected.sha256, candidate_context_size_bytes=len(selected.messages_json.encode()),
             candidate_measurement_kind="canonical_json_v1", physical_context=_physical_context_for_fit(fit))
         refusal = main_context_fit_refusal(request)
+        evidence = {"fit": asdict(fit), "route_facts": asdict(facts), "tool_count": len(host.schemas),
+                    "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "units": facts.basis}
         if refusal is None:
             host._session_instructions = options.instructions
             host._selected_text_estimate = text_input_estimate(rows, host.schemas)
@@ -167,9 +169,7 @@ def session_candidate(host, factory, options):
             host.messages[:] = current
             host._context_changed()
             host.ctx.active_context_mode = plan.initial_mode
-            return session, request, {"fit": asdict(fit), "route_facts": asdict(facts),
-                "input_sha256": selected.sha256, "wire_sha256": sha256(wire),
-                "units": facts.basis}
+            return session, request, evidence
         if known and plan.initial_mode == "max":
             # The ordinary pre-send rung after an actual Max overflow. Once
             # Low is selected the same physical floor can continue to Nano.
@@ -179,5 +179,17 @@ def session_candidate(host, factory, options):
             previous, deficit = None, 0
             continue
         if previous is not None and measured >= previous:
+            from ouroboros.observability import persist_physical_candidate
+
+            # This final candidate never opens a connection, but its measured
+            # refusal must remain as inspectable as an admitted preparation.
+            evidence.update(reason="context_capacity", refusal=refusal,
+                            deficit_tokens=max(1, -refusal["free_tokens"] + 1))
+            receipt = persist_physical_candidate(host.ctx.drive_root, task_id=host.ctx.task_id,
+                attempt_id=f"call-{host.turn.spec.call_id}-{host.connection_number}-refused",
+                candidate=session.wire, candidate_facts=evidence)
+            event = {"type": "call.fit_refused", **evidence, "manifest_ref": receipt["manifest_ref"]}
+            host.trace["fit_refusal"] = event
+            host.observe("host", canonical_json(event))
             raise RealtimeSetupError("context_capacity", "This room's context and working reserve do not fit this engine's window.")
         previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)
