@@ -338,6 +338,7 @@ class GrokSession(JsonSession):
             inputs = {**(nested.get('input_token_details') or {}), **(outer.get('input_token_details') or {})}
             outputs = {**(nested.get('output_token_details') or {}), **(outer.get('output_token_details') or {})}
             values = {'text_input_tokens': inputs.get('text_tokens'), 'audio_input_tokens': inputs.get('audio_tokens'),
+                      'image_input_tokens': 0, 'video_input_tokens': 0,  # This route accepts neither modality.
                       'cached_input_tokens': inputs.get('cached_tokens'), 'text_output_tokens': outputs.get('text_tokens'),
                       'audio_output_tokens': outputs.get('audio_tokens'), 'thinking_tokens': outputs.get('reasoning_tokens')}
             usage = {axis: value for axis, value in values.items() if type(value) is int and value >= 0}
