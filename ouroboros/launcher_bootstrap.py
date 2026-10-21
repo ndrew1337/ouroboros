@@ -1016,14 +1016,9 @@ def source_handoff_argv(argv, *, keep_runtime_venv: bool = False) -> list[str]:
 
 def automatic_launch_allowed(intent: str, data_dir: pathlib.Path, log: Any) -> bool:
     if intent == "automatic":
-        # The server consumes this existing marker on an explicit owner start.
-        # A boot entry must not start it and accidentally erase the owner's Stop.
-        # The same file also carries owner_restart_no_resume: that is a restart,
-        # not Panic, and must remain launchable. No second stop-state store.
-        try:
-            stopped = (data_dir / "state" / "panic_stop.flag").read_text(encoding="utf-8").strip() == "panic"
-        except FileNotFoundError:
-            stopped = False
+        from ouroboros.installation_stop import installation_panic
+
+        stopped = installation_panic(data_dir)
         if stopped:
             log.info("Automatic start skipped: Ouroboros was stopped with Panic.")
             print("Ouroboros is stopped. Use Start to resume.", flush=True)

@@ -114,6 +114,101 @@ def _active_restart_transaction_path(drive_root: Any) -> pathlib.Path:
     return pathlib.Path(drive_root) / "state" / "delegate_recovery_transactions" / "active.json"
 
 
+_PROCESS_GENERATION = uuid.uuid4().hex
+_LEGACY_RESTART_FLAG = "owner_restart_no_resume.flag"
+_LEGACY_RESTART_BYTE = "owner_restart_no_resume"
+
+
+def active_restart_transaction(root: Any) -> dict:
+    active = _read_restart_transaction(root, "active")
+    return _read_restart_transaction(root, str(active.get("transaction_id") or "")) if active else {}
+
+
+def prepare_owner_restart(root: Any, *, legacy: bool = False) -> dict:
+    """Publish the door before stopping work; restore the prior pointer on failure."""
+    path = _active_restart_transaction_path(root)
+    previous = path.read_bytes() if path.exists() else None
+    row = {"schema": 1, "transaction_id": uuid.uuid4().hex, "door": "owner_restart",
+           "status": "prepared", "supervisor_pid": os.getpid(),
+           "generation": "legacy" if legacy else _PROCESS_GENERATION,
+           "door_applied_at": "", "task_ids": [], "prepared_at": utc_now_iso(), "expected_exit_code": 42}
+    try:
+        _write_restart_transaction(root, row)
+        atomic_write_json(path, {key: row[key] for key in ("transaction_id", "supervisor_pid", "prepared_at")})
+    except Exception:
+        from ouroboros.utils import write_bytes_atomic
+
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            write_bytes_atomic(path, previous)
+        _restart_transaction_path(root, row["transaction_id"]).unlink(missing_ok=True)
+        raise
+    return row
+
+
+def import_legacy_restart(root: Any) -> None:
+    """Translate old flags once at boot, never from a work decision."""
+    row = active_restart_transaction(root)
+    state = pathlib.Path(root) / "state"
+    old_flag = state / _LEGACY_RESTART_FLAG
+    compat = state / "panic_stop.flag"
+    try:
+        old_byte = compat.read_text(encoding="utf-8").strip() == _LEGACY_RESTART_BYTE
+    except FileNotFoundError:
+        old_byte = False
+    if old_flag.exists() or old_byte:
+        if row.get("door") != "owner_restart" or row.get("door_applied_at"):
+            # Preserve an unconsumed transaction and its ACK. A legacy flag has
+            # no transaction identity and cannot rename an active update's door.
+            if not row or row.get("returns_restored_at") or row.get("door_applied_at"):
+                row = prepare_owner_restart(root, legacy=True)
+        old_flag.unlink(missing_ok=True)
+        if old_byte:
+            compat.unlink(missing_ok=True)
+
+
+def boot_door(root) -> str:
+    """Translate unconsumed installation inputs at snapshot restoration only."""
+    from ouroboros.installation_stop import installation_panic
+
+    import_legacy_restart(root)
+
+    if installation_panic(root):
+        return "panic"
+    return "owner_restart" if pending_owner_restart(root) else ""
+
+
+def pending_owner_restart(root: Any) -> dict:
+    """The unconsumed prior-generation door; ACK separately governs returns."""
+    row = active_restart_transaction(root)
+    if (row.get("door") == "owner_restart" and not row.get("door_applied_at")
+            and row.get("status") in {"prepared", "normal_exit_acknowledged"}
+            and (row.get("generation") != _PROCESS_GENERATION or row.get("supervisor_pid") != os.getpid())):
+        return row
+    return {}
+
+
+def owner_restart_in_progress(root: Any) -> bool:
+    """Server latches, or a worker's own parent's prepared door; never Panic."""
+    import multiprocessing
+
+    parent = multiprocessing.parent_process()
+    if parent is not None:
+        row = active_restart_transaction(root)
+        return bool(row.get("door") == "owner_restart" and row.get("status") == "prepared"
+                    and not row.get("door_applied_at") and row.get("supervisor_pid") == parent.pid)
+    from ouroboros import server_restart
+
+    return bool(pathlib.Path(root) == pathlib.Path(server_restart.DATA_DIR)
+                and server_restart._OWNER_STOP_BEGAN.is_set())
+
+
+def consume_owner_restart(root: Any, row: dict) -> None:
+    current = _read_restart_transaction(root, row["transaction_id"])
+    _write_restart_transaction(root, {**current, "door_applied_at": utc_now_iso()})
+
+
 def arm_active_planned_restart_transaction(drive_root: Any) -> str:
     """Pass a prepared restart transaction to a direct exec/spawn successor.
 
@@ -974,10 +1069,7 @@ def pre_adopt_planned_handoffs(
         for task in list(pending_tasks or []) if str(task.get("id") or "")
     }
     root = pathlib.Path(drive_root) / "state" / "delegate_recovery"
-    no_resume_flag = next((
-        name for name in ("owner_restart_no_resume.flag", "panic_stop.flag")
-        if (pathlib.Path(drive_root) / "state" / name).exists()
-    ), "")
+    from ouroboros.work_stop import current_stop
     for path in root.glob("*.json") if root.exists() else ():
         task_id = path.stem
         row = _read(drive_root, task_id)
@@ -990,8 +1082,8 @@ def pre_adopt_planned_handoffs(
         transaction_id = str(row.get("restart_transaction_id") or "")
         transaction = _read_restart_transaction(drive_root, transaction_id)
         mismatch = ""
-        if no_resume_flag:
-            mismatch = f"startup_no_resume:{no_resume_flag}"
+        if pending_owner_restart(drive_root) or current_stop(task):
+            mismatch = "startup_work_stopped"
         elif not transaction_id:
             mismatch = "restart_transaction_missing"
         elif transaction.get("status") != "normal_exit_acknowledged":
@@ -1122,8 +1214,7 @@ def planned_handoff_resume_allowed(drive_root: Any, task: Mapping[str, Any]) -> 
         row = _read(drive_root, task_id)
         if row.get("status") != "pre_adopted" or not planned_handoff_matches(row, task):
             return False
-        if any((pathlib.Path(drive_root) / "state" / name).exists()
-               for name in ("owner_restart_no_resume.flag", "panic_stop.flag")):
+        if owner_restart_in_progress(drive_root) or pending_owner_restart(drive_root):
             return False
         transaction_id = str(row.get("restart_transaction_id") or "")
         transaction = _read_restart_transaction(drive_root, transaction_id)

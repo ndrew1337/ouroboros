@@ -424,8 +424,10 @@ def test_resume_attention_follows_the_parked_rows_release_rule(tmp_path, cause, 
         assert rows[0]["can_resume"] is True and rows[0]["cancelable"] is True
         assert rows[0]["attention_reason"] == reason
     # Pausing is not yet parked: no Resume is offered before the boundary.
-    activity.update(phase="budget_pausing")
+    activity.update(phase="budget_pausing", live=True)
     assert main_decisions_snapshot(tmp_path, [activity], {})["main_attention"] == []
+    activity["live"] = False
+    assert bool(main_decisions_snapshot(tmp_path, [activity], {})["main_attention"]) is can_resume
 
 
 def test_required_quiz_wait_is_one_identity_and_does_not_hide_other_task_actions(tmp_path):
@@ -449,7 +451,7 @@ def test_required_quiz_wait_is_one_identity_and_does_not_hide_other_task_actions
     # A parked row runs no wait loop, so its recorded wait is no separate
     # action beside Resume.
     assert row["can_resume"] is True and row["model_waits"] == {}
-    activity.update(phase="budget_pausing")
+    activity.update(phase="budget_pausing", live=True)
     assert main_decisions_snapshot(tmp_path, [activity], {})["main_attention"] == []
 
 

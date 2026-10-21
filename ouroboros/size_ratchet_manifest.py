@@ -3,7 +3,6 @@
 BASELINE_SOURCE_SHA = "77d6827b7a72a632899bb6cc64a7e759aabcfaa6"
 
 GIANT_PATHS = (
-    "server.py",
     "skills/unix_computer_use/plugin.py",
     "supervisor/workers.py",
     "tests/test_claudexor_owned_daemon.py",
@@ -242,7 +241,6 @@ BAND_PATHS = {
     "tests/test_provider_contract_ci.py": "Provider canary matrix pins grew with the deepseek_direct row; split when the next provider lands.",
     "tests/test_provider_failure_reporting.py": "Entered the band from 938 lines: the provider-failure honesty rework added the retry-wall marker suites (entry-clear, all-retryable stamp, empty-response provider-failing gate, no-repay rail) beside the cost-validation suites (bool/NaN/inf/negative/huge-int at both boundaries) - one file per failure-reporting surface.",
     "tests/test_repo_health_smoke.py": "size-ratchet redesign: merge-aware previous, pairwise base-vs-tip, candidate-mode generator contract tests",
-    "tests/test_retry_pause_identity.py": "The retry consumer matrix follows one saved attempt through owner Pause, worker loss, reaping and explicit Resume; shared fixtures retain the same physical identity across those coupled doors.",
     "tests/test_review_agent_session_route.py": "D06 F2.3a re-entry by extraction: the session-route giant (3399) split into three sibling suites + shared fixtures; this remainder keeps the typed-verdict/route themes at 1218 with headroom",
     "tests/test_review_custody_replay_policy.py": "The existing replay and late-capture suite keeps its shared worker/capture fixtures and deterministic deadline assertions together; the timing regression repair adds no runtime surface.",
     "tests/test_review_ledger.py": "Ledger pins for the pool gate: pending-record provenance, the real empty-pool cycle under advisory and the NOT_PERFORMED reasons sit beside the reduce_verdict tests they prove; split by surface next touch.",

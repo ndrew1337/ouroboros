@@ -199,6 +199,14 @@ def acknowledge_press(root: Any, card_id: str, request_id: str) -> None:
         _update(_card_path(root, card_id), mutate)
 
 
+def late_press_ref(value: Any) -> Optional[Dict[str, str]]:
+    """Typed provenance of a press whose card's author no longer holds it: ``{task_id, card_id, request_id}``."""
+    if not isinstance(value, dict):
+        return None
+    ref = {key: str(value.get(key) or "").strip() for key in ("task_id", "card_id", "request_id")}
+    return ref if ref["task_id"] and ref["request_id"] and valid_card_id(ref["card_id"]) else None
+
+
 def press_wait(row: Dict[str, Any]) -> str:
     """``awaiting_recipient_read`` while a delivered press waits for its author to read it, else ``""``."""
     return "" if row.get("read_at") else str(row.get("delivery_reason") or "")
@@ -262,7 +270,7 @@ def unpin_card(root: Any, card_id: str) -> bool:
 
 __all__ = [
     "CARD_KINDS", "CardStoreError", "MAX_APP_BYTES", "MAX_PINS", "MAX_SUBMISSIONS", "acknowledge_press",
-    "find_submission", "load_card", "mark_delivery", "pin_card", "pinned_cards", "press_wait", "read_app_bytes",
-    "record_publication", "record_submission", "store_app_bytes", "submissions_summary", "unpin_card", "valid_card_id",
-    "write_card",
+    "find_submission", "late_press_ref", "load_card", "mark_delivery", "pin_card", "pinned_cards", "press_wait",
+    "read_app_bytes", "record_publication", "record_submission", "store_app_bytes", "submissions_summary",
+    "unpin_card", "valid_card_id", "write_card",
 ]

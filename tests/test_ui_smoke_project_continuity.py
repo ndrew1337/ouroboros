@@ -26,6 +26,7 @@ import pytest
 
 from ouroboros import dialogue_store
 from tests._work_projection_shared import with_work_fields
+from tests.test_reconnect_feed_browser import HISTORY_LANDED
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
 from tests.ui_chat_viewport_smoke import _OBSERVE_STATE_READS, _wait_state_reads_quiescent
 
@@ -236,12 +237,12 @@ def test_ui_smoke_stale_history_rebuild_keeps_owner_bubble(direct_server_with_da
                 assert "Message saved for task" in annotation.inner_text()
 
                 # Reconnect-driven full rebuild replays the STALE response.
+                page.evaluate(HISTORY_LANDED)
                 page.evaluate(
                     "() => window.__ouroWs.emit('open', { previouslyConnected: true })"
                 )
-                page.wait_for_selector(
-                    '.chat-bubble[data-system-type="reconnect"]', timeout=10_000
-                )
+                page.wait_for_function("() => window.historyLanded > 0", timeout=10_000)
+                assert page.locator('[data-system-type="reconnect"]').count() == 0
                 survivor = page.locator(
                     f'.chat-bubble.user[data-client-message-id="{cmid}"]'
                 )

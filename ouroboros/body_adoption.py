@@ -208,12 +208,15 @@ def authorize_row(data_dir: pathlib.Path, row: Dict[str, Any], commit: str, *, r
         "data_dir": str(pathlib.Path(data_dir).resolve()), "branch": branch, "old": old, "cand": cand,
         "candidate_id": row.get("candidate_id"), "candidate_branch": row.get("branch"),
         "candidate_path": str(candidate), "task_id": task_id, "reason": str(reason or ""),
+        "created_tag": str((row.get("reviewed_release_tags") or {}).get(cand) or ""),
         "switch": rows, "deps_command": _dependency_command(serving, rows), "authorized_at": utc_now_iso(),
         "unreviewed_commits": unreviewed, "attempts": 0, "events": [],
         "tests": qualification,
     }
     # The helper is captured from the body that is running, never from the candidate.
     shutil.copyfile(pathlib.Path(body_switch.__file__), directory / "switch.py")
+    from ouroboros import installation_stop
+    shutil.copyfile(pathlib.Path(installation_stop.__file__), directory / "installation_stop.py")
     _git(serving, "update-ref", f"{PIN_PREFIX}{handoff['id']}", cand)
     body_switch.record(str(directory), handoff, "authorized", f"restart reason: {reason}")
     _log(data_dir, "body_adoption_authorized", handoff, branch=branch, paths=len(rows))
@@ -343,7 +346,7 @@ def arm(data_dir: Any, *, worker_exits: Any, live_children: Any, owned_stop: Any
             ("worker_exits_unconfirmed", census is None or bool(census.get("unconfirmed"))),
             ("child_processes_alive", bool(live_children)),
             ("owned_work_unconfirmed", stop.get("state") != "completed" or bool(stop.get("unconfirmed"))),
-            ("panic_stop", (pathlib.Path(data_dir) / "state" / "panic_stop.flag").exists()),
+            ("panic_stop", body_switch.installation_panic(data_dir)),
         ) if blocked]
         directory = str(helper_dir(data_dir))
         if blockers:
@@ -459,7 +462,7 @@ def finalize_on_boot(data_dir: Any, repo_dir: Any, *, supervisor_ready: bool,
     body_switch.record(str(helper_dir(data_dir)), handoff, "adopted", f"ready on {head[:12]} (pid {os.getpid()})")
     _archive(data_dir, handoff, "adopted")
     kept = sorted({*(loaded.get("later_edits") or []), *(handoff.get("later_edit_kept") or [])})
-    return {"outcome": "adopted", "sha": head,
+    return {"outcome": "adopted", "sha": head, "created_tag": str(handoff.get("created_tag") or ""),
             "note": f"Adopted candidate commit {cand} on {handoff.get('branch')}; previous commit "
                     f"{str(handoff.get('old') or '')[:12]}."
                     + (f" Later local edits were kept at: {', '.join(kept)}." if kept else "")}
@@ -485,9 +488,10 @@ def settle_on_boot(data_dir: Any, repo_dir: Any, *, supervisor_ready: bool) -> D
 
         branch = _git(repo_dir, "symbolic-ref", "-q", "--short", "HEAD", check=False).stdout.strip()
         _record_checkout_facts({"current_branch": branch, "current_sha": result["sha"]})
-        # Adopted, the commit IS the serving line: the same push every local commit gets (an
-        # optional `origin` is the owner's persistence choice; a failure is the usual skip).
-        pushed, push_msg = push_to_remote(branch or None)
+        # The consumed handoff carries only this commit's operation-created tag.
+        pushed, push_msg = push_to_remote(branch or None, created_tag=str(result.get("created_tag") or ""),
+                                         expected_commit_sha=result["sha"])
+        result["note"] += f" Publication: {push_msg}."
         log.info("Serving push after body adoption: %s (%s)", "ok" if pushed else "skipped", push_msg)
 
     def notify() -> None:

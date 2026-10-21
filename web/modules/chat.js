@@ -142,7 +142,7 @@ import {
     rawTimestampEpoch,
     stampNodeTimestamp,
     reconcileHydratedDirectActivities,
-    reconnectBannerText,
+    restartNoticeText,
     senderLabel,
     taskCostMeta,
     taskCostProjection,
@@ -493,11 +493,11 @@ export function createChatInstance({
     }
     let activeLiveGroupId = '';
     let pendingReconnectSync = false;  // Set when a fromReconnect sync arrives while one is already in-flight.
-    let pendingReconnectBannerText = '';
+    let pendingRestartNotice = '';
     try {
-        pendingReconnectBannerText = reconnectBannerText(new URL(window.location.href).searchParams.get('_ouro_reason') || '');
+        pendingRestartNotice = restartNoticeText(new URL(window.location.href).searchParams.get('_ouro_reason') || '');
     } catch {}
-    function clearPendingReconnectBanner() {
+    function clearReloadParams() {
         try {
             const url = new URL(window.location.href);
             if (!url.searchParams.has('_ouro_reason') && !url.searchParams.has('_ouro_refresh')) return;
@@ -3495,29 +3495,20 @@ export function createChatInstance({
         const isReconnect = typeof msg?.previouslyConnected === 'boolean'
             ? msg.previouslyConnected
             : wsHasConnectedOnce;
-        const reconnectBanner =
-            pendingReconnectBannerText
-            || (isReconnect ? 'Reconnected' : '');
-        const shouldClearReconnectParams = Boolean(pendingReconnectBannerText);
-        pendingReconnectBannerText = '';
+        // Room status carries the outage; only a reload onto changed code adds a restart notice.
+        const restartNotice = isReconnect ? '' : pendingRestartNotice;
+        pendingRestartNotice = '';
         wsHasConnectedOnce = true;
         updateMessagesPadding();
+        const settled = () => {
+            if (restartNotice) addMessage(restartNotice, 'system', false, null, false, { ephemeral: true, systemType: 'reconnect' });
+            clearReloadParams();
+        };
         loadUiPreferences()
             // Reconnect refetches lost task_done; first open shares idle-gated hydration.
             .then(() => (isReconnect ? syncHistory({ fromReconnect: true })
                 : waitForHydrationWindow().then(awaitInitialHydration)))
-            .then(() => {
-                if (reconnectBanner) {
-                    addMessage(reconnectBanner, 'system', false, null, false, { ephemeral: true, systemType: 'reconnect' });
-                    if (shouldClearReconnectParams) clearPendingReconnectBanner();
-                }
-            })
-            .catch(() => {
-                if (reconnectBanner) {
-                    addMessage(reconnectBanner, 'system', false, null, false, { ephemeral: true, systemType: 'reconnect' });
-                    if (shouldClearReconnectParams) clearPendingReconnectBanner();
-                }
-            });
+            .then(settled, settled);
     });
 
     onWs('close', () => {

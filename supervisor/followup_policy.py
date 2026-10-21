@@ -151,7 +151,8 @@ def policy_view(root, data, record):
     controls, wait, busy = {}, "", False
     released = record.get("followup_released") or {}
     try:
-        if (pathlib.Path(root) / "state/owner_restart_no_resume.flag").exists():
+        from ouroboros.delegate_recovery import owner_restart_in_progress, pending_owner_restart
+        if owner_restart_in_progress(root) or pending_owner_restart(root):
             wait = "owner_restart_in_progress"
         origin = origin_of(record)
         origin_ids = set(origin.values()) - {""}

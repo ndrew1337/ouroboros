@@ -21,6 +21,7 @@ import pytest
 
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture
 from tests.ui_chat_viewport_smoke import wait_drawer_closed
+from tests.test_reconnect_feed_browser import HISTORY_LANDED
 
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
@@ -135,9 +136,12 @@ def test_notes_reach_main_activity_and_the_live_banner(direct_server_with_data, 
                 window.__reminderBannerObserver.observe(document.querySelector('#toast-stack'), { childList: true });
             }""", LIVE)
             assert page.evaluate("getSelection().toString()") == LIVE
+            # Live delivery may precede its durable append; this scenario tests adoption of a saved row.
+            _wait_for_row(page.request, url, LIVE)
             for attempt in (1, 2):
-                reconnected = page.locator('#chat-messages .chat-bubble[data-system-type="reconnect"]')
-                before = reconnected.count()
+                page.wait_for_function("() => window.__ouroWs.ws?.readyState === WebSocket.OPEN"
+                                       " && Boolean(window.__ouroWs._lastSha)", timeout=30_000)
+                page.evaluate(HISTORY_LANDED)
                 with page.expect_response(lambda response: "/api/chat/history" in response.url
                                           and response.request.method == "GET", timeout=30_000) as history:
                     page.evaluate("window.__ouroWs.ws.close()")
@@ -145,11 +149,8 @@ def test_notes_reach_main_activity_and_the_live_banner(direct_server_with_data, 
                 rows = history.value.json()["messages"]
                 row = next(row for row in rows if row.get("system_type") == "reminder"
                            and row.get("text", "").endswith(LIVE))
-                # The reconnect row is appended only after syncHistory has painted.
-                # Wait for that independent marker, so a duplicate still gets a RED capture.
-                page.wait_for_function("""before => document.querySelectorAll(
-                    '#chat-messages .chat-bubble[data-system-type="reconnect"]').length > before""",
-                    arg=before, timeout=30_000)
+                page.wait_for_function("() => window.historyLanded > 0", timeout=30_000)
+                assert page.locator('[data-system-type="reconnect"]').count() == 0
                 page.evaluate(SETTLED)
                 page.screenshot(path=str(evidence / f"main-live-reconnect-{attempt}.png"))
                 assert live.count() == 1, "reconnect history must adopt the live reminder"

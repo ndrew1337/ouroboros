@@ -197,12 +197,13 @@ def test_exact_planned_handoff_reaches_worker_once(prepared, monkeypatch, adopt_
 @pytest.mark.parametrize("reason", ["stale_queue_row_grant_consumed", "stale_resume_grant_superseded"])
 @pytest.mark.parametrize("basis", ["valid", "foreign", "unreadable"])
 def test_legacy_spent_hold_is_redecided_on_first_restore(prepared, monkeypatch, reason, basis):
-    from supervisor.events_budget import BUDGET_HOLD_KEY, budget_hold_fact, hold_budget_row, hold_selectable
+    from supervisor.events_budget import hold_budget_row
+    from ouroboros.work_stop import continuation_refusal
 
     case = prepared
     task = case.host.pending[0]
     hold_budget_row(task, reason=reason, extra={"pause_id": "prior-pause", "grant_id": "spent-resume"})
-    assert not hold_selectable(task, task[BUDGET_HOLD_KEY])
+    assert continuation_refusal(task)["grant_state"] in {"consumed", "superseded"}
     assert "_budget_pause_resume" not in task and "_budget_pause_consumed" not in task
     path = recovery._path(case.host.root, "child1")
     if basis == "foreign":
@@ -221,9 +222,9 @@ def test_legacy_spent_hold_is_redecided_on_first_restore(prepared, monkeypatch, 
         return
     assert count == 1
     if basis == "unreadable":
-        assert budget_hold_fact(case.host.pending[0])["reason"] == reason
+        assert continuation_refusal(case.host.pending[0])["reason"] == reason
         return
-    assert budget_hold_fact(case.host.pending[0]) is None
+    assert not continuation_refusal(case.host.pending[0])
     assert recovery.pre_adopt_planned_handoffs(case.host.root, case.host.pending) == {"child1"}
     sent = worker(case.host, monkeypatch)
     workers.assign_tasks()
@@ -238,10 +239,20 @@ def test_unproven_or_owner_stopped_restart_never_assigns(prepared, monkeypatch, 
     case = prepared
     if fault == "bad_proof":
         windows_successor(monkeypatch, case.host.root, case.handoff["restart_transaction_id"], binding={})
+    elif fault == "ordinary_restart":
+        # A new manual Restart supersedes the plan through its own transaction;
+        # an unbound old flag cannot rename an already prepared update.
+        recovery.prepare_owner_restart(case.host.root)
+        monkeypatch.setattr(recovery, "_PROCESS_GENERATION", "successor")
     else:
-        flag = "owner_restart_no_resume.flag" if fault == "ordinary_restart" else "panic_stop.flag"
-        (case.host.root / "state" / flag).write_text("stop", encoding="utf-8")
+        (case.host.root / "state/panic_stop.flag").write_text("panic", encoding="utf-8")
     restore(case)
+    if fault == "panic":
+        from ouroboros.work_stop import current_stop
+        assert current_stop(case.host.pending[0])["door"] == "panic"
+        assert current_stop(case.host.pending[0])["release"] == "resume"
+        # The installation input is no longer needed by the adoption decision.
+        (case.host.root / "state/panic_stop.flag").unlink()
     assert recovery.pre_adopt_planned_handoffs(case.host.root, case.host.pending) == set()
     sent = worker(case.host, monkeypatch)
     workers.assign_tasks()
@@ -286,9 +297,12 @@ def test_assignment_rechecks_exact_pre_adoption_and_independent_fences(prepared,
                           "tx_membership": ("task_ids", [])}[fault]
             transaction[key] = value
             atomic_write_json(path, transaction)
-    elif fault in {"owner_restart", "panic"}:
-        flag = "owner_restart_no_resume.flag" if fault == "owner_restart" else "panic_stop.flag"
-        (case.host.root / "state" / flag).write_text("stop", encoding="utf-8")
+    elif fault == "owner_restart":
+        from tests._work_stop_helpers import live_restart
+        live_restart(case.host.root, monkeypatch)
+    elif fault == "panic":
+        from ouroboros.work_stop import stop_record
+        task["_budget_pause_hold"] = stop_record("panic_hold", held_at="test")
     elif fault == "owner_hold":
         task["_owner_hold"] = {"reason": "owner"}
     elif fault == "budget":
@@ -423,7 +437,7 @@ def test_expired_planned_grant_never_stands_in_for_a_carrier(prepared, expiry, m
 def test_held_planned_expiry_rereads_controls_and_handoff(prepared, expiry, monkeypatch, change, during):  # noqa: F811
     """Panic, a no-resume restart, Stop or a vetoed handoff wins before marking or while custody runs off Q."""
     from ouroboros.cancel_intents import request_cancel
-    from ouroboros.server_control import _write_panic_flag
+    from ouroboros.work_stop import stop_record
 
     case = prepared
     root = case.host.root
@@ -433,9 +447,10 @@ def test_held_planned_expiry_rereads_controls_and_handoff(prepared, expiry, monk
 
     def alter(*_a, **_k):
         if change == "panic":
-            _write_panic_flag(root)
+            task["_budget_pause_hold"] = stop_record("panic_hold", held_at="test")
         elif change == "owner_restart":
-            (root / "state" / "owner_restart_no_resume.flag").write_text("stop", encoding="utf-8")
+            from tests._work_stop_helpers import live_restart
+            live_restart(root, monkeypatch)
         elif change == "stop":
             request_cancel(root, "child1", source="test", reason="Stop the held planned task")
         else:

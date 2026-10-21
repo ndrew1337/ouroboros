@@ -381,9 +381,8 @@ def test_observe_cannot_dispose_any_captured_patch_at_dispatch(tmp_path, monkeyp
     assert act_calls == [(name, args)]
 
 
-def test_publication_of_evolution_stats_is_withheld_from_observe(tmp_path, monkeypatch):
-    """``generate_evolution_stats`` pushes docs/evolution.json through the GitHub
-    API: a publication, not a read, so Observe does not get it (Sol plan note)."""
+def test_evolution_stats_artifact_write_is_withheld_from_observe(tmp_path, monkeypatch):
+    """The local export writes a task artifact; it is not an Observe-only read."""
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     assert "generate_evolution_stats" in ca.OBSERVE_DISABLED
     wake = _registry(tmp_path, _wake_task("observe")["metadata"])

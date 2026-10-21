@@ -11,13 +11,12 @@ import { setInlineStatus } from './ui_helpers.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { taskCancelPending } from './log_events.js';
 import { waitingModel } from './project_activity.js';
-import { openWorkControls, resumeTargets, workOfEpisode } from './work_status.js';
+import { memberState, openWorkControls, resumeTargets, workOfEpisode, workRowView } from './work_status.js';
 import { censusTaskFacts, censusTaskPhase, paintTaskPhase } from './task_phase_chip.js';
 import {
     ACTION_HURRY,
     ACTION_RESUME,
     TASK_CONTROL_TRIGGER_LABEL,
-    heldWorkFacts,
     hurryTaskAction,
     isRootTaskRow,
     openTaskControlMenu,
@@ -290,69 +289,24 @@ export function initActivity({ mount, ws } = {}) {
         const phases = new Map(activities.map((a) => [String(a?.activity_id || ''), a?.phase]));
         // Resume is offered only on a task a work's Resume control names (the server's door decision).
         const resumable = resumeTargets(census);
-        const rootPhases = new Map();
-        for (const q of [...running, ...pending]) {
-            const t = q?.task || {}, id = String(q.id || t.id || '');
-            // The census contains roots only; compact pending snapshots may omit retry lineage.
-            if (phases.has(id)) rootPhases.set(String(t.root_task_id || id), phases.get(id));
-        }
         phaseViews = [];
-        // #322: the snapshot already carries the pause truth — a member's own
-        // _budget_pause row, or a root fence covering its tree.
-        const liveFences = ((queue && queue.budget_root_fences) || [])
-            .filter((f) => f && ['active', 'paused'].includes(String(f.status || '')));
-        const fencedRoots = new Set(liveFences.map((f) => String(f.root_task_id || '')));
-        // The owner's Pause rides the same latch, typed by its cause: not money.
-        const ownerFencedRoots = new Set(liveFences.filter((f) => f.cause === 'owner_pause')
-            .map((f) => String(f.root_task_id || '')));
-        // #1196: a row whose root fence was lifted keeps a durable HOLD instead —
-        // nothing dispatches it until an explicit selection is recorded, so
-        // showing it as plain "queued" would promise work that cannot start.
-        const heldRow = (t) => Boolean(t && t._budget_pause_hold && !t._budget_pause_hold.selected);
-        const rowBudgetPaused = (q, t, kind) => kind === 'pending' && Boolean(
-            (t && t._budget_pause)
-            || heldRow(t)
-            || fencedRoots.has(String((t && (t.root_task_id || t.id)) || q.id || '')));
         const row = (q, kind) => {
             const t = (q && q.task) || {};
             const id = esc(q.id || t.id || '');
             const label = esc(t.title || t.objective || t.text || q.type || id || 'task');
             const rt = kind === 'running' && q.runtime_sec != null ? ` · ${Math.round(q.runtime_sec)}s` : '';
-            // The owner's Restart holds never-started work under the same
-            // hold carrier (restart_retention.py): same Resume, its own words.
-            // Work saved before an application stop (saved_work_hold, #1563) has
-            // the census's same "after restart" cause; it is never a money pause.
-            const restartHeld = heldRow(t)
-                && ['owner_restart_hold', 'saved_work_hold'].includes(t._budget_pause_hold.reason);
-            // A held Continue waits on its predecessor's unsettled work, not on money (#1721).
-            const continueHeld = heldRow(t) && t._budget_pause_hold.reason === 'continuation_writer_unsettled';
-            const waiting = q.owner_wait;
-            const warmSleeping = kind === 'running' && waiting?.state === 'waiting'
-                && waiting.reason === 'sleep' && waiting.sleep?.mode === 'warm';
-            const sleeping = t._budget_pause?.reason === 'sleep' || warmSleeping;
-            const ownerPaused = t._budget_pause?.reason === 'owner'
-                || ownerFencedRoots.has(String(t.root_task_id || t.id || q.id || ''));
-            const authorityPaused = t._budget_pause?.reason === 'authority';
-            // Census addresses the current physical retry. Children use that actor's phase,
-            // while a separate late-work row keeps its own identity and controls.
-            const ownId = String(q.id || t.id || ''), rootId = String(t.root_task_id || ownId);
-            const phase = phases.get(ownId) ?? rootPhases.get(rootId) ?? phases.get(rootId);
-            const paused = rowBudgetPaused(q, t, kind) || (ownerPaused && phases.get(ownId) === 'budget_paused');
-            const parked = paused && (!ownerPaused || phase === 'budget_paused');
-            const kindLabel = phase === 'unknown' ? 'pause status unknown'
-                : phase === 'budget_pausing' ? 'pausing' : restartHeld ? 'held after Restart'
-                : continueHeld ? 'held: earlier work not proven settled'
-                : (paused ? (ownerPaused ? 'paused' : sleeping ? 'sleeping'
-                    : authorityPaused ? 'paused (technical)' : 'paused (budget)') : sleeping ? 'sleeping' : kind);
-            // A result is still the row's own, beside its wait word.
+            const ownId = String(q.id || t.id || '');
+            const projected = workOfEpisode(census, ownId) || memberState(census, ownId);
+            const view = workRowView(projected || { activity: 'unknown', confirmed: false });
+            const parked = projected?.activity === 'paused';
+            const kindLabel = view.word;
             const outcome = ownId && ownOutcomePhase(activities.find((entry) => entry?.activity_id === ownId),
-                kindLabel === 'running' ? '' : kindLabel);
-            const heldFacts = continueHeld ? heldWorkFacts(t._budget_pause_hold.blockers) : '';
-            const meta = `${outcome ? phaseSlot(outcome) : esc(kindLabel)}${heldFacts ? ` · ${esc(heldFacts)}` : ''}${q.type ? ` · ${esc(q.type)}` : ''}${rt}`;
+                projected?.activity === 'working' && projected.transition === 'none' ? '' : kindLabel);
+            const meta = `${outcome ? phaseSlot(outcome) : esc(kindLabel)}${view?.secondary ? ` · ${esc(view.secondary)}` : ''}${q.type ? ` · ${esc(q.type)}` : ''}${rt}`;
             const hold = t.project_admission_hold;
             const projectWait = hold?.label ? ` · ${esc(hold.label)}: ${esc(hold.detail || hold.reason)}` : '';
             // The held cause is what the owner reads before Resume: it wraps, never ellipsized.
-            return `<div class="activity-row${continueHeld ? ' activity-held' : ''}">
+            return `<div class="activity-row${projected?.activity === 'waiting' ? ' activity-held' : ''}">
                 <div class="activity-row-main">
                     <span class="activity-name">${label}</span>
                     <span class="activity-sub">${meta}${projectWait}</span>

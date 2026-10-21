@@ -205,12 +205,12 @@ def test_pause_is_transient_wait_and_resume_preserves_eligibility(world):
 def test_restart_marker_temporarily_fences_but_does_not_hold_healthy_schedules(world):
     _, root, pending = world
     related = register(world)
-    marker = root / 'state/owner_restart_no_resume.flag'
-    marker.write_text('owner_restart')
+    from ouroboros.delegate_recovery import prepare_owner_restart, consume_owner_restart
+    door = prepare_owner_restart(root, legacy=True)
     queue.check_scheduled_tasks()
     assert pending == []
     record_restart(root)
-    marker.unlink()
+    consume_owner_restart(root, door)
     queue.check_scheduled_tasks()
     assert [task['metadata']['schedule_id'] for task in pending] == [related['id']]
     assert not row(root, related['id']).get('followup_hold')

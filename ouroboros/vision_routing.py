@@ -643,18 +643,19 @@ def _caption_for_block(
     task_id: str = "",
     event_queue: Any = None,
 ) -> Tuple[str, str]:
-    """Return (caption, failure), both empty if no route can accept these pixels.
-
-    Each candidate's prepared-byte identity governs its refusal and memo lookup.
-    """
+    """Return (caption, failure), both empty without a route. Each candidate's
+    prepared-byte identity governs its refusal and memo lookup."""
     memo = accumulated_usage.setdefault("_vision_caption_memo", {})
     model, url, url_digest, preparation_note, failure = prepare_caption_image(block, ctx, llm, accumulated_usage)
     # Completed captions remain reusable after their generating account is unavailable.
     key = f"{url_digest}|{model}|v1"
     if memo.get(key):
         return str(memo[key]), ""
+    from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY  # an owed timeout repeat (#1886) buys no caption
     if not model or not url:
         return "", failure
+    if TIMEOUT_REPEAT_KEY in accumulated_usage:
+        return "", failure or "no new caption is generated for a timeout repeat"
     call_id = new_call_id("vision_caption")
     prompt_ref = {}
 

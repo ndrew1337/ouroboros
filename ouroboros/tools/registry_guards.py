@@ -358,7 +358,6 @@ _GITHUB_TOKEN_TOOLS = frozenset({
     "close_github_issue",
     "create_github_issue",
     "submit_skill_to_hub",
-    "generate_evolution_stats",
 })
 
 
@@ -387,7 +386,7 @@ def _builtin_tool_availability(name: str, ctx: Any = None) -> tuple[bool, str, s
             return True, "", ""
     if tool in _GITHUB_TOKEN_TOOLS:
         detail = "GITHUB_TOKEN"
-        if tool in {"submit_skill_to_hub", "generate_evolution_stats"}:
+        if tool == "submit_skill_to_hub":
             configured = bool(os.environ.get("GITHUB_TOKEN", "").strip())
         else:
             from ouroboros.tools.github import github_cli_configured

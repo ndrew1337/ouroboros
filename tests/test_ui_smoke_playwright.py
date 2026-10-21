@@ -1253,7 +1253,7 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                     " && window.__ouroWs._lastSha.length > 0",
                     timeout=30_000,
                 )
-                page.evaluate("() => { window.__chronologyDocument = {}; }")
+                page.evaluate("() => { window.__chronologyDocument = {socket: window.__ouroWs.ws}; }")
 
                 t1 = {
                     "ts": "2025-07-18T10:00:01+00:00",
@@ -1330,8 +1330,8 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                 assert scroll_before["remaining"] > 160
                 direct_server_with_data["restart_server"]()
                 page.wait_for_function(
-                    "() => [...document.querySelectorAll('.chat-bubble.system')]"
-                    ".some((node) => node.textContent.includes('Reconnected'))",
+                    "() => window.__ouroWs.ws !== window.__chronologyDocument.socket"
+                    " && window.__ouroWs.ws?.readyState === WebSocket.OPEN",
                     timeout=20_000,
                 )
                 page.wait_for_selector(
@@ -1347,8 +1347,7 @@ def test_ui_smoke_chat_chronology_reconnect_and_plain_answer_marker(direct_serve
                     # timestamp of its own: it is chrome, not a transcript row.
                     """() => [...document.querySelector('#chat-messages').children]
                         .filter((node) => !node.classList.contains('typing-bubble')
-                            && !node.classList.contains('chat-load-older')
-                            && !node.textContent.includes('Reconnected'))
+                            && !node.classList.contains('chat-load-older'))
                         .map((node) => ({
                             text: node.textContent,
                             ts: node.dataset.ts || '',

@@ -1,6 +1,7 @@
 """Owner process verbs work before onboarding without an unconsumed chat bus."""
 
 from tests import _dialogue as dialogue_test
+from ouroboros.delegate_recovery import active_restart_transaction
 from types import SimpleNamespace
 import threading
 
@@ -37,7 +38,7 @@ def test_runtime_branch_defaults_preserve_managed_choices_and_fallback(monkeypat
 
 
 @pytest.fixture
-def startup_controls(native_guard, tmp_path, monkeypatch):
+def startup_controls(native_guard, tmp_path, monkeypatch):  # noqa: F811 - imported fixture
     import server
     from ouroboros.gateway.control import api_command
     from ouroboros.gateway.ws import ws_endpoint
@@ -60,6 +61,10 @@ def startup_controls(native_guard, tmp_path, monkeypatch):
     monkeypatch.setattr(server, '_owner_restart_requested', threading.Event())
     from ouroboros import server_process, server_restart
     monkeypatch.setattr(server_restart, 'DATA_DIR', data)
+    monkeypatch.setattr(server_restart, '_OWNER_STOP_BEGAN', threading.Event())
+    monkeypatch.setattr(server_restart, '_LAST_RETURN_TX', {'id': ''})
+    monkeypatch.setattr(server_restart, '_LAST_RETURNING', set())
+    monkeypatch.setattr(server_restart, '_owner_restart_requested', server._owner_restart_requested)
     monkeypatch.setattr(server_process, '_restart_requested', server._restart_requested)
     monkeypatch.setattr(server_process, '_owner_restart_requested', server._owner_restart_requested)
     monkeypatch.setattr(message_bus, '_BRIDGE', None)
@@ -118,7 +123,7 @@ def startup_without_consumer(startup_controls, monkeypatch, request):
         assert not thread.is_alive()
 
 
-def test_onboarding_restart_uses_existing_no_resume_flags_and_exit_signal(startup_without_consumer, monkeypatch):
+def test_onboarding_restart_uses_existing_restart_transaction_and_exit_signal(startup_without_consumer, monkeypatch):
     obj = startup_without_consumer
     calls = []
     from ouroboros import server_restart
@@ -130,8 +135,8 @@ def test_onboarding_restart_uses_existing_no_resume_flags_and_exit_signal(startu
     assert calls == [('checked', {'reason': 'owner_restart', 'unsynced_policy': 'rescue_and_reset'}), ('stopped', {})]
     assert obj.server._restart_requested.is_set() and obj.server._owner_restart_requested.is_set()
     assert obj.server.RESTART_EXIT_CODE == 42
-    assert (obj.data / 'state/owner_restart_no_resume.flag').read_text(encoding="utf-8") == 'owner_restart'
-    assert (obj.data / 'state/panic_stop.flag').read_text(encoding="utf-8") == 'owner_restart_no_resume'
+    assert active_restart_transaction(obj.data)["door"] == "owner_restart"
+    assert not (obj.data / 'state/panic_stop.flag').exists()
     assert not (obj.data / 'settings.json').exists()
     from supervisor import state, git_ops
     assert state.DRIVE_ROOT == git_ops.DRIVE_ROOT == obj.data
@@ -177,7 +182,9 @@ def test_restart_during_initialization_does_not_queue_to_published_bridge(
                                  else {'type': 'chat', 'content': ' /ReStArT '} if surface == 'ws_chat'
                                  else {'type': 'chat', 'content': '/restart', 'client_message_id': 'with-file', 'attachments': [
                                      {'filename': staged['upload'], 'display_name': 'photo.png', 'mime': 'image/png'}]})
-                assert did_stop.wait(3), 'Restart remained behind the initializing supervisor'
+                # Ordered durable chat/file acceptance precedes this door. Allow its
+                # disk work on a loaded host; the fake supervisor stays blocked throughout.
+                assert did_stop.wait(10), 'Restart remained behind the initializing supervisor'
         assert stopped == [{}]
         if surface == 'ws_chat_files':
             from ouroboros import dialogue_retry
@@ -189,8 +196,8 @@ def test_restart_during_initialization_does_not_queue_to_published_bridge(
             assert [ref['upload'] for ref in row['attachments']] == [staged['upload']], 'the file rides the accepted row'
             assert any(item.get('type') == 'command_reply' and item['origin_message_ref']['client_message_id'] == 'with-file'
                        for item in rows), "the door's reply answers that row"
-        assert obj.server._restart_requested.wait(3) and obj.server._owner_restart_requested.is_set()
-        assert (obj.data / 'state/owner_restart_no_resume.flag').read_text(encoding='utf-8') == 'owner_restart'
+        assert obj.server._restart_requested.wait(10) and obj.server._owner_restart_requested.is_set()
+        assert active_restart_transaction(obj.data)["door"] == "owner_restart"
         assert bridge.get_updates(0, timeout=0) == []
     finally:
         release.set()

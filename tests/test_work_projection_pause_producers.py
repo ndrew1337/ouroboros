@@ -52,10 +52,10 @@ def test_a_settling_pause_says_what_still_executes_and_a_stop_nobody_confirmed(t
         install_exact_budget_pause(ctx, task_id, budget_pause.exact_pause_marker(saved)["checkpoint"])
     assert not workers.RUNNING
     [work] = _works(tmp_path)
-    assert (work["activity"], work["transition"], work["live"]) == ("working", "pausing", False)
+    assert (work["activity"], work["transition"], work["live"]) == ("paused", "none", False)
     assert [(tail["code"], tail["state"], tail["ids"]) for tail in work["tails"]] == [
         ("external_runs_unconfirmed", "unknown", ["run-1"])]
-    assert "stop" in {control["action"] for control in work["controls"]}, "its Stop still reaches that run"
+    assert {"stop", "resume"} <= {control["action"] for control in work["controls"]}, "its Stop still reaches that run"
 
 
 def test_a_warm_park_executes_nothing_and_its_unconfirmed_stop_stays_unconfirmed(tmp_path, monkeypatch):

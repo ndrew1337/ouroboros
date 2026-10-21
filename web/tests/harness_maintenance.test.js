@@ -384,3 +384,91 @@ test('disposed view retains late acceptance without rendering or refreshing unre
     assert.equal(intents.get('fixture').operation.state, 'succeeded');
     assert.equal(calls.filter(([kind]) => kind === 'inventory').length, 1);
 });
+
+
+function preparationError(status = 409) {
+    return Object.assign(new Error('Environment preparation complete; CLI update not started. Use Restart in the chat header, then repeat Update.'), {
+        status, body: { error: { code: 'maintenance_restart_required', context: {
+            acceptance: 'not_submitted', scope: 'this_attempt', preparation: 'ready', restartRequired: true,
+        } } },
+    });
+}
+
+test('preparation-only result enables a later explicit Update and never claims an operation or unknown install', async () => {
+    let ready = false;
+    const { controller, calls } = setup({ startHarnessMaintenance: async () => {
+        if (!ready) throw preparationError();
+        return operation();
+    } });
+    await controller.refresh();
+    await controller.start('fixture', { kind: 'latest' });
+    const view = controller.view('fixture');
+    assert.equal(view.request, null);
+    assert.equal(view.operation, null);
+    assert.notEqual(view.unknownCurrent, true);
+    assert.match(harnessMaintenanceMarkup(entry(), view), /preparation complete.*Use Restart in the chat header/);
+    assert.match(harnessMaintenanceMarkup(entry(), view), />Update</);
+    assert.doesNotMatch(harnessMaintenanceMarkup(entry(), view), /Cancel update|Operation completed|acceptance unconfirmed/);
+    assert.equal(calls.filter(([kind]) => kind === 'read' || kind === 'cancel').length, 0);
+    ready = true;
+    await controller.start('fixture', { kind: 'latest' });
+    assert.equal(controller.view('fixture').operation.id, 'operation-1');
+});
+
+test('a local pre-submit response cannot clear an earlier lost POST or change its key/body', async () => {
+    const sent = [];
+    const { controller, intents, api } = setup({ startHarnessMaintenance: async (body, key) => {
+        sent.push({ body, key });
+        if (sent.length === 1) throw new Error('Lost POST');
+        if (sent.length === 2) throw preparationError();
+        return operation();
+    } });
+    await controller.refresh();
+    await controller.start('fixture', { kind: 'latest' });
+    await controller.act('fixture', 'rejoin');
+    assert.ok(controller.view('fixture').request);
+    assert.match(controller.view('fixture').operationError, /acceptance unconfirmed/);
+    controller.dispose();
+    const resumed = createHarnessMaintenanceController({ api, intents, newKey: () => { throw new Error('must retain'); } });
+    await resumed.refresh();
+    await resumed.act('fixture', 'rejoin');
+    assert.deepEqual(sent, [sent[0], sent[0], sent[0]]);
+    assert.equal(resumed.view('fixture').operation.id, 'operation-1');
+});
+
+test('a host-observed pre-submit transport failure is not unknown acceptance on a first press', async () => {
+    const { controller } = setup({ startHarnessMaintenance: async () => { throw preparationError(503); } });
+    await controller.refresh();
+    await controller.start('fixture', { kind: 'latest' });
+    assert.equal(controller.view('fixture').request, null);
+    assert.notEqual(controller.view('fixture').unknownCurrent, true);
+});
+
+for (const code of ['daemon_spawn_failed', 'daemon_starting', 'foreign_daemon_home', 'attach_only_engine']) {
+    for (const lostPost of [false, true]) {
+        test(`${code}: acquisition refusal names no update, but preserves an earlier unknown POST`, async () => {
+            const sent = [];
+            const { controller } = setup({ startHarnessMaintenance: async (body, key) => {
+                sent.push({ body, key });
+                if (lostPost && sent.length === 1) throw new Error('Lost POST');
+                throw Object.assign(new Error('cannot acquire gateway'), { status: 503, body: { error: {
+                    code, context: { acceptance: 'not_submitted', scope: 'this_attempt' },
+                } } });
+            } });
+            await controller.refresh();
+            await controller.start('fixture', { kind: 'latest' });
+            if (lostPost) await controller.act('fixture', 'rejoin');
+            const view = controller.view('fixture');
+            if (lostPost) {
+                assert.ok(view.request);
+                assert.match(view.operationError, /^Update acceptance unconfirmed:/);
+                assert.deepEqual(sent[1], sent[0], 'rejoin keeps the unknown POST key and body');
+            } else {
+                assert.equal(view.request, null);
+                assert.notEqual(view.unknownCurrent, true);
+                assert.match(view.operationError, /^Update not started: cannot acquire gateway$/);
+                assert.match(harnessMaintenanceMarkup(entry(), view), /Update not started: cannot acquire gateway/);
+            }
+        });
+    }
+}

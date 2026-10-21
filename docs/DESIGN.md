@@ -918,7 +918,9 @@ runtime's state, Main's Project lifecycle, or words signed by their author (a
 reminder, a skill notice). It is one short typed mark in owner words, never a
 paragraph or text written for a model. `tests/test_host_message_voice.py` keeps
 every host type stamped as a literal at its send site in one of these classes, with
-its counted producer sites.
+its counted producer sites. Room status carries connection loss; reconnecting adds
+no feed row or counter in Main or a Project (`tests/test_reconnect_feed_browser.py`).
+Only the first open after a reload onto changed code shows `Restart complete`.
 
 Language follows the same line. The install's interface language
 (`OUROBOROS_UI_LANGUAGE`, Settings → Appearance → Language) translates chrome
@@ -961,8 +963,8 @@ Main's empty-chat greeting speaks in neither voice: it is host copy in a quiet
 bubble, a history row or a model reply (`web/modules/welcome_preference.js`). It
 appears only after a successful recent history read whose own window reports
 complete coverage, over a feed with no message or task card (the typing indicator
-and the ephemeral reconnect notice are chrome, by the same rule that gives an empty
-feed its history loading state). Every later read withdraws it while in flight, so
+and the ephemeral `Restart complete` row are chrome, by the same rule that gives an
+empty feed its history loading state). Every later read withdraws it while in flight, so
 that loading state, then any failure, shows instead; only a complete answer brings
 it back, and it leaves with the first message or task card. Project rooms never
 show it.

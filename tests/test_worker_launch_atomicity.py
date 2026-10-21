@@ -68,9 +68,8 @@ def restore(rows, **kwargs):
 
 
 def hold_reason(task):
-    from supervisor.events_budget import budget_hold_fact
-
-    return (budget_hold_fact(task) or {}).get("reason")
+    from ouroboros.work_stop import continuation_refusal, hold_fact
+    return ((hold_fact(task) or continuation_refusal(task)) or {}).get("reason")
 
 
 @pytest.mark.parametrize("zero_budget", [False, True])

@@ -103,12 +103,12 @@ def test_tail_prefix_real_round_and_final_serializers(publisher, monkeypatch):
     assert messages[1] == before[1]
     assert ctx._owner_directives == owner_corpus
     assert owner_source_sha256(ctx) == owner_hash and directive_owner_rows(ctx) == owner_words
+    sent = deepcopy(messages)
     _write(path, "B")
     messages = _run_round_compaction(messages, round_ctx)
-    changed = observe_send(recorder, messages, round_idx=3)
-    assert changed["sanctioned_by"] == "superseded_skill_snapshot"
-    assert changed["index"] == len(before)
-    assert messages[:len(before)] == before
+    assert observe_send(recorder, messages, round_idx=3) is None
+    assert messages[:-1] == sent
+    assert visible_snapshots(messages)[skill.name][1]["text"] == "B"
 
 
 def test_material_change_renewal_reversion_and_compacted_cold_resume(publisher):
@@ -213,11 +213,14 @@ def test_superseded_notes_reclaim_only_after_latest_complete_note(publisher):
     assert _obsolete_host_rows(messages) == {0, 1}
 
 
-def test_successor_addresses_old_full_snapshot_and_retains_exact_source(publisher):
-    import re
+def test_successor_appends_until_host_copy_recovery_and_retains_exact_source(publisher):
+    from ouroboros import context_compaction  # noqa: F401 — public import establishes its leaf facade
+    from ouroboros.artifacts import read_actor_source_bytes
+    from ouroboros.context_source_view import emergency_address_view
     from ouroboros.tools.query_data import _query_data
     from ouroboros.tools.registry import ToolContext
     from ouroboros.skill_context_snapshot import snapshot_note
+    from tests.test_context_reclaim_materializer import _request
 
     root, skill, ctx, path = publisher
     prefix = [{"role": "user", "content": "Owner words remain exact"}]
@@ -225,11 +228,13 @@ def test_successor_addresses_old_full_snapshot_and_retains_exact_source(publishe
     first = _write(path, "A" * 12_000)
     assert maybe_append_skill_snapshots(ctx, messages, root)
     original = deepcopy(messages[1])
+    rebuilt, receipt = emergency_address_view(messages, _request(messages, 1), rung="host_copies",
+                                             drive_root=root, task_id="root")
+    assert rebuilt == messages and receipt.status == "no_eligible"
     _write(path, "B" * 12_000)
     assert maybe_append_skill_snapshots(ctx, messages, root)
-    pointer = messages[1]["content"]
-    assert "\n" not in pointer and "A" * 100 not in pointer and "Superseded skill snapshot" in pointer
-    sha = re.search("sha256='([a-f0-9]{64})'", pointer).group(1)
+    assert messages[1] == original
+    sha = json.loads(original["content"].split("\n", 1)[1])["source"]["retained"]["sha256"]
     read = json.loads(_query_data(ToolContext(repo_dir=root, drive_root=root, task_id="root"),
                                  op="blob", sha256=sha, blob_kind="txt"))
     assert read["status"] == "ok" and json.loads(read["data"]) == first
@@ -244,6 +249,14 @@ def test_successor_addresses_old_full_snapshot_and_retains_exact_source(publishe
     assert renewal["text_ref"]["source_sha256"] != json.loads(original["content"].split("\n", 1)[1])["source"]["sha256"]
     assert visible_snapshots(messages)[skill.name][1]["text"] == "B" * 12_000
     assert "B" * 12_000 in messages[-2]["content"]
+    before = deepcopy(messages)
+    rebuilt, receipt = emergency_address_view(messages, _request(messages, 1), rung="host_copies",
+                                             drive_root=root, task_id="root")
+    assert receipt.status == "applied" and receipt.reclaimed_tokens > 0
+    assert messages == before and original not in rebuilt
+    assert all(row in rebuilt for row in [*prefix, *before[-2:]])
+    assert visible_snapshots(rebuilt)[skill.name][1]["text"] == "B" * 12_000
+    assert json.loads(read_actor_source_bytes(root, "root", receipt.checkpoint_ref))["messages"] == before
 
 
 def test_snapshot_without_retained_source_stays_whole_when_superseded(publisher, monkeypatch):

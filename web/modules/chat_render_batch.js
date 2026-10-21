@@ -8,8 +8,8 @@ const nodePosition = node => node?.dataset?.historySource
     ? { source: node.dataset.historySource, offset: Number(node.dataset.historyOffset) } : null;
 
 // A feed holding only chrome has no conversation: the history control, the typing
-// indicator, Main's empty-state greeting and an ephemeral notice (the reconnect
-// banner). The loading state and the greeting share this one rule.
+// indicator, Main's empty-state greeting and an ephemeral notice (Restart
+// complete). The loading state and the greeting share this one rule.
 export const feedIsEmpty = messages => Array.from(messages.children).every(node =>
     node.classList.contains('chat-load-older') || node.classList.contains('typing-bubble')
     || node.classList.contains('chat-empty-welcome') || node.dataset.ephemeral === '1');

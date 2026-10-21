@@ -347,6 +347,11 @@ def _admit_chat_task(
                 task["text"] = late_answer_model_text(
                     _pool().DRIVE_ROOT, task_metadata.get("late_answer"), str(text or ""),
                 )
+            elif task_metadata.get("card_press") is not None:
+                # A press on a finished author's card: the same, with the card frame rebuilt from the stored press.
+                from ouroboros.gateway.card_decision import card_press_model_text
+
+                task["text"] = card_press_model_text(_pool().DRIVE_ROOT, task_metadata.get("card_press"), str(text or ""))
             # The ingress-captured origin identity rides on the TASK RECORD so a
             # later post-hoc "Turn into project" reads it from the persisted
             # result instead of re-deriving identity from content.
@@ -710,59 +715,40 @@ def handle_wake_direct(
 
 
 def auto_resume_after_restart() -> None:
-    """Auto-resume after a recent restart when scratchpad still has work.
-
-    The owner-Restart marker is consumed only AFTER the queue holding its
-    per-row Restart holds (``restart_retention``) is durably persisted: a
-    marker gone while the holds live only in memory would let the next boot
-    read the older queue as dispatchable work. A failed persist keeps the
-    marker (fail closed, no auto-wake) for the next boot to retry.
-    """
+    """Consume boot doors only after their work stops and controls are durable."""
     try:
-        owner_restart_flag = _pool().DRIVE_ROOT / "state" / "owner_restart_no_resume.flag"
-        if owner_restart_flag.exists():
-            from supervisor.queue import persist_queue_snapshot
-
+        from ouroboros.delegate_recovery import import_legacy_restart, pending_owner_restart, consume_owner_restart
+        from ouroboros.installation_stop import (PANIC_RECEIPT, panic_input, panic_received,
+                                                remove_received_panic)
+        from supervisor.queue import persist_queue_snapshot
+        root = _pool().DRIVE_ROOT
+        import_legacy_restart(root)
+        restart = pending_owner_restart(root)
+        if restart:
             if persist_queue_snapshot(reason="owner_restart_holds") is not True:
-                log.error("Owner restart holds are not durable yet; the restart marker is kept "
-                          "and nothing auto-resumes.")
+                log.error("Owner restart holds are not durable; its door is kept.")
                 return
             from supervisor.queue_schedules import schedule_transaction
             from supervisor.followup_policy import record_restart
-            with schedule_transaction(_pool().DRIVE_ROOT):
-                record_restart(_pool().DRIVE_ROOT)
-                owner_restart_flag.unlink(missing_ok=True)
-            panic_compat_flag = _pool().DRIVE_ROOT / "state" / "panic_stop.flag"
-            try:
-                if panic_compat_flag.read_text(encoding="utf-8").strip() == "owner_restart_no_resume":
-                    panic_compat_flag.unlink(missing_ok=True)
-            except FileNotFoundError:
-                pass
-            except Exception:
-                log.debug("Failed to consume owner restart compatibility flag", exc_info=True)
-            log.info("Owner restart flag detected — skipping auto-resume.")
-            if not (_pool().DRIVE_ROOT / "state" / "panic_stop.flag").exists():
-                return  # a kept Panic flag still owes its durable controls below
-
-        # Panic/owner-restart flags suppress auto-resume and are consumed — a Panic's
-        # only after the queue carrying its sleep holds is durable, like a Restart's.
-        panic_flag = _pool().DRIVE_ROOT / "state" / "panic_stop.flag"
-        if panic_flag.exists():
-            from supervisor.queue import persist_queue_snapshot
-
+            with schedule_transaction(root):
+                record_restart(root)
+                consume_owner_restart(root, restart)
+        identity = panic_input(root)
+        if identity:
+            if panic_received(root, identity):
+                remove_received_panic(root, identity)
+                return
             if persist_queue_snapshot(reason="panic_holds") is not True:
-                log.error("Panic holds are not durable yet; the panic marker is kept.")
+                log.error("Panic holds are not durable; its input is kept.")
                 return
             from ouroboros.server_control import PANIC_CONTROL_KEYS, _panic_controls
-            from supervisor.state import StateUnavailable, update_state
+            from supervisor.state import update_state
 
-            try:
-                update_state(_panic_controls, confirm=PANIC_CONTROL_KEYS)
-            except StateUnavailable as exc:
-                log.warning("Panic flag kept: its disabled controls are not durable yet (%s)", exc)
-                return
-            panic_flag.unlink(missing_ok=True)
-            log.info("Panic flag detected — skipping auto-resume.")
+            update_state(_panic_controls, confirm=PANIC_CONTROL_KEYS)
+            update_state(lambda state: state.update({PANIC_RECEIPT: identity}))
+            remove_received_panic(root, identity)
+            return
+        if restart:
             return
 
         from supervisor.state import control_value
@@ -777,22 +763,6 @@ def auto_resume_after_restart() -> None:
         if not restart_verify_path.exists():
             return
 
-        scratchpad_path = _pool().DRIVE_ROOT / "memory" / "scratchpad.md"
-        if not scratchpad_path.exists():
-            return
-
-        scratchpad = scratchpad_path.read_text(encoding="utf-8")
-        stripped = scratchpad.strip()
-        if not stripped or stripped == "# Scratchpad" or "(empty" in stripped.lower():
-            content_lines = [
-                ln.strip() for ln in stripped.splitlines()
-                if ln.strip() and not ln.strip().startswith("#") and ln.strip() != "- (empty)"
-            ]
-            content_lines = [ln for ln in content_lines if not ln.startswith("UpdatedAt:")]
-            if not content_lines:
-                return
-
-        time.sleep(2)  # Let everything initialize
         if not _pool().chat_turn_liveness():
             import threading
             threading.Thread(

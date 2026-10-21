@@ -96,6 +96,8 @@ D20 = "Presence"
 "ouroboros/swarm_rollup.py" = "D07"
 "launcher.py" = "D18"
 "ouroboros/budget_pause.py" = "D01"
+"ouroboros/work_stop.py" = "D01"
+"ouroboros/installation_stop.py" = "D08"
 "ouroboros/external_runs.py" = "D01"
 "ouroboros/working_checkpoint.py" = "D01"
 "ouroboros/owner_pause.py" = "D01"
@@ -844,6 +846,8 @@ D20 = "Presence"
 "ouroboros/queue_observation.py" = "D08"
 "supervisor/restart_retention.py" = "D08"
 "supervisor/owner_pause_control.py" = "D08"
+"supervisor/owner_pause_resume.py" = "D08"
+"supervisor/work_stop_migration.py" = "D08"
 "supervisor/continuation_admission.py" = "D08"
 "supervisor/sleep_wake.py" = "D08"
 "supervisor/direct_roots.py" = "D08"  # the main loop's off-lock fragment, written beside the snapshot
@@ -1222,6 +1226,7 @@ lazy_only = [
   "D17->D20",
   "D18->D01",
   "D18->D07",
+  "D18->D08",
   "D18->D11",
   "D18->D14",
   "D18->D16",

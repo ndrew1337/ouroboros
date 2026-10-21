@@ -152,11 +152,11 @@ def test_registry_hides_missing_credential_tools(tmp_path, monkeypatch):
     assert "create_github_issue" not in reg.available_tools()
     assert reg.get_schema_by_name("create_github_issue") is None
     assert reg.get_schema_by_name("submit_skill_to_hub") is None
-    assert reg.get_schema_by_name("generate_evolution_stats") is None
+    assert reg.get_schema_by_name("generate_evolution_stats") is not None
     blocked = reg.execute("submit_skill_to_hub", {"skill": "x"})
     assert "CAPABILITY_UNAVAILABLE" in blocked
     assert "GITHUB_TOKEN" in blocked
-    assert "CAPABILITY_UNAVAILABLE" in reg.execute("generate_evolution_stats", {})
+    assert "generate_evolution_stats" in reg.available_tools()
     reg.schemas()
     omissions = reg.capability_omissions()
     assert any(

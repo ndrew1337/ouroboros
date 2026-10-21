@@ -148,19 +148,21 @@ def test_aborted_update_does_not_lend_old_handoff_authority_to_manual_restart(tm
     monkeypatch.setattr(update_merge, "active_update_tx", lambda: {})
     monkeypatch.setattr(update_merge, "read_update_tx_strict", lambda: ("absent", {}))
     if intent == "manual_restart":
-        (tmp_path / "state" / "owner_restart_no_resume.flag").write_text("owner restart")
+        from tests._work_stop_helpers import live_restart
+        live_restart(tmp_path, monkeypatch)
     env = direct_exec_environment(monkeypatch, tmp_path)
     assert delegate_recovery.PLANNED_RESTART_TRANSACTION_ENV not in env
     assert delegate_recovery._read_restart_transaction(tmp_path, "aborted")["status"] == "prepared"
 
 
-def test_owner_no_resume_flag_dominates_a_restartable_update(tmp_path, monkeypatch):
+def test_owner_restart_door_dominates_a_restartable_update(tmp_path, monkeypatch):
     from supervisor import update_merge
 
     delegate_recovery._write_restart_transaction(tmp_path,
         {"transaction_id": "prior", "status": "prepared", "supervisor_pid": os.getpid()})
     delegate_recovery._active_restart_transaction_path(tmp_path).write_text(json.dumps({"transaction_id": "prior"}))
-    (tmp_path / "state" / "owner_restart_no_resume.flag").write_text("owner restart")
+    from tests._work_stop_helpers import live_restart
+    live_restart(tmp_path, monkeypatch)
     monkeypatch.setenv(delegate_recovery.PLANNED_RESTART_TRANSACTION_ENV, "prior")
     monkeypatch.setattr(update_merge, "read_update_tx_strict", lambda: ("valid", {"phase": "pending_boot_smoke"}))
     assert delegate_recovery.PLANNED_RESTART_TRANSACTION_ENV not in direct_exec_environment(monkeypatch, tmp_path)

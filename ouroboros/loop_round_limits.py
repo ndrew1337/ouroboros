@@ -269,6 +269,11 @@ def _drain_incoming_messages(
                     str(getattr(owner_ctx, "budget_drive_root", "") or "") or drive_root,
                     entry.get("late_answer"), dmsg,
                 )
+            elif entry.get("card_press") is not None:  # a press on a finished author's card: its card frame
+                from ouroboros.gateway.card_decision import card_press_model_text
+
+                model_msg = card_press_model_text(str(getattr(owner_ctx, "budget_drive_root", "") or "") or drive_root,
+                                                  entry.get("card_press"), dmsg)
             owner_content = _owner_content({**entry, "text": model_msg}, drive_root, task_id)
             _loop()._record_owner_directive(
                 owner_ctx,

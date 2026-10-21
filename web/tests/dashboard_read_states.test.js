@@ -6,167 +6,14 @@ import { initLogs } from '../modules/logs.js';
 import { initCosts } from '../modules/costs.js';
 import { initDashboard } from '../modules/dashboard.js';
 import { initStorage } from '../modules/storage.js';
-import { TextStub } from './chat_dom_fixture.js';
-
-// DOM bookkeeping only: the production initializers, HTTP client, status helper,
-// stream subscription and log deduplication all run unchanged. Layout/AT behavior
-// remains a browser check; this fixture does not pretend to measure either.
-class NodeStub {
-    constructor(tag = 'div') {
-        this.tagName = tag;
-        this.children = [];
-        this.attrs = {};
-        this.dataset = {};
-        this.events = new Map();
-        this.scrollHeight = this.scrollTop = this.clientHeight = 0;
-        this.hidden = this.disabled = false;
-        this._text = '';
-        this.classList = {
-            contains: (name) => this.className.split(/\s+/).includes(name),
-            toggle: (name, force) => {
-                const names = new Set(this.className.split(/\s+/).filter(Boolean));
-                const enabled = force ?? !names.has(name);
-                if (enabled) names.add(name); else names.delete(name);
-                this.className = [...names].join(' ');
-                return enabled;
-            },
-            add: (name) => this.classList.toggle(name, true),
-        };
-    }
-    get id() { return this.attrs.id || ''; }
-    set id(value) { this.attrs.id = value; }
-    get ownerDocument() { return globalThis.document; }
-    get isConnected() { return true; }
-    get tabIndex() { return this.attrs.tabindex === undefined ? 0 : Number(this.attrs.tabindex); }
-    set tabIndex(value) { this.attrs.tabindex = String(value); }
-    getClientRects() { return [{ width: 1, height: 1 }]; }
-    get className() { return this.attrs.class || ''; }
-    set className(value) { this.attrs.class = value; }
-    setAttribute(key, value) {
-        this.attrs[key] = String(value);
-        if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = String(value);
-        if (key === 'disabled' || key === 'hidden') this[key] = true;
-    }
-    getAttribute(key) { return this.attrs[key] ?? null; }
-    hasAttribute(key) { return key in this.attrs; }
-    removeAttribute(key) { delete this.attrs[key]; }
-    get firstElementChild() { return this.children.find((child) => child.nodeType !== 3); }
-    get firstChild() { return this.children[0] || null; }
-    get lastChild() { return this.children.at(-1) || null; }
-    get nextElementSibling() { return this.parentElement?.children[this.parentElement.children.indexOf(this) + 1]; }
-    get textContent() { return this._text + this.children.map((child) => child.textContent).join(''); }
-    set textContent(text) { this._text = String(text); this.children = []; }
-    // escapeHtmlText's round trip (text written as textContent reads back escaped); markup
-    // children are not serialized back.
-    get innerHTML() { return this.textContent.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
-    set innerHTML(html) {
-        this.textContent = '';
-        const stack = [this];
-        for (const token of String(html).match(/<[^>]+>|[^<]+/g) || []) {
-            if (token.startsWith('</')) { stack.pop(); continue; }
-            if (!token.startsWith('<')) { stack.at(-1)._text += token; continue; }
-            const tag = token.match(/^<([\w-]+)/)?.[1];
-            if (!tag) continue;
-            const node = new NodeStub(tag);
-            for (const attr of token.slice(tag.length + 1, -1).matchAll(/([\w-]+)(?:="([^"]*)")?/g)) {
-                node.setAttribute(attr[1], attr[2] ?? '');
-            }
-            stack.at(-1).appendChild(node);
-            if (!['input', 'br', 'hr', 'img', 'meta', 'link'].includes(tag)) stack.push(node);
-        }
-    }
-    appendChild(node) { node.remove(); node.parentElement = this; this.children.push(node); return node; }
-    insertBefore(node, before) {
-        node.remove();
-        node.parentElement = this;
-        this.children.splice(before ? this.children.indexOf(before) : this.children.length, 0, node);
-        return node;
-    }
-    append(...nodes) { nodes.forEach((node) => this.appendChild(node)); }
-    remove() {
-        if (this.parentElement) this.parentElement.children.splice(this.parentElement.children.indexOf(this), 1);
-        this.parentElement = null;
-    }
-    contains(node) { return this === node || this.children.some((child) => child.contains(node)); }
-    matches(selector) {
-        if (selector.includes(',')) return selector.split(',').some((part) => this.matches(part.trim()));
-        if (selector.includes('][')) return (selector.match(/\[[^\]]+\]/g) || []).every((part) => this.matches(part));
-        if (selector.startsWith('#')) return this.id === selector.slice(1);
-        if (selector.startsWith('.')) return this.classList.contains(selector.slice(1));
-        const attr = selector.match(/^\[([\w-]+)(?:="([^"]*)")?\]$/);
-        return attr ? this.hasAttribute(attr[1]) && (attr[2] === undefined || this.getAttribute(attr[1]) === attr[2]) : this.tagName === selector;
-    }
-    querySelectorAll(selector) {
-        return this.children.flatMap((child) => [...(child.matches(selector) ? [child] : []), ...child.querySelectorAll(selector)]);
-    }
-    querySelector(selector) { return this.querySelectorAll(selector)[0] || null; }
-    closest(selector) { return this.matches(selector) ? this : this.parentElement?.closest(selector) || null; }
-    focus() { globalThis.document.activeElement = this; }
-    addEventListener(type, fn) {
-        if (!this.events.has(type)) this.events.set(type, []);
-        this.events.get(type).push(fn);
-    }
-    async fire(type, event = {}) { for (const fn of this.events.get(type) || []) await fn({ currentTarget: this, ...event }); }
-    dispatchEvent(event) { for (const fn of this.events.get(event.type) || []) fn(event); }
-    removeEventListener(type, fn) { this.events.set(type, (this.events.get(type) || []).filter((listener) => listener !== fn)); }
-}
-
-function setup(t) {
-    const mount = new NodeStub();
-    const body = new NodeStub('body');
-    const documentEvents = new NodeStub('#document');
-    const document = {
-        body,
-        hidden: false,
-        activeElement: null,
-        defaultView: { getComputedStyle: () => ({ visibility: 'visible' }) },
-        createElement: (tag) => new NodeStub(tag),
-        createTextNode: (data) => new TextStub(data),
-        getElementById: (id) => mount.querySelector(`#${id}`) || body.querySelector(`#${id}`),
-        addEventListener: (type, fn) => documentEvents.addEventListener(type, fn),
-        removeEventListener: (type, fn) => documentEvents.removeEventListener(type, fn),
-        dispatchEvent: (event) => documentEvents.dispatchEvent(event),
-    };
-    const window = new NodeStub();
-    const routes = new Map();
-    const calls = [];
-    const wsHandlers = new Map();
-    const ws = {
-        on: (type, fn) => { wsHandlers.set(type, fn); },
-        send() {},
-        emit: (type, data = {}) => wsHandlers.get(type)?.(data),
-    };
-    const previous = Object.fromEntries(['document', 'window', 'fetch', 'requestAnimationFrame', 'setTimeout'].map((key) => [key, globalThis[key]]));
-    // Timers still fire during the test; the handles are tracked so a toast's
-    // dismissal timeout cannot keep the runner's event loop alive after it.
-    const timers = new Set();
-    const realSetTimeout = globalThis.setTimeout;
-    Object.assign(globalThis, {
-        document, window, requestAnimationFrame: (fn) => fn(),
-        setTimeout: (fn, ms, ...rest) => {
-            const handle = realSetTimeout(fn, ms, ...rest);
-            timers.add(handle);
-            return handle;
-        },
-        fetch: async (url, init) => {
-            calls.push(url);
-            if (!routes.has(url)) throw new Error(`Unexpected request ${url}`);
-            const value = routes.get(url);
-            if (typeof value === 'function') return value(url, init);
-            if (value instanceof Error) throw value;
-            return value;
-        },
-    });
-    t.after(() => {
-        timers.forEach((handle) => clearTimeout(handle));
-        Object.assign(globalThis, previous);
-    });
-    const toasts = () => body.querySelectorAll('.toast').map((node) => node.textContent);
-    return { mount, window, document, ws, routes, calls, toasts };
-}
+import { NodeStub, setup } from './dashboard_dom_fixture.js';
 
 const response = (data, status = 200) => ({ ok: status < 400, status, json: async () => data });
 const queueUrl = '/api/tasks?queue_only=1';
+// Explicit gateway projection fixtures; Activity no longer re-derives stops from queue reason names.
+const projectedWork = (id, activity = 'working', extra = {}) => ({ work_id: id, confirmed: true,
+    activity, transition: 'none', because: [], tails: [], episode: { task_id: id, live: true },
+    controls: activity === 'paused' ? [{ action: 'resume', target: id }] : [], ...extra });
 const backgroundUrl = '/api/state';
 const schedulesUrl = '/api/schedules';
 const logUrl = (name) => `/api/logs/${name}?limit=150`;
@@ -514,7 +361,7 @@ test('Activity unites live direct turns with queue identities and preserves queu
     const now = Date.now;
     Date.now = () => 100000;
     t.after(() => { Date.now = now; });
-    routes.set(backgroundUrl, response({ bg_consciousness_enabled: true,
+    routes.set(backgroundUrl, response({ bg_consciousness_enabled: true, works: [projectedWork('queued-1'), projectedWork('paused-1', 'paused')],
         active_chat_activities_complete: false, active_chat_activities: [
             { activity_id: 'direct-1', kind: 'direct_chat', phase: 'thinking', started_at: 88 },
             { activity_id: 'queued-1', kind: 'direct_chat', phase: 'thinking', started_at: 80 },
@@ -528,8 +375,8 @@ test('Activity unites live direct turns with queue identities and preserves queu
     const queue = section(mount, 'queue');
     const rows = queue.querySelectorAll('.activity-row');
     assert.equal(rows.length, 3, 'partial positive census adds exactly the missing direct identity');
-    assert.match(rows[0].textContent, /Queue title[\s\S]*running · task · 9s/);
-    assert.match(rows[1].textContent, /Paused work[\s\S]*paused \(budget\)/);
+    assert.match(rows[0].textContent, /Queue title[\s\S]*Working · task · 9s/);
+    assert.match(rows[1].textContent, /Paused work[\s\S]*Paused/);
     assert.equal(rows[1].querySelector('button').dataset.budgetPaused, '1');
     // A live census row says its state in the chip's own word (translated at its producer), never the census code.
     assert.equal(rows[2].querySelector('[data-i18n-skip]').textContent, 'Thinking');
@@ -550,18 +397,22 @@ test('Activity names work held by an application stop as held, never as a money 
         { task: { id: 'saved-1', title: 'Saved before Quit', _budget_pause_hold: { reason: 'saved_work_hold' } } },
         { task: { id: 'restart-1', title: 'Held by Restart', _budget_pause_hold: { reason: 'owner_restart_hold' } } },
         { task: { id: 'released-1', title: 'Resumed already',
-            _budget_pause_hold: { reason: 'saved_work_hold', selected: true } } },
+            _resume_selection: { selected_by: 'owner' } } },
     ] } }));
+    routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, works: [
+        projectedWork('saved-1', 'paused', { because: [{ code: 'saved_on_stop', text: 'Saved when the app stopped' }] }),
+        projectedWork('restart-1', 'paused', { because: [{ code: 'after_restart', text: 'Held after a restart' }] }),
+        projectedWork('released-1', 'queued')], active_chat_activities: [] }));
     await initActivity({ mount, ws }).refresh();
     const rows = section(mount, 'queue').querySelectorAll('.activity-row');
     assert.equal(rows.length, 3);
     for (const row of rows.slice(0, 2)) {
-        assert.match(row.textContent, /held after Restart/);
+        assert.match(row.textContent, /Paused/);
         assert.doesNotMatch(row.textContent, /budget/);
         assert.equal(row.querySelector('button').dataset.budgetPaused, '1', 'the same Resume is offered');
     }
     // The owner's Resume released this hold: it is neither held nor paused any more.
-    assert.doesNotMatch(rows[2].textContent, /held after Restart|paused/);
+    assert.doesNotMatch(rows[2].textContent, /Held after a restart|Paused/);
     assert.equal(rows[2].querySelector('button').dataset.budgetPaused, undefined);
 });
 
@@ -816,7 +667,7 @@ test('saved Pause with unreadable tree authority remains unknown in Activity and
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false,
         active_chat_activities: [{ activity_id: 'held', phase: 'unknown' }], active_chat_activities_complete: false }));
     await initActivity({ mount, ws }).refresh();
-    assert.match(section(mount, 'queue').textContent, /pause status unknown/);
+    assert.match(section(mount, 'queue').textContent, /Activity unconfirmed/);
     assert.doesNotMatch(section(mount, 'queue').textContent, /paused/);
     assert.equal(section(mount, 'queue').querySelector('[data-act="task-control"]').dataset.budgetPaused, undefined);
     let body = '';
@@ -836,11 +687,13 @@ test('Activity Resume follows the root census while owner Pause is settling', as
     for (const phase of ['budget_pausing', 'unknown', undefined, 'budget_paused']) {
         routes.set(backgroundUrl, response({ bg_consciousness_enabled: false,
             active_chat_activities: phase ? [{ activity_id: 'root', phase }] : [],
-            active_chat_activities_complete: phase !== undefined }));
+            active_chat_activities_complete: phase !== undefined,
+            works: phase?.startsWith('budget_') ? [projectedWork('root', 'paused', {
+                members: { states: { child: { activity: 'paused', confirmed: true } } } })] : [] }));
         await activity.refresh();
         for (const id of ['root', 'child']) {
             const button = section(mount, 'queue').querySelector(`[data-id="${id}"]`);
-            assert.equal(button.dataset.budgetPaused, phase === 'budget_paused' ? '1' : undefined, `${id}: ${phase}`);
+            assert.equal(button.dataset.budgetPaused, phase?.startsWith('budget_') ? '1' : undefined, `${id}: ${phase}`);
         }
     }
 });
@@ -853,17 +706,20 @@ test('Activity names saved sleep without claiming a budget pause and preserves o
         _budget_pause: { reason: 'sleep' },
     } }] };
     routes.set(queueUrl, response({ queue }));
+    routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, works: [projectedWork('sleeping-root', 'waiting', {
+        because: [{ code: 'sleeping', text: 'Sleeping until it is woken' }] })] }));
     const activity = initActivity({ mount, ws });
     await activity.refresh();
-    assert.match(section(mount, 'queue').textContent, /sleeping/);
+    assert.match(section(mount, 'queue').textContent, /Sleeping/);
     assert.doesNotMatch(section(mount, 'queue').textContent, /paused \(budget\)/);
-    assert.equal(section(mount, 'queue').querySelector('[data-act="task-control"]').dataset.budgetPaused, '1');
+    assert.equal(section(mount, 'queue').querySelector('[data-act="task-control"]').dataset.budgetPaused, undefined);
     queue.budget_root_fences = [{ root_task_id: 'sleeping-root', status: 'paused', cause: 'owner_pause' }];
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false,
+        works: [projectedWork('sleeping-root', 'paused')],
         active_chat_activities: [{ activity_id: 'sleeping-root', phase: 'budget_paused' }] }));
     await activity.refresh();
-    assert.match(section(mount, 'queue').textContent, /paused/);
-    assert.doesNotMatch(section(mount, 'queue').textContent, /sleeping|budget/);
+    assert.match(section(mount, 'queue').textContent, /Paused/);
+    assert.doesNotMatch(section(mount, 'queue').textContent, /Sleeping|budget/);
 });
 
 // Census rows as gateway/state.py publishes them: the row's own stored status, axes and checkpoint.
@@ -894,6 +750,9 @@ test('Activity shows a row\'s own known outcome first and its unfinished finaliz
         pending: [{ id: 'queued-root', type: 'task', task: { id: 'queued-root', root_task_id: 'queued-root', title: 'Queued work' } }],
     } }));
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, active_chat_activities_complete: true,
+        works: [...['failed-root', 'done-root', 'warn-root', 'cancelled-root', 'live-root'].map((id) => projectedWork(id, 'working')),
+            projectedWork('queued-root', 'queued'), projectedWork('late-root', 'paused'),
+            projectedWork('tree', 'working', { members: { states: { 'child-1': { activity: 'working', confirmed: true } } } })],
         active_chat_activities: [
             outcomeRow('failed-root', 'failed', 'infra_failed', 'finalizing', 'running'),
             outcomeRow('done-root', 'completed', 'ok', 'finalizing', 'pending_once'),
@@ -917,13 +776,13 @@ test('Activity shows a row\'s own known outcome first and its unfinished finaliz
         label: 'Task status: Done with warnings', secondary: '' });
     assert.equal(chip(rowOf(mount, 'cancelled-root')).text, 'Stopped');
     // No known outcome: the queue's own words, exactly as before.
-    for (const [id, word] of [['live-root', /running · task · 9s/], ['queued-root', /Queued work[\s\S]*pending · task/]]) {
+    for (const [id, word] of [['live-root', /Working · task · 9s/], ['queued-root', /Queued work[\s\S]*Queued · task/]]) {
         assert.equal(chip(rowOf(mount, id)), null, id);
         assert.match(rowOf(mount, id).textContent, word);
     }
     // A child never borrows its root's result, even while that root's census row is Failed.
     assert.equal(chip(rowOf(mount, 'child-1')), null);
-    assert.match(rowOf(mount, 'child-1').textContent, /Child of the failed root[\s\S]*running/);
+    assert.match(rowOf(mount, 'child-1').textContent, /Child of the failed root[\s\S]*Working/);
     assert.doesNotMatch(rowOf(mount, 'child-1').textContent, /Failed/);
     // Census-only rows: a known answer with late work, a late Pause beside its Done, a plain turn.
     assert.deepEqual(chip(rowOf(mount, 'answered-direct')).text + '|' + chip(rowOf(mount, 'answered-direct')).secondary,
@@ -987,13 +846,14 @@ test('Activity keeps pause words for members and paints a host hold beside a kno
     const activities = [outcomeRow('paused-root', 'completed', 'ok', 'budget_paused', 'paused', { pause_cause: 'owner' }),
         outcomeRow('held-root', 'failed', 'infra_failed', 'finalizing', 'running', { project_admission_hold: hold })];
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, active_chat_activities: activities,
-        active_chat_activities_complete: false }));
+        active_chat_activities_complete: false, works: [projectedWork('paused-root', 'paused', {
+            members: { states: { 'member-1': { activity: 'paused', confirmed: true } } } })] }));
     const activity = initActivity({ mount, ws });
     await activity.refresh();
     // The root's own row knows its answer; its member keeps the tree's pause word and Resume.
     assert.equal(chip(rowOf(mount, 'paused-root')).text, 'Done');
     assert.equal(chip(rowOf(mount, 'member-1')), null);
-    assert.match(rowOf(mount, 'member-1').textContent, /paused/);
+    assert.match(rowOf(mount, 'member-1').textContent, /Paused/);
     for (const id of ['paused-root', 'member-1']) {
         assert.equal(section(mount, 'queue').querySelector(`[data-id="${id}"]`).dataset.budgetPaused, '1', id);
     }
@@ -1001,11 +861,11 @@ test('Activity keeps pause words for members and paints a host hold beside a kno
     assert.deepEqual(chip(rowOf(mount, 'held-root')).secondary, hold.label);
     assert.equal(section(mount, 'queue').querySelectorAll('img').length, 0);
     assert.doesNotMatch(section(mount, 'queue').textContent, /Nothing running/);
-    // Without a census the queue rows keep their words; nothing is erased or called idle.
+    // Without a census the rows stay visible, but their stop is unconfirmed.
     routes.set(backgroundUrl, response({}, 503));
     await activity.refresh();
     assert.equal(section(mount, 'queue').querySelectorAll('[data-activity-phase]').length, 0);
-    assert.match(rowOf(mount, 'paused-root').textContent, /paused/);
+    assert.match(rowOf(mount, 'paused-root').textContent, /Activity unconfirmed/);
     assert.equal(section(mount, 'queue').querySelectorAll('.activity-row').length, 2);
 });
 
@@ -1026,6 +886,9 @@ test('Activity keeps a queue row\'s own wait beside its known outcome and shows 
         ],
     } }));
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, active_chat_activities_complete: true,
+        works: [projectedWork('sleep-root', 'waiting', { because: [{ code: 'sleeping', text: 'Sleeping until it is woken' }] }),
+            projectedWork('live-model'), projectedWork('held-queue'), projectedWork('restart-root', 'paused', {
+                because: [{ code: 'saved_on_stop', text: 'Saved when the app stopped' }] }), projectedWork('pending-root', 'queued')],
         active_chat_activities: [
             outcomeRow('sleep-root', 'completed', 'ok', 'finalizing', 'running'),
             outcomeRow('live-model', 'completed', 'ok', 'working', 'running',
@@ -1037,10 +900,10 @@ test('Activity keeps a queue row\'s own wait beside its known outcome and shows 
     await initActivity({ mount, ws }).refresh();
     const pair = (id) => [chip(rowOf(mount, id)).text, chip(rowOf(mount, id)).secondary];
     // A queue wait outranks the census's merely active phase; the outcome still leads.
-    assert.deepEqual(pair('sleep-root'), ['Done', 'sleeping']);
-    assert.deepEqual(pair('restart-root'), ['Done', 'held after Restart']);
-    assert.deepEqual(pair('pending-root'), ['Failed', 'pending']);
-    assert.equal(chip(rowOf(mount, 'sleep-root')).label, 'Task status: Done, sleeping');
+    assert.deepEqual(pair('sleep-root'), ['Done', 'Waiting']);
+    assert.deepEqual(pair('restart-root'), ['Done', 'Paused']);
+    assert.deepEqual(pair('pending-root'), ['Failed', 'Queued']);
+    assert.equal(chip(rowOf(mount, 'sleep-root')).label, 'Task status: Done, Waiting');
     // Activity carries no model-call telemetry: finalization stays a generic fact.
     assert.deepEqual(pair('live-model'), ['Done', 'Finalizing…']);
     assert.doesNotMatch(section(mount, 'queue').textContent, /request|response/i);
@@ -1461,11 +1324,14 @@ test('Activity says why a held Continue waits, keeps its Resume, and never calls
             detail: "the interrupted task's own work is not proven settled; this Continue waits",
             predecessor_task_id: 'pred-1', blockers: [{ kind: 'delegated_run', task_id: 'pred-1', run_id: 'run-leaf',
                 invocation_id: '', state: 'running', stop_outcome: '', source: 'delegated_subagent' }] } } }] } }));
+    routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, works: [projectedWork('pred-1-s1', 'waiting', {
+        because: [{ code: 'earlier_work_unconfirmed', text: "Continue starts when the earlier attempt's work is confirmed finished" }],
+        controls: [{ action: 'resume', target: 'pred-1-s1' }] })] }));
     const activity = initActivity({ mount, ws });
     await activity.refresh();
     const row = section(mount, 'queue').querySelector('.activity-row');
     assert.match(row.querySelector('.activity-sub').textContent,
-        /^held: earlier work not proven settled · delegated run run-leaf is running$/);
+        /^Waiting · Continue starts when the earlier attempt&#39;s work is confirmed finished$/);
     assert.ok(row.classList.contains('activity-held'), 'its cause wraps instead of ending in an ellipsis');
     assert.doesNotMatch(row.textContent, /paused \(budget\)/);
     const control = row.querySelector('[data-act="task-control"]');

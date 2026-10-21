@@ -8,14 +8,14 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 
 | domain | name | modules | proposed |
 |---|---|---:|---:|
-| D01 | Agent core & main loop | 53 | 0 |
+| D01 | Agent core & main loop | 54 | 0 |
 | D02 | LLM client, routing & providers | 45 | 0 |
 | D03 | Context assembly, fit & compaction | 25 | 0 |
 | D04 | Tool execution: registry, access & typed results | 22 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 41 | 0 |
 | D06 | Review stack | 91 | 0 |
 | D07 | Delegation, subagents & Claudexor | 73 | 0 |
-| D08 | Supervisor: queue, workers, events & runtime control | 69 | 0 |
+| D08 | Supervisor: queue, workers, events & runtime control | 72 | 0 |
 | D09 | Cancellation, owner control & process custody | 23 | 0 |
 | D10 | Git, update & release machinery | 33 | 0 |
 | D11 | Gateway, server & Web UI | 102 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 32 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
 | D20 | Presence | 15 | 0 |
-| **total** | | **841** | **0** |
+| **total** | | **845** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **117**
+- lazy-only cross-domain pairs: **118**
   - D01->D10
   - D01->D11
   - D02->D05
@@ -168,6 +168,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D17->D20
   - D18->D01
   - D18->D07
+  - D18->D08
   - D18->D11
   - D18->D14
   - D18->D16
@@ -247,6 +248,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/tool_custody.py`
 - `ouroboros/tool_result_delivery.py`
 - `ouroboros/transcript_prefix.py`
+- `ouroboros/work_stop.py`
 - `ouroboros/working_checkpoint.py`
 
 ### D02 — LLM client, routing & providers
@@ -566,6 +568,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 
 ### D08 — Supervisor: queue, workers, events & runtime control
 
+- `ouroboros/installation_stop.py`
 - `ouroboros/promotion_source.py`
 - `ouroboros/queue_observation.py`
 - `ouroboros/schedule_contract.py`
@@ -606,6 +609,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `supervisor/message_bus.py`
 - `supervisor/message_ingress.py`
 - `supervisor/owner_pause_control.py`
+- `supervisor/owner_pause_resume.py`
 - `supervisor/plan_obligation.py`
 - `supervisor/queue.py`
 - `supervisor/queue_schedules.py`
@@ -626,6 +630,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `supervisor/task_model_wait.py`
 - `supervisor/task_ownership.py`
 - `supervisor/telemetry_events.py`
+- `supervisor/work_stop_migration.py`
 - `supervisor/worker_assignment.py`
 - `supervisor/worker_chat_lane.py`
 - `supervisor/worker_health.py`

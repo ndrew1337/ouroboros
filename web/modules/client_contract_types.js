@@ -718,6 +718,9 @@
  * @property {string} task_id
  * @property {string=} root_task_id
  * @property {('resumed'|'settled')=} late_phase
+ * @property {boolean=} tree_only
+ * @property {boolean=} owner_pause_released
+ * @property {boolean=} snapshot_persisted
  * @property {boolean=} exact_continuation
  * @property {string=} grant_id
  * @property {number=} grant_generation

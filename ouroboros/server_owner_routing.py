@@ -102,9 +102,10 @@ def _route_project_chat_to_running_task(
     Queued or paused roots remain explicit tell_task targets, never implicit
     readers. Zero or several readers starts a fresh head in this room; the
     model chooses whether to relay, move, detach, answer or start work. A late
-    answer (``thread_of``: its asker) reads only a head that a late answer to
-    the same asker started, in a Project or Main, the earliest of several:
-    one asker's answers are one thread. No other reader receives it.
+    answer or a press on a finished author's card (``thread_of``: that author)
+    reads only a head that a late answer or press of the same author started,
+    in a Project or Main, the earliest of several: one author's late input is
+    one thread. No other reader receives it.
     """
     try:
         if not thread_of and not _project_id_for_registered_chat(ctx, chat_id):
@@ -113,7 +114,7 @@ def _route_project_chat_to_running_task(
         return ""
     try:
         steerable = [row for row in _addressable_root_tasks(ctx, chat_id) if row.get("room_reader")
-                     and (not thread_of or row.get("late_answer_of") == thread_of)]
+                     and (not thread_of or row.get("late_input_of") == thread_of)]
         if thread_of:
             steerable = sorted(steerable, key=_start_order)[:1]
         # Exactly one candidate => unambiguous transport. Zero or many => a routing
@@ -271,6 +272,7 @@ def _route_project_chat_to_running_task(
                 late_answer=(
                     task_metadata.get("late_answer") if isinstance(task_metadata, dict) else None
                 ),
+                card_press=task_metadata.get("card_press") if isinstance(task_metadata, dict) else None,
             ):
                 return ""
             message_written = True
@@ -644,10 +646,11 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
             event["origin_suppressed"] = True
         _handle_promote_chat_to_task(event, ctx)
         return
+    from ouroboros.card_store import late_press_ref
     from ouroboros.owner_quiz import late_answer_ref
 
     late = task_metadata.get("late_answer")
-    thread_of = (late_answer_ref(late) or {}).get("task_id", "")
+    thread_of = (late_answer_ref(late) or late_press_ref(task_metadata.get("card_press")) or {}).get("task_id", "")
     # A live call's admitted turn keeps the room it was opened in; it never re-routes.
     if realtime_turn is None and ((project_id and not late) or thread_of):
         routed_to_task = _route_project_chat_to_running_task(

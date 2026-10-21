@@ -70,7 +70,7 @@ def test_planned_restart_and_quit_teardown_pause_admission_first(monkeypatch):
     assert server_restart._begin_task_teardown(False) == server_restart._shutdown_task_cleanup_args(False)
     assert calls == ["pause", "pause"]
     # Both server doors begin their teardown through it, before they read the queue or retire the pool.
-    assert "_begin_task_teardown(restart_requested=True)" in inspect.getsource(server._perform_supervisor_restart)
+    assert "_begin_task_teardown(restart_requested=True)" in inspect.getsource(server_restart._perform_supervisor_restart)
     assert inspect.getsource(server).count("_begin_task_teardown(restart_requested)") == 1
 
 
@@ -170,7 +170,8 @@ def test_owner_restart_hands_a_committed_followup_over_before_its_own_restrictio
     observed = {}
 
     def pause(timeout=None):
-        observed["flag_before_pause"] = (env.data / "state" / "owner_restart_no_resume.flag").exists()
+        from ouroboros.delegate_recovery import active_restart_transaction
+        observed["flag_before_pause"] = bool(active_restart_transaction(env.data))
         proceed.set()
         observed["drained"] = real_pause(timeout)
         observed["delivered"] = [item["id"] for item in delivered if "id" in item]

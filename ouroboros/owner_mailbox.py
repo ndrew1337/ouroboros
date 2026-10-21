@@ -269,6 +269,7 @@ def write_owner_message(
     late_answer: Optional[Dict[str, Any]] = None,
     quiz_delivery: Optional[Dict[str, Any]] = None,
     card_delivery: Optional[Dict[str, Any]] = None,
+    card_press: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an owner message or typed control entry to a task's mailbox.
 
@@ -280,8 +281,9 @@ def write_owner_message(
     ``late_answer`` is the typed ``{task_id, quiz_id}`` provenance of an owner
     message that answers a finished task's quiz card (stored additively when
     valid): the drain rebuilds the card's frame for the model from it, while
-    ``text`` stays the owner's own words. ``card_delivery`` names the living-card
-    press ``{card_id, request_id, canonical_root}`` its read settles.
+    ``text`` stays the owner's own words; ``card_press`` is the same for a press on a
+    finished author's card. ``card_delivery`` names the living-card press
+    ``{card_id, request_id, canonical_root}`` its read settles.
     """
     from ouroboros.install_identity import StoreForeign, require_owned_root
 
@@ -302,6 +304,10 @@ def write_owner_message(
         entry["quiz_delivery"] = dict(quiz_delivery)
     if card_delivery:
         entry["card_delivery"] = dict(card_delivery)
+    from ouroboros.card_store import late_press_ref
+
+    if (press := late_press_ref(card_press)) is not None:
+        entry["card_press"] = press
     late_ref = late_answer_ref(late_answer)
     if late_ref is not None:
         entry["late_answer"] = late_ref
@@ -761,7 +767,7 @@ def drain_owner_entries(
                 # Same for a late quiz answer's typed provenance (the drain rebuilds
                 # the card frame for the model from it) and a card press's read receipt.
                 for relay_field in ("relay", "owner_rows", "source_task_id", "source_row", "quiz_delivery", "card_delivery",
-                                    "relay_canonical_root", "sender_origin"):
+                                    "card_press", "relay_canonical_root", "sender_origin"):
                     if relay_field in entry:
                         drained[relay_field] = entry[relay_field]
                 if isinstance(entry.get("late_answer"), dict):

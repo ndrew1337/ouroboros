@@ -251,7 +251,7 @@ def get_tools() -> List[ToolEntry]:
                     "your typed owner-directed dialogue, the assignment and the system view stay whole. "
                     "Earlier notes stay in place unless selected for replacement; select several to merge them. "
                     "The note occupies the first replaced unit. Rewriting can lose prefix-cache "
-                    "reuse from the earliest change: fold for space/clarity in useful batches, with a note shorter than its sources. "
+                    "reuse and provider-signed reasoning from the earliest change: fold for space/clarity in useful batches, with a note shorter than its sources. "
                     "A selected older assistant tool call and all of its "
                     "contiguous matching results stay atomic; Ouroboros checkpoints their exact "
                     "actor-visible bytes before replacement, with checkpoint/CAS provenance. Raw evidence remains retrievable (restore_unit_refs; an emergency "

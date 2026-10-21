@@ -431,6 +431,13 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
             acknowledge_staged_output_delivery(self._inspection_ctx, execution, projected, shown_ranges=shown)
         self._pending_staged_reads.clear()
 
+    def _retire_reasoning(self, messages: list, schemas: list, round_idx: int) -> None:
+        from ouroboros.transcript_prefix import append_reasoning_retirement_fact, prepare_reasoning_for_send
+
+        if prepare_reasoning_for_send(self._inspection_ctx, messages, schemas,
+                                      round_idx=round_idx, usage=self._episode_usage):
+            append_reasoning_retirement_fact(self._episode_usage, round_idx, messages)
+
     def _refresh_window(self, model_route: Optional[dict] = None) -> None:
         """Window evidence for the current route, never an assumed send limit."""
         from ouroboros.reviewer_window import resolve_reviewer_window
@@ -679,6 +686,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
         values["messages"] = messages
         self.assignment = replace(self.assignment, slot=updated)
         self._refresh_window(values.pop("_model_observed_route", None))
+        self._retire_reasoning(messages, values.get("tools"), self._rounds_used + 1)
         return values
 
     def _run_episode(self) -> None:
@@ -703,6 +711,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
         scratch = tempfile.mkdtemp(prefix="ouro-native-review-")
         registry = None
         total_usage: Dict[str, Any] = {}
+        self._episode_usage = total_usage
         final_answer: Optional[str] = None
         last_content = ""  # the reviewer's latest prose — the product of an exhausted report episode
         end_reason = "not_started"  # the true reason is set by whichever end the episode takes
@@ -728,6 +737,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                         break  # a report keeps its draft (marked incomplete below)
                     raise _deadline_exhausted_error("owner deadline exhausted mid native review episode")
                 round_idx += 1
+                self._retire_reasoning(messages, schemas, round_idx)
                 chat_kwargs = self._chat_kwargs(messages, schemas, max_tokens)
                 transport = review_transport_timeout(
                     slot.model, getattr(slot, "transport_timeout_sec", None), deadline_at,

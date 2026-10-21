@@ -190,7 +190,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | USE_LOCAL_CONSCIOUSNESS | false | Route Consciousness locally |
 | USE_LOCAL_FALLBACK | false | Route fallback locally |
 | OUROBOROS_MAX_ROUNDS | unlimited | Optional total task round limit (hot-reloadable; a Presence turn keeps its own finite inline cap) |
-| OUROBOROS_TRANSIENT_RETRY_MAX | 6 | Same-model transient retry budget; pre-dispatch `transport_unavailable` is a separate task-bounded outer wait |
+| OUROBOROS_TRANSIENT_RETRY_MAX | 6 | Same-model transient retry budget |
 | OUROBOROS_SKILL_LIFECYCLE_TIMEOUT_SEC | 1800 | Skill lifecycle-lane timeout |
 | OUROBOROS_CLAUDEXOR_HARNESS_INSTALL_TIMEOUT_SEC | 300 | Harness install ceiling (kills the tracked group, typed refusal) |
 | OUROBOROS_CLAUDEXOR_QUOTA_REFRESH_TIMEOUT_SEC | 90 | Quota-refresh POST ceiling (clamped 1-90) |

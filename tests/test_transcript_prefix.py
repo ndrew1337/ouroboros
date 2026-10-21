@@ -100,10 +100,12 @@ def test_cache_control_marker_does_not_change_the_digest():
     assert message_digest(plain) == message_digest(marked)
 
 
-def test_block_and_string_tool_results_share_one_digest():
+def test_one_block_and_string_tool_results_share_one_digest_but_splits_do_not():
     as_string = {"role": "tool", "tool_call_id": "t1", "content": "result body"}
     as_blocks = {"role": "tool", "tool_call_id": "t1",
                  "content": [{"type": "text", "text": "result "}, {"type": "text", "text": "body"}]}
+    assert message_digest(as_string) != message_digest(as_blocks)
+    as_blocks["content"] = [{"type": "text", "text": " result body\n"}]
     assert message_digest(as_string) == message_digest(as_blocks)
 
 
@@ -210,7 +212,7 @@ def test_sanctioned_by_rides_through_unchanged():
 def _describe(message):
     calls = transcript_prefix._tool_call_identity(message.get("tool_calls"))
     return (f"role={message.get('role')!r} tool_calls={[c[1] for c in calls]!r} "
-            f"text={transcript_prefix._plain_text(message.get('content'))[:120]!r}")
+            f"text={loop._extract_plain_text_from_content(message.get('content'))[:120]!r}")
 
 
 def _assert_prefix_chain(sends):
@@ -324,9 +326,9 @@ def test_the_roster_note_rides_the_real_loop_as_an_append(full_loop, monkeypatch
     _assert_prefix_chain(f.model_inputs)
     assert _prefix_breaks(f.events) == []
     notes = [m for m in f.model_inputs[-1]
-             if m.get("role") == "user" and "[INDEPENDENT_ROOTS]" in transcript_prefix._plain_text(m.get("content"))]
+             if m.get("role") == "user" and "[INDEPENDENT_ROOTS]" in loop._extract_plain_text_from_content(m.get("content"))]
     assert len(notes) == 1, "the roster changed once, so exactly one note was appended"
-    assert "- peer-root · Peer work · chat=0 · running" in transcript_prefix._plain_text(notes[0]["content"])
+    assert "- peer-root · Peer work · chat=0 · running" in loop._extract_plain_text_from_content(notes[0]["content"])
     assert "prompt_prefix_breaks" not in usage
 
 

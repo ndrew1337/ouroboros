@@ -68,7 +68,7 @@ def _emit_event(logs_dir: pathlib.Path, kind: str, **fields: Any) -> None:
         log.debug("Failed to emit %s event", kind, exc_info=True)
 
 
-def _merge_consolidation_usage(*usages: Dict[str, Any]) -> Dict[str, Any]:
+def _merge_consolidation_usage(*usages: Dict[str, Any], reasoning_usage: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Combine helper usage without turning absent spend/counters into zero."""
     from ouroboros.knowledge import observed_route_stamp
 
@@ -78,6 +78,10 @@ def _merge_consolidation_usage(*usages: Dict[str, Any]) -> Dict[str, Any]:
         merged[key] = None if None in values else sum(values)
     for key in ("ledger_attempt_ids", "_consolidation_errors", "_coverage"):
         merged[key] = [value for usage in usages for value in usage.get(key, [])]
+    retirement_rows = [*usages, reasoning_usage or {}]
+    for key in ("reasoning_retired", "reasoning_retired_turns", "reasoning_retired_blocks", "prompt_prefix_breaks"):
+        if any(key in usage for usage in retirement_rows):
+            merged[key] = sum(usage.get(key, 0) for usage in retirement_rows)
     # The route that answered the LAST send of this unit, and only that one: a
     # physical usage carries provider/resolved_model, a merged one its forwarded
     # stamp, and a final call without a physical fact reads unknown — an earlier
@@ -292,6 +296,7 @@ def _call_consolidation_llm(
 
     facts: Dict[str, Any] = {}
     prepared_values: Dict[str, Any] = {}
+    retired_usage: Dict[str, Any] = {}
     model_route = model_route if model_route is not None else {}
     invoked = False
     usages: List[Dict[str, Any]] = []
@@ -306,6 +311,10 @@ def _call_consolidation_llm(
         observed = values.pop("_model_observed_route", None)
         if knowledge:
             from ouroboros.llm_claudexor import turn_state_for_route
+            from ouroboros.transcript_prefix import append_reasoning_retirement_fact, prepare_reasoning_for_send
+            if prepare_reasoning_for_send(knowledge.context, values["messages"], values["tools"],
+                                          round_idx=len(usages) + 1, usage=retired_usage):
+                append_reasoning_retirement_fact(retired_usage, len(usages) + 1, values["messages"])
             values["model_turn_state"] = turn_state_for_route(
                 turn_state, "local" if values["use_local"] else provider_for_model(values["model"]))
         prepared_values.clear()
@@ -419,7 +428,6 @@ def _call_consolidation_llm(
                 invoked = True
                 if knowledge:
                     from ouroboros.llm_observability import chat_observed
-                    record_context_view(knowledge.context, values["messages"], values["tools"])
                     msg, usage = chat_observed(
                         llm_client, drive_root=knowledge.context.drive_root,
                         task_id=str(knowledge.context.task_id or "consolidation"),
@@ -446,7 +454,7 @@ def _call_consolidation_llm(
             if content.strip():
                 if knowledge and not knowledge.source_complete():
                     response_ref = chat_chain.retain_memory_source(knowledge.context, "incomplete_memory_response", content.encode("utf-8"))
-                    return "", {**_merge_consolidation_usage(*usages), "_consolidation_errors": [{
+                    return "", {**_merge_consolidation_usage(*usages, reasoning_usage=retired_usage), "_consolidation_errors": [{
                         "kind": "source_incomplete", "label": label,
                         "message": "The complete retained source was not delivered; originals are preserved.",
                         "source_ref": knowledge.required_source, "response_ref": response_ref}]}
@@ -458,7 +466,7 @@ def _call_consolidation_llm(
                     usages.pop()
                     kind, message, preflight = "output_truncated", "Consolidation output was cut at the output ceiling", False
                     break
-                return content, _merge_consolidation_usage(*usages)
+                return content, _merge_consolidation_usage(*usages, reasoning_usage=retired_usage)
             usages.pop()  # the empty response is added once as the failed result below
             kind, message, preflight = "empty_summary", "Consolidation returned no summary", False
             break
@@ -491,7 +499,7 @@ def _call_consolidation_llm(
         kind = "knowledge_source_unfit"  # splitting the original episode cannot shrink a requested note
     fact = dict(facts, kind=kind, label=label, message=sanitize_tool_result_for_log(message), preflight_only=preflight)
     log.warning("%s failed (%s): %s", label, kind, fact["message"])
-    return "", {**_merge_consolidation_usage(*usages, usage), "_consolidation_errors": [fact]}
+    return "", {**_merge_consolidation_usage(*usages, usage, reasoning_usage=retired_usage), "_consolidation_errors": [fact]}
 
 
 from ouroboros.context_budget import (

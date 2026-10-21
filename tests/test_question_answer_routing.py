@@ -263,6 +263,60 @@ def test_paused_recipient_keeps_its_saved_answer_and_reads_it_once(tmp_path, mon
     assert getattr(drain(tmp_path, "asker")[0], "_owner_directives", []) == []
 
 
+def due(root):
+    """The persisted backoff has passed: maintenance retries the owed answer now."""
+    from ouroboros.owner_quiz import _mutate_projection
+
+    def advance(quizzes):
+        quizzes["q"]["delivery"]["next_retry_at"] = ""
+        return True
+    _mutate_projection(root, "asker", advance)
+
+
+@pytest.mark.parametrize("retry", ["owner", "maintenance"])
+@pytest.mark.parametrize("ingress", ["accepted", "accepted_before_restart", "refused"])
+def test_a_late_answer_retried_after_a_continue_keeps_one_effect(tmp_path, monkeypatch, ingress, retry):
+    """The late path ran, then the owner continued the asker. An answer the owner's ingress accepted, whose
+    delivery mark was then lost, converges on that message: the successor gets no second copy, and after a
+    restart its delivery stays unknown. One the ingress never accepted still reaches the successor."""
+    import asyncio
+
+    import supervisor.message_bus as mb
+    from ouroboros import owner_quiz, process_custody
+    from ouroboros.owner_mailbox import drain_owner_entries
+
+    app, bridge, q, task = runtime(tmp_path, monkeypatch, running=False)
+    accepted = ingress != "refused"
+    with monkeypatch.context() as lost:
+        if accepted:  # the ingress accepted it, then the delivery mark was lost
+            lost.setattr(owner_quiz, "mark_discharged", lambda *a, **k: {})
+        else:  # the ingress failed before anything landed
+            lost.setattr(mb, "accept_chat", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("not persisted")))
+        assert answer(app).status_code == (200 if accepted else 503)
+    assert debt(tmp_path)["state"] == "owed" and debt(tmp_path)["route"] == "fresh_head"
+    assert len(_inbox(bridge)) == int(accepted)
+
+    if ingress == "accepted_before_restart":  # the process that handed its dispatch over has ended
+        monkeypatch.setattr(process_custody, "current_custody_session_id", lambda: "next-generation")
+    continue_to(tmp_path)
+    q.RUNNING["successor"] = {"task": {**task, "id": "successor"}}
+    if retry == "owner":
+        assert answer(app).status_code == 200, "the same request id"
+    else:
+        due(tmp_path)
+        asyncio.run(td.recover_question_deliveries(tmp_path))
+    copies = [entry["msg_id"] for entry in drain_owner_entries(tmp_path, "successor", set())]
+    assert _inbox(bridge) == []
+    if ingress == "accepted":
+        assert copies == [], "one answer, one effect: the owner's message the ingress accepted"
+        assert debt(tmp_path)["state"] == "delivered"
+    elif ingress == "accepted_before_restart":
+        assert copies == [], "an accepted answer of unknown dispatch is never delivered again elsewhere"
+        assert (debt(tmp_path)["state"], debt(tmp_path)["reason_code"]) == ("owed", "late_answer_delivery_unknown")
+    else:
+        assert copies == ["quiz_answer:asker:q"] and debt(tmp_path)["recipient_task_id"] == "successor"
+
+
 def test_an_appended_answer_whose_receipt_failed_stays_with_its_paused_recipient(tmp_path, monkeypatch):
     from ouroboros import question_answers as qa
     app, bridge, q, task = runtime(tmp_path, monkeypatch)

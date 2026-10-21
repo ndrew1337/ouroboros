@@ -169,8 +169,15 @@ def test_startup_pre_adoption_retains_local_checks_without_engine_observation(
                    "exit_code": 42, "task_ids": ["nanny"]}
     if fault == "transaction":
         transaction["exit_code"] = 1
-    elif fault in {"no_resume", "panic"}:
-        (tmp_path / "state" / ("panic_stop.flag" if fault == "panic" else "owner_restart_no_resume.flag")).touch()
+    elif fault == "no_resume":
+        recovery.prepare_owner_restart(tmp_path)
+        monkeypatch.setattr(recovery, "_PROCESS_GENERATION", "successor")
+    elif fault == "panic":
+        # Startup restores the queue before pre-adoption; the work's stop,
+        # not the consumed installation input, owns the decision here.
+        from supervisor.restart_retention import hold_stopped_queue
+
+        hold_stopped_queue(task, tmp_path, "panic")
     elif fault == "attempt":
         task["_attempt"] += 1
     elif fault == "holder":
@@ -187,6 +194,8 @@ def test_startup_pre_adoption_retains_local_checks_without_engine_observation(
         assert recovery.planned_handoff_resume_allowed(tmp_path, task)
     else:
         assert not adopted and recovery._read(tmp_path, "nanny")["status"] == "vetoed"
+        if fault in {"no_resume", "panic"}:
+            assert recovery._read(tmp_path, "nanny")["veto_reason"] == "startup_work_stopped"
 
 
 @pytest.mark.parametrize("prepared", [(False, False, "saved"), (True, False, "saved")],

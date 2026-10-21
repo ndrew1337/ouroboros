@@ -40,6 +40,7 @@ from ouroboros.gateway.task_archive import (
     chat_media_identity, directory_archives, plain_segments, serve_directory_archive, serve_task_file,
     task_artifact_location, recorded_identity, serve_task_source,
 )
+from ouroboros.confined_files import root_spellings
 from ouroboros.task_custody import task_artifact_stores
 from ouroboros.headless import (
     ARTIFACTS_DIR,
@@ -932,9 +933,11 @@ def api_task_artifact(request: Request):
     except ValueError as exc:
         return json_error(str(exc), 400)
     name = str(request.path_params.get("name") or "").strip()
-    if not name or "/" in name or "\\" in name or name in {".", ".."} or ".." in pathlib.PurePosixPath(name).parts:
+    if plain_segments(name) != [name]:
         return json_error("artifact name must be a simple filename", 400)
     source, relpath = request.query_params.get("source"), request.query_params.get("relpath")
+    if source and not plain_segments(source):
+        return json_error("task source is unavailable or does not match its recorded identity", 404)
     if relpath is not None and (source or plain_segments(relpath)[-1:] != [name]):
         return json_error("relpath must be store-relative plain segments ending in the name, without source",
                           400, reason_code="artifact_relpath_invalid", task_id=task_id, artifact=name)
@@ -942,16 +945,16 @@ def api_task_artifact(request: Request):
     if (archive := request.query_params.get("archive")) is not None:
         return serve_directory_archive(drive_root, task_id, name, archive,
                                        other_selectors=source is not None or relpath is not None)
-    stores = task_artifact_stores(drive_root, task_id)
+    stores, spellings = task_artifact_stores(drive_root, task_id), root_spellings(drive_root)
     path = None if relpath is not None else artifact_store.resolve_chat_media_path(drive_root, task_id, name)
     if path is not None:  # content-addressed chat media: the canonical store, bytes that hash to the name
-        media = task_artifact_location(stores[:1], path)
+        media = task_artifact_location(stores[:1], path, spellings)
         return (serve_task_file(drive_root, stores[0], media[2], name, chat_media_identity(name), task_id=task_id)
                 if media else json_error("artifact not found", 404, task_id=task_id, artifact=name))
     registered = artifact_store.registered_task_artifact(drive_root, task_id, name) if relpath in (None, name) else None
     # A registered immutable top-level file needs one identity check, not a result projection.
     fast = bool(not source and registered and registered.get("immutable")
-                and (at := task_artifact_location(stores, registered.get("path"))) and at[2] == name)
+                and (at := task_artifact_location(stores, registered.get("path"), spellings)) and at[2] == name)
     result = {} if fast else (load_effective_task_result(drive_root, task_id) or {})
     if not result and not registered:
         return json_error("task not found", 404)
@@ -960,7 +963,7 @@ def api_task_artifact(request: Request):
     rows = [] if fast else [row for row in result.get("artifacts") or [] if isinstance(row, dict) and (
         relpath is not None or str(row.get("name") or pathlib.Path(str(row.get("path") or "")).name) == name)]
     located = [(at, order, row) for order, row in enumerate(rows + ([registered] if registered else []))
-               if (at := task_artifact_location(stores, row.get("path")))]
+               if (at := task_artifact_location(stores, row.get("path"), spellings))]
     matches = [item for item in located if item[0][2] == (relpath or name)]
     nested = sorted({item[0][2] for item in located if "/" in item[0][2]})
     if relpath is None and not matches and len(nested) > 1:
@@ -1387,8 +1390,9 @@ async def api_task_resume(request: Request) -> JSONResponse:
         # a held Continue's observed blockers (#1721): an existing successor, never Not Found
         "predecessor_writers_unsettled", "selection_owner_held",
     } else 404
-    return json_error(error, status, task_id=task_id, **{key: result[key] for key in ("action", "blockers")
-                                                          if result.get(key)})
+    return JSONResponse({"error": error, "task_id": task_id,
+                         **{key: result[key] for key in ("action", "blockers", "message") if result.get(key)}},
+                        status_code=status)
 
 
 # The task-event SSE endpoint and its follower live in gateway/task_events.py

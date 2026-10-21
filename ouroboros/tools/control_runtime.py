@@ -660,7 +660,7 @@ def _consciousness_status_facts(ctx: ToolContext) -> str:
         if "enabled" in facts and unproven:
             facts["enabled"] = {"status": "unknown", "reason": unproven}
     if panic_blocks_wake(path.parent.parent):
-        facts["panic_flag_kept"] = "state/panic_stop.flag is present or unreadable: no wake starts while it is kept"
+        facts["panic_flag_kept"] = "state/panic_stop.flag is unreceived or unreadable: no wake starts until it is received"
     facts["configured_bounds_sec"] = {"min": get_bg_wakeup_min_sec(), "max": get_bg_wakeup_max_sec(),
                                       "source": "owner settings, not the state file"}
     facts["notes"] = [

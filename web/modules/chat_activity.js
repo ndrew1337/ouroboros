@@ -1116,10 +1116,9 @@ export function buildMessageKey(role, text, timestamp, opts = {}) {
     ].join('|');
 }
 
-export function reconnectBannerText(reason = '') {
-    if (reason === 'sha-change') return 'Restart complete';
-    if (reason) return 'Reconnected';
-    return '';
+// Only a reload onto changed code earns a feed notice; any other reload reason or reconnect is silent.
+export function restartNoticeText(reason = '') {
+    return reason === 'sha-change' ? 'Restart complete' : '';
 }
 
 // The message clock is the chat's one compact time format, shared with the terminal time line (utils.js).

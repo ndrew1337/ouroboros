@@ -150,17 +150,9 @@ def _fail_nonterminal_artifact_bundle(bundle: Dict[str, Any], message: str) -> D
 
 
 def _child_drive_candidates(result: Dict[str, Any]) -> List[pathlib.Path]:
-    paths: List[pathlib.Path] = []
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    for source in (result, metadata):
-        for key in ("child_drive_root", "headless_child_drive_root", "drive_root"):
-            text = str(source.get(key) or "").strip()
-            if not text:
-                continue
-            path = pathlib.Path(text)
-            if path not in paths:
-                paths.append(path)
-    return paths
+    from ouroboros.task_custody import child_drive_candidates  # the one child-root vocabulary
+
+    return child_drive_candidates(result)
 
 
 # Legacy mirrored disposition/sha fields stripped from every effective read; the
@@ -1187,11 +1179,11 @@ def effective_task_result(
         from ouroboros.outcomes import artifact_bundle_from_result
         from ouroboros.task_custody import own_child_drives, store_artifact_view
 
-        # A pure view (TZ-1 A): recorded rows, the task's OWN child stores' recorded rows
-        # (their identity survives a suppressed cancelled child result) and stat-only
-        # listings; nothing is copied, hashed or registered here.
+        # In this artifact view, canonical admission/copy-back facts authorize child store
+        # reads, never scratch existence. Keep child claims even after cancellation; the
+        # view copies, hashes and registers nothing.
         child_rows = {}
-        for drive in own_child_drives(drive_root, task_id):
+        for drive in own_child_drives(drive_root, task_id, store_row=result):
             rows = (load_task_result(drive, task_id) or {}).get("artifacts")
             child_rows[drive / "task_results" / "artifacts" / task_id] = rows if isinstance(rows, list) else []
         recorded = [item for item in (merged.get("artifacts") or []) if isinstance(item, dict)]

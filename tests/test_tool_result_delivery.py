@@ -532,6 +532,6 @@ def test_producer_page_sizes_stay_positive_ints_for_every_paging_consumer():
                    "ouroboros.tools.delegate_terminal_evidence", "ouroboros.skill_publish_result",
                    "ouroboros.tools.delegate", "ouroboros.tools.followup",
                    "ouroboros.skill_catalogue", "ouroboros.delegate_supervision",
-                   "ouroboros.delegate_interactions"):
+                   "ouroboros.delegate_interactions", "ouroboros.tools.recent_tasks"):
         source = inspect.getsource(importlib.import_module(module))
         assert "tool_result_limit(" in source, module

@@ -52,8 +52,9 @@ def _wires(messages, monkeypatch):
     return out
 
 
-@pytest.mark.parametrize("batch_size", [1, 3, 7])
-def test_real_png_auto_batches_share_eviction_projection_with_fit_and_all_wire_builders(tmp_path, monkeypatch, batch_size):
+@pytest.mark.parametrize(("batch_size", "live_count"), [(1, 6), (3, 8), (5, 10), (6, 5), (7, 6)])
+def test_real_png_auto_batches_share_eviction_projection_with_fit_and_all_wire_builders(tmp_path, monkeypatch,
+                                                                                     batch_size, live_count):
     repo = tmp_path / "repo"
     repo.mkdir()
     ctx = ToolContext(repo_dir=repo, drive_root=tmp_path / "data", task_id="image-projection")
@@ -84,7 +85,7 @@ def test_real_png_auto_batches_share_eviction_projection_with_fit_and_all_wire_b
     trace = {"tool_calls": []}
     process_tool_results(rows, messages, trace, lambda *_a, **_kw: None,
                          SimpleNamespace(_ctx=ctx), fit_candidate=fit, tool_schemas=[])
-    assert measured and all(len(_images(m)) == MAX_LIVE_IMAGE_BLOCKS for m in measured)
+    assert measured and all(len(_images(m)) == live_count for m in measured)
     assert _images(messages) == _images(measured[-1])
     for wire in _wires(messages, monkeypatch).values():
         assert _images(wire["messages"]) == _images(messages)
@@ -92,7 +93,7 @@ def test_real_png_auto_batches_share_eviction_projection_with_fit_and_all_wire_b
     assert [m["role"] for m in messages[len(before):len(before) + len(rows)]] == ["tool"] * len(rows)
     assert all(row["image_attachment"] == {"status": "attached"} for row in trace["tool_calls"])
     assert [path.read_bytes() for path in paths] == originals
-    # Positive direct path uses the same existing cap and image implementation.
+    # Direct attachments share the same sequence of high-water batch evictions.
     ctx.messages = deepcopy(initial)
     for path in paths[MAX_LIVE_IMAGE_BLOCKS:]:
         assert attach_local_image_to_context(ctx, str(path))[0]

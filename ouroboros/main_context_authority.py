@@ -95,14 +95,20 @@ def _authority_identity(value: Any) -> str:
     return str(value.get("task_id") or "").strip()
 
 
+def _shown_elsewhere(text: str, representation: str, rule: str) -> Dict[str, Any]:
+    return {"representation": representation, "chars": len(text),
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "rule": rule}
+
+
 def project_main_task_authority(task: Mapping[str, Any]) -> Dict[str, Any]:
     """Build the provider-only authority section without mutating ``task``.
 
     The materialized predecessor (the brief) appears once, at the top level; an
     equal copy nested in the task's own contract is dropped from this view. A
     contract objective byte-identical to the assignment — the first user turn of
-    the conversation — is shown as a typed reference, so the work order appears
-    once per request.
+    the conversation — and a contract context byte-identical to the task block's
+    own ``context`` are shown as typed references, so the work order and its
+    context appear once per request.
     """
     projection: Dict[str, Any] = {}
     predecessor = task.get("predecessor_authority")
@@ -117,12 +123,13 @@ def project_main_task_authority(task: Mapping[str, Any]) -> Dict[str, Any]:
             projected_contract.pop("predecessor_authority", None)
         objective = projected_contract.get("objective")
         if isinstance(objective, str) and objective and objective == str(task.get("text") or ""):
-            projected_contract["objective"] = {
-                "representation": "assignment", "chars": len(objective),
-                "sha256": hashlib.sha256(objective.encode("utf-8")).hexdigest(),
-                "rule": "The objective is this task's assignment, the first user turn of this conversation; "
-                        "it is not repeated here.",
-            }
+            projected_contract["objective"] = _shown_elsewhere(objective, "assignment", (
+                "The objective is this task's assignment, the first user turn of this conversation; "
+                "it is not repeated here."))
+        context = projected_contract.get("context")
+        if isinstance(context, str) and context and context == task.get("context"):
+            projected_contract["context"] = _shown_elsewhere(context, "task_context", (
+                "The caller's context is the `context` field of the task block above; it is not repeated here."))
         projection["task_contract"] = projected_contract
     origin_ref = task.get("origin_message_ref")
     origin_text = task.get("origin_message_text")

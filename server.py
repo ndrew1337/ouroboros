@@ -3,7 +3,7 @@
 import asyncio
 import base64  # noqa: F401
 import json
-import subprocess
+import subprocess as subprocess
 import os
 import pathlib
 import sys
@@ -12,14 +12,14 @@ import time
 import uuid
 # The executing checkout is the implicit repository before any import resolves REPO_DIR; an explicit one wins.
 os.environ.setdefault("OUROBOROS_REPO_DIR", os.path.dirname(os.path.abspath(__file__)))
-from ouroboros.utils import read_json_dict, utc_now_iso  # noqa: E402
+from ouroboros.utils import read_json_dict as read_json_dict, utc_now_iso  # noqa: E402
 from typing import Any, Dict, Optional
 
 from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
 from ouroboros.server_control import (PanicIngress, execute_panic_stop as _execute_panic_stop_impl, exit_after_restart,
-                                      restart_current_process as _restart_current_process_impl)
+                                      restart_current_process as _restart_current_process_impl)  # noqa: F401 — restart lifecycle binding
 from ouroboros.owned_shutdown import (begin_owned_stop, finish_unconfirmed_stops, start_inherited_import,
                                        stop_owned_work)
 from ouroboros.server_auth import (
@@ -106,6 +106,7 @@ from ouroboros.server_maintenance import (  # noqa: F401
 from ouroboros.ui_translation import start_background as _start_ui_translation
 from supervisor.workspace_preparation import start_generation as _start_preparation_generation
 from supervisor.event_observation import pending_idle_observations
+from ouroboros import server_restart as _restart_lifecycle
 from ouroboros.server_restart import (  # noqa: F401
     _begin_task_teardown, _live_running_task_ids, _managed_update_pending_kwargs,
     _perform_owner_restart, _safe_restart_serialized,
@@ -170,30 +171,7 @@ def _launcher_managed_repo_matches() -> bool:
 
 
 def _restart_current_process(host: str, port: int) -> None:
-    # Every direct restart reaches this seam, including an assisted update whose
-    # native waits were already moved to PENDING before its resolver ran.
-    try:
-        from ouroboros.delegate_recovery import PLANNED_RESTART_TRANSACTION_ENV, arm_active_planned_restart_transaction
-        from ouroboros.server_restart import _RESTARTABLE_UPDATE_PHASES
-        from supervisor.update_merge import read_update_tx_strict
-
-        panic_flag = DATA_DIR / "state" / "panic_stop.flag"
-        if panic_flag.exists() and panic_flag.read_text(encoding="utf-8").strip() == "panic":
-            os.environ.pop(PLANNED_RESTART_TRANSACTION_ENV, None)
-        elif (DATA_DIR / "state" / "owner_restart_no_resume.flag").exists():
-            from ouroboros.server_restart import arm_owner_restart_transaction
-
-            arm_owner_restart_transaction()  # only the work THIS owner Restart named returns
-        else:
-            status, tx = read_update_tx_strict()
-            if status == "valid" and tx.get("phase") in _RESTARTABLE_UPDATE_PHASES:
-                arm_active_planned_restart_transaction(DATA_DIR)
-    except Exception:
-        log.warning("Direct restart transaction could not be armed; continuation remains unconfirmed", exc_info=True)
-    _restart_current_process_impl(
-        host, port, repo_dir=REPO_DIR, log=log,
-        owner_initiated=_owner_restart_requested.is_set(),
-    )
+    return _restart_lifecycle._restart_current_process(sys.modules[__name__], host, port)
 
 from ouroboros.config import (
     SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SEC,
@@ -817,7 +795,8 @@ def _run_supervisor(settings: dict) -> None:
             routing_metadata_fn=lambda cid: main_lane_routing_metadata(_event_ctx, cid))  # _event_ctx is built below
 
         # A boot grant needs a KNOWN True and no unconsumed Panic flag (#1307).
-        if control_is(load_state(), "bg_consciousness_enabled", True) and not (DATA_DIR / "state" / "panic_stop.flag").exists():
+        from ouroboros.installation_stop import installation_panic
+        if control_is(load_state(), "bg_consciousness_enabled", True) and not installation_panic(DATA_DIR):
             _consciousness.start()
             log.info("Background consciousness auto-restored from saved state.")
 
@@ -981,187 +960,16 @@ _pending_restart: Dict[str, Any] = {}
 
 
 def _handle_restart_in_supervisor(evt: Dict[str, Any], ctx: Any) -> None:
-    """Handle agent restart request: drain live tasks across loop ticks, then
-    graceful shutdown + exit(42). Never sleeps on the dispatch thread."""
-    st = ctx.load_state()
-    if st.get("owner_chat_id"):
-        ctx.send_with_budget(
-            int(st["owner_chat_id"]),
-            f"♻️ Restart requested by agent: {evt.get('reason')}",
-            role="system", system_type="restart_notice")
-    from ouroboros.config import get_restart_drain_max_sec
-
-    max_wait = get_restart_drain_max_sec()
-    live = _live_running_task_ids(ctx) if max_wait > 0 else []
-    if live:
-        # Defer: re-checked each tick by _check_pending_restart_drain so the
-        # loop keeps draining events (heartbeats advance, RUNNING shrinks).
-        _pending_restart.clear()
-        _pending_restart.update({
-            "reason": str(evt.get("reason") or "agent_restart_request"),
-            "deadline": time.time() + min(max_wait, 1800),
-            "evolution_restart": bool(evt.get("evolution_restart")),
-        })
-        if st.get("owner_chat_id"):
-            ctx.send_with_budget(
-                int(st["owner_chat_id"]),
-                f"⏳ Restart drain: waiting up to {max_wait}s for running task(s) "
-                f"{', '.join(sorted(live))} to finish.",
-                role="system", system_type="restart_notice")
-        return
-    _perform_supervisor_restart(
-        ctx, restart_reason=str(evt.get("reason") or "agent_restart_request"),
-        evolution_restart=bool(evt.get("evolution_restart")),
-    )
+    return _restart_lifecycle._handle_restart_in_supervisor(sys.modules[__name__], evt, ctx)
 
 
 def _check_pending_restart_drain(ctx: Any) -> bool:
-    """Loop-tick hook: complete a deferred restart once tasks drain or the
-    deadline passes (proceeds fail-closed). Returns True while STILL draining, so
-    the loop can skip starting new work that the restart would immediately chop."""
-    if not _pending_restart:
-        return False
-    live = _live_running_task_ids(ctx)
-    if live and time.time() < float(_pending_restart.get("deadline") or 0.0):
-        return True  # keep draining — events still flow each tick
-    pending = dict(_pending_restart)
-    _pending_restart.clear()
-    _perform_supervisor_restart(
-        ctx, restart_reason=str(pending.get("reason") or "agent_restart_request"),
-        evolution_restart=bool(pending.get("evolution_restart")),
-    )
-    # Still "quiescing" this tick: _perform_supervisor_restart sets up the exit
-    # (or fail-closed pauses) and returns to the loop — the process exits on the
-    # next `while not _restart_requested` check. Returning True keeps the caller
-    # from starting new enqueue/assign work on this final pre-exit tick.
-    return True
+    return _restart_lifecycle._check_pending_restart_drain(sys.modules[__name__], ctx)
 
 
-def _perform_supervisor_restart(
-    ctx: Any, *, restart_reason: str = "agent_restart_request",
-    evolution_restart: bool = False,
-) -> None:
-    """Graceful shutdown + exit(42) (the post-drain tail; never sleeps)."""
-    st = ctx.load_state()
-    marker = read_json_dict(
-        pathlib.Path(ctx.DRIVE_ROOT) / "state" / "pending_restart_verify.json"
-    ) or {}
-    claim = (
-        marker.get("evolution_claim")
-        if evolution_restart and marker.get("reason") == restart_reason
-        else {}
-    )
-    claim = claim if isinstance(claim, dict) else {}
-    if evolution_restart and not claim:
-        if st.get("owner_chat_id"):
-            ctx.send_with_budget(
-                int(st["owner_chat_id"]),
-                "🧬 Restart cancelled: the exact evolution restart receipt is missing.",
-                role="system", system_type="restart_notice")
-        return
-    if claim:
-        from supervisor.evolution_lifecycle import check_evolution_authority
-
-        authority = check_evolution_authority(
-            str(claim.get("campaign_id") or ""),
-            str(claim.get("transaction_id") or ""),
-            str(claim.get("task_id") or ""),
-            commit_sha=str(claim.get("commit_sha") or ""),
-        )
-        if not authority.get("ok"):
-            if st.get("owner_chat_id"):
-                ctx.send_with_budget(
-                    int(st["owner_chat_id"]),
-                    "🧬 Restart cancelled: evolution authority changed "
-                    f"({authority.get('reason') or 'unknown'}).",
-                    role="system", system_type="restart_notice")
-            return
-        expected_sha = str(claim.get("commit_sha") or "")
-        try:
-            head_proc, status_proc = (subprocess.run(
-                ["git", *args], cwd=str(ctx.REPO_DIR), check=False, capture_output=True, text=True,
-            ) for args in (("rev-parse", "HEAD"), ("status", "--porcelain")))
-            head = head_proc.stdout.strip() if head_proc.returncode == 0 else ""
-            clean = status_proc.returncode == 0 and not status_proc.stdout.strip()
-        except Exception:
-            head = ""
-            clean = False
-        # A candidate commit is claimed BEFORE its switch: the serving checkout is then at the adoption's base.
-        serving_sha = body_adoption.authorized_base(ctx.DRIVE_ROOT, expected_sha, restart_reason) or expected_sha
-        if not expected_sha or head != serving_sha or not clean:
-            if st.get("owner_chat_id"):
-                ctx.send_with_budget(
-                    int(st["owner_chat_id"]),
-                    "🧬 Restart cancelled: the live checkout no longer matches "
-                    "the exact reviewed evolution commit.",
-                    role="system", system_type="restart_notice")
-            return
-    ok, msg = _safe_restart_serialized(
-        body_adoption.bind_restart(ctx.safe_restart, ctx.DRIVE_ROOT, restart_reason),
-        reason="agent_restart_request",
-        unsynced_policy="rescue_and_block",
-    )
-    if not ok:
-        try:
-            from supervisor.evolution_lifecycle import disable_evolution_projection, pause_evolution_campaign
-
-            disable_evolution_projection()
-            pause_evolution_campaign(f"agent restart blocked to protect local changes: {msg}")
-        except Exception:
-            log.debug("Failed to pause evolution after blocked agent restart", exc_info=True)
-        if st.get("owner_chat_id"):
-            ctx.send_with_budget(int(st["owner_chat_id"]), f"⚠️ Restart skipped: {msg}", role="system", system_type="restart_notice")
-        return
-    cleanup_status, cleanup_reason = _begin_task_teardown(restart_requested=True)
-    global _planned_delegate_restart_transaction_id
-    _planned_delegate_restart_transaction_id = ""
-    planned_handoffs: set[str] = set()
-    restart_transaction_id = uuid.uuid4().hex
-    try:
-        from ouroboros.delegate_recovery import prepare_planned_restart_handoffs
-        from ouroboros.owner_wait import prepare_owner_wait_handoffs
-        from supervisor.queue import name_queue_returns
-        from supervisor.restart_retention import prepare_restart_returns
-        from supervisor.workers import direct_chat_turns
-
-        owner_waits = prepare_owner_wait_handoffs(ctx.DRIVE_ROOT, ctx.RUNNING, restart_transaction_id)
-        planned_handoffs = prepare_planned_restart_handoffs(
-            ctx.DRIVE_ROOT, ctx.RUNNING,
-            restart_transaction_id=restart_transaction_id,
-            additional_task_ids=owner_waits,
-        )
-        # The planned restart also returns active work and the runnable queue (#1563);
-        # the off-loop schedule duty admits nothing after this copy.
-        prepare_restart_returns(ctx.DRIVE_ROOT, ctx.RUNNING, name_queue_returns(ctx.PENDING, "planned_restart"),
-                                transaction_id=restart_transaction_id,
-                                direct=direct_chat_turns(), owner_wait_ids=owner_waits)
-    except Exception:
-        log.debug("Planned self-restart delegate handoff preparation failed", exc_info=True)
-    try:
-        restart_kill_kwargs = _managed_update_pending_kwargs()
-        if planned_handoffs:
-            _planned_delegate_restart_transaction_id = restart_transaction_id
-            restart_kill_kwargs["preserve_pending"] = True
-        ctx.kill_workers(
-            force=True,
-            terminal_status=cleanup_status,
-            result_reason=cleanup_reason,
-            stop_source="server_shutdown",
-            preserve_running_task_ids=planned_handoffs,
-            retain_saved_work=True,
-            **restart_kill_kwargs,
-        )
-        try:  # a field update: a stale snapshot never erases a control written meanwhile (#1307)
-            ctx.update_state(lambda live: live.__setitem__("session_id", uuid.uuid4().hex))
-        except Exception:
-            log.warning("Restart session id not rotated: runtime state unavailable", exc_info=True)
-        ctx.persist_queue_snapshot(reason="pre_restart_exit")
-    except BaseException:
-        from supervisor.queue import reopen_queue_returns
-
-        reopen_queue_returns("planned_restart")  # no exit follows: this generation keeps admitting
-        raise
-    _request_restart_exit()
+def _perform_supervisor_restart(ctx: Any, *, restart_reason="agent_restart_request", evolution_restart=False) -> None:
+    return _restart_lifecycle._perform_supervisor_restart(
+        sys.modules[__name__], ctx, restart_reason=restart_reason, evolution_restart=evolution_restart)
 
 
 def _wait_for_supervisor_update_finalize() -> bool:

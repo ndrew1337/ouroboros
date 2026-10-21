@@ -270,7 +270,7 @@ def test_evolution_cleanup_never_stashes_or_resets_serving_dirt_of_a_candidate_c
     assert other["cleanup_status"] != "candidate_retained"
 
 
-def test_serving_push_publishes_reachable_release_tags_and_never_a_candidates(scene, monkeypatch, tmp_path):
+def test_serving_push_publishes_only_the_operation_tag_and_never_a_candidates(scene, monkeypatch, tmp_path):
     from ouroboros.tools import git as git_tools
     from supervisor import git_ops
 
@@ -293,26 +293,28 @@ def test_serving_push_publishes_reachable_release_tags_and_never_a_candidates(sc
 
     monkeypatch.setattr(git_ops, "REPO_DIR", scene.serving)
     monkeypatch.setattr(git_ops, "BRANCH_DEV", "ouroboros")
+    git(scene.serving, "config", "push.followTags", "true")  # ambient configuration must not expand the effect
     pushed, message = git_ops.push_to_remote()
 
-    assert pushed is True and "+ tags" in message
+    assert pushed is True and "+ tag" not in message
     assert git(remote, "rev-parse", "refs/heads/ouroboros") == scene.old
-    assert git(remote, "rev-parse", "refs/tags/v1.0.0^{commit}") == scene.old
     refs = git(remote, "for-each-ref", "--format=%(refname)").splitlines()
-    assert sorted(refs) == ["refs/heads/ouroboros", "refs/tags/v1.0.0"]  # no v1.0.1, no candidate branch, no pin
+    assert refs == ["refs/heads/ouroboros"]  # no old tag, private candidate branch or pin
 
     # Explicit publication of the approved contribution branch stays available and is not forced.
-    git(scene.candidate, "push", "-q", "origin", f"{scene.ctx.branch_dev}:refs/heads/contrib/fix")
+    git(scene.candidate, "push", "-q", "--no-follow-tags", "origin", f"{scene.ctx.branch_dev}:refs/heads/contrib/fix")
     assert git(remote, "rev-parse", "refs/heads/contrib/fix") == neutral
     assert "refs/tags/v1.0.1" not in git(remote, "for-each-ref", "--format=%(refname)")
 
-    # Once the numbered release IS the serving line, the same push publishes its tag.
+    # Publication now also needs this operation's creation fact, not merely reachability.
     git(scene.serving, "merge", "-q", "--ff-only", numbered)
-    assert git_ops.push_to_remote()[0] is True
+    assert git_ops.push_to_remote(created_tag="v1.0.1", expected_commit_sha=numbered)[0] is True
     assert git(remote, "rev-parse", "refs/tags/v1.0.1^{commit}") == numbered
+    assert "refs/tags/v1.0.0" not in git(remote, "for-each-ref", "--format=%(refname)")
 
 
-def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(scene, monkeypatch, tmp_path):
+@pytest.mark.parametrize("tag_evidence", ["neutral", "numbered", "legacy", "numbered_then_neutral"])
+def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(scene, monkeypatch, tmp_path, tag_evidence):
     from supervisor import git_ops, git_ops_reset, message_bus, state
 
     remote = tmp_path / "origin.git"
@@ -328,7 +330,19 @@ def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(sce
     assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}  # nothing inherited
     assert sent == [] and git(remote, "for-each-ref") == ""
 
+    git(scene.serving, "tag", "-a", "v-old", "-m", "old")
+    git(scene.serving, "config", "push.followTags", "true")
+    if tag_evidence != "neutral":
+        git(scene.candidate, "tag", "-a", "v-new", "-m", "new")
+    if tag_evidence == "numbered":
+        body_candidate.record_reviewed_commit(scene.ctx, scene.cand, created_tag="v-new")
+    if tag_evidence == "numbered_then_neutral":
+        body_candidate.record_reviewed_commit(scene.ctx, scene.cand, created_tag="v-new")
+        scene.cand = candidate_commit(scene.candidate, "neutral follow-up",
+                                      files={"ouroboros/mod_b.py": "GEN = 'N'\n"})
+        body_candidate.record_reviewed_commit(scene.ctx, scene.cand)
     _switch(scene)
+    assert body_adoption.read(scene.data)["created_tag"] == ("v-new" if tag_evidence == "numbered" else "")
     unready = body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=False)
     assert unready["outcome"] == "unconfirmed" and git(remote, "for-each-ref") == "" and facts == []
 
@@ -339,6 +353,11 @@ def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(sce
     assert git(remote, "rev-parse", "refs/heads/ouroboros") == scene.cand  # the serving line, as after any commit
     assert sent and sent[0][0] == 7 and scene.cand[:12] in sent[0][1]
     assert sent[0][2]["system_type"] == "restart_notice"
+    tags = git(remote, "for-each-ref", "--format=%(refname)", "refs/tags").splitlines()
+    assert tags == (["refs/tags/v-new"] if tag_evidence == "numbered" else [])
+    assert "Publication: Pushed" in sent[0][1]
+    assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}
+    assert len(sent) == 1  # consuming the handoff does not schedule another push
 
 
 def test_runtime_fact_lists_retained_candidates_for_a_deliberate_resume(scene):
@@ -590,3 +609,46 @@ def test_an_unreadable_candidate_never_proves_its_commit_lost(tmp_path, monkeypa
     assert [row["reason"] for row in _events(scene.data, "evolution_tx_awaiting_adoption")] == [
         "candidate_unreadable", "candidate_holds_commit"]
     assert body_adoption.read(scene.data) == {} and git(scene.serving, "rev-parse", "HEAD") == scene.serving_head
+
+
+def test_adoption_selects_the_recorded_tag_of_the_exact_commit(scene):
+    git(scene.candidate, "tag", "-a", "v-first", "-m", "first")
+    body_candidate.record_reviewed_commit(scene.ctx, scene.cand, created_tag="v-first")
+    later = candidate_commit(scene.candidate, "later release", files={"VERSION": "2.0.0\n"})
+    git(scene.candidate, "tag", "-a", "v-later", "-m", "later")
+    body_candidate.record_reviewed_commit(scene.ctx, later, created_tag="v-later")
+    body_candidate.record_reviewed_commit(scene.ctx, scene.cand)  # recovery adds no new fact and erases none
+    handoff = body_adoption.authorize(scene.ctx, scene.cand, reason="exact earlier selection")
+    assert handoff["cand"] == scene.cand and handoff["created_tag"] == "v-first"
+
+
+def test_boot_reports_partial_tag_publication_and_does_not_retry_it(scene, monkeypatch, tmp_path):
+    from supervisor import git_ops, git_ops_reset, message_bus, state
+
+    remote = tmp_path / "origin.git"
+    git(tmp_path, "init", "-q", "--bare", str(remote))
+    git(scene.serving, "remote", "add", "origin", str(remote))
+    git(scene.candidate, "tag", "-a", "v-new", "-m", "new")
+    body_candidate.record_reviewed_commit(scene.ctx, scene.cand, created_tag="v-new")
+    monkeypatch.setattr(git_ops, "REPO_DIR", scene.serving)
+    monkeypatch.setattr(git_ops_reset, "_record_checkout_facts", lambda value: None)
+    monkeypatch.setattr(state, "load_state", lambda: {"owner_chat_id": 7})
+    sent, attempts = [], []
+    monkeypatch.setattr(message_bus, "send_with_budget", lambda chat, text, **kw: sent.append(text))
+    network = git_ops._git_network_bounded
+
+    def tag_refusal(command, **kwargs):
+        attempts.append(command)
+        if any(arg.endswith(":refs/tags/v-new") for arg in command):
+            return 1, "", "remote rejected tag"
+        return network(command, **kwargs)
+
+    monkeypatch.setattr(git_ops, "_git_network_bounded", tag_refusal)
+    _switch(scene)
+    result = body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True)
+    assert result["outcome"] == "adopted"
+    assert len(attempts) == 2 and len(sent) == 1
+    assert "partial publication: tag v-new" in sent[0] and "no automatic retry" in sent[0]
+    assert git(remote, "for-each-ref", "--format=%(refname)") == "refs/heads/ouroboros"
+    assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}
+    assert len(attempts) == 2 and len(sent) == 1

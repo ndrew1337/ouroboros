@@ -366,12 +366,8 @@ def restore_owner_wait_allowed(root: Any, task: dict, *, strict: bool = False, e
     if not isinstance(handoff, dict):
         return False
     root = pathlib.Path(root)
-    try:  # Panic never returns work; the owner's Restart returns only what its acknowledged transaction names
-        if (root / "state" / "panic_stop.flag").read_text(encoding="utf-8").strip() == "panic":
-            return False
-    except FileNotFoundError:
-        pass
-    except OSError:
+    from ouroboros.delegate_recovery import owner_restart_in_progress
+    if owner_restart_in_progress(root):
         return False
     _ack_direct_exec_successor(root)
     task_id = str(task.get("id") or "")
@@ -645,7 +641,7 @@ def consume_warm_resume(ctx: Any) -> bool:
         fence = read_fence(root_drive, root_task_id)
         stamp = {"consumed_at": utc_now_iso(), "consumed_by": task_id,
                  "task_attempt": int(getattr(ctx, "task_attempt", 1) or 1)}
-        if fence_closed(fence):
+        if fence_closed(fence) or ((fence.get("resume_grant") or {}).get("tree_only") and task_id != root_task_id):
             selected = dict(fence.get("selected_members") or {})
             mine = selected.get(task_id)
             if not isinstance(mine, dict):

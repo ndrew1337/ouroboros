@@ -208,19 +208,25 @@ def _settle(key: Tuple[int, int], entry: _Inode) -> None:
     _INODES.pop(key, None)
 
 
-def _borrow(path: Any) -> Tuple[Tuple[int, int], int]:
+def _borrow(path: Any, dir_fd: Optional[int] = None) -> Tuple[Tuple[int, int], int]:
     """A read descriptor of PATH's file (POSIX): on POSIX closing ANY descriptor of a file releases
     every advisory lock this process holds on it, an open transaction's on another thread included,
     and another process then writes the same pages (sqlite.org howtocorrupt §2.2). So a raw read
     shares one descriptor per inode, and ``_return`` closes it only when no store connection of this
-    process has the file open (SQLite's unix VFS defers its own closes the same way)."""
-    key = _identity_key(os.stat(path))
+    process has the file open (SQLite's unix VFS defers its own closes the same way). With ``dir_fd``
+    PATH is one entry of that held directory (``confined_files``), stated and opened relative to it,
+    never through a link."""
+    key = _identity_key(os.stat(path, dir_fd=dir_fd, follow_symlinks=dir_fd is None))
     with _INODE_GUARD:
         entry = _INODES.get(key)
         if entry is not None and entry.files:
             entry.readers += 1
             return key, entry.files[0].fileno()
-    handle = pathlib.Path(path).open("rb", buffering=0)  # outside the guard: a slow open stalls only this caller
+    if dir_fd is None:
+        handle = pathlib.Path(path).open("rb", buffering=0)  # outside the guard: a slow open stalls only this caller
+    else:
+        from ouroboros.confined_files import FILE_FLAGS  # no-follow; a FIFO swapped in never blocks
+        handle = open(os.open(path, FILE_FLAGS, dir_fd=dir_fd), "rb", buffering=0)
     key = _identity_key(os.fstat(handle.fileno()))  # the path may name a newer file than the stat did
     with _INODE_GUARD:
         entry = _INODES.setdefault(key, _Inode())
@@ -265,13 +271,13 @@ class _StoreConnection(sqlite3.Connection):
                     _settle(key, entry)
 
 
-def _read_header(path: pathlib.Path) -> bytes:
+def _read_header(path: pathlib.Path, dir_fd: Optional[int] = None) -> bytes:
     """The first 100 bytes, read through the inode registry (``_borrow``); Windows locks belong
     to their handle, and a held handle there would block the export rename."""
     if os.name == "nt":
         with open(path, "rb") as handle:
             return handle.read(100)
-    key, fd = _borrow(path)
+    key, fd = _borrow(path, dir_fd)
     try:
         return os.pread(fd, 100, 0)
     finally:
@@ -291,13 +297,15 @@ def held_descriptor(path: Any) -> Optional[int]:
         return entry.files[0].fileno() if entry is not None and entry.files else None
 
 
-def is_sqlite_file(path: Any) -> bool:
+def is_sqlite_file(path: Any, *, dir_fd: Optional[int] = None) -> bool:
     """Whether PATH holds a SQLite database (its header magic), read without closing a descriptor
-    a store connection may depend on; a WAL index is none, and is never opened to look."""
+    a store connection may depend on; a WAL index is none, and is never opened to look. ``dir_fd``:
+    PATH is one entry of that held directory, and a link there is none (``_borrow``)."""
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode) or is_wal_index(path):
+        if (not stat.S_ISREG(os.stat(path, dir_fd=dir_fd, follow_symlinks=dir_fd is None).st_mode)
+                or is_wal_index(path, dir_fd=dir_fd)):
             return False  # never open a FIFO or a device to look, nor a WAL index (``is_wal_index``)
-        return _read_header(pathlib.Path(path)).startswith(b"SQLite format 3\x00")
+        return _read_header(pathlib.Path(path), dir_fd).startswith(b"SQLite format 3\x00")
     except OSError:
         return False
 
@@ -305,8 +313,8 @@ def is_sqlite_file(path: Any) -> bool:
 class _BorrowedReader:
     """A binary reader over a borrowed descriptor (``_borrow``); closing returns the borrow."""
 
-    def __init__(self, path: Any) -> None:
-        self._key, self._fd = _borrow(path)
+    def __init__(self, path: Any, dir_fd: Optional[int] = None) -> None:
+        self._key, self._fd = _borrow(path, dir_fd)
         self._offset, self._open = 0, True
 
     def __enter__(self) -> "_BorrowedReader":
@@ -360,7 +368,7 @@ class WalIndexRefused(PermissionError):
     """A raw read of a SQLite WAL index (``is_wal_index``), refused before any descriptor opens."""
 
 
-def is_wal_index(path: Any) -> bool:
+def is_wal_index(path: Any, *, dir_fd: Optional[int] = None) -> bool:
     """Whether PATH is a SQLite WAL index: a regular file (nothing else ever is, and nothing is read
     before that is known) whose real name (a link stands for the file it names) is its database's name
     plus ``-shm``, folded as a case-insensitive volume folds it, where the database, a sibling in that
@@ -375,31 +383,41 @@ def is_wal_index(path: Any) -> bool:
     are ``current.sqlite``, ``usage.sqlite``, ``dialog.sqlite``, ``index.sqlite3``, ``index.sqlite`` and
     temporaries ending in hex): beside a database ``x``, a database ``x-shm`` reads as ``x``'s index and
     its own index ``x-shm-shm`` as a file, whose raw read drops only this process's locks, and this
-    process holds none on ``x-shm``. The ``-wal`` log carries no lock and reads as any file does."""
-    path = pathlib.Path(os.path.realpath(path) if os.path.islink(path) else path)
-    if len(path.name) <= 4 or path.name[-4:].casefold() != "-shm":
+    process holds none on ``x-shm``. The ``-wal`` log carries no lock and reads as any file does.
+    ``dir_fd`` (POSIX) asks it of one entry of that held directory (``confined_files``): every name is
+    stated relative to it and none is followed, so a link there is no index and names no database."""
+    path = (pathlib.PurePath(path) if dir_fd is not None
+            else pathlib.Path(os.path.realpath(path) if os.path.islink(path) else path))
+    # No database is named ``.`` or ``..`` (``with_name(".")`` would raise).
+    if len(path.name) <= 4 or path.name[-4:].casefold() != "-shm" or path.name[:-4] in {".", ".."}:
         return False
     database = path.with_name(path.name[:-4])
     try:
+        if dir_fd is not None:  # the header is read last, only for the entry ``<database>-shm`` names
+            own = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+            named = os.stat(database.with_name(database.name + "-shm"), dir_fd=dir_fd, follow_symlinks=False)
+            return (stat.S_ISREG(own.st_mode) and os.path.samestat(own, named)
+                    and is_sqlite_file(database, dir_fd=dir_fd))
         return (stat.S_ISREG(os.stat(path).st_mode) and not os.path.islink(database) and is_sqlite_file(database)
                 and os.path.samefile(path, database.with_name(database.name + "-shm")))
     except OSError:
         return False
 
 
-def refuse_wal_index(path: Any) -> None:
+def refuse_wal_index(path: Any, *, dir_fd: Optional[int] = None) -> None:
     """Raise ``WalIndexRefused`` for a WAL index, before anything opens it."""
-    if is_wal_index(path):
+    if is_wal_index(path, dir_fd=dir_fd):
         raise WalIndexRefused(errno.EACCES, "a SQLite WAL index is not read as a file (its bytes are shared "
                               "memory; the database's content is in the database and its log)", str(path))
 
 
-def open_for_read(path: Any) -> Any:
+def open_for_read(path: Any, *, dir_fd: Optional[int] = None) -> Any:
     """``open(path, "rb")`` for any reader in a process that may hold a store: on POSIX the read
     borrows the inode's shared descriptor, whose close waits until no store connection of this
-    process has the file open; Windows opens and closes as usual. A WAL index is refused."""
-    refuse_wal_index(path)
-    return pathlib.Path(path).open("rb") if os.name == "nt" else _BorrowedReader(path)
+    process has the file open; Windows opens and closes as usual. A WAL index is refused. ``dir_fd``
+    (POSIX) reads one entry of that held directory, never through a link."""
+    refuse_wal_index(path, dir_fd=dir_fd)
+    return pathlib.Path(path).open("rb") if os.name == "nt" else _BorrowedReader(path, dir_fd)
 
 
 def iter_file_bytes(path: Any, *, limit: Optional[int] = None, chunk: int = 1 << 20) -> Iterator[bytes]:

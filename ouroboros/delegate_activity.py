@@ -419,17 +419,14 @@ def _owner_stop(ctx: Any, task_id: str) -> str:
         from ouroboros.cancel_intents import cancel_pending
         from ouroboros.delegate_custody import custody_root
         from ouroboros.model_wait import current_model_wait
-        from supervisor.state_initialization import confirm_absent
+        from ouroboros.delegate_recovery import owner_restart_in_progress
 
         owner = current_model_wait()
         if owner is not None and (reason := owner.control_reason()):
             return reason
         root = custody_root(ctx)
-        try:
-            for name in ("panic_stop.flag", "owner_restart_no_resume.flag"):
-                confirm_absent(root / "state" / name)
-        except OSError:  # present, linked or unknown is not a proven absent Stop flag
-            return "panic"
+        if owner_restart_in_progress(root):
+            return "owner_restart"
         return "cancelled" if cancel_pending(root, task_id) else ""
     except Exception:
         log.debug("owner stop facts unreadable during a delegated drain", exc_info=True)

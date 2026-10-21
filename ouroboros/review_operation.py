@@ -115,10 +115,11 @@ def controller_state(identity: Any) -> str:
 
 
 def operation_stop_state(root: pathlib.Path, task_id: str) -> str:
-    """Panic, immediate/settled cancellation, clear or unknown; unreadable authority is never clear."""
+    """Current Restart, immediate/settled cancellation, clear or unknown."""
     try:
-        if any((root / "state" / name).exists() for name in ("panic_stop.flag", "owner_restart_no_resume.flag")):
-            return "panic"
+        from ouroboros.delegate_recovery import owner_restart_in_progress
+        if owner_restart_in_progress(root):
+            return "owner_restart"
         from ouroboros.cancel_intents import cancel_pending, resolve_owner_stop_intent
         from ouroboros.task_results import load_task_result
         if cancel_pending(root, task_id, strict=True) and not resolve_owner_stop_intent(root, task_id, propagate_busy=control_probe_active())[1]:
@@ -245,7 +246,7 @@ class ReviewOperation:
                 if control_probe_requires_current():
                     raise
                 self.control_state = "unknown"  # A paid receiver keeps its operation and late result.
-            if self.control_state in {"panic", "cancelled"}:
+            if self.control_state in {"panic", "cancelled", "owner_restart"}:
                 self._control = self.control_state
             if self.control_state != "unknown":
                 self._checked_at = now

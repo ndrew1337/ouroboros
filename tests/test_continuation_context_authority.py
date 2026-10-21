@@ -296,6 +296,41 @@ def test_main_projection_shows_the_brief_once_and_the_objective_once():
     assert kept["task_contract"]["objective"] == "A shorter title", "only the assignment itself is referenced"
 
 
+
+def test_main_projection_shows_an_equal_task_context_once():
+    """A contract context byte-identical to the task block's own ``context`` (an API or recovery root's packet,
+    20.10: 2 x 96,893 chars in every round) becomes a typed reference; a different or absent row context, and
+    any non-string, stay exactly as the contract holds them."""
+    import hashlib
+
+    from ouroboros.main_context_authority import project_main_task_authority
+
+    packet = "FULL RECOVERY PACKET " * 4_000 + " \n"
+    task = {"id": "root", "text": "Recover", "context": packet,
+            "task_contract": {"objective": "Recover the store", "context": packet}}
+    before = copy.deepcopy(task)
+
+    projected = project_main_task_authority(task)
+
+    assert task == before
+    assert projected["task_contract"]["context"] == {
+        "representation": "task_context", "chars": len(packet),
+        "sha256": hashlib.sha256(packet.encode("utf-8")).hexdigest(),
+        "rule": "The caller's context is the `context` field of the task block above; it is not repeated here."}
+    assert packet not in json.dumps(projected)
+    assert projected["task_contract"]["objective"] == "Recover the store"
+
+    child = project_main_task_authority({"id": "c", "text": "x", "context": "delegator orientation",
+                                         "task_contract": {"context": "inherited authority"}})
+    assert child["task_contract"]["context"] == "inherited authority", "different texts both stay"
+    spaced = project_main_task_authority({"id": "s", "text": "x", "context": "keep",
+                                          "task_contract": {"context": " keep\n"}})
+    assert spaced["task_contract"]["context"] == " keep\n", "equality is byte-exact, no strip"
+    for row_context, contract_context in ((None, "keep"), ("", ""), ("x", None), ({"k": 1}, {"k": 1})):
+        kept = project_main_task_authority({"id": "n", "text": "x", "context": row_context,
+                                            "task_contract": {"context": contract_context}})
+        assert kept["task_contract"]["context"] == contract_context
+
 def test_numeric_http_code_does_not_hide_response_body_overflow():
     from ouroboros.loop_llm_call import classify_llm_exception
 

@@ -643,15 +643,22 @@ def executor_environment(ctx: Any, cwd: Any, *, executor, map_path) -> Optional[
             f"the executor must map both the body copy and its sibling .env directory: {exc}") from exc
 
 
-def record_reviewed_commit(ctx: Any, commit_sha: str, *, row: Optional[Dict[str, Any]] = None) -> None:
+def record_reviewed_commit(ctx: Any, commit_sha: str, *, row: Optional[Dict[str, Any]] = None, created_tag: str = "") -> None:
     """The commit gate created ``commit_sha`` on this candidate under the configured enforcement
     (``row``: the candidate whose interrupted gate an evolution intent proves)."""
     bound = row or descriptor(ctx)
     if not bound or not commit_sha:
         return
+
+    def record(entry):
+        entry["reviewed_commits"] = [
+            *[sha for sha in entry.get("reviewed_commits") or [] if sha != commit_sha], str(commit_sha)]
+        if created_tag:
+            entry["reviewed_release_tags"] = {
+                **(entry.get("reviewed_release_tags") or {}), str(commit_sha): str(created_tag)}
+
     try:
-        _update_row(bound, lambda entry: entry.__setitem__("reviewed_commits", [
-            *[sha for sha in entry.get("reviewed_commits") or [] if sha != commit_sha], str(commit_sha)]))
+        _update_row(bound, record)
     except Exception:
         log.warning("reviewed candidate commit %s was not recorded on its row", commit_sha[:12], exc_info=True)
 

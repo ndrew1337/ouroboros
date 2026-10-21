@@ -14,16 +14,21 @@ candidate-attached facts rather than provider prose.
 from __future__ import annotations
 
 import copy
+import contextlib
+import contextvars
 import hashlib
 import inspect
 import json
 import math
+import re
 import threading
 from dataclasses import asdict
 from typing import Any, Dict, List, Optional, Set
 
 from ouroboros.anthropic_native_custody import is_replayed_native_content
-from ouroboros.context_budget import CONTEXT_OVERFLOW_CODES, HOST_CONTEXT_KIND_KEY, HOST_TEXT_SHA_KEY
+from ouroboros.context_budget import (
+    CONTEXT_OVERFLOW_CODES, HOST_CONTEXT_KIND_KEY, HOST_TEXT_SHA_KEY, context_overflow_message,
+)
 from ouroboros.request_wire_contract import physical_candidate_bytes as _canonical_candidate_bytes
 from ouroboros.request_wire_recovery import prepare_wire_payload_for_send
 from ouroboros.transport_custody import ProviderNotDispatched, is_loopback_base_url
@@ -52,6 +57,23 @@ _CACHE_TTL_SECONDS = {"5m": 300, "1h": 3600}
 
 
 PROVIDER_POLICY_REFUSAL = "provider_policy_refusal"
+
+# The caller owns the allowance; this scope carries its write-ahead claim to
+# every physical lane, without another counter or any accounting authority.
+_SINGLE_SEND = contextvars.ContextVar("single_physical_send", default=None)
+
+
+@contextlib.contextmanager
+def single_physical_send(claim):
+    token = _SINGLE_SEND.set(claim)
+    try:
+        yield
+    finally:
+        _SINGLE_SEND.reset(token)
+
+
+def single_physical_send_active() -> bool:
+    return _SINGLE_SEND.get() is not None
 
 
 class PhysicalDispatchInterrupted(PhysicalAttemptPreconditionFailed):
@@ -180,6 +202,18 @@ def _is_structured_context_overflow_exception(exc: BaseException) -> bool:
 
 def _is_structured_context_overflow_body(error: Any) -> bool:
     return bool(_structured_error_values(error) & CONTEXT_OVERFLOW_CODES)
+
+
+def _is_http_status(exc: BaseException, code: int) -> bool:
+    """Read a status attribute or SDK status token, never an arbitrary number."""
+    sc = getattr(exc, "status_code", None)
+    if sc is not None:
+        try:
+            return int(sc) == int(code)
+        except (TypeError, ValueError):
+            pass
+    text = str(exc).strip().lower()
+    return bool(re.search(rf"(?:^|error code:?\s*|status(?:[ _]code)?:?\s*|http[\s:]*){int(code)}\b", text))
 
 
 def cache_ttl_seconds(applied_ttl: Any) -> Optional[int]:
@@ -401,6 +435,16 @@ def processing_refusal(target: Dict[str, Any], payload: Dict[str, Any],
         normalized.body = copy.deepcopy(body)
         return normalized
     return error
+
+
+def reasoning_strip_retry_allowed(exc: BaseException) -> bool:
+    """A 400 may omit replay unless an existing refusal/overflow path owns it."""
+    if getattr(exc, "stream_incomplete", False) or isinstance(exc, ProcessingNotStarted):
+        return False
+    if _is_structured_context_overflow_exception(exc) or _is_provider_policy_refusal(exc):
+        return False
+    # The loop's size recovery owns textual overflow too, including aggregated errors.
+    return not context_overflow_message(str(exc)) and _is_http_status(exc, 400)
 
 
 def effort_request_facts(target: Dict[str, Any], payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -747,6 +791,9 @@ def _deadline_checked_send(send: Any, before_dispatch: Any):
         except PhysicalDispatchInterrupted as exc:
             exc.candidate_manifest_ref = manifest
             raise
+        claim = _SINGLE_SEND.get()
+        if claim is not None:
+            claim(reservation)  # after admission; durable before mark_dispatched/send
         return manifest
 
     def dispatch():

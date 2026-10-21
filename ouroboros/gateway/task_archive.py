@@ -2,14 +2,16 @@
 
 A task's files live in its own stores only (``task_custody.task_artifact_stores``: the
 canonical store, then each own child drive's); a recorded path is attributed to one of
-them once (``_task_artifact_location``), and the bytes that leave are then read from ONE
-open descriptor reached by a confined descent: from the resolved canonical drive root
-(when the store lies under it, so a swapped drive, store or ``task_results`` component
-is refused too) one ``O_DIRECTORY | O_NOFOLLOW`` directory-relative open per path
-segment, and the file itself opened ``O_NOFOLLOW | O_NONBLOCK`` from its parent's
-descriptor. A component swapped for a symlink after attribution is ELOOP, a planted FIFO
-never blocks, and the open descriptor must fstat as a regular file. Nothing re-opens a
-pathname after the check. A captured file (an immutable row, content-addressed chat media
+them once, lexically (``task_artifact_location``; a path recorded through the configured
+root's spelling is re-spelled onto its physical directory), and the bytes that leave are
+then read from ONE open descriptor reached by a confined descent from the host-configured canonical
+root. ``confined_files`` opens each plain component relative to a held directory:
+POSIX no-follow descriptors or Windows NT RootDirectory/DONT_REPARSE handles.
+Descendant symlinks, junctions and nonregular files are refused; the configured
+root itself may be a legitimate junction. On this route, admission facts authorize a
+child's metadata store before its path-based SQLite reader; scratch existence is not admission.
+Payload reads never reopen a checked pathname. A captured file (an immutable row,
+content-addressed chat media
 whose name is its sha256, or a delegated run's retained journal range named by its digest)
 is verified INTO a private spool and only the spool is served, so the bytes on the wire
 are exactly the verified ones. The same holds for any row that records a digest: a
@@ -18,16 +20,16 @@ mutable file's bytes that no longer match it are refused typed (409
 under an identity a parent's disposition may have bound; a listing without a digest
 streams its current bytes and says so (``x-ouroboros-artifact-identity: unmeasured``).
 
-A directory archive holds exactly the recorded rows under that directory that resolve
-inside the stores, are regular files and carry no failed/missing capture; one relpath
-is one member (canonical store first), named relative to the directory's parent. It
+A directory archive includes only recorded regular files lexically under its
+own-store directory, with no failed/missing capture. One relpath is one member
+(canonical store first), named relative to the directory's parent. It
 spools in 1 MiB chunks through one anonymous temporary file (bounded memory, exact
 ``Content-Length``, status settled before the first byte); a member that records a
 digest must match it while read, or the answer is a typed refusal.
 
-Where the platform lacks directory-relative no-follow opens (Windows today) no file or
-archive is served: a typed HTTP 503, never an unconfined fallback (owner decision,
-issue #1297).
+Without a supported confined backend, ordinary files, archives and delegated
+journals return typed HTTP 503, never an unconfined fallback. Published result and
+host-acceptance sources retain their separate verified-source reader contract.
 """
 
 from __future__ import annotations
@@ -50,7 +52,8 @@ import anyio
 from starlette.responses import Response, StreamingResponse
 
 from ouroboros import artifacts as artifact_store
-from ouroboros.confined_files import DIR_FLAGS, POSIX_CONFINED, open_regular_at
+from ouroboros.confined_files import (DIR_FLAGS, CONFINED_OPEN_AVAILABLE, IS_WINDOWS, confined_directory,
+                                     lexical_relative, open_regular_at, relative_parts, root_spellings)
 from ouroboros.gateway._helpers import json_error
 from ouroboros.task_custody import task_artifact_stores
 from ouroboros.task_status import load_effective_task_result
@@ -62,8 +65,7 @@ _CHUNK = 1024 * 1024
 _SERVABLE_STATUSES = frozenset({"", "ready"})
 # Gone, lost a directory, or turned into a link (ELOOP; EMLINK on some BSDs): not an I/O fault.
 _MEMBER_GONE = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP, errno.EMLINK})
-# The one POSIX confined-open vocabulary (``confined_files``); this module descends many segments.
-CONFINED, _DIR_FLAGS = POSIX_CONFINED, DIR_FLAGS
+CONFINED, _DIR_FLAGS = CONFINED_OPEN_AVAILABLE, DIR_FLAGS
 _CHAT_MEDIA_DIGEST_RE = re.compile(r"chat-media-([0-9a-f]{64})\.[a-z0-9]+")
 _DELEGATED_SOURCE_RE = re.compile(r"source_handles/delegated_activity/([A-Za-z0-9][A-Za-z0-9_.-]*-([0-9a-f]{64})\.jsonl)")
 _ACCEPTANCE_SOURCE_RE = re.compile(r"source_handles/context_checkpoints/(acceptance-([0-9a-f]{64})\.json)")
@@ -75,21 +77,17 @@ _SVG_POLICY = {"content-security-policy": "sandbox", "x-content-type-options": "
 Route = Tuple[pathlib.Path, List[str]]  # (directory opened by absolute path, segments below it)
 
 
-def task_artifact_location(stores: List[pathlib.Path], raw_path: Any) -> Optional[tuple]:
-    """``(store index, resolved file, POSIX relpath)`` of a recorded path in one of the task's
-    own ``stores`` (symlinks resolve first, so an escaping link or a sibling's store is None)."""
-    text = str(raw_path or "").strip()
-    path = pathlib.Path(text).resolve(strict=False) if text else None
-    return next(((index, path, path.relative_to(store).as_posix()) for index, store in enumerate(stores)
-                 if path and path != store and path.is_relative_to(store)), None)
+def task_artifact_location(stores: List[pathlib.Path], raw_path: Any, spellings: Any = ()) -> Optional[tuple]:
+    """Attribute lexically (``spellings``: ``root_spellings`` of the canonical root the
+    stores were built from); only the subsequent held walk may touch descendants."""
+    return next(((index, pathlib.Path(raw_path), relative) for index, store in enumerate(stores)
+                 if (relative := lexical_relative(store, raw_path, spellings))), None)
 
 
 def plain_segments(relpath: Any) -> List[str]:
     """The segments of a store-relative path, or [] when any is empty/``.``/``..`` or the text
     carries a backslash or NUL."""
-    text = str(relpath or "")
-    parts = text.split("/")
-    return [] if "\\" in text or "\x00" in text or {"", ".", ".."} & set(parts) else parts
+    return relative_parts(relpath)
 
 
 def recorded_identity(row: Any) -> Optional[Dict[str, Any]]:
@@ -122,6 +120,7 @@ class _Parents:
     def __init__(self) -> None:
         self._key: Optional[tuple] = None
         self._fd = -1
+        self._held = self.directory = None
 
     def __enter__(self) -> "_Parents":
         return self
@@ -133,22 +132,17 @@ class _Parents:
         key = (root, tuple(directories))
         if key != self._key:
             self.close()
-            fd = os.open(root, _DIR_FLAGS)
-            try:
-                for name in directories:
-                    child = os.open(name, _DIR_FLAGS, dir_fd=fd)
-                    os.close(fd)
-                    fd = child
-            except BaseException:
-                os.close(fd)
-                raise
-            self._fd, self._key = fd, key
+            held = confined_directory(root, directories)
+            directory = held.__enter__()
+            self._held, self.directory = held, directory
+            self._fd, self._key = directory.handle, key
         return self._fd
 
     def close(self) -> None:
         if self._fd >= 0:
-            fd, self._fd, self._key = self._fd, -1, None
-            os.close(fd)
+            self._fd, self._key = -1, None
+            held, self._held, self.directory = self._held, None, None
+            held.__exit__(None, None, None)
 
 
 def _member_stat(parents: _Parents, route: Optional[Route]) -> Optional[os.stat_result]:
@@ -157,6 +151,10 @@ def _member_stat(parents: _Parents, route: Optional[Route]) -> Optional[os.stat_
         return None
     root, segments = route
     try:
+        if IS_WINDOWS:
+            handle, observed = _open_member(parents, route)
+            handle.close()
+            return observed
         observed = os.stat(segments[-1], dir_fd=parents.get(root, segments[:-1]), follow_symlinks=False)
     except OSError:
         return None
@@ -167,21 +165,23 @@ def _open_member(parents: _Parents, route: Route) -> Tuple[Any, os.stat_result]:
     """A binary handle on the member itself plus the fstat of that descriptor; anything but a
     regular file is refused (an OSError without errno, like a failed verification)."""
     root, segments = route
-    return open_regular_at(parents.get(root, segments[:-1]), segments[-1])
+    parent = parents.get(root, segments[:-1])
+    return (parents.directory.open(segments[-1]) if IS_WINDOWS else open_regular_at(parent, segments[-1]))
 
 
 def directory_archives(stores: List[pathlib.Path], rows: Any, *, anchor: Any = None) -> Dict[str, Dict[str, Any]]:
     """Per top-level result directory, what ``?archive=<dir>`` would stream now: ``files``/``size``
     of its members from one confined no-follow stat each (no hashing), the recorded rows it leaves
     out (``excluded``) and ``available`` iff it has a member (never where the platform cannot confine)."""
-    anchor = pathlib.Path(anchor).resolve(strict=False) if anchor is not None else None
+    spellings = root_spellings(anchor) if anchor is not None else ()
+    anchor = spellings[0] if spellings else None
     view: Dict[str, Dict[str, Any]] = {}
     picked: Dict[str, Tuple[tuple, int]] = {}
     with _Parents() as parents:
         for order, row in enumerate(rows if isinstance(rows, list) else []):
             if not isinstance(row, dict):
                 continue
-            location = task_artifact_location(stores, row.get("path"))
+            location = task_artifact_location(stores, row.get("path"), spellings)
             relpath = location[2] if location else str(row.get("relpath") or "")
             parts = plain_segments(relpath)
             if len(parts) < 2:
@@ -207,12 +207,13 @@ def _archive_members(stores: List[pathlib.Path], rows: Any, directory: str, *,
                      anchor: Any) -> List[Tuple[str, Route, Dict[str, Any]]]:
     """``(member name, route, row)`` of every eligible recorded file under DIRECTORY that a
     confined stat finds, once per relpath (canonical store first), sorted by name."""
-    anchor = pathlib.Path(anchor).resolve(strict=False)
+    spellings = root_spellings(anchor)
+    anchor = spellings[0]
     prefix, base = directory + "/", (directory.rsplit("/", 1)[0] + "/" if "/" in directory else "")
     picked: Dict[str, Tuple[tuple, Route, Dict[str, Any]]] = {}
     with _Parents() as parents:
         for order, row in enumerate(rows if isinstance(rows, list) else []):
-            location = task_artifact_location(stores, row.get("path")) if isinstance(row, dict) else None
+            location = task_artifact_location(stores, row.get("path"), spellings) if isinstance(row, dict) else None
             if location is None or not location[2].startswith(prefix) or not _eligible(row):
                 continue
             route = _route(anchor, stores[location[0]], location[2])
@@ -327,7 +328,9 @@ def serve_task_source(drive_root: Any, stores: List[pathlib.Path], result: Dict[
                               task_id=task_id, artifact=name)
         # New delegated JSONL sources retain the ordinary file route's fail-closed
         # platform boundary (#1297); the result-published review-source branch below is unchanged.
-        present = [store for store in stores if os.path.lexists(store.joinpath(*source.split("/")))] if CONFINED else []
+        with _Parents() as parents:
+            present = [store for store in stores if _member_stat(parents, _route(
+                pathlib.Path(drive_root).resolve(), store, source)) is not None]
         return serve_task_file(drive_root, (present or stores)[0], source, name, {"sha256": match.group(2)},
                                task_id=task_id)
     try:
@@ -340,7 +343,7 @@ def serve_task_source(drive_root: Any, stores: List[pathlib.Path], result: Dict[
         if record and record.group(1) == name:
             from ouroboros.task_finalization import host_acceptance_source
 
-            return Response(host_acceptance_source(drive_root, task_id, record.group(2))[1],
+            return Response(host_acceptance_source(drive_root, task_id, record.group(2), anchor=drive_root)[1],
                             media_type="application/json")
     except (OSError, ValueError, RuntimeError):
         pass

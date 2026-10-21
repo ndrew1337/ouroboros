@@ -1206,14 +1206,16 @@ def collect_trace_refs(usage: Dict[str, Any], llm_trace: Dict[str, Any]) -> Dict
     execution_id = str(usage.get("execution_id") or "").strip()
     if execution_id:
         refs["execution_id"] = execution_id
+    if isinstance(llm_trace.get("timeout_repeat"), dict):
+        refs["timeout_repeat"] = copy.deepcopy(llm_trace["timeout_repeat"])
     llm_refs = [
         {key: item.get(key) for key in (
             "llm_call_id", "execution_id", "round_id", "round", "request_ref",
             "response_ref", "model", "resolved_model", "provider",
-            "reported_model", "use_local", "usable_solve_response",
+            "reported_model", "use_local", "usable_solve_response", "manifest_ref",
         )}
         for item in usage.get("llm_call_refs") or []
-        if isinstance(item, dict) and (not item.get("failure_code") or "response_ref" in item)
+        if isinstance(item, dict) and (not item.get("failure_code") or "response_ref" in item or "manifest_ref" in item)
     ]
     if llm_refs:
         refs["llm_call_refs"] = llm_refs

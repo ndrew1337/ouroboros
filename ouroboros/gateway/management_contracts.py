@@ -471,10 +471,12 @@ class ClaudexorProblem(TypedDict):
 
 
 class ClaudexorMaintenanceProblem(TypedDict):
-    """Maintenance refusals carry the engine's ControlProblem object, not a sentence:
-    ``{code, message, retryable?, requiredActions?, context?}``. 503 with
-    ``context.acceptance: "unknown"`` means the request may have been accepted: send the same body
-    with the same Idempotency-Key again."""
+    """Engine or host preparation problem: ``{code, message, retryable?, requiredActions?, context?}``.
+    POST may prepare Node/npm: 409 ``maintenance_restart_required`` asks for chat-header Restart;
+    409/503 ``maintenance_preparation_failed`` reports failure. Both use
+    ``context.acceptance=not_submitted, scope=this_attempt``. Optional inspection failure still
+    permits POST. A 503 ``acceptance=unknown`` may have been accepted: retain its body and
+    Idempotency-Key even after a later preparation-only reply, then resend both."""
 
     error: Dict[str, Any]
 

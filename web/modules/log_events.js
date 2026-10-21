@@ -1346,7 +1346,7 @@ function summarizeChatLiveEventView(evt) {
         return chatView({
             phase: lowRetry || evt.checkpoint_kind === 'service_finalization_error' ? 'warn' : 'thinking',
             headline: taskCheckpointLabel(evt),
-            visible: !checkpointHasProgressRow(evt),
+            visible: !checkpointHasProgressRow(evt) && !(evt.checkpoint_kind === 'prompt_prefix_break' && evt.reasoning_retired),
             dedupeKey: key(evt.checkpoint_kind || '', taskCheckpointIdentity(evt)),
         });
     }

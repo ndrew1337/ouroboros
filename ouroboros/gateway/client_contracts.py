@@ -521,6 +521,9 @@ class TaskResumeResponse(TypedDict, total=False):
     task_id: Required[str]
     root_task_id: str
     late_phase: Literal["resumed", "settled"]
+    tree_only: bool
+    owner_pause_released: bool
+    snapshot_persisted: bool
     exact_continuation: bool
     grant_id: str
     grant_generation: int

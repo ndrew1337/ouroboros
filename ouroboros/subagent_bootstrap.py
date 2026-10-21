@@ -130,6 +130,15 @@ def _record_startup_refusal(
         task["subagent_availability"] = availability
 
 
+def is_configured_api_child(ctx: Any) -> bool:
+    """The exact API-model actor a parent chose (bound below), never Main, Presence or a session nanny:
+    the one actor whose round and forced calls take the stream-timeout repeat (#1886)."""
+    from ouroboros.route_spec import ROUTE_KIND_API_MODEL
+
+    return bool(getattr(ctx, "exact_model_route", False)) and getattr(
+        ctx, "_configured_subagent_route_kind", "") == ROUTE_KIND_API_MODEL
+
+
 def bootstrap_before_context(ctx: Any, task: Mapping[str, Any], dispatch: Any) -> str:
     """Start a fresh leaf, or retain saved supervision for restoration before admission.
 

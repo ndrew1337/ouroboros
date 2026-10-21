@@ -1396,14 +1396,14 @@ def test_module_grandfather_matcher_uses_exact_repo_relative_paths():
     # a DIFFERENT plugin.py (future skill) is NOT exempted by the path-qualified entry
     assert not module_is_grandfathered("skills/other_skill/plugin.py")
     assert not module_is_grandfathered("repo/skills/other_skill/plugin.py")
-    # Root server.py is an exact manifest path; a nested same-basename is not.
-    assert module_is_grandfathered("server.py")
+    # The Restart extraction retired server.py's debt; no same-basename is exempt.
+    assert not module_is_grandfathered("server.py")
     assert not module_is_grandfathered("repo/server.py")
     assert not module_is_grandfathered("ouroboros/server.py")
     assert not module_is_grandfathered("repo/ouroboros/server.py")
     # tools/control.py's debt was retired by the v7 split (2110->492 lines);
     # basename exactness still holds - NEITHER control.py is grandfathered now
-    # (the positive+negative exact-path pair above is server.py).
+    # (the positive+negative exact-path pair above is the skill plugin).
     assert not module_is_grandfathered("ouroboros/tools/control.py")
     assert not module_is_grandfathered("ouroboros/gateway/control.py")
 

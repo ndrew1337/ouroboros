@@ -237,8 +237,8 @@ def test_cli_store_metadata_enables_only_cli_tools_without_probing(tmp_path, mon
     ctx, _ = _context(tmp_path, "queued")
     for name, _, _ in _CALLS:
         assert _builtin_tool_availability(name, ctx)[0] is True
-    for name in ("submit_skill_to_hub", "generate_evolution_stats"):
-        assert _builtin_tool_availability(name, ctx) == (False, "missing_credential", "GITHUB_TOKEN")
+    assert _builtin_tool_availability("submit_skill_to_hub", ctx) == (False, "missing_credential", "GITHUB_TOKEN")
+    assert _builtin_tool_availability("generate_evolution_stats", ctx) == (True, "", "")
 
 
 @pytest.mark.parametrize("bound,explicit", [(False, False), (False, True), (True, True)])

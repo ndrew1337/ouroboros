@@ -760,7 +760,7 @@ def _rewrite_child_ref_tree(
                 value = placed  # Only the mutable request projection rebinds addresses.
         return {
             key: _rewrite_child_ref_tree(item, parent_root, child_root,
-                source_owner(key, item, task_id), state, carrier=role)
+                source_owner(key, item, task_id, carrier=carrier, root=parent_root), state, carrier=role)
             if (role := source_carrier(value, key, carrier)) else item
             for key, item in value.items()
         }

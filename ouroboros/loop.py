@@ -56,8 +56,9 @@ from ouroboros.loop_tool_execution import (
     prune_reclaim_trace_refs,  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
     reclaim_trace_refs,  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 )
-from ouroboros.loop_llm_call import TRANSPORT_DEATHS_KEY, call_llm_with_retry, emit_llm_usage_event, forced_response_is_incomplete, forced_response_parts, provider_no_call_source  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
+from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY, TRANSPORT_DEATHS_KEY, call_llm_with_retry, emit_llm_usage_event, forced_response_is_incomplete, forced_response_parts, provider_no_call_source  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 from ouroboros.transcript_prefix import observe_send as _observe_transcript_send
+from ouroboros.transcript_prefix import retire_main_reasoning as _retire_main_reasoning  # noqa: F401 -- shared send boundary
 from ouroboros.delegate_hold import (
     close_hold as _delegate_hold_close,
     hold_step as _delegate_hold_step,
@@ -223,8 +224,9 @@ def _provider_unavailable_result(
     unknown_outcome = record or bool(ctx.accumulated_usage.get("_pending_transport_outcome")) or str(
         ctx.accumulated_usage.get("_last_llm_error_kind") or "") == "provider_outcome_unknown"
     is_transport_wait = wait_cause == "transport_unavailable" or wait_cause in PRIMARY_REFUSAL_KINDS
+    # A spent timeout repeat ran no size recovery: the no-call rail below owns its terminal.
     is_context_overflow = (kind == "context_overflow" and not (record or is_transport_wait)
-                           and not ctx.accumulated_usage.get("resource_refusal"))
+                           and not ctx.accumulated_usage.get("resource_refusal") and TIMEOUT_REPEAT_KEY not in ctx.accumulated_usage)
     is_deadline_exhausted = kind == "deadline_exhausted" or str(ctx.accumulated_usage.get("_last_llm_error_kind") or "") == "deadline_exhausted"
     llm_trace = getattr(ctx, "llm_trace", None)
     llm_trace = llm_trace if isinstance(llm_trace, dict) else {}
@@ -311,6 +313,19 @@ def _provider_unavailable_result(
     return with_terminal_notice(text, usage, llm_trace)
 
 
+def _timeout_repeat_handover(limit_ctx: Any, transport_wait: Any, llm_trace: Dict[str, Any]) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
+    """A configured API child's timeout repeat did not answer (#1886): the round ends on the no-call
+    provider terminal, with no configured route, wait, renewal or summary call; the parent that chose
+    the actor decides. An outage episode this round was redialing closes with its own durable row."""
+    if transport_wait is not None:
+        _end_episode_budget(transport_wait, limit_ctx.drive_logs, limit_ctx.task_id, limit_ctx.active_model,
+                            detail="timeout_repeat_spent")
+    text, usage, forced_trace = _handle_provider_unavailable(
+        limit_ctx, error_kind=str(limit_ctx.accumulated_usage.get("_last_llm_error_kind") or "provider_unavailable"))
+    _merge_finalization_trace(llm_trace, forced_trace)
+    return text, usage, llm_trace
+
+
 def _output_exhausted_notice(facts: Any) -> str:
     """The one host fact the next ordinary round reads after a reply that ended on its
     output limit before any visible text or tool call; no retry, no provider terminal.
@@ -373,7 +388,7 @@ def _record_transcript_prefix(ctx, messages, round_idx, accumulated_usage,
     from ouroboros.context_input_selection import capture_historical_inputs
 
     capture_historical_inputs(ctx)
-    fact = _observe_transcript_send(ctx, messages, round_idx=round_idx)
+    fact = _observe_transcript_send(ctx, messages, round_idx=round_idx, tools=tool_schemas)
     if not fact:
         return
     _emit_checkpoint_event(event_queue, task_id, drive_logs, fact)
@@ -489,11 +504,8 @@ def _load_working_recovery(ctx: Any, messages: List[Dict[str, Any]]) -> Dict[str
 @task_timing_scope(reuse=True)
 def run_llm_loop(
     messages: List[Dict[str, Any]], tools: ToolRegistry, llm: LLMClient,
-    drive_logs: pathlib.Path,
-    emit_progress: Callable[..., None],
-    incoming_messages: queue.Queue,
-    task_type: str = "",
-    task_id: str = "",
+    drive_logs: pathlib.Path, emit_progress: Callable[..., None], incoming_messages: queue.Queue,
+    task_type: str = "", task_id: str = "",
     budget_remaining_usd: Optional[float] = None,
     event_queue: Optional[queue.Queue] = None,
     initial_effort: str = "medium",
@@ -512,6 +524,7 @@ def run_llm_loop(
         llm_trace[VIEW_TRACE_KEY] = dict(ctx.memory_view_facts)
     accumulated_usage: Dict[str, Any] = {"_task_attempt": getattr(ctx, "task_attempt", None)}
     ctx._accumulated_usage = accumulated_usage
+    ctx._reasoning_retirement_progress = emit_progress
     invalidate_task_cache_splits(task_id or getattr(ctx, "task_id", ""))  # rebuilt attempt = new prefix
     max_retries = 3
     saved = load_owner_wait(ctx)
@@ -632,6 +645,9 @@ def run_llm_loop(
                     return final_result
                 continue
             try:
+                from ouroboros.loop_llm_call import timeout_repeat_blocked
+                if timeout_repeat_blocked(accumulated_usage):  # before compaction can buy a call on re-entry
+                    return _timeout_repeat_handover(limit_ctx, transport_wait, llm_trace)
                 if (transport_wait is not None and transport_wait.wait_cause == "provider_outcome_unknown"
                         and not _continue_unknown_transport(transport_wait, llm=llm, tools=tools, messages=messages,
                             accumulated_usage=accumulated_usage, drive_logs=drive_logs, task_id=task_id, model=active_model, emit_progress=emit_progress)):
@@ -642,12 +658,10 @@ def run_llm_loop(
                         event_queue=event_queue, task_id=task_id, drive_logs=drive_logs,
                         budget_remaining_usd=budget_remaining_usd, cost_ceiling=cost_ceiling, active_use_local=active_use_local)
 
-                    messages = _run_round_compaction(
-                        messages,
-                        _CompactionRoundContext(
+                    messages = _run_round_compaction(messages, _CompactionRoundContext(
                             tools=tools, drive_root=drive_root, drive_logs=drive_logs,
-                            task_id=task_id, round_idx=round_idx,
-                            event_queue=event_queue, emit_progress=emit_progress, tool_schemas=tool_schemas))
+                            task_id=task_id, round_idx=round_idx, event_queue=event_queue,
+                            emit_progress=emit_progress, tool_schemas=tool_schemas))
                     tools._ctx.messages = messages
                     limit_ctx.messages = messages  # WA2: provider-death finalize must salvage the COMPACTED transcript
 
@@ -663,7 +677,7 @@ def run_llm_loop(
                         event_queue=event_queue, accumulated_usage=accumulated_usage, task_type=task_type,
                         active_use_local=active_use_local, active_context_mode=active_context_mode,
                         drive_root=drive_root, emit_progress=emit_progress)
-                    with receiver_abandonable():  # an owner Pause interrupts this local wait
+                    with receiver_abandonable(), working_checkpoint.model_call_scope(limit_ctx):
                         msg, cost, active_context_mode = _call_round_model(model_call)
                     active_model, active_use_local = model_call.active_model, model_call.active_use_local
                     context_fit_plan = model_call.context_fit_plan
@@ -675,6 +689,8 @@ def run_llm_loop(
                     transport_wait = None  # The leaf wake owns resumption, without a provider probe.
                     continue
                 limit_ctx.active_model, limit_ctx.active_use_local = active_model, active_use_local
+                if msg is None and TIMEOUT_REPEAT_KEY in accumulated_usage:  # before any route, wait or renewal
+                    return _timeout_repeat_handover(limit_ctx, transport_wait, llm_trace)
                 # Configured routes before any wait; an active episode owns its own outcome.
                 # Fallbacks and an owner-wait resend are author calls too. Their
                 # physical sender retains any late answer after this wait leaves.
@@ -755,8 +771,7 @@ def run_llm_loop(
                 tool_calls, tools, drive_logs, task_id, stateful_executor,
                 messages, llm_trace, emit_progress, tool_schemas=tool_schemas,
                 fit_candidate=functools.partial(_measure_tool_result_batch, ctx,
-                    round_id=f"{accumulated_usage.setdefault('execution_id', new_execution_id())}:round:{round_idx}")
-            )
+                    round_id=f"{accumulated_usage.setdefault('execution_id', new_execution_id())}:round:{round_idx}"))
             working_checkpoint.save_or_log(limit_ctx, "post_batch")  # BEFORE any owner-wait park
             from ouroboros.loop_delivery import finish_completed_stop
             stopped = finish_completed_stop(tools, limit_ctx, emit_progress, budget_remaining_usd, cost_ceiling)

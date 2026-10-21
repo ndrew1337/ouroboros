@@ -74,6 +74,10 @@ export function taskCheckpointLabel(evt = {}) {
         return `Checkpoint ${evt.checkpoint_number} — periodic self-check`;
     }
     const folded = Number(evt.reclaimed_tokens);
+    if (kind === 'prompt_prefix_break' && evt.reasoning_retired) {
+        const turns = evt.reasoning_retired.turns;
+        return `Earlier reasoning not replayed (${turns} turn${turns === 1 ? '' : 's'})`;
+    }
     if (kind === 'context_view' && evt.status === 'applied' && folded > 0) {
         return `Ouroboros folded its context (−${folded.toLocaleString('en-US')} tokens)`;
     }

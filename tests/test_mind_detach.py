@@ -76,7 +76,11 @@ def test_ready_detach_arms_then_parks_same_id_and_sleep_grant_is_single_use(tmp_
         assert regrant["grant_id"] != grant["grant_id"], "the pre-restart grant stays single-use"
         return
     assert not woke
-    (tmp_path / "state" / flag).unlink()
+    if door == "owner_restart":
+        from ouroboros.delegate_recovery import consume_owner_restart, pending_owner_restart
+        consume_owner_restart(tmp_path, pending_owner_restart(tmp_path))
+    else:
+        (tmp_path / "state" / flag).unlink()
     assert q.resume_budget_paused_task("head")["ok"], "explicit Resume can release the retained sleep"
 
 
@@ -248,6 +252,6 @@ def test_failed_pause_source_stays_visible_without_dispatch_authority(tmp_path, 
     held = workers.PENDING[0]
     assert held["id"] == "head" and held["_is_direct_chat"]
     assert budget_hold_fact(held)["reason"] == (HOLD_SAVED_WORK if unreadable else HOLD_UNSAVED_PAUSE)
-    assert not budget_hold_fact(held)["dispatchable"]
+    assert budget_hold_fact(held) and "_resume_selection" not in held
     assert not held.get("_budget_pause_resume")
     assert recover_direct_pause(task) and len(workers.PENDING) == 1

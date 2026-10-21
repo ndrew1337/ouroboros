@@ -158,7 +158,7 @@ def test_held_store_defers_the_pass_while_unrelated_queue_consumers_finish(q, mo
 
 
 @pytest.mark.parametrize("which", ["table", "cancellation", "launch"])
-def test_a_held_table_or_control_lock_defers_at_once(q, which):
+def test_a_held_table_or_control_lock_defers_at_once(q, which, monkeypatch):
     from supervisor import followup_policy, queue_schedules
 
     _row(q, "independent", intent={"kind": "system_repo"})
@@ -180,17 +180,29 @@ def test_a_held_table_or_control_lock_defers_at_once(q, which):
     before = _rows(q)["related"]
     from supervisor.queue_schedules import ScheduleLockTimeout
     from supervisor.schedule_occurrence import contention
+    from ouroboros import platform_layer
+
+    acquire, waits = platform_layer.acquire_exclusive_file_lock, []
+
+    def observed_acquire(lock_path, **kwargs):
+        started = time.monotonic()
+        try:
+            return acquire(lock_path, **kwargs)
+        finally:
+            if pathlib.Path(lock_path) == path:
+                waits.append(time.monotonic() - started)
 
     with held_lock(path):
-        started = time.monotonic()
+        monkeypatch.setattr(platform_layer, "acquire_exclusive_file_lock", observed_acquire)
+        monkeypatch.setattr(queue_schedules, "acquire_exclusive_file_lock", observed_acquire)
         if which == "table":  # the whole pass defers; the duty treats this refusal as contention
             with pytest.raises(ScheduleLockTimeout) as refused:
                 automatic_pass()
             assert contention(refused.value)
         else:
             automatic_pass()
-        elapsed = time.monotonic() - started
-    assert elapsed < 2.0, f"a held {which} lock must not wait under Q ({elapsed:.1f}s)"
+    # Measure the real contended acquisition, not unrelated admission/database I/O.
+    assert waits and max(waits) < 2.0, f"a held {which} lock must not wait under Q ({waits})"
     rows = _rows(q)
     if which == "table":
         assert q.pending == [] and "occurrence" not in rows["independent"]  # the whole pass waits

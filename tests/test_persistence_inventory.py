@@ -819,11 +819,18 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # own section-2 row; ``ouroboros/card_store.py`` writes all four).
 # 407 -> 408: ``state/panic_source.json`` is diagnostic latest-source evidence
 # (section 2); causal observations also use the existing ``logs/events.jsonl``.
+# 408 -> 407 (managed Node/npm): promotion adds immutable .g-* siblings rather than
+# displacing into node/.old-*; metadata reads use _node_roots instead of spelling
+# node/*-*/managed-node.json. Retained generations and legacy roots share section 4's cx row.
+# 407 -> 408: the upstream local evolution export adds task_results/artifacts/*/evolution-*.json.
+# 408 -> 409: ``state/body_adoption/installation_stop.py``, the stdlib Panic reader captured beside
+# the switch helper (body adoption row).
+# 409 -> 412 (live calls):
 # Live calls retain conversation-wire.jsonl and the sibling extension-imports lock.
 # The unused realtime-wire and realtime-prepared probe writers are retired by the host lane.
 # The host's exact-route tariff cache adds state/pricing/litellm.json.
 # PERSISTENCE names its overwrite lifetime; reconcile markers already exist on base.
-EXPECTED_SCAN_PATHS = 411
+EXPECTED_SCAN_PATHS = 412
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
