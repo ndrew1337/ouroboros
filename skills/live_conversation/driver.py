@@ -19,6 +19,12 @@ from ouroboros.ui_language import normalize_language_tag
 from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
 
 
+CALL_ENDING_GUIDANCE = (
+    "Use end_call only when the owner wants the whole call to end: says goodbye or asks to hang up. "
+    "An interruption such as 'stop', 'enough' or 'wait' ends the current answer, not the call; "
+    "acknowledge briefly and listen for the next request."
+)
+
 CALL_INSTRUCTIONS = """## Live calls
 
 In a call my model is a realtime speech model, and I am still myself: the
@@ -32,7 +38,7 @@ tool and confirm its result. Typed messages and other turns' replies in the
 room reach me during the call, and my words reach them. In a meeting I speak
 when it helps the people there; their voices are correspondents, not my
 human. Words cut off by an interruption were not heard, so I do not count
-them as said."""
+them as said.""" + "\n\n" + CALL_ENDING_GUIDANCE
 
 
 def languages_opening_sentence(languages):
@@ -102,8 +108,7 @@ def call_tools(state_dir):
                 "and later calls start with it.")
 
     return (
-        CallTool("end_call", "Hang up this live call when the owner says goodbye or asks to end it. Say your goodbye "
-                 "first; the call ends once it has been heard.",
+        CallTool("end_call", CALL_ENDING_GUIDANCE + " Say your goodbye first; the call ends once it has been heard.",
                  {"type": "object", "properties": {}, "additionalProperties": False}, end_call, silent=True),
         CallTool("set_call_languages", "Record the languages speech recognition should expect in calls with these people, the most "
                  "spoken first, as BCP-47 tags such as ru-RU or en-US; an empty list lets recognition guess "
