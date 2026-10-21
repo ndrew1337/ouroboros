@@ -1,4 +1,4 @@
-"""Feature configuration reads registered metadata, never credential values."""
+"""Feature configuration checks credential availability without returning or logging values."""
 import asyncio
 import json
 from types import SimpleNamespace
@@ -14,7 +14,7 @@ class API:
         self.root, self.routes, self.sections = root, {}, []
     def get_state_dir(self): return str(self.root / 'feature')
     def get_runtime_info(self): return {'data_dir': str(self.root)}
-    def get_settings(self, _keys): raise AssertionError('no secret reads')
+    def get_settings(self, _keys): raise AssertionError('availability uses the host and engine API')
     def register_route(self, name, handler, **_kwargs): self.routes[name] = handler
     def register_live_conversation(self, name, handler, **kwargs): self.feature = kwargs
     def register_settings_section(self, *args, **kwargs): self.sections.append((args, kwargs))
@@ -22,21 +22,25 @@ class API:
 
 @pytest.fixture
 def config_api(tmp_path, monkeypatch):
-    from ouroboros import extension_registry_state as registry, skill_loader
+    from ouroboros import extension_registry_state as registry, realtime_setup
     catalog = ProviderCatalog('Fixture voice', (CatalogModel('fixture-model', 'Fixture model', default=True, vision=True,
         voices=(CatalogVoice('fixture-voice', 'Fixture voice'),), honours=frozenset({'pause'}),
         facts=RouteFacts(conversation_window_tokens=12345, source='fixture measured'),
         notes=(('search', 'Fixture does not search.'),)),), ('TEST_CREDENTIAL',), 'Fixture audio stays synthetic.')
     skill = SimpleNamespace(name='fixture-engine')
     providers = {'fixture-engine:voice': {'skill':skill.name, 'catalog':catalog}}
-    monkeypatch.setattr(registry, '_realtime_providers', providers)
-    monkeypatch.setattr(registry, '_extensions', {skill.name: SimpleNamespace(loaded_skill=skill)})
-    monkeypatch.setattr(registry, '_unloading', set())
     granted = ['TEST_CREDENTIAL']
-    monkeypatch.setattr(skill_loader, 'grant_status_for_skill', lambda _root, _skill: {'granted_keys':list(granted), 'usable':True})
+    credentials = {'TEST_CREDENTIAL': 'test-credential'}
+    engine_api = SimpleNamespace(get_settings=lambda keys: {key: credentials[key] for key in keys
+        if key in granted and key in credentials})
+    extensions = {skill.name: SimpleNamespace(loaded_skill=skill, api_instances=[engine_api])}
+    for module in (registry, realtime_setup):
+        monkeypatch.setattr(module, '_realtime_providers', providers)
+        monkeypatch.setattr(module, '_extensions', extensions)
+        monkeypatch.setattr(module, '_unloading', set())
     api = API(tmp_path)
     plugin.register(api)
-    return api, granted, providers
+    return api, granted, providers, credentials
 
 
 def request(api, value=None):
@@ -45,27 +49,44 @@ def request(api, value=None):
     return response.status_code, json.loads(response.body)
 
 
-def test_registered_catalogs_and_grants_decide_offer_without_reading_secrets(config_api):
-    api, granted, providers = config_api
-    status, data = request(api)
+def test_offer_requires_a_granted_value_and_never_returns_or_logs_a_secret(config_api, caplog, capsys):
+    caplog.set_level('DEBUG')
+    api, granted, providers, credentials = config_api
+    responses = []
+    def checked_request(value=None):
+        status, data = request(api, value)
+        responses.append(data)
+        return status, data
+    status, data = checked_request()
     assert status == 200 and data['offered'] is False and data['provider'] == 'gemini_live:gemini'
     assert data['catalogs'][0]['id'] == 'fixture-engine:voice'
     model = data['catalogs'][0]['models'][0]
     assert model['voices'][0]['id'] == 'fixture-voice' and model['facts']['conversation_window_tokens'] == 12345
     value = {'enabled':True, 'provider':'fixture-engine:voice', 'model':'fixture-model', 'voice':'fixture-voice'}
-    status, data = request(api, value)
+    status, data = checked_request(value)
     assert status == 200 and data['offered'] is True and data['selected_model']['vision'] is True
+    credentials.clear()  # auto-granted permission, but no configured value
+    assert checked_request()[1]['offered'] is False
+    credentials['TEST_CREDENTIAL'] = ''
+    assert checked_request()[1]['offered'] is False
+    credentials['TEST_CREDENTIAL'] = 'test-credential'
+    assert checked_request()[1]['offered'] is True
     granted.clear()
-    assert request(api)[1]['offered'] is False
+    assert checked_request()[1]['offered'] is False
     granted.append('TEST_CREDENTIAL')
-    assert request(api)[1]['offered'] is True
+    assert checked_request()[1]['offered'] is True
+    assert checked_request({**value, 'enabled':False})[1]['offered'] is False
+    assert checked_request(value)[1]['offered'] is True
     providers.clear()
-    assert request(api)[1]['offered'] is False
-    assert request(api, {**value, 'enabled':False})[0] == 200
+    assert checked_request()[1]['offered'] is False
+    assert checked_request({**value, 'enabled':False})[0] == 200
+    captured = capsys.readouterr()
+    assert 'test-credential' not in json.dumps(responses)
+    assert 'test-credential' not in caplog.text + captured.out + captured.err
 
 
 def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config_api):
-    api, _, _ = config_api
+    api, _, _, _ = config_api
     for fields in ({'model':'invented'}, {'voice':'invented'}, {'provider':'missing:engine'}):
         status, data = request(api, {'enabled':True, 'provider':'fixture-engine:voice', **fields})
         assert status == 400 and data['error']
