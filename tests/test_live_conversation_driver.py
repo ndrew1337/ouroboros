@@ -116,6 +116,7 @@ def test_port_greeting_options_usage_and_context():
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
+        assert not any(state[0] == cp.STATE_CLOSED for state in host.hub.states)
     asyncio.run(scenario())
 
 
@@ -267,11 +268,13 @@ def test_end_call_is_silent_and_waits_until_goodbye_audio_was_played(tmp_path):
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
             assert next(x for x in session.sent if isinstance(x, ToolOutputs)).silent == ('hangup',)
             assert host.hub.ended_by_ouroboros and not task.done()
+            assert not any(state[0] == cp.STATE_CLOSED for state in host.hub.states)
             host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':300}))
             await asyncio.sleep(.03)
             assert not task.done(), 'partial playback is not a completed goodbye'
             host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type':'played', 'item_id':'goodbye', 'played_ms':1000}))
             await asyncio.wait_for(task, 2)
+            assert host.hub.states[-1] == (cp.STATE_CLOSED, 'ouroboros_bye')
         finally:
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)

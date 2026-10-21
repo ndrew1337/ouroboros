@@ -64,7 +64,6 @@ const ENDINGS = {
     owner_bye: { words: 'Call ended', calm: true },
     ouroboros_bye: { words: 'Ouroboros ended the call', calm: true },
     owner_stop: { words: 'Call ended', calm: true },
-    max_minutes: { words: 'The call reached its time limit', calm: true },
     peers_left: { words: 'Everyone left the call', calm: true },
     budget_exceeded: SPENDING_LIMIT,
     budget_exhausted: SPENDING_LIMIT,
@@ -87,7 +86,6 @@ const ENDINGS = {
         action: 'settings', settings: MODEL },
     // Admission refusals the server words itself; the table adds only the next step.
     call_model_missing: { action: 'settings', settings: MODEL },
-    invalid_call_max_minutes: { action: 'settings', settings: MODEL },
     permission_denied: { sheet: true, words: 'Allow the microphone for Ouroboros in System Settings → Privacy & Security → '
         + 'Microphone (or in the browser’s site settings), then press Talk again.' },
     no_microphone: { sheet: true, words: 'No microphone was found. Connect one, then press Talk again.' },

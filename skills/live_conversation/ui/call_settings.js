@@ -21,6 +21,9 @@ export function callSettingsHtml(config) {
         select('provider', 'Engine', catalogs, config.provider),
         select('model', 'Model', [{id:'',label:"Engine’s default model"}, ...(catalog?.models || [])], config.model),
         select('voice', 'Voice', [{id:'',label:"Engine’s default voice"}, ...(model?.voices || [])], config.voice)];
+    if (catalog?.id === 'gemini_live:gemini') {
+        fields[1].help = 'Google does not offer Gemini Live in Russia or Belarus.';
+    }
     const knobs = {
         pause: field('pause', 'Pause before answering', 'select', ['short','normal','long']),
         interruptions: field('interruptions', 'Speaking interrupts Ouroboros', 'checkbox'),

@@ -66,7 +66,6 @@ test('each ending says what happened and offers its one next step', () => {
     const show = (view) => { const p = callPresentation(view); return [p.title, p.actions.map(a => a.label), p.tone]; };
     assert.deepEqual(show(ended('owner_bye')), ['Call ended', [], '']);
     assert.deepEqual(show(ended('owner_stop')), ['Call ended', [], '']);
-    assert.deepEqual(show(ended('max_minutes')), ['The call reached its time limit', [], '']);
     assert.deepEqual(show(ended('peers_left')), ['Everyone left the call', [], '']);
     assert.deepEqual(show(ended('budget_exceeded')), ['The spending limit is reached', ['Open Settings'], 'error']);
     for (const code of ['missing_credential', 'missing_credential_google'])
@@ -668,4 +667,16 @@ test('the real admission opening echo folds into one call card live and after re
     assert.equal(feed.children.filter(n => n.className === 'call-card').length, 2);
     assert.equal(ordinary.classList.contains('call-folded'), false);
     reloaded.destroy();
+});
+
+test('obsolete time caps have no ending words or action; a deliberate goodbye names Ouroboros', () => {
+    for (const code of ['max_minutes', 'invalid_call_max_minutes']) {
+        const p = callPresentation(ended(code));
+        assert.equal(p.title, 'The call ended');
+        assert.deepEqual(p.actions, []);
+    }
+    const bye = callPresentation(ended('ouroboros_bye'));
+    assert.equal(bye.title, 'Ouroboros ended the call');
+    assert.equal(bye.tone, '');
+    assert.equal(callPresentation(ended('owner_bye')).title, 'Call ended');
 });

@@ -37,3 +37,10 @@ test('an unavailable selected engine is named rather than silently replaced', ()
     assert.match(html, /not available/);
     assert.match(html, /value="missing:voice" selected/);
 });
+
+test('the Gemini engine choice carries its regional availability note only for Gemini', () => {
+    const note = /Google does not offer Gemini Live in Russia or Belarus\./;
+    const gemini = { ...catalog, id:'gemini_live:gemini', label:'Gemini' };
+    assert.match(callSettingsHtml({provider:gemini.id, catalogs:[gemini,catalog]}), note);
+    assert.doesNotMatch(callSettingsHtml({provider:catalog.id, catalogs:[gemini,catalog]}), note);
+});

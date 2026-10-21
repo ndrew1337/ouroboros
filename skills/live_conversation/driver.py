@@ -169,6 +169,8 @@ class _Call:
             finally:
                 writer.cancel()
                 await joined(asyncio.gather(writer, return_exceptions=True))
+        if self.hub.ended_by_ouroboros and not self.hub.ended_by_owner and not self.hub.closed:
+            self.hub.send_state(cp.STATE_CLOSED, "ouroboros_bye")
 
     async def connections(self):
         handle = ""
