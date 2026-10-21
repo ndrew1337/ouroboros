@@ -23,8 +23,9 @@ def validate(value):
 def registered_catalogs(drive_root):
     """Live registrations and current hash-bound grants; no credential values.
 
-    Integration will replace the offer predicate with LiveHost's call_offer.
-    The feature still reads catalogs here to build its Settings choices.
+    Talk is offered from the grants alone, so the page never reads a secret. The
+    host's admission (``call_offer``) also requires the granted values to exist; a
+    refusal there opens the same no-key sheet. Catalogs build the Settings choices.
     """
     from ouroboros import extension_registry_state as registry
     from ouroboros.skill_loader import grant_status_for_skill
@@ -53,8 +54,6 @@ def configuration_view(config, catalogs):
         model = selected.model(config.model) if selected else None
     except RealtimeSetupError:
         model = None
-    # After the host merge, replace this one assignment with:
-    # from ouroboros.live_conversation import call_offer; offered = call_offer(config)["offered"]
     offered = bool(config.enabled and model and any(key == config.provider and granted for key, _, granted in catalogs))
     return {**asdict(config), "offered": offered, "selected_model": model_json(model) if model else None,
             "catalogs": [{"id": key, "label": catalog.label, "privacy": catalog.privacy,
