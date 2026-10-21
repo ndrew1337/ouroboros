@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pathlib
 
+import pytest
+
 from ouroboros.tools.knowledge import _knowledge_list, get_tools
 
 
@@ -48,3 +50,29 @@ def test_the_tool_schema_offers_topics():
     properties = entry.schema["parameters"]["properties"]
     assert properties["topics"]["type"] == "array"
     assert "topics" not in entry.schema["parameters"]["required"]
+
+
+@pytest.mark.parametrize("topics,unmatched,count", [
+    (["people/"], [], 0), (["people"], ["people"], 0),
+    (["people/", "missing"], ["missing"], 0), (["old"], ["old"], 1),
+])
+def test_narrowed_listing_names_selection_unmatched_selectors_and_scoped_archives(tmp_path, topics, unmatched, count):
+    import json
+    from ouroboros.knowledge import read_knowledge_note, resolve_knowledge_address, write_knowledge_note
+
+    ctx = _shelf(tmp_path)
+    old = resolve_knowledge_address(ctx.drive_root, "old", "global")
+    assert write_knowledge_note(old, "# Earlier note\n").ok
+    assert write_knowledge_note(old, "", mode="archive", reason="Superseded",
+                                expected_revision=read_knowledge_note(old).revision).ok
+    text = _knowledge_list(ctx, topics=topics)
+    assert "Selection: " + json.dumps(topics) in text
+    assert f"Archived notes in this selection: {count}." in text
+    assert ("Unmatched selectors in active view:" in text) == bool(unmatched)
+    if unmatched:
+        assert "Unmatched selectors in active view: " + json.dumps(unmatched) in text
+    whole = _knowledge_list(ctx)
+    assert "Archived notes: 1." in whole and "Selection:" not in whole
+    assert "Unmatched selectors" not in whole
+    archived = _knowledge_list(ctx, topics=["old"], view="archived")
+    assert "Unmatched selectors" not in archived and "Earlier note" in archived

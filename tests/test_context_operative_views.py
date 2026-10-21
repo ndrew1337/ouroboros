@@ -36,14 +36,19 @@ def test_world_subagents_and_reflections_keep_names_and_state(tmp_path, monkeypa
 
     env, memory = _make_env_and_memory(tmp_path)
     catalog = {"rows": [{"subagent_id": f"helper-{i}", "route_class": "API model", "effort": "auto",
-                         "review_eligible": i == 0, "recommended_use": "The owner's words about this row. " * 20}
+                         "review_eligible": i == 0,
+                         **({"recommended_use": "The owner's words about this row. " * 20} if i < 2 else {})}
                         for i in range(3)]}
     monkeypatch.setattr("ouroboros.subagent_runtime.current_model_visible_subagent_catalog", lambda: catalog)
     core = context._capture_context_core(env, memory, {"id": "t1", "type": "task", "text": "hi"}, None, None)
     subagents = next(part for part in core.semi_stable_sections if part.section_id == "subagents")
     assert "- helper-0: API model, effort auto, reviews" in subagents.operative_view
     assert "- helper-2: API model, effort auto" in subagents.operative_view
-    assert "owner's words" in subagents.full_text and "owner's words" not in subagents.operative_view
+    assert "owner's words" in subagents.full_text
+    for row in catalog["rows"][:2]:
+        assert row["recommended_use"] in subagents.operative_view
+    assert subagents.operative_view.count("recommended_use:") == 2
+    assert subagents.operative_view.endswith("- helper-2: API model, effort auto")
     assert core.semi_stable_text == "\n\n".join(core.semi_stable_sections)
     assert [part.section_id for part in core.semi_stable_sections if part.section_id in ("identity", "subagents")] \
         == ["subagents", "identity"]

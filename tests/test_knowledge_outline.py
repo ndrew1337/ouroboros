@@ -6,6 +6,8 @@ it, for every caller.
 """
 from __future__ import annotations
 
+import pytest
+
 from ouroboros.knowledge import (
     knowledge_index_view, knowledge_index_views, resolve_knowledge_address, write_knowledge_note,
 )
@@ -60,3 +62,15 @@ def test_a_group_or_a_topic_lists_with_its_summaries(tmp_path):
     one = knowledge_index_view(address, topics=("release-queue-20261016",))
     assert "The queue stalls when two releases race." in one and "people/ada" not in one
     assert "patterns" in knowledge_index_view(address)  # no filter: the whole active index
+
+
+@pytest.mark.parametrize("kind,kept", [("person", True), ("Person", True), (" PERSON ", True),
+                                        ("\tPeRsOn\t", True), ("personal", False), ("note", False)])
+def test_person_summary_survives_case_and_whitespace_in_authored_yaml(tmp_path, kind, kept):
+    import json
+
+    _note(tmp_path, "entry", summary="The authored understanding of this person.", kind=json.dumps(kind))
+    whole, outline = knowledge_index_views(resolve_knowledge_address(tmp_path, "overview", "global"))
+    assert "The authored understanding of this person." in whole
+    assert ("The authored understanding of this person." in outline) == kept
+    assert "- entry" in outline

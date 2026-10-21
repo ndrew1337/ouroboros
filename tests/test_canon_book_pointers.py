@@ -15,6 +15,8 @@ def _assert_pointers(text):
     books = {name.upper(): load_reference_book(ROOT, name) for name in ("architecture", "development")}
     for name, heading in re.findall(r'`docs/(ARCHITECTURE|DEVELOPMENT)\.md`\s+"([^"]+)"', text):
         assert read_book_section(books[name], " ".join(heading.split())).text
+    for name, heading in re.findall(r'\b(ARCHITECTURE|DEVELOPMENT)\s+"([^"]+)"', text):
+        assert read_book_section(books[name], " ".join(heading.split())).text
     for name, heading in re.findall(r"docs/(ARCHITECTURE|DEVELOPMENT)\.md § ([A-Za-z][^\n)]+)", text):
         assert read_book_section(books[name], heading).text
     for name, number, invariant in re.findall(
@@ -36,11 +38,14 @@ def test_canon_document_paths_and_named_book_sections_resolve(path):
     "docs/DEVELOPMENT.md § Design System",
     "`docs/ARCHITECTURE.md` §10, invariant 2",
     "`docs/CREATING_SKILLS.md`",
+    '(DEVELOPMENT "Capability placement")',
+    '(ARCHITECTURE "Review delivery")',
 ])
 def test_dangling_paths_headings_and_invariants_fail_while_real_ones_resolve(pointer):
     _assert_pointers(pointer)
     missing = (pointer.replace("Review delivery", "Missing section")
                .replace("Design System", "Missing section").replace("invariant 2", "invariant 999")
+               .replace("Capability placement", "Missing section")
                .replace("CREATING_SKILLS.md", "NO_SUCH_DOC.md"))
     with pytest.raises((AssertionError, ValueError, StopIteration)):
         _assert_pointers(missing)

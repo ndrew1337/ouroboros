@@ -33,7 +33,8 @@ TIER0_ALWAYS_FULL = frozenset({
 
 
 # Resident in every view; only the physical window may choose its outline.
-TIER0_WHOLE_OR_OUTLINE = frozenset({"knowledge_index"})
+INDEX_STEPS = ("project_knowledge_index", "knowledge_index")
+TIER0_WHOLE_OR_OUTLINE = frozenset(INDEX_STEPS)
 
 def _read_doc(env: Any, rel_path: str) -> str:
     try:

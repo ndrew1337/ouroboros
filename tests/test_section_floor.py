@@ -17,6 +17,50 @@ from tests import _memory_view_synthetic as syn
 RESERVE = 8_192
 
 
+def test_host_ladder_lists_live_producers_and_keeps_only_the_actual_protected_core():
+    from ouroboros.context_layout import TIER0_ALWAYS_FULL
+
+    assert memory_floor.HOST_STEPS == ("runtime", "registry", "installed_skills", "drive_state",
+        "shared_understanding", "pattern_register", "world", "subagents", "execution_reflections",
+        "architecture_map", "development_map")
+    assert section_floor.PROTECTED == TIER0_ALWAYS_FULL
+    assert {"system", "bible", "identity", "scratchpad", "memory_marks"} <= section_floor.PROTECTED
+
+
+@pytest.mark.parametrize("missing", ["window", "root", "task_id", "measure", "eligible"])
+def test_host_steps_do_not_measure_when_no_section_can_step(missing):
+    calls = []
+    args = dict(window=50_000, root="test-root", task_id="test-task", reserve=RESERVE,
+                ratio=1.0, saving=123, measure=lambda addressed: calls.append(dict(addressed)) or 1000)
+    sections = [HostSection("runtime", "whole " * 1000, "operative")]
+    if missing == "eligible":
+        sections = [HostSection("runtime", "whole " * 1000)]
+    else:
+        args[missing] = None
+    previous = [{"section_id": "registry", "reader": "test-reader"}]
+    assert memory_floor._host_steps(sections, previous, **args) == (previous, 123)
+    assert calls == []
+
+
+@pytest.mark.parametrize("window,saving,steps", [(20_000, 0, 0), (18_000, 0, 1), (20_000, 3000, 2)])
+def test_host_steps_measure_once_then_only_after_each_new_address(monkeypatch, window, saving, steps):
+    calls = []
+    sections = [HostSection(name, "whole " * 1000, "operative")
+                for name in ("runtime", "registry", "installed_skills")]
+    monkeypatch.setattr(memory_floor, "retain_section",
+                        lambda part, **_kw: {"section_id": part.section_id, "reader": "test-reader"})
+
+    def measure(addressed):
+        calls.append(tuple(addressed))
+        return 10_000 - len(addressed) * 2000
+
+    receipts, remaining = memory_floor._host_steps(sections, [], measure=measure, window=window,
+        reserve=RESERVE, ratio=1.0, saving=saving, root="test-root", task_id="test-task")
+    assert len(receipts) == steps and remaining == 0
+    assert len(calls) == 1 + steps
+    assert calls == [tuple(part.section_id for part in sections[:n]) for n in range(steps + 1)]
+
+
 @pytest.fixture(autouse=True)
 def capacity_facts(monkeypatch):
     monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 1.0)
@@ -153,7 +197,7 @@ def test_route_reprojection_only_narrows_and_recomputes_from_the_original_captur
 
 def test_physical_mode_lowering_carries_host_addresses_from_the_shown_view(tmp_path, monkeypatch):
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: 65_536)
-    core = _core(tmp_path, [_service("health_invariants", 12_000)], snapshot=syn.snapshot())
+    core = _core(tmp_path, [_service("runtime", 12_000)], snapshot=syn.snapshot())
     initial = _plan(core, 100_000, "low")
     assert _host_facts(initial, "low") and not _host_facts(initial, "nano")
     lowered = initial.reproject_for_route(window_tokens=60_000, known_window=True, ratio=1.0,
