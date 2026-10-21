@@ -189,13 +189,17 @@ class LiveConversationTurn(RealtimeTurn):
                 host.observe("host", canonical_json({"type": "call.ended", "reason": reason,
                     **({"failure": failure} if failure is not None else {})}))
         finally:
-            if host is not None:
-                host.executor.shutdown(wait=True)
-            with self._lock:
-                self._closed = True
-            close_hub(self.spec.call_id, reason, detail=detail)
-            self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
-                          "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
+            try:
+                if host is not None:
+                    host.executor.shutdown(wait=True)
+                    host.observe("host", canonical_json({"type": "call.input_audio",
+                        **hub.input_audio_evidence()}))
+            finally:
+                with self._lock:
+                    self._closed = True
+                close_hub(self.spec.call_id, reason, detail=detail)
+                self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
+                              "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
         return "Call ended. Its transcript is in this room.", {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
             **({"failure": failure} if failure is not None else {}),

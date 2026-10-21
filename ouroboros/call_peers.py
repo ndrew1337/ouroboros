@@ -153,6 +153,8 @@ class LiveCallHub(cp.CallHub):
         self._input_rate, self._output_rate = _rate(rates[0]), _rate(rates[1])
         self._epoch = 0
         self._mix_at = 0.0
+        self._input_dropped_samples = 0
+        self._input_dropped_ms = 0.0
         self._closed = False
         self._owner_bye = False
         self._ouroboros_bye = False
@@ -265,6 +267,12 @@ class LiveCallHub(cp.CallHub):
                 self._events.append(cp.PeerLeft(peer_id, reason))
                 self._condition.notify_all()
 
+    def input_audio_evidence(self) -> dict:
+        """Call-lifetime overflow totals; no audio or peer identity is recorded."""
+        with self._condition:
+            return {"dropped_samples": self._input_dropped_samples,
+                    "dropped_ms": self._input_dropped_ms}
+
     def receive_audio(self, peer_id: str, frame: cp.AudioFrame) -> bool:
         with self._condition:
             self._live()
@@ -293,6 +301,8 @@ class LiveCallHub(cp.CallHub):
             limit = self._input_rate * MIX_FRAME_MS * self._audio_limit // 1000
             excess = max(0, len(track.samples) - limit)
             if excess:
+                self._input_dropped_samples += excess
+                self._input_dropped_ms += excess * 1000 / self._input_rate
                 del track.samples[:excess]
             self._condition.notify_all()
             return True
