@@ -272,3 +272,55 @@ def test_failed_reopen_abandons_response_during_call_teardown(host_world, abando
     assert abandonments == [('unfinished-resume', 'call_ended_without_receipt')]
     assert not observed['port'].responses
     assert all(session.closed for session in host_world.sessions)
+
+
+@pytest.mark.parametrize('resumed', [False, True])
+def test_extended_thinking_idle_receipt_is_not_charged_again(host_world, abandonments, resumed):
+    from ouroboros.contracts.live_conversation import LiveEvent
+    host = host_world.host
+    host.quote = tariff(input_cost_per_token=.001, output_cost_per_token=.002)
+    progress = LiveEvent('response_done', {
+        'response_id': 'thinking-answer', 'status': 'completed', 'continues': True,
+        'usage': token_usage(text_input_tokens=12, text_output_tokens=2, thinking_tokens=3),
+        'raw_usage': {'usageMetadata': {
+            'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 12}],
+            'responseTokensDetails': [{'modality': 'TEXT', 'tokenCount': 2}],
+            'thoughtsTokenCount': 3}},
+    })
+    idle = replace(progress, data={**progress.data, 'continues': False})
+    first = {}
+    def forward(event):
+        # The feature handles continues as liveness and forwards this accounting
+        # payload through LiveHost's public port without manufacturing a receipt.
+        host.response_done(event.data['response_id'], usage=event.data['usage'],
+                           raw_usage=event.data['raw_usage'], status=event.data['status'])
+    async def begin(session):
+        host.response_started(progress.data['response_id'])
+        forward(progress)
+        first['rows'] = ua.read_usage_records(host.ctx.drive_root)
+        return 'fixture-resume-handle'
+    async def transition(session):
+        for _ in range(2):
+            forward(idle)
+        host.response_started(idle.data['response_id'])  # a replayed start stays deduplicated too
+        assert ua.read_usage_records(host.ctx.drive_root) == first['rows']
+        assert not abandonments and not host.responses
+        # Equal usage on a genuinely new native id is another billable response.
+        following = replace(idle, data={**idle.data, 'response_id': 'next-thinking-answer'})
+        host.response_started(following.data['response_id'])
+        forward(following)
+    async def same_connection(session):
+        await begin(session)
+        await transition(session)
+    async def run():
+        if resumed:
+            handle = await host.session(begin, LiveOptions())
+            await host.session(transition, LiveOptions(resume_handle=handle))
+        else:
+            await host.session(same_connection, LiveOptions())
+        await host.finish()
+    asyncio.run(run())
+    rows = ua.read_usage_records(host.ctx.drive_root)
+    assert [row['cost_evidence']['response_key'] for row in rows] == ['thinking-answer', 'next-thinking-answer']
+    assert [row['cost_usd'] for row in rows] == pytest.approx([.022, .022])
+    assert all(row['state'] == 'settled' for row in rows) and not abandonments
