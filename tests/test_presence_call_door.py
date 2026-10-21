@@ -21,6 +21,7 @@ def place(tmp_path, monkeypatch):
     monkeypatch.setattr("ouroboros.presence_admission.focus_enabled", lambda _root: True)
     monkeypatch.setattr("ouroboros.presence_admission.focus_allowance",
                         lambda _root: {"status": "available", "remaining_usd": 2})
+    monkeypatch.setattr("ouroboros.config.get_consciousness_autonomy", lambda: "act")
     return p.connect_place(tmp_path, connector="meet_bridge", provider="meet", account_id="a",
                            conversation_id="room", wakes=["mention"])
 
@@ -60,29 +61,46 @@ def _open(tmp_path, **kw):
                                    event=kw.pop("event", _event(facts=["mention"])), **kw)
 
 
+def _heard(tmp_path):
+    from ouroboros import dialogue_store
+
+    with dialogue_store.transaction(tmp_path, write=False) as conn:
+        rows = conn.execute("SELECT body, dispatch_input FROM dialogue WHERE stream='chat'").fetchall()
+    return [(dialogue_store.decode(row["body"]).get("direction"), row["dispatch_input"]) for row in rows]
+
+
 def test_a_waking_active_place_opens_the_call_under_its_place(tmp_path, place, opened):
     result = _open(tmp_path)
     assert result.call_id and opened["started"] == [result.task_id]
     assert [spec.presence_binding_id for spec in opened["hubs"]] == [place.place_id]
     assert opened["closed"] == []
+    # The request was heard in the place's room before the decision, and no attention verdict settled it.
+    heard = _heard(tmp_path)
+    assert [direction for direction, _ in heard] == ["in"] and "place_attention" not in (heard[0][1] or "")
     # Naming the place by id opens it the same way.
     assert _open(tmp_path, binding_id=place.place_id, event=_event(source_event_id="e2", facts=["mention"])).call_id
 
 
-@pytest.mark.parametrize("change, facts, code", [
-    (("set_state", {"state": "silent"}), ["mention"], "place_not_active"),
-    (("set_state", {"state": "paused"}), ["mention"], "place_not_active"),
-    (None, ["direct_message"], "place_no_wake_match"),
-    (None, None, "place_no_wake_match"),
+@pytest.mark.parametrize("change, facts, autonomy, code", [
+    (("set_state", {"state": "silent"}), ["mention"], "act", "place_silent"),
+    (("set_state", {"state": "paused"}), ["mention"], "act", "place_paused"),
+    (None, ["direct_message"], "act", "place_no_wake_match"),
+    (None, None, "act", "place_no_wake_match"),
+    (None, ["mention"], "observe", "place_advises"),
 ])
-def test_a_call_never_opens_where_a_focus_would_not_start(tmp_path, place, opened, change, facts, code):
+def test_a_call_never_opens_where_a_focus_would_not_start(tmp_path, place, opened, monkeypatch,
+                                                          change, facts, autonomy, code):
     if change:
         p.edit_place(tmp_path, place.place_id, change[0], author="owner", **change[1])
+    monkeypatch.setattr("ouroboros.config.get_consciousness_autonomy", lambda: autonomy)
     event = _event(**({"facts": facts} if facts is not None else {}))
     with pytest.raises(door.PresenceCallRefused) as refused:
         _open(tmp_path, event=event)
     assert refused.value.code == code
     assert opened["hubs"] == [] and opened["started"] == []
+    # The refused request stays a heard arrival carrying the reason, as a text event would.
+    (direction, facts_json), = _heard(tmp_path)
+    assert direction == "in" and code.removeprefix("place_") in facts_json
 
 
 def test_consciousness_off_and_an_exhausted_allowance_refuse_before_any_hub(tmp_path, place, opened, monkeypatch):

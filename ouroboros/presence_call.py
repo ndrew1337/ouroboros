@@ -2,8 +2,9 @@
 
 A reviewed transport token and a connected place never mint owner speech. A call
 speaks in its place, so it opens only in an Active place whose current choices
-would start a focus for the event (wake match, consciousness on, allowance left).
-It runs the same loaded feature/provider pair as an owner call, under the turn gate.
+would start a focus for the event (wake match, consciousness on and not Advises,
+allowance left); the request is heard in the room first, as a text event is. It
+runs the same loaded feature/provider pair as an owner call, under the turn gate.
 """
 from __future__ import annotations
 import contextvars
@@ -15,7 +16,7 @@ from typing import Any, Mapping
 from ouroboros.presence_admission import admit_presence_turn, PresenceAdmissionError
 from ouroboros.presence_events import presence_event_origin
 from ouroboros.presence_runner import (PresenceTurnEvent, PresenceTurnError, PROACTIVE_TURNS,
-    _configured_gate, _task_id, _log_dialogue, _stable_numeric_id, presence_chat_id,
+    _configured_gate, _task_id, _log_dialogue, _stable_numeric_id, capture_presence_event, presence_chat_id,
     presence_event_identity, presence_turn_event, presence_turn_replay, run_presence_turn)
 
 log = logging.getLogger(__name__)
@@ -32,19 +33,30 @@ class PresenceCallOpened:
     task_id: str
 
 
-def _require_waking_place(drive_root, admission, event) -> None:
-    """Refuse before any hub opens unless this event would start a focus in an Active place now."""
-    from ouroboros.place_intake import decide_attention
+def _require_waking_place(drive_root, admission, event, captured) -> None:
+    """Refuse before any hub opens unless this event would start a focus in an Active place now.
+
+    A call is speech: Silent and Paused places, consciousness Off or Panic, and Advises (which
+    holds automatic replies) refuse it. A refused request stays a heard arrival in the room.
+    Only the admission is checked; the call's speech does not cross the Supervisor per utterance.
+    """
+    from ouroboros.config import get_consciousness_autonomy
+    from ouroboros.consciousness_authority import LEVEL_OBSERVE, normalize_level
+    from ouroboros.place_intake import decide_attention, settle_heard
 
     place = admission.place
     if place is None or place.state != "active":
-        raise PresenceCallRefused("place_not_active", "A call speaks there; this place is Silent or Paused.")
-    decision, details = decide_attention(Path(drive_root), admission, event)
+        decision, details = "silent", {"reason": place.state if place is not None else "disconnected"}
+    else:
+        decision, details = decide_attention(Path(drive_root), admission, event)
+    if decision == "focus" and normalize_level(get_consciousness_autonomy()) == LEVEL_OBSERVE:
+        decision, details = "silent", {"reason": "advises"}
     if decision == "retry":
         raise PresenceCallRefused("consciousness_allowance_exhausted", "The consciousness allowance is used up.")
     if decision != "focus":
-        reason = str(details.get("reason") or "silent")
-        raise PresenceCallRefused(f"place_{reason}", f"This place does not wake for this event ({reason}).")
+        reason = str(details.get("reason") or "heard")
+        settle_heard(Path(drive_root), captured, event, reason)
+        raise PresenceCallRefused(f"place_{reason}", f"This place does not take a call for this event ({reason}).")
 
 
 def open_presence_call(*, drive_root, repo_dir, skill_name, binding_id="", event,
@@ -58,9 +70,11 @@ def open_presence_call(*, drive_root, repo_dir, skill_name, binding_id="", event
         admission = admit_presence_turn(drive_root=drive_root, authenticated_transport_skill=skill_name,
             binding_id=binding_id, **presence_event_origin(event))
         turn_event = presence_turn_event(event, admission)
+        # Heard before any decision, as a text event is (host_service_places).
+        captured = capture_presence_event(admission, turn_event, drive_root=Path(drive_root))
     except (PresenceAdmissionError, PresenceTurnError) as exc:
         raise PresenceCallRefused(exc.code, str(exc)) from exc
-    _require_waking_place(drive_root, admission, turn_event)
+    _require_waking_place(drive_root, admission, turn_event, captured)
     with feature_configuration("live_conversation:call") as (feature, config):
         if not config.enabled:
             raise PresenceCallRefused("calls_disabled", "Calls (beta) are off.")
