@@ -923,3 +923,20 @@ def test_host_control_watcher_ends_busy_audio_promptly_and_joins_the_driver(reas
             for child in (task, controls): child.cancel()
             await asyncio.gather(task, controls, return_exceptions=True)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('source', ['instructions', 'tool'])
+def test_call_guidance_distinguishes_interrupting_an_answer_from_ending_the_call(tmp_path, source):
+    from skills.live_conversation.driver import call_tools, session_options
+    if source == 'instructions':
+        text = session_options(Host()).instructions
+    else:
+        text = next(tool.description for tool in call_tools(tmp_path) if tool.name == 'end_call')
+    text = ' '.join(text.split())
+    for distinction in (
+        'Use end_call only when the owner wants the whole call to end',
+        'says goodbye or asks to hang up',
+        "An interruption such as 'stop', 'enough' or 'wait' ends the current answer, not the call",
+        'acknowledge briefly and listen for the next request',
+    ):
+        assert distinction in text, (source, distinction)
