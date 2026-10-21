@@ -122,8 +122,8 @@ def test_continue_brief_survives_overflow_relocation(tmp_path, monkeypatch, flag
     assert len({request["model"] for request in inputs}) == 1
     assert inputs[1]["reasoning_effort"] == inputs[2]["reasoning_effort"]
     assert any(m.get("tool_call_id") == "read-evidence" for m in inputs[1]["messages"])
-    # Nothing shown is addressable, so the second pass runs whole: the floor (Max: books to navigation)
-    # and the disclosed late rescue of the never-answered read, before the one retry.
+    # The floor (Max: books to navigation; Low: host facts with retained sources)
+    # precedes the disclosed late rescue of the never-answered read and the one retry.
     assert not any(m.get("tool_call_id") == "read-evidence" for m in inputs[2]["messages"])
     record = next(m for m in registry._ctx.messages if _capsule_metadata(m)[1])
     capsule = _capsule_metadata(record)[1]
@@ -132,5 +132,15 @@ def test_continue_brief_survives_overflow_relocation(tmp_path, monkeypatch, flag
     refused_read = next(m for m in inputs[1]["messages"] if m.get("tool_call_id") == "read-evidence")
     assert refused_read in checkpoint["messages"], "the refused request's body stays exactly retrievable"
     if mode == "low":
-        assert checkpoint["messages"] == inputs[1]["messages"]  # Low has no floor below it: the refused request itself
+        # Only system host sections may change before this checkpoint. Dialogue,
+        # Continue authority and the refused tool result keep their exact messages.
+        without_system = lambda rows: [m for m in rows if m["role"] != "system"]
+        assert without_system(checkpoint["messages"]) == without_system(inputs[1]["messages"])
+        receipts = registry._ctx.context_fit_plan.low_projection.memory_facts["host_sections_addressed"]
+        assert receipts
+        refused_system = "\n\n".join(block["text"] for m in inputs[1]["messages"]
+                                     if m["role"] == "system" for block in m["content"])
+        for receipt in receipts:
+            whole = read_actor_source_bytes(env.drive_root, task["id"], receipt["source_ref"]).decode()
+            assert whole in refused_system, "each addressed host section retains its exact refused bytes"
     assert load_task_result(env.drive_root, "pred-1") == before, "recovery never rewrites predecessor authority"
