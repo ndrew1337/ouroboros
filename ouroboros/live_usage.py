@@ -245,6 +245,27 @@ def warm_quote(*, engine: str, model: str, drive_root) -> dict | None:
     return get_catalog_quote(model, provider=engine, drive_root=drive_root, allow_live_fetch=True)
 
 
+def check_live_budget(*, engine: str, model: str, task_id: str, drive_root) -> None:
+    """Read the ordinary admission axes without reserving or admitting anything.
+
+    Connected time is already spent when reported. Its settlement, including the
+    closing tail, never calls this guard; the running host's control loop does.
+    """
+    from ouroboros import usage_store
+    from ouroboros.usage_admission import raise_group_refusal
+
+    request, scope = accounting._merge_scope(accounting.AttemptRequest(
+        model=model, provider=engine, task_id=task_id, drive_root=drive_root))
+    with usage_store.read(drive_root) as view:
+        if view.exceeds_limit(accounting._global_limit(request)):
+            raise accounting.BudgetExceeded("global model budget exhausted")
+        if (scope.root_task_id and scope.root_limit_usd is not None
+                and view.exceeds_limit(scope.root_limit_usd, root_task_id=scope.root_task_id)):
+            raise accounting.BudgetExceeded("root model budget exhausted", limit_scope="root",
+                                            root_task_id=scope.root_task_id)
+        raise_group_refusal(view, scope)
+
+
 def reserve_live_response(*, engine: str, model: str, call_id: str, response_key: str,
                           task_id: str, rendered_mode: str, drive_root, quote=None, physical_context=None) -> LiveAttempt:
     quote = copy.deepcopy(quote)

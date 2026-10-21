@@ -293,12 +293,20 @@ class ConversationHost:
             watermark=self._meter_watermark)
 
     async def check(self):
+        from ouroboros.live_usage import check_live_budget
+        from ouroboros.usage_accounting import BudgetExceeded
+
         waiter = self.ctx.model_wait_context
         if waiter is None:
             raise RealtimeSetupError("host_control", "call has no ordinary model-wait owner")
         reason = await asyncio.to_thread(waiter.control_reason, strict_current=True)
         if reason:
             raise RealtimeSetupError(reason, "ordinary task control ended the call")
+        try:
+            await asyncio.to_thread(check_live_budget, engine=self.turn.route.accounting_provider,
+                                    model=self.turn.model, task_id=self.ctx.task_id, drive_root=self.ctx.drive_root)
+        except BudgetExceeded as exc:
+            raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
 
 
     async def watch_controls(self):
