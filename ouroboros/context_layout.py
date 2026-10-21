@@ -32,7 +32,7 @@ TIER0_ALWAYS_FULL = frozenset({
 })
 
 
-# Resident in every view; only the physical window may choose its outline.
+# Resident where present; only the physical window may choose its outline.
 INDEX_STEPS = ("project_knowledge_index", "knowledge_index")
 TIER0_WHOLE_OR_OUTLINE = frozenset(INDEX_STEPS)
 
