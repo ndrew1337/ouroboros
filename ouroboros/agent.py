@@ -647,9 +647,9 @@ class OuroborosAgent:
             return None, [], {"authority_source_unavailable": authority_refusal}
         request = (task.get("metadata") or {}).get("execution_transport")
         if request is not None:
-            task["_skip_post_task_synthesis"] = True
             turn = getattr(self, "_realtime_turn", None)
             if turn is None or not turn.matches_live_request(request):
+                task["_skip_post_task_synthesis"] = True
                 return None, [], {"realtime_refusal": "realtime_restart_required"}
         drive_logs = self.env.drive_path("logs")
         task = attach_task_contract(apply_consciousness_authority(task))

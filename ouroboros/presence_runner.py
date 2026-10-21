@@ -1256,7 +1256,6 @@ def run_presence_turn(
                 raise PresenceTurnError("presence_call_identity", "binding_id")
             task["metadata"]["execution_transport"] = live_turn.request
             task["model"], task["use_local_model"] = live_turn.model, False
-            task["_skip_post_task_synthesis"] = True
         chat_id = int(task["chat_id"])
         actor_id = _stable_numeric_id("presence-actor-log", str(task.get("actor_id") or ""))
         log_dialogue = functools.partial(_log_dialogue, Path(drive_root), chat_id=chat_id,
