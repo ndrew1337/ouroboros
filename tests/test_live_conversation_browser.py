@@ -273,11 +273,21 @@ def test_talk_a_real_composer_and_loaded_feature(subscription_ui, monkeypatch, w
 
 
 def test_beta_off_has_no_talk_or_media(subscription_ui, monkeypatch):
+    from playwright.sync_api import expect
+    from ouroboros.skill_builtin import default_on_names
+    assert {'live_conversation', 'gemini_live', 'grok_realtime', 'openai_realtime'} <= set(default_on_names(ROOT / 'skills'))
     page, posts = open_call_ui(subscription_ui, monkeypatch, width=360, scheme="dark", enabled=False)
     page.wait_for_timeout(500)
     assert page.locator("[data-call-entry='talk']").count() == 0
     page.locator("#chat-input").press("Enter")
     assert not posts and page.evaluate("window.__callFixture.microphones") == 0
+    navigate(page, 'settings')
+    page.locator('[data-settings-tab="advanced"]').click()
+    form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
+    expect(form.locator('[name="enabled"]')).not_to_be_checked()
+    expect(form.locator('[name="provider"] option')).to_have_count(3)
+    assert not posts and not subscription_ui['call_saves']
+    assert page.evaluate('__callFixture.microphones') == 0
 
 
 def test_unavailable_offer_has_no_talk_until_server_confirms_it(subscription_ui, monkeypatch):

@@ -73,3 +73,31 @@ def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config
     assert all(tool.silent for tool in api.feature['call_tools'])
     from ouroboros.extension_ui_validation import validate_settings_schema
     validate_settings_schema(api.sections[0][1]['schema'])
+
+
+@pytest.mark.parametrize('auto_grant', [False, pytest.param(True, marks=pytest.mark.xfail(
+    strict=True, reason='F1: core auto_grant_if_enabled grants engine keys even while Calls beta is off; integrator-owned'))])
+def test_default_call_skills_install_without_credentials_and_leave_beta_off(tmp_path, monkeypatch, auto_grant):
+    from pathlib import Path
+    from ouroboros.skill_builtin import default_on_names, install_builtin_skill
+    from ouroboros.skill_install_record import read_install_record
+    from ouroboros.skill_loader import load_skill, grant_status_for_skill
+    from ouroboros import config
+    seeds = Path(__file__).resolve().parents[1] / 'skills'
+    names = ('live_conversation', 'gemini_live', 'grok_realtime', 'openai_realtime')
+    assert set(names) <= set(default_on_names(seeds))
+    monkeypatch.setenv('OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS', 'true')
+    monkeypatch.setenv('OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS', str(auto_grant).lower())
+    monkeypatch.setattr(config, 'SETTINGS_PATH', tmp_path / 'empty-test-settings.json')
+    for name in names:
+        result = install_builtin_skill(name, drive_root=tmp_path, seed_dir=seeds, turn_on_when_ready=True)
+        assert result['ok'], result
+        assert result['auto_granted_keys'] == []
+        assert read_install_record(tmp_path, name)['turn_on_when_ready'] is True
+        skill = load_skill(tmp_path / 'skills' / 'native' / name, tmp_path)
+        assert grant_status_for_skill(tmp_path, skill)['granted_keys'] == []
+    api = API(tmp_path)
+    plugin.register(api)
+    assert api.sections[0][1]['title'] == 'Calls (beta)'
+    assert api.feature['configure']().enabled is False
+    assert plugin.configuration_view(api.feature['configure'](), [])['offered'] is False
