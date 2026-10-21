@@ -90,6 +90,9 @@ def build_user_content(task: Dict[str, Any]) -> Any:
 
     text = task.get("text", "")
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    host_fact = metadata.get("host_fact")
+    if isinstance(host_fact, dict) and host_fact.get("kind") == "call_open":
+        text = "[Host fact: a live call opened; not the owner's words]\n\n" + str(text or "")
     author = metadata.get("objective_author")
     if isinstance(author, dict) and author.get("kind") == "task":
         text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
