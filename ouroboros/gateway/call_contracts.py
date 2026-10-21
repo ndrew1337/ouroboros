@@ -38,11 +38,13 @@ class CallRefusal(TypedDict):
 
 
 class HostCallOpenRequest(TypedDict):
-    """Attach to an admitted call, or request Presence admission for a binding.
+    """Attach to an admitted call, or request place admission for a new call.
 
-    Exactly one of call_id/binding_id starts attachment/admission. When both
-    are present the binding must match the admitted call. Directions default to
-    mic=true, speaker=false; a later hello can narrow but never widen them.
+    call_id attaches; without it the event opens a call in its connected place,
+    named by binding_id (a place id or a migrated binding id) or resolved from
+    the event's provider facts. With both, the place must be the call's place.
+    Directions default to mic=true, speaker=false; a later hello can narrow but
+    never widen them.
     """
 
     role: Literal["meeting"]

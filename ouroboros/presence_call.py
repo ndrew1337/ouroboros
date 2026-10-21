@@ -1,8 +1,9 @@
-"""Meeting peers use the ordinary Presence admission, execution registry and history.
+"""Meeting peers use the ordinary place admission, execution registry and history.
 
-A reviewed transport token and owner-created binding never mint owner speech.
-The retained meeting HTTP contract runs the same loaded feature/provider pair as
-an owner call, within the existing Presence capability ceiling and turn gate.
+A reviewed transport token and a connected place never mint owner speech. A call
+speaks in its place, so it opens only in an Active place whose current choices
+would start a focus for the event (wake match, consciousness on, allowance left).
+It runs the same loaded feature/provider pair as an owner call, under the turn gate.
 """
 from __future__ import annotations
 import contextvars
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 from ouroboros.presence_admission import admit_presence_turn, PresenceAdmissionError
+from ouroboros.presence_events import presence_event_origin
 from ouroboros.presence_runner import (PresenceTurnEvent, PresenceTurnError, PROACTIVE_TURNS,
     _configured_gate, _task_id, _log_dialogue, _stable_numeric_id, presence_chat_id,
     presence_event_identity, presence_turn_event, presence_turn_replay, run_presence_turn)
@@ -30,35 +32,48 @@ class PresenceCallOpened:
     task_id: str
 
 
-def open_presence_call(*, drive_root, repo_dir, skill_name, binding_id, event,
+def _require_waking_place(drive_root, admission, event) -> None:
+    """Refuse before any hub opens unless this event would start a focus in an Active place now."""
+    from ouroboros.place_intake import decide_attention
+
+    place = admission.place
+    if place is None or place.state != "active":
+        raise PresenceCallRefused("place_not_active", "A call speaks there; this place is Silent or Paused.")
+    decision, details = decide_attention(Path(drive_root), admission, event)
+    if decision == "retry":
+        raise PresenceCallRefused("consciousness_allowance_exhausted", "The consciousness allowance is used up.")
+    if decision != "focus":
+        reason = str(details.get("reason") or "silent")
+        raise PresenceCallRefused(f"place_{reason}", f"This place does not wake for this event ({reason}).")
+
+
+def open_presence_call(*, drive_root, repo_dir, skill_name, binding_id="", event,
                        label="", event_queue=None, agent_factory=None):
     from ouroboros.call_protocol import CallSpec, OPENED_BY_SKILL
     from ouroboros.call_peers import open_hub, close_hub
     from ouroboros.live_conversation import LiveConversationTurn, feature_configuration
-    from ouroboros.loop import _resolve_loop_max_rounds
     from supervisor.message_bus import get_bridge
 
     try:
         admission = admit_presence_turn(drive_root=drive_root, authenticated_transport_skill=skill_name,
-            binding_id=binding_id, global_max_rounds=_resolve_loop_max_rounds())
+            binding_id=binding_id, **presence_event_origin(event))
         turn_event = presence_turn_event(event, admission)
     except (PresenceAdmissionError, PresenceTurnError) as exc:
         raise PresenceCallRefused(exc.code, str(exc)) from exc
-    if admission.execution != "call":
-        raise PresenceCallRefused("presence_call_not_enabled", "This binding is configured for event turns.")
+    _require_waking_place(drive_root, admission, turn_event)
     with feature_configuration("live_conversation:call") as (feature, config):
         if not config.enabled:
             raise PresenceCallRefused("calls_disabled", "Calls (beta) are off.")
         spec = CallSpec(secrets.token_hex(16), presence_chat_id(turn_event.conversation_key),
             config.provider, config.model, config.voice, opened_by=OPENED_BY_SKILL,
-            presence_binding_id=binding_id, label=str(label), client_message_id=turn_event.source_event_id)
+            presence_binding_id=admission.binding_id, label=str(label), client_message_id=turn_event.source_event_id)
         turn = LiveConversationTurn(feature, config, spec, publish=get_bridge().broadcast)
         spec = turn.spec
         lease = _configured_gate(Path(drive_root)).try_acquire(turn_event.conversation_key)
         if lease is None:
             raise PresenceCallRefused("presence_call_busy", "This conversation or the Presence capacity is busy.")
         task_id = _task_id(admission, turn_event)
-        identity = presence_event_identity(binding_id, turn_event)
+        identity = presence_event_identity(admission.binding_id, turn_event)
         try:
             if presence_turn_replay(Path(drive_root), task_id, turn_event.conversation_key, identity, 0) is not None:
                 raise PresenceCallRefused("presence_call_settled", "This event's turn already ended.")

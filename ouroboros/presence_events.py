@@ -1,4 +1,4 @@
-"""Presence event identity and origin validation shared by text turns and meeting calls."""
+"""Presence event identity and origin validation for meeting calls (text turns parse in host_service_places)."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -50,19 +50,29 @@ class PresenceTurnEvent:
     facts: tuple[str, ...] | None = None
 
 
+def presence_event_origin(payload: Any) -> dict[str, str]:
+    """The provider facts a connected place is resolved by; empty when the payload lacks them."""
+    source = payload if isinstance(payload, dict) else {}
+    return {key: str(source.get(key) or "").strip() for key in ("provider", "account_id", "conversation_id", "thread_id")}
+
+
 def presence_turn_event(payload: Any, admission: PresenceAdmission, *,
                         reporting_version: int = 0, continuing: int = 0) -> PresenceTurnEvent:
-    """Share binding/origin validation between ordinary text and call ingress.
+    """Validate a call's source event against its admitted place, as ``/presence/turn`` does.
 
     The transport's claimed conversation_key never chooses the host history
     or concurrency key; that key comes from the checked origin facts.
     """
+    from ouroboros.places import WAKE_FACTS
     from ouroboros.presence_bindings import conversation_key
 
     expected = {"source_event_id", "provider", "account_id", "conversation_id", "thread_id",
                 "conversation_key", "actor", "conversation", "message", "text"}
-    if not isinstance(payload, dict) or set(payload) != expected:
+    if not isinstance(payload, dict) or set(payload) - {"facts"} != expected:
         raise PresenceTurnError("presence_event_invalid", "event")
+    facts = payload.get("facts")
+    if "facts" in payload and (not isinstance(facts, list) or any(fact not in WAKE_FACTS for fact in facts)):
+        raise PresenceTurnError("presence_event_invalid", "event.facts")
     provider, account_id, conversation_id, thread_id = (
         str(payload.get(key) or "").strip()
         for key in ("provider", "account_id", "conversation_id", "thread_id"))
@@ -79,7 +89,7 @@ def presence_turn_event(payload: Any, admission: PresenceAdmission, *,
         conversation=dict(payload["conversation"]) if isinstance(payload["conversation"], dict) else {},
         message=dict(payload["message"]) if isinstance(payload["message"], dict) else {},
         text=str(payload["text"] or ""), delivery_reporting_version=reporting_version,
-        continuation_version=continuing)
+        continuation_version=continuing, facts=tuple(facts) if facts is not None else None)
     if not event.source_event_id or not event.conversation_key or not event.actor:
         raise PresenceTurnError("presence_identity_missing", "event")
     if "transport_queue" in event.conversation:

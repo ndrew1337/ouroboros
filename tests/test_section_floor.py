@@ -63,7 +63,7 @@ def test_host_steps_measure_once_then_only_after_each_new_address(monkeypatch, w
 
 @pytest.fixture(autouse=True)
 def capacity_facts(monkeypatch):
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 1.0)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: RESERVE)
     monkeypatch.setattr("ouroboros.capability_evidence.resolve_main_token_density",
                         lambda *_a, **_kw: (1.0, "cold_estimate"))
@@ -218,7 +218,7 @@ def test_tool_schema_cost_and_route_density_both_count_toward_physical_pressure(
         preferred_mode="max", tool_schemas=schemas,
         route_resolver=lambda *_a, **_kw: ({"provider": "test", "model": "synthetic"}, _evidence(window)))
     assert _host_facts(with_tools)
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 2.0)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 2.0)
     assert _host_facts(_plan(core, window))
 
 
@@ -232,17 +232,14 @@ def test_new_host_savings_pay_the_refused_deficit_before_memory_steps(tmp_path):
 
 
 def _presence_ceiling(*tool_names):
-    from ouroboros.presence_authority import build_presence_capability_ceiling, presence_ceiling_payload
-    from ouroboros.presence_capabilities import PresenceProfileResolution, PresenceSelection, PresenceToolTarget
-    from ouroboros.presence_runtime import ResolvedPresenceRuntime
+    # A ceiling already admitted work still carries (places mint none for new work).
+    from ouroboros.presence_authority import PresenceCapabilityCeiling, PresenceToolGrant, presence_ceiling_payload
 
-    targets = [PresenceToolTarget("builtin", name) for name in tool_names] or [PresenceToolTarget("builtin", "chat_history")]
-    resolution = PresenceProfileResolution(
-        active=tuple(PresenceSelection(f"{index + 1:064x}", target) for index, target in enumerate(targets)),
-        missing_required=(), missing_optional=(), orphaned=(), runtime=ResolvedPresenceRuntime("main", 10, 10, False),
-        profile_fingerprint="a" * 64, selection_fingerprint="b" * 64, required_selections_present=True)
-    ceiling = build_presence_capability_ceiling(skill_name="moderator", skill_content_hash="c" * 64,
-                                                state_fingerprint="d" * 64, resolution=resolution)
+    ceiling = PresenceCapabilityCeiling(
+        skill_name="moderator", skill_content_hash="c" * 64, profile_fingerprint="a" * 64,
+        state_fingerprint="d" * 64, selection_fingerprint="b" * 64, model_slot="main", inline_max_rounds=10,
+        tool_grants=tuple(PresenceToolGrant(name) for name in (tool_names or ("chat_history",))),
+        resource_grants=(), digest="e" * 64)
     return {"capability_ceiling": presence_ceiling_payload(ceiling)}
 
 

@@ -1,9 +1,11 @@
 """Reviewed companions attach as meeting peers under a call-scoped direction grant.
 
-A skill token never admits an owner turn. Only Presence's binding admission may
-create a new skill-opened call, and opening one is a Presence turn: it needs the
-transport skill's ``presence`` grant beside ``call_peer``, as ``/presence/turn``
-does. Ordinary attachments name an existing hub and need ``call_peer`` alone.
+A skill token never admits an owner turn. Only place admission may create a new
+skill-opened call, and opening one is a Presence turn: it needs the connector's
+``presence`` grant beside ``call_peer``, as ``/presence/turn`` does. Ordinary
+attachments name an existing hub and need ``call_peer`` alone. ``binding_id``
+names the connected place (its id or a migrated binding id); without it the
+source event's provider facts resolve the place.
 """
 
 from __future__ import annotations
@@ -30,7 +32,9 @@ log = logging.getLogger(__name__)
 
 # HTTP status of a Presence call refusal; any other admission code is a conflict.
 _REFUSAL_STATUS = {
-    "calls_disabled": 403, "presence_call_not_enabled": 403, "presence_origin_mismatch": 403, "presence_binding_wrong_transport": 403,
+    "calls_disabled": 403, "presence_origin_mismatch": 403, "presence_binding_wrong_transport": 403,
+    "place_not_connected": 403, "place_not_active": 403, "place_paused": 403, "place_off": 403,
+    "place_no_wake_match": 403, "place_disconnected": 403, "consciousness_allowance_exhausted": 429,
     "presence_event_invalid": 400, "presence_identity_missing": 400, "presence_call_invalid_setting": 400,
     "presence_call_model_unset": 503,
     "presence_call_hub_unavailable": 503, "presence_call_not_started": 503,
@@ -41,16 +45,20 @@ def _token_digest(token: str) -> str:
     return hashlib.sha256(token.strip().encode("utf-8")).hexdigest()
 
 
-def _binding(ctx, skill: str, binding_id: str):
-    from ouroboros.presence_bindings import load_presence_binding
+def _place(ctx, skill: str, place_ref: str):
+    """The connected place of this connector named by its id or a migrated binding id."""
+    from ouroboros.places import load_places
 
-    return load_presence_binding(ctx.data_dir, skill, binding_id)
+    place = next((p for p in load_places(ctx.data_dir) if place_ref in (p.place_id, *p.legacy_binding_ids)), None)
+    if place is None or place.connector != skill:
+        raise ValueError("call_place_forbidden")
+    return place
 
 
 async def _admit_presence_call(ctx, skill: str, binding_id: str, payload: dict) -> str:
-    """Presence owns its gate, ceiling, turn and hub lifetime; the door only asks.
+    """Presence owns its gate, turn and hub lifetime; the door only asks.
 
-    The binding's transport is authenticated again inside the admission, which
+    The place's connector is authenticated again inside the admission, which
     returns once the call's turn has started; a refusal raises its typed reason.
     """
     from ouroboros.presence_call import open_presence_call
@@ -71,7 +79,7 @@ async def api_host_call_open(request: Request) -> JSONResponse:
         if validate_ingress(payload, HostCallOpenRequest):
             raise CallPeerError("invalid_call_request")
         call_id, binding_id = payload.get("call_id", ""), payload.get("binding_id", "")
-        if not call_id and not binding_id:
+        if not call_id and not (binding_id or payload.get("event")):
             raise CallPeerError("call_or_binding_required")
         if not call_id:
             try:
@@ -82,7 +90,7 @@ async def api_host_call_open(request: Request) -> JSONResponse:
         if not ctx.rate_limiter.allow(f"{skill}:call"):
             return refusal("call_rate_limited", 429)
         if binding_id:
-            await _bounded_host_read(ctx, lambda: _binding(ctx, skill, binding_id))
+            await _bounded_host_read(ctx, lambda: _place(ctx, skill, binding_id))
         if not call_id:
             from ouroboros.presence_call import PresenceCallRefused
 
@@ -94,11 +102,13 @@ async def api_host_call_open(request: Request) -> JSONResponse:
         hub = get_hub(call_id)
         if hub is None or hub.closed:
             return refusal("call_not_found", 404)
-        if binding_id and hub.spec.presence_binding_id != binding_id:
-            return refusal("call_binding_mismatch", 403)
         if hub.spec.opened_by == cp.OPENED_BY_SKILL:
             # An already-open Presence call retains the same transport boundary.
-            await _bounded_host_read(ctx, lambda: _binding(ctx, skill, hub.spec.presence_binding_id))
+            place = await _bounded_host_read(ctx, lambda: _place(ctx, skill, hub.spec.presence_binding_id))
+            if binding_id and binding_id not in (place.place_id, *place.legacy_binding_ids):
+                return refusal("call_binding_mismatch", 403)
+        elif binding_id:
+            return refusal("call_binding_mismatch", 403)
         hub.grant_peer(skill, _token_digest(raw_token), mic=payload.get("mic", True),
                        speaker=payload.get("speaker", False), video=payload.get("video", False))
         return JSONResponse({"call_id": call_id, "peer_path": f"/call/{call_id}/peer"})
@@ -125,7 +135,7 @@ async def ws_host_call(websocket: WebSocket) -> None:
             raise CallPeerError("call_not_found")
         grant = hub.peer_grant(skill, _token_digest(raw_token))
         if hub.spec.opened_by == cp.OPENED_BY_SKILL:
-            await _bounded_host_read(ctx, lambda: _binding(ctx, skill, hub.spec.presence_binding_id))
+            await _bounded_host_read(ctx, lambda: _place(ctx, skill, hub.spec.presence_binding_id))
     except (HostServiceAuthError, CallPeerError, ValueError, KeyError):
         await websocket.close(code=1008, reason="call_peer_forbidden")
         return

@@ -17,7 +17,7 @@ from tests import _memory_view_synthetic as syn
 @pytest.fixture(autouse=True)
 def evidence(monkeypatch):
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: 16_384)
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 1.0)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     monkeypatch.setattr("ouroboros.capability_evidence.resolve_main_token_density",
                         lambda *_a, **_kw: (1.0, "cold_estimate"))
 
@@ -75,7 +75,7 @@ def test_working_reserve_reaches_the_memory_floor_without_host_sections(tmp_path
 
 @pytest.mark.parametrize("basis", ["provider", "estimator"])
 def test_unknown_conversation_window_keeps_host_sources_whole(tmp_path, monkeypatch, basis):
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 4.0)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 4.0)
     built = plan(core(tmp_path), 0, facts=RouteFacts(accepted_input_tokens=100_000,
                                                   working_reserve_tokens=24_000, basis=basis))
     assert not addressed(built)
@@ -93,7 +93,7 @@ def test_window_basis_applies_before_the_first_memory_selection(tmp_path, monkey
     raw = plan(captured, 0).nano_projection.estimated_tokens
     window = math.ceil(raw * cutoff) + 8192
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: 8192)
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: density)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: density)
     projections, calls = fit._view_projections, []
 
     def record(*args, **kwargs):
@@ -170,7 +170,7 @@ def test_ordinary_measurement_keeps_its_previous_reserve_density_and_acceptance_
 @pytest.mark.parametrize("mode", ["max", "low", "nano"])
 @pytest.mark.parametrize("window", [0, 50_000, 2_000_000])
 def test_ordinary_projection_bytes_match_before_route_facts(tmp_path, monkeypatch, mode, window):
-    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a: 1.5)
+    monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.5)
     captured = replace(core(tmp_path, memory=True), section_root="", dynamic_sections=())
     built = plan(captured, window, mode=mode)
     value = json.dumps({"initial": built.initial_mode, "views": {

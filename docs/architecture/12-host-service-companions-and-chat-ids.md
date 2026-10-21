@@ -48,7 +48,7 @@ Per-turn receipt negotiation: `CREATING_SKILLS.md` “Reporting actual Presence 
 
 ### Live meeting peers
 
-`presence_runtime.execution` defaults to `event`; a reviewed binding may select `call`. `presence_call.py` uses the same admission ceiling, gate and `PROACTIVE_TURNS` registry with a loaded Live Conversation turn (§13). Existing `/call/open` and `/call/{call_id}/peer` (`gateway/host_call.py`) require `call_peer`; new calls also require the binding's Presence grant. Attachment grants narrow mic/speaker/video directions and bind the token digest. The common peer parser preserves the meeting protocol; `presence_events.py` checks text/call origin identity. Final external captions remain Presence observations; playback evidence never makes a participant the owner. Meeting skills are unchanged.
+`presence_call.py` admits a connector's call by place, as `/presence/turn` does, and opens it only in an Active place whose current choices would start a focus for the event (wake match, consciousness on, allowance left), under the same gate and `PROACTIVE_TURNS` registry with a loaded Live Conversation turn (§13). `/call/open` and `/call/{call_id}/peer` (`gateway/host_call.py`) require `call_peer`; new calls also require the connector's Presence grant. Attachment grants narrow mic/speaker/video directions and bind the token digest. The common peer parser preserves the meeting protocol; `presence_events.py` checks call origin identity. Final external captions remain Presence observations; playback evidence never makes a participant the owner. Meeting skills are unchanged.
 
 ### Companion processes
 
