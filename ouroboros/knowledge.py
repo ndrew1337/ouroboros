@@ -8,6 +8,7 @@ does not select memories, call models or decide what an observation means.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from collections import Counter
 from contextlib import contextmanager
@@ -301,7 +302,8 @@ def _label(value: str) -> str:
 
 
 def render_knowledge_index(rows: tuple[dict[str, Any], ...], legacy_context: str = "",
-                           *, include_summaries: bool = True, view: str = "active", scope: str = "global") -> str:
+                           *, include_summaries: bool = True, view: str = "active", scope: str = "global",
+                           selection: tuple[str, ...] = ()) -> str:
     """Generated navigation is separate from authored understanding."""
     if view not in {"active", "archived", "all"}:
         raise ValueError("view must be active, archived or all")
@@ -323,9 +325,20 @@ def render_knowledge_index(rows: tuple[dict[str, Any], ...], legacy_context: str
         if row.get("read_error") or row.get("parse_error") or row.get("archive_error"):
             line += "\n  (source metadata unavailable; read the original note)"
         entries.append(line)
-    rendered = _INDEX_HEADER + ("\n".join(entries) if entries else "(empty)") + "\n"
+    selection_note = ""
+    if selection:
+        selection_note = "Selection: " + json.dumps(list(selection), ensure_ascii=False) + "\n"
+        unmatched = [item for item in selection if not any(
+            _selected(str(row["topic"]), (item,)) and (view == "all" or row.get("state", "active") == view)
+            for row in rows)]
+        if unmatched:
+            selection_note += f"Unmatched selectors in {view} view: " + json.dumps(unmatched, ensure_ascii=False) + "\n"
+        selection_note += "\n"
+    rendered = _INDEX_HEADER + selection_note + ("\n".join(entries) if entries else "(empty)") + "\n"
     archived = sum(row.get("state") == "archived" for row in rows)
-    rendered += (f"\nArchived notes: {archived}. Open with knowledge_list(scope={scope!r}, view='archived'); "
+    archive_label = "Archived notes in this selection" if selection else "Archived notes"
+    selected_arg = f", topics={list(selection)!r}" if selection else ""
+    rendered += (f"\n{archive_label}: {archived}. Open with knowledge_list(scope={scope!r}, view='archived'{selected_arg}); "
                  f"complete inventory: knowledge_list(scope={scope!r}, view='all').\n")
     if legacy_context:
         rendered += ("\n## Earlier generated context\n\n"
@@ -397,7 +410,7 @@ def knowledge_index_view(address: KnowledgeAddress, view: str = "active", *,
     rows = inventory_knowledge(address, navigation=True, known_note=overview)
     if topics:
         return render_knowledge_index(tuple(row for row in rows if _selected(str(row["topic"]), tuple(topics))),
-                                      view=view, scope=address.scope)
+                                      view=view, scope=address.scope, selection=topics)
     return render_knowledge_index(rows, _legacy_prose(address, view, overview), view=view, scope=address.scope)
 
 
