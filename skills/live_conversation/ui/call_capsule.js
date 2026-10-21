@@ -67,6 +67,7 @@ const ENDINGS = {
     peers_left: { words: 'Everyone left the call', calm: true },
     budget_exceeded: { words: 'The spending limit is reached', action: 'settings', settings: BUDGET },
     missing_credential: NO_KEY,
+    credential: NO_KEY,
     missing_credential_google: NO_KEY,
     calls_disabled: { words: 'Calls are off — turn on Calls (beta) in Settings', action: 'settings', settings: SWITCH },
     authentication: { words: 'The voice service refused the key', action: 'settings', settings: KEY },
@@ -310,6 +311,7 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
     row.addEventListener('click', talkPress, true);
     row.addEventListener('keydown', enterGuard, true);
     field.addEventListener('input', renderEntry);
+    field.addEventListener('change', renderEntry);  // dictation and contributed draft edits
     field.addEventListener('keydown', renderEntry);  // after the chat's own history keys
     send.addEventListener('click', renderEntry);     // after the chat's own Send cleared the field
 
@@ -409,6 +411,9 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
             if (!showMenu) button.setAttribute('aria-expanded', 'false');
         }
         if ((button.hidden || button.disabled) && showMenu) showMenu.close();
+        const explanation = !sheet && available.unsupported ? available.reason : '';
+        words.small.classList.toggle('call-vision-note', Boolean(explanation));
+        setWords(words.small, presented.small || explanation || '', !explanation);
     }
 
     function typingPlaceholder(on) {
@@ -469,7 +474,6 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
         // The words' second line on a phone's chip (call.css): the wave's while a voice speaks (the line only
         // names who, and the wave's colour says it) or while it has nothing to say; else its words.
         wrap.dataset.callLine = !subText || (presented.voiced && !followUp && !current.visionError) ? 'wave' : 'text';
-        setWords(words.small, presented.small || '', true);
         const size = $('.call-size');
         size.hidden = sheet;
         size.setAttribute('aria-expanded', String(big));
@@ -526,6 +530,7 @@ export function createCallCapsule({ page, env = globalThis, visual, light, style
             row.removeEventListener('click', talkPress, true);
             row.removeEventListener('keydown', enterGuard, true);
             field.removeEventListener('input', renderEntry);
+            field.removeEventListener('change', renderEntry);
             field.removeEventListener('keydown', renderEntry);
             send.removeEventListener('click', renderEntry);
             showMenu?.close();

@@ -520,7 +520,22 @@ contributions.attach({ ws });
 const visibleDraft = draftPort(() => projectInstances.get(navState.activeProjectId) || mainChat);
 bridgeContributedActions({ store: contributions, draft: visibleDraft });
 startVoice({ hosts: startHostModules({ store: contributions, draft: visibleDraft }) });
-startConversations({ hosts: startHostModules(), openSettings: openSettingsTab });
+startConversations({ hosts: startHostModules(), openSettings: openSettingsTab,
+    roomOptions: ({ page, chatId }) => {
+        // A directly opened Project need not be in the bounded sidebar census.
+        const project = chatId === 1 ? null : lastProjectRows.find(row => Number(row.chat_id) === chatId)
+            || { id: navState.activeProjectId, chat_id: chatId, name: projectPanelTitle.textContent };
+        return {
+            label: () => project ? freshProjectRow(project).name || project.id : 'Main',
+            onScreen: () => state.activePage === 'chat' && !page.hidden
+                && (project ? navState.activeProjectId === project.id : !navState.activeProjectId),
+            reveal: () => project ? openProjectPanel(freshProjectRow(project), { openOnly: true }) : showPage('chat'),
+            onSettled: () => queueMicrotask(() => {
+                if (project && navState.activeProjectId !== project.id) destroyProjectInstance(project.id);
+            }),
+        };
+    },
+});
 // The starts the previous page did not outlive are named in the chat that owns each item (holds.js, POST /api/ui/holds).
 reportFoundHolds(getHolds(), (payload) => apiClient.reportUiHolds(payload));
 

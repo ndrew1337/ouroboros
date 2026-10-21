@@ -1,0 +1,86 @@
+/** The granted page module enhances its declared Settings form; catalogs stay server-owned. */
+import { escapeHtmlAttr as esc, renderSafeField, collectSafeFieldValues } from '/static/modules/ui_primitives.js';
+import { fetchJson } from '/static/modules/api_client.js';
+import { bindDeviceSettings, devicesHtml } from './call_device_settings.js';
+
+export const CONFIG_FIELDS = ['enabled', 'provider', 'model', 'voice', 'instructions', 'pause', 'interruptions', 'thinking', 'search']
+    .map(name => ({ name, type: ['enabled', 'interruptions', 'search'].includes(name) ? 'checkbox' : 'text' }));
+const field = (name, label, type, options, help) => ({ name, label, type, options, help });
+const options = rows => rows.map(row => ({ value: row.id, label: row.label || row.id }));
+const select = (name, label, rows, value) => {
+    const choices = options(rows);
+    if (value && !choices.some(row => row.value === value)) choices.push({ value, label: `${value} (not available)` });
+    return field(name, label, 'select', choices);
+};
+
+export function callSettingsHtml(config) {
+    const catalogs = config.catalogs || [];
+    const catalog = catalogs.find(row => row.id === config.provider);
+    const model = catalog?.models.find(row => config.model ? row.id === config.model : row.default);
+    const fields = [field('enabled', 'Calls (beta)', 'checkbox'),
+        select('provider', 'Engine', catalogs, config.provider),
+        select('model', 'Model', [{id:'',label:"Engine’s default model"}, ...(catalog?.models || [])], config.model),
+        select('voice', 'Voice', [{id:'',label:"Engine’s default voice"}, ...(model?.voices || [])], config.voice)];
+    const knobs = {
+        pause: field('pause', 'Pause before answering', 'select', ['short','normal','long']),
+        interruptions: field('interruptions', 'Speaking interrupts Ouroboros', 'checkbox'),
+        thinking: field('thinking', 'Thinking', 'select', [{value:'',label:"Engine’s default"}, ...(model?.thinking_levels || [])]),
+        search: field('search', 'Built-in search', 'checkbox'),
+    };
+    const notes = [];
+    for (const [name, spec] of Object.entries(knobs)) {
+        if (model?.honours?.includes(name)) fields.push(spec);
+        else {
+            const note = Object.fromEntries(model?.notes || [])[name];
+            if (note) notes.push(`<div class="settings-inline-note" data-call-knob-note="${name}">${esc(note)}</div>`);
+        }
+    }
+    fields.push(field('instructions', 'Instructions for calls', 'textarea', undefined, 'Applies to the next call.'));
+    const window = model?.facts?.conversation_window_tokens;
+    const memory = window ? `${catalog.label}: about ${Number(window).toLocaleString('en-US')} tokens per session, then it renews.`
+        : 'The memory window for this selection is not known.';
+    return `<div class="settings-section-copy">Calls use this room’s ordinary memory and tools. Changes apply to the next call.</div>
+        ${!catalog ? '<p class="settings-inline-note">The selected engine is not available. Enable an engine skill and grant its credential in Skills.</p>' : ''}
+        <div class="form-grid two">${fields.map(spec => renderSafeField(spec, config, {fieldClass:'form-field'})).join('')}</div>
+        ${notes.join('')}<p class="settings-inline-note" data-call-privacy>${esc(catalog?.privacy || '')}</p>
+        <p class="settings-inline-note" data-call-memory>${esc(memory)} ${esc(model?.facts?.source || '')}</p>`;
+}
+
+export function mountCallSettings(form, { skill, env = globalThis, read = () => fetchJson(`/api/extensions/${encodeURIComponent(skill)}/config`) } = {}) {
+    const fields = form.querySelector('.form-grid');
+    const save = form.querySelector('button[type="submit"]');
+    const status = form.querySelector('[data-extension-settings-status]');
+    let disposed = false, draft, devices = null;
+    let stopDevices = () => {};
+    save.disabled = true;
+    function paint() {
+        fields.classList.remove('two');
+        fields.innerHTML = callSettingsHtml(draft);
+    }
+    const changed = event => {
+        if (!draft || !['provider', 'model'].includes(event.target.name)) return;
+        Object.assign(draft, collectSafeFieldValues(form, CONFIG_FIELDS));
+        if (event.target.name === 'provider') draft.model = '';
+        draft.voice = ''; draft.thinking = '';
+        paint();
+    };
+    form.addEventListener('change', changed);
+    const ready = read().then(config => {
+        if (disposed) return;
+        draft = config;
+        paint();
+        devices = form.ownerDocument.createElement('div');
+        devices.innerHTML = devicesHtml();
+        form.insertBefore(devices, save);
+        stopDevices = bindDeviceSettings(devices, env);
+        delete form.dataset.extensionSettingsBlocked;
+        save.disabled = false;
+    }).catch(() => {
+        if (!disposed) status.textContent = 'Call settings could not be read. Reload Settings to retry.';
+    });
+    return { ready, dispose() {
+        disposed = true;
+        form.removeEventListener('change', changed);
+        stopDevices(); devices?.remove();
+    } };
+}

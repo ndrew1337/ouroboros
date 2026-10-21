@@ -30,6 +30,7 @@ export function panelBox(chip, { width, height }) {
 export function createCallStage({ wrap, row, time, doc, env = globalThis, escape = () => {} }) {
     let big = false;
     let spacer = null;
+    let homeRadius = 0;
     let covered = [];  // what a full-screen panel took out of reach while it covers the page
     let origin = { x: 0, y: 0 };  // a transformed ancestor's offset of the fixed row, measured once per lift
     let timers = [];
@@ -53,6 +54,7 @@ export function createCallStage({ wrap, row, time, doc, env = globalThis, escape
     }
 
     function lift(chip) {
+        homeRadius = Number.parseFloat(env.getComputedStyle?.(row)?.borderTopLeftRadius) || chip.height / 2;
         spacer = doc.createElement('div');
         spacer.className = 'call-spacer';
         spacer.setAttribute('aria-hidden', 'true');
@@ -61,10 +63,10 @@ export function createCallStage({ wrap, row, time, doc, env = globalThis, escape
         row.classList.add('call-lifted');
         row.style.transition = 'none';
         origin = { x: 0, y: 0 };
-        place(chip);
+        place({ ...chip, radius: homeRadius });
         const landed = rect(row);
         origin = { x: landed.left - chip.left, y: landed.top - chip.top };
-        if (origin.x || origin.y) place(chip);
+        if (origin.x || origin.y) place({ ...chip, radius: homeRadius });
     }
 
     /** A panel that covers the whole screen takes the rest of the page out of reach (focus, screen readers). */
@@ -112,7 +114,7 @@ export function createCallStage({ wrap, row, time, doc, env = globalThis, escape
         wrap.dataset.callMove = '1';
         row.style.transition = '';
         const home = rect(spacer);
-        place({ ...home, radius: home.height / 2 });
+        place({ ...home, radius: homeRadius });
         later(() => { delete wrap.dataset.callMove; }, MOVE_MS - 40);
         later(land, LAND_MS);
     }

@@ -62,9 +62,8 @@ export class CallVision {
         const token = this.token;
         let stream;
         try {
-            const media = this.env.navigator.mediaDevices;
             const prefs = loadDevicePrefs(this.env);
-            const pending = acquire({ kind, owner: this.session, label: 'Live Conversation',
+            const pending = acquire({ kind, owner: this.session, label: 'Live Conversation', keepWhenHidden: true,
                 constraints: kind === 'screen' ? true : cameraConstraints(prefs).video });
             this.pendingLease = pending;
             const lease = await pending;

@@ -67,12 +67,13 @@ function outputLatency(context) {
 }
 
 export class CallSession {
-    constructor({ chatId, env = globalThis, open = openLiveConversation,
+    constructor({ chatId, env = globalThis, open = openLiveConversation, model = () => null,
         socket = path => liveConversationSocket(path), changed = () => {}, caption = () => {},
         level = () => {}, settled = () => {}, notice = () => {} }) {
         this.chatId = chatId;
         this.env = env;
         this.open = open;
+        this.model = model;
         this.makeSocket = socket;
         this.changed = changed;
         this.caption = caption;
@@ -120,6 +121,7 @@ export class CallSession {
     async start() {
         if (this.active) return;
         this.clear();
+        this.supportsVision = this.model()?.vision === true;
         const capability = callAvailability(this.env);
         if (!capability.supported) { this.setState('failed', { code: capability.code }); return; }
         const generation = ++this.generation;
@@ -137,7 +139,8 @@ export class CallSession {
             this.resuming = resume;
             // This client's chosen microphone and cleaning (Settings → Live calls), else the system's own.
             const prefs = loadDevicePrefs(this.env);
-            const pending = acquire({ owner: this, label: 'Live Conversation', constraints: microphoneConstraints(prefs).audio });
+            const pending = acquire({ owner: this, label: 'Live Conversation', keepWhenHidden: true,
+                constraints: microphoneConstraints(prefs).audio });
             this.pendingLease = pending;
             const lease = await pending;
             if (lease.code) {
@@ -178,7 +181,6 @@ export class CallSession {
             if (!result?.call_id || typeof result.ws_path !== 'string') throw new Error('The server did not return a call address.');
             if (!current()) { this.releaseAdmission(result.ws_path, context.sampleRate); return; }
             this.callId = String(result.call_id);
-            this.supportsVision = result.vision === true;
             const socket = this.makeSocket(result.ws_path);
             this.socket = socket;
             socket.binaryType = 'arraybuffer';
@@ -416,11 +418,11 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
     let entry = null;
     // Talk appears once the server says calls are on (a beta the owner turns on in Settings) and this
     // feature configuration has explicitly enabled it. Credential presence never enables calls.
-    let enabled = false;
+    let offered = false, selectedModel = null;
     const visible = () => !destroyed && onScreen() && doc.visibilityState !== 'hidden';
     const light = createCallLight({ env, visible, heard: now => capsule.heard(now), voice: () => capsule.voice(),
         owner: () => capsule.render(), draw: state => capsule.draw(state) });
-    const session = new CallSession({ chatId, env,
+    const session = new CallSession({ chatId, env, model: () => selectedModel,
         changed(view) {
             if (destroyed) return;
             composer.dataset.callActive = String(view.active);
@@ -439,11 +441,12 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
         mute: () => session.setMuted(!session.muted),
         show: kind => session.toggleVision(kind),
         vision: () => session.supportsVision ? visionAvailability(env) : { screen: false, camera: false,
+            unsupported: Boolean(session.callId),
             reason: 'This voice engine does not accept images.', cameraReason: 'This voice engine does not accept images.' },
         end: () => session.end(),
         dismiss: () => session.dismiss(),
         act: action => act(action),
-        offered: () => enabled });
+        offered: () => offered });
     light.attach(capsule.wrap);
     entry = trackCallMark({ session, label, onScreen, reveal, page, env, sign: () => CALL_VISUAL.mark(doc),
         wake: () => light.wake() });
@@ -486,8 +489,9 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
         retains: () => session.active,
         state(data) {
             if (destroyed) return;
-            enabled = data?.enabled === true;
-            if (!enabled) session.end();
+            offered = data?.enabled === true && data?.offered === true;
+            selectedModel = data?.selected_model || null;
+            if (data?.enabled !== true) session.end();
             capsule.entry();
         },
         destroy() {
@@ -525,17 +529,4 @@ function ensureStylesheet(doc) {
         link.addEventListener('load', done, { once: true });
         link.addEventListener('error', done, { once: true });
     });
-}
-
-/** A room's call keeps the room while it lasts: hiding the room keeps the call (like a phone
- * call), destroying it hangs up, and `hasPendingWork` holds a Project room for the whole
- * non-terminal lifetime. When the call ends, `release` lets go of a hidden room nothing else holds. */
-export function mountRoomCall({ room, mount = mountCall, release = () => {}, ...options }) {
-    const call = mount({ ...options, onSettled: () => queueMicrotask(release) });
-    const { destroy, hasPendingWork, hydrateStateSnapshot } = room;
-    room.destroy = () => { call.destroy(); destroy(); };
-    room.hasPendingWork = () => call.retains() || Boolean(hasPendingWork?.());
-    // The state snapshot every open room already receives tells its call whether Talk can work.
-    room.hydrateStateSnapshot = (data, ...rest) => { call.state?.(data); return hydrateStateSnapshot?.(data, ...rest); };
-    return call;
 }

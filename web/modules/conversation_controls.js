@@ -1,10 +1,12 @@
 /** A loaded conversation feature mounts in the ordinary room's composer lifetime. */
 let hosts = null;
 let openSettings = () => {};
+let roomOptions = () => ({});
 const rooms = new Set();
-export function startConversations({ hosts: runtime, openSettings: settings }) {
+export function startConversations({ hosts: runtime, openSettings: settings, roomOptions: options }) {
     hosts = runtime;
     openSettings = settings;
+    roomOptions = options || (() => ({}));
     runtime.onProvidersChange(() => { for (const room of rooms) room.sync(); });
     for (const room of rooms) room.sync();
 }
@@ -20,7 +22,7 @@ export function bindConversationControls({ composer, page, chatId, ws }) {
         active?.destroy(); active = null; key = entry;
         if (typeof entry?.impl.mountRoom === 'function')
             active = entry.impl.mountRoom({ page, chatId, ws, composer, openSettings,
-                onScreen: () => page.getClientRects().length > 0 });
+                onScreen: () => page.getClientRects().length > 0, ...roomOptions({ page, chatId }) });
     } };
     rooms.add(room); room.sync();
     return () => { rooms.delete(room); active?.destroy(); composer.hasPendingWork = priorPending; };
