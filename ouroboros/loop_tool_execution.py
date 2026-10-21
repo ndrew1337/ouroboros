@@ -1449,9 +1449,11 @@ def process_tool_results(
         # A delivered refusal wake too: ``acknowledge_pending_wake`` itself verifies what the text carried.
         if ctx is not None and published.get("supervision_wake_id"):
             try:
-                from ouroboros.delegate_supervision import acknowledge_pending_wake
+                from ouroboros.delegate_supervision import acknowledge_pending_wake, stage_pending_wake_exposure
+                from ouroboros.working_checkpoint import defer_content_ack
 
-                acknowledge_pending_wake(ctx, truncated_result)
+                stage_pending_wake_exposure(ctx, truncated_result)
+                defer_content_ack(ctx, lambda delivered=truncated_result: acknowledge_pending_wake(ctx, delivered))
             except Exception:
                 log.debug("Failed to acknowledge injected delegate wake", exc_info=True)
 

@@ -1,5 +1,7 @@
 import { accountedUpperBound, accountedUpperBoundWithChildren, formatUsd4, joinMarkdownHeadings, plainCauseText, savedTerminalRowNote } from './utils.js';
 import { cancelCauseClauses } from './cancel_presentation.js';
+import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote } from './task_reason_words.js';
+export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
 import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow } from './task_checkpoints.js';
 export { taskCheckpointLabel } from './task_checkpoints.js';
 import { harnessPresentation } from './harness_presentation.js';
@@ -399,101 +401,6 @@ export function taskStoppedWithSummary(evt) {
     return String(evt?.reason_code || '') === 'owner_requested_finalization';
 }
 
-// The typed causes a card can state in the owner's words, keyed on the CODE alone. The
-// record keeps the machine code (Logs, task detail, benchmark ledgers); only the card
-// speaks. An UNKNOWN code stays raw on purpose: a reason we have no sentence for must read
-// as itself rather than as a wrong sentence. The byte-identical twin of
-// project_dialogue.TASK_CAUSE_PHRASES; web/tests/fixtures/outcome_phase_parity.json pins both.
-const TASK_CAUSE_PHRASES = {
-    previous_revision_accepted: "The reviewers approved an earlier version of this answer; the current version was not re-reviewed.",
-    admission_close_unconfirmed: "Reviewers approved this answer; the supervisor did not confirm that task admission was closed.",
-    author_stop: "Ouroboros stopped with unfinished work; no review approval was granted.",
-    review_outcome_received: "Ouroboros received the reviewers' outcome and finished on that.",
-    author_finish: "Ouroboros delivered this answer on its own judgement; the reviewers had not signed it off.",
-    review_degraded: "The reviewers did not reach a verdict on this answer.",
-    infra_failure: "The review could not run because of an infrastructure failure, so there is no verdict.",
-    acceptance_preparation_failed: "Ouroboros could not assemble the evidence for this answer's review, so this preparation attempt dispatched no new reviewers; the work itself is kept.",
-    dialogue_terminal: "The reviewers and Ouroboros could not agree, and both positions were kept.",
-    improvement_capsule: "The reviewers asked for one more pass and Ouroboros was given their notes.",
-    fence_reopen_failed: "The requested extra pass could not be started, so the answer stands as it was.",
-    review_cycles_exhausted: "The task used up its review rounds before the answer was signed off.",
-    open_obligations: "The answer was delivered with reviewer requests still open.",
-    improvement_window_closed: "There was no room left for another pass, so the answer stands as it was.",
-    capsule_spent: "The one allowed improvement pass was already used.",
-    reviewer_fail_no_capsule: "A reviewer rejected the answer and suggested nothing to change.",
-    no_actionable_changes: "The re-review was not clean and suggested nothing to change.",
-    identical_acceptance_refused: "Nothing had changed since the last review, so the recorded verdict stands.",
-    review_skipped_deadline_reserve: "There was not enough time left to review the answer.",
-    delivery_binding_superseded: "The answer or its evidence changed, so the earlier review no longer covered it.",
-    owner_followup: "A new message from you arrived, so the review was set aside for it.",
-    evidence_refresh: "The work changed after the review was frozen, so it no longer covered the answer.",
-    revision_unavailable_on_forced_rail: "The task had to stop, so the requested rework never happened.",
-    owner_hurry: "You asked me to hurry, so no further review was started.",
-    unspecified: "The answer was not signed off, and no cause was recorded.",
-    acceptance_bypassed_budget_exhausted: "The task ran out of budget before the answer could be reviewed.",
-    acceptance_bypassed_round_limit: "The task hit its round limit before the answer could be reviewed.",
-    acceptance_bypassed_deadline: "The task ran out of time before the answer could be reviewed.",
-    acceptance_bypassed_provider_unavailable: "The model provider was unavailable, so the answer was never reviewed.",
-    acceptance_bypassed_context_overflow: "The task outgrew its context before the answer could be reviewed.",
-    acceptance_bypassed_children_unabsorbed: "Some sub-tasks had not been folded in, so the answer was never reviewed.",
-    plan_review_advisory: "The plan review was never closed; the work went on with what the reviewers said.",
-    plan_review_awaiting: "Not every plan reviewer had answered when the task ended.",
-    // The plan review's outcome CLASS at delivery (outcome_axes.execution.plan_review) picks one of these.
-    plan_review_unanswered: "Only some of the plan reviewers answered; the work went on with their notes.",
-    plan_review_none_answered: "None of the plan reviewers answered; the work went on without their notes.",
-    plan_review_answered_open: "The plan reviewers answered, but the review was never closed; the work went on with their notes.",
-    plan_review_quorum_unreachable: "Too few plan reviewers could answer, so the work was held.",
-    plan_review_objections_open: "Objections to the plan were still open when this answer was delivered; the work went on with them disclosed.",
-    host_child_status_suffix: "A child task had not settled when the answer was delivered",
-    invalid_delivery_control_after_repair: "Ouroboros's final delivery instruction could not be read even after repair, so the answer stands as delivered.",
-    budget_exhausted: "The task ran out of budget before it could finish cleanly",
-    billing_authority_unreadable: "Ouroboros could not read this task's billing authority, so it admitted no further paid call; budget exhaustion was not established",
-    billing_authority_refused: "This task's billing lineage was missing or not its own, so it admitted no further paid call; budget exhaustion was not established",
-    control_authority_unreadable: "Ouroboros could not read a control this task needs before a call, so it admitted none; budget exhaustion was not established",
-    // The other forced-finalization rails (outcomes.BEST_EFFORT_REASON_CODES / ACCEPTANCE_BYPASS_REASON_BY_RAIL keys).
-    round_limit: "The task hit its round limit before it could finish cleanly",
-    finalization_grace: "The task hit a time limit and had to wrap up before it could finish cleanly",
-    deadline_local: "The task reached its deadline before it could finish cleanly",
-    context_overflow: "The task outgrew its context before it could finish cleanly",
-    children_unabsorbed: "Some sub-task results were never folded in, so the task had to wrap up",
-    // The supervisor's timeout rails (queue_timeouts.TIMEOUT_TERMINAL_REASONS): the reaper's task_done reason_code.
-    absolute_ceiling: "The task reached its maximum running time",
-    deadline: "The task reached its deadline",
-    idle_timeout: "The task made no progress for too long",
-    // The reason codes outcomes.derive_loop_outcome stamps from typed terminal facts.
-    provider_failure: "The model provider failed to answer, so the task could not finish",
-    empty_final_text: "The task ended without a final answer",
-    deep_self_review_unavailable: "The deep self-review could not run",
-    deep_self_review_error: "The deep self-review stopped on an error",
-    // #869: the provider-death rail's terminal words (twin of project_dialogue.TASK_CAUSE_PHRASES).
-    provider_unavailable: "The task could not get a usable model answer, so it could not finish",
-    accounting_wait_expired: "Accounting access did not recover within this turn’s wait window",
-    delivery_control_degraded: "Ouroboros's final delivery instruction could not be applied, so the answer stands as delivered.",
-    authoring_handover_incomplete: "The replacement model stopped before resuming tool work.",
-    delegated_custody_unreconciled: "Some delegated work was never reconciled.",
-    // The one non-reason-code key: the task-result FIELD terminal_plan_review_open, a standing limitation.
-    terminal_plan_review_open: "The plan review was still open when this answer was delivered",
-    child_results_deferred: "Some sub-task results were deferred instead of being folded into this answer",
-    tool_failure: "A tool this task used failed and nothing recovered it",
-    receipt_absent: "No host verification receipt was recorded; this does not establish whether other checks ran.",
-    expected_output_ungrounded: "The declared output has no recorded tool work or structured final answer to support it.",
-    residual_tool_errors_without_review: "Tool errors remain in the record and the result has not been evaluated.",
-    artifacts_unavailable: "Some result files are missing or could not be preserved.",
-    partial_result: "The result is partial; remaining work is described in task details.",
-    task_exception: "The task stopped on an internal error",
-    // Recovery finalized a dead attempt from its registered answer; the Done card's delivery
-    // disposition keys (the row's typed terminal_delivery), rendered by terminalDeliveryClause.
-    finalization_incomplete: "The answer was authored, but the task's finalization did not complete, so its review evidence, artifacts and cost accounting are incomplete.",
-    terminal_delivery_exhausted: "Sending the final answer was not confirmed after the delivery attempts ran out",
-    terminal_delivery_unknown: "Delivery of the final answer could not be confirmed because the delivery registry could not be read; the result is in task details.",
-};
-
-export function taskReasonPhrase(code) {
-    const raw = String(code || '');
-    // English is the source; an install language reads the sentence by its stable code (i18n.js).
-    return TASK_CAUSE_PHRASES[raw] ? tr(`task.cause.${raw}`, TASK_CAUSE_PHRASES[raw]) : raw;
-}
-
 // The card's one sentence about a delivery the host could not confirm: an exhausted delivery names
 // the saved copy when one exists and says so when it does not. Twin: project_dialogue.terminal_delivery_clause.
 export function terminalDeliveryClause(delivery) {
@@ -507,11 +414,9 @@ export function terminalDeliveryClause(delivery) {
 // The cause lookup the shared acceptance presenter receives: no second path reads the table.
 const causePhraseLookup = (key) => (TASK_CAUSE_PHRASES[String(key || '')] ? taskReasonPhrase(key) : '');
 
-// Custody heals on the write side without rewriting reason_code. Only the
-// carried nonempty delegated_runs_unreconciled list states a current debt;
-// absence states none, not proof of reconciliation. Live task_done carries
-// that list too (_custody_debt_event_fields). Twin: _custody_debt_reason.
-// Debt stands beside the execution cause; other codes pass through unchanged.
+// Custody heals at its writer without rewriting reason_code. Only a nonempty delegated_runs_unreconciled list
+// states debt beside the execution cause; absence proves no reconciliation. Live task_done carries it too
+// (_custody_debt_event_fields). Twin: _custody_debt_reason; other codes pass unchanged.
 const CUSTODY_DEBT_REASON = 'delegated_custody_unreconciled';
 
 function custodyDebtReason(record) {
@@ -523,9 +428,7 @@ function custodyDebtReason(record) {
     ];
 }
 
-// The plan review's outcome class at delivery (outcome_axes.execution.plan_review, a
-// closed vocabulary) picks the owner sentence; a record naming no class keeps the
-// fallback key. Read by presence of a sentence, never by the class word itself.
+// outcome_axes.execution.plan_review picks its sentence by lookup, never by its spelling; absent classes keep fallback.
 function planReviewKey(record, fallback) {
     const key = `plan_review_${String(record?.outcome_axes?.execution?.plan_review || '')}`;
     return Object.hasOwn(TASK_CAUSE_PHRASES, key) ? key : fallback;
@@ -549,11 +452,8 @@ const explicitAuthorStop = (d) => d?.reason === 'author_stop' || (d?.reason === 
 // Its AUTHOR's reason beside the typed sentence (never a finish's or reviewer prose). Twin: project_dialogue._author_stop_rationale.
 const authorStopRationale = (d) => (explicitAuthorStop(d) ? String(d.author_disposition?.rationale || '').split(/\s+/).filter(Boolean).join(' ') : '');
 
-// Standing limitations of the delivered answer, from facts already on the
-// record: deferred children, and a plan review still open at delivery (the
-// result's terminal_plan_review_open flag), worded by its class when one is
-// named. The twin of project_dialogue._terminal_limitations.
-// The open-review classes that state a standing limitation (never the merely awaited case).
+// Recorded standing limitations: deferred children and terminal_plan_review_open, worded by its class when present.
+// Twin: project_dialogue._terminal_limitations. Open classes exclude the merely awaited case.
 const PLAN_REVIEW_OPEN_CLASSES = new Set(['plan_review_unanswered', 'plan_review_none_answered', 'plan_review_answered_open', 'plan_review_objections_open']);
 
 function terminalLimitations(record, reason, held = false) {
@@ -568,7 +468,14 @@ function terminalLimitations(record, reason, held = false) {
 
 // Independent functional causes precede review provenance, never replacing it.
 // Twin of project_dialogue._completion_verdict; neither renderer mutates health.
-export function taskReasonDetail(evt) {
+export function taskReasonCodes(evt) {
+    const codes = [];
+    taskReasonDetail(evt, codes);
+    return codes;
+}
+
+export function taskReasonDetail(evt, codes = []) {
+    const phrase = (code) => describedCause(code, codes);
     const record = normalizeTaskTerminalRecord(evt);
     const decision = record.outcome_axes?.review?.acceptance_decision
         ?? record.review_status?.acceptance_decision;
@@ -595,7 +502,7 @@ export function taskReasonDetail(evt) {
         && !Array.isArray(origin) && Object.keys(origin).length) {
         clause = joinCauseClauses(cancelCauseClauses(origin, record));
     } else if (held) {
-        clause = taskReasonPhrase(String(objective.reason || ''));
+        clause = phrase(String(objective.reason || ''));
     } else if (!reason || reason === 'final_message') {
         clause = completion?.action === 'stop' && severity !== 'cancelled' ? taskReasonPhrase('author_stop')
             : severity === 'done' && record.outcome_axes?.execution?.plan_review === 'awaiting' ? taskReasonPhrase('plan_review_awaiting') : '';
@@ -603,7 +510,7 @@ export function taskReasonDetail(evt) {
         const receiptVeto = objective?.receipt_veto;
         clause = receiptVeto?.reason === reason && receiptVeto.detail
             ? String(receiptVeto.detail).split(/\s+/).filter(Boolean).join(' ')
-            : taskReasonPhrase(reason === 'plan_review_advisory' ? planReviewKey(record, reason) : reason);
+            : phrase(reason === 'plan_review_advisory' ? planReviewKey(record, reason) : reason);
     }
     if (reviewCause && (reason === reviewCause || bypass[reason] === reviewCause)) clause = '';
     const excluded = ['', 'delegated_custody_unreconciled', 'terminal_delivery_unknown', 'terminal_delivery_exhausted'];
@@ -615,7 +522,7 @@ export function taskReasonDetail(evt) {
     if (objective?.status === 'best_effort' && !clause && !objective.deferred_count && !taskStoppedWithSummary(evt)
         && ['', 'previous_revision_accepted'].includes(reviewCause)) warningClauses.push(taskReasonPhrase('partial_result'));
     const rationale = completion?.action === 'stop' ? plainCauseText(completion.rationale, 0) : authorStopRationale(decision);
-    const line = joinCauseClauses([clause, ...warningClauses, taskReasonPhrase(reviewCause), rationale,
+    const line = joinCauseClauses([clause, ...warningClauses, phrase(reviewCause), rationale,
         ...acceptanceIncidentClauses(decision, reason, causePhraseLookup),
         ...terminalLimitations(record, reason, held), custody ? taskReasonPhrase(custody) : '',
         terminalDeliveryClause(record.terminal_delivery)]);  // the host twin appends the delivery clause last too
@@ -1172,7 +1079,7 @@ export function taskTerminalSummary(evt = {}) {
     const observedOutcome = OBSERVED_OUTCOME_STATUSES.has(knownStatus) ? outcome : '';
     const presentation = taskPresentation(terminal ? outcome : 'working');
     const body = [taskStoppedWithSummary(evt) ? OWNER_STOP_DETAIL_MARKER : '', taskReasonDetail(evt),
-        terminal ? savedTerminalRowNote(evt) : ''].filter(Boolean).join('\n');
+        reasonCodesNote(taskReasonCodes(evt)), terminal ? savedTerminalRowNote(evt) : ''].filter(Boolean).join('\n');
     const cause = terminal ? taskReasonDetail(evt) : '';
     return {
         ...chatView({
@@ -1290,6 +1197,7 @@ function summarizeChatLiveEventView(evt) {
             traceText.full ? `[TRACE]\n${traceText.full}` : '',
             errorText.full ? `[ERROR]\n${errorText.full}` : '',
             reasonDetail,
+            !cancelDetail && stopDetail ? reasonCodesNote(taskReasonCodes(evt)) : '',
         ].filter(Boolean);
         // Completed frames take label and phase from their authoritative outcome axes.
         const completionSeverity = rawEvent === 'completed' ? taskOutcomeSeverity(evt) : 'done';

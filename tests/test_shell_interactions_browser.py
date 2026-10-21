@@ -12,7 +12,7 @@ import pytest
 
 from ouroboros.launcher_window_chrome import DOCUMENT_SCRIPT
 from tests import test_subscription_setup_browser as setup_browser
-from tests.test_design_system_gate_browser import PROJECTS, save_evidence, seed_page, settle, sidebar_metrics
+from tests.test_design_system_gate_browser import PROJECTS, rest, save_evidence, seed_page, settle, sidebar_metrics
 from tests._work_projection_shared import work_fields
 
 subscription_ui = setup_browser.subscription_ui
@@ -256,7 +256,8 @@ def test_a_project_opened_from_the_phone_drawer_takes_focus(shell_ui, tmp_path, 
         page.wait_for_timeout(250)
         press(page.locator('#nav-projects-list [data-project-id]').first)
         page.wait_for_function("() => window.__ouroLayers.top() === 'project'")
-        page.wait_for_timeout(400)
+        # The panel lay in the room the drawer made inert: focus goes in once the card has come home.
+        rest(page)
         facts['focus'] = page.evaluate(WHO)
         facts['inside_panel'] = page.evaluate("document.getElementById('project-panel').contains(document.activeElement)")
         facts['layers'] = ids(page)
@@ -773,7 +774,7 @@ def test_a_handle_drag_moves_its_box_and_the_room_follows_it_frame_by_frame(shel
 
 
 def test_the_project_panel_sliding_in_never_widens_the_window(shell_ui, tmp_path):
-    """Docked, the panel slides in from 18px past the window's edge. Placed in #app (an absolute grid item), that
+    """Docked, the panel slides in from past the window's right edge. Placed in #app (an absolute grid item), that
     offset would widen the page, and a scrollIntoView during the slide (a Project opened on a question) would
     scroll the whole window sideways; #app clips it. The slide is slowed so the check lands inside it."""
     page = seed_page(shell_ui, 1108, 680)
@@ -795,6 +796,56 @@ def test_the_project_panel_sliding_in_never_widens_the_window(shell_ui, tmp_path
     assert facts['sliding'] not in ('none', 'matrix(1, 0, 0, 1, 0, 0)'), ('checked while the panel slides', facts)
     assert facts['pageWidth'] <= facts['window'], facts
     assert facts['scrollLeft'] == 0 and facts['sidebarLeft'] == 0, facts
+
+
+# Each frame from now on: where the Project panel's left edge stands, whether it is hidden, how many rows its room shows.
+PANEL_FRAMES = """() => { const panel = document.getElementById('project-panel'); const frames = []; window.__panelFrames = frames;
+    const tick = () => { if (window.__panelFrames !== frames) return;
+        frames.push({left: panel.getBoundingClientRect().left, hidden: panel.hidden,
+                     rows: panel.querySelectorAll('.chat-messages .chat-bubble').length});
+        requestAnimationFrame(tick); };
+    requestAnimationFrame(tick); }"""
+# A room's read takes 150 ms, as on a real link: a panel that set off at the click would cross the window empty.
+SLOW_HISTORY = """(() => { const real = window.fetch; window.fetch = (input, init) => { const answer = real(input, init);
+    return String(input?.url || input).includes('/api/chat/history')
+        ? answer.then((r) => new Promise((resolve) => setTimeout(() => resolve(r), 150))) : answer; }; })()"""
+
+
+def test_docked_the_project_panel_comes_in_with_its_room_and_goes_back_with_it(shell_ui, tmp_path):
+    """Owner 20.10 (Q2 A): docked, the panel comes in from the window's right edge once its room has painted and goes
+    back there whole: every frame of both motions shows the room's rows, and each motion is seen over frames."""
+    page = seed_page(shell_ui, 1143, 790)
+    rows = [{'role': 'assistant', 'text': f'Answer {i}. ' + 'Ordinary context. ' * 8,
+             'content': f'Answer {i}.', 'ts': f'2026-10-14T09:{i:02d}:00Z'} for i in range(6)]
+    page.route('**/api/chat/history*', lambda route: route.fulfill(json={'messages': rows, 'progress': []}))
+    page.add_init_script(SLOW_HISTORY)
+    facts = {'engine': shell_ui['engine']}
+    try:
+        boot(page, shell_ui)
+        width = page.evaluate('innerWidth')
+        page.evaluate(PANEL_FRAMES)
+        page.evaluate("p => window.dispatchEvent(new CustomEvent('ouro:open-project', {detail: {project: p}}))",
+                      PROJECTS[0])
+        page.wait_for_function("() => document.getElementById('project-panel').classList.contains('open')")
+        rest(page)
+        facts['opening'] = page.evaluate('window.__panelFrames.splice(0)')
+        page.evaluate(PANEL_FRAMES)
+        page.locator('#project-panel-close').click()
+        page.wait_for_function("() => document.getElementById('project-panel').hidden")
+        facts['closing'] = page.evaluate('window.__panelFrames.splice(0)')
+        page.evaluate('window.__panelFrames = null')
+    finally:
+        evidence(tmp_path, f'shell-panel-arrival-{shell_ui["engine"]}', facts)
+        page.close()
+    home = facts['opening'][-1]['left']
+    assert home < width - 300, ('it ends beside Main', home, width)
+
+    def moving(frames):
+        return [f for f in frames if not f['hidden'] and home + 1 < f['left'] < width - 1]
+    assert len(moving(facts['opening'])) >= 3, ('the arrival is seen moving', facts['opening'])
+    assert all(f['rows'] > 0 for f in moving(facts['opening'])), ('it sets off with its room painted', facts['opening'])
+    assert len(moving(facts['closing'])) >= 3, ('the way back is seen moving', facts['closing'])
+    assert all(f['rows'] > 0 for f in facts['closing'] if not f['hidden']), ('it goes back with its room', facts['closing'])
 
 
 def test_a_project_closed_mid_drag_keeps_its_stored_width(shell_ui, tmp_path):
@@ -868,12 +919,12 @@ def test_a_row_that_hides_gives_the_keyboard_to_the_projects_toggle(shell_ui, tm
         # lands on the Projects toggle instead of the page.
         page.locator(f'[data-nav-project-id="{pins[0]}"] .nav-project-kebab').focus()
         page.keyboard.press('Enter')
-        page.locator('body > .project-row-menu').wait_for()
+        page.locator('body > .project-row-menu:not([data-leaving])').wait_for()
         facts['in_menu'] = page.evaluate("() => document.activeElement.dataset.prm || ''")
         unpin(pins[1:])
         page.wait_for_function(hidden, arg=pins[0], timeout=20_000)
         settle(page)
-        facts['menus_after'] = page.locator('.project-row-menu').count()
+        facts['menus_after'] = page.locator('.project-row-menu:not([data-leaving])').count()
         facts['focus_after_menu'] = page.evaluate(FOCUS)
         # The keyboard on the other pinned row, which is unpinned too: the list empties, the toggle keeps the keyboard.
         page.locator(f'[data-project-id="{pins[1]}"]').focus()

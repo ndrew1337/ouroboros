@@ -159,18 +159,21 @@ def _load_start_continuation(ctx: Any, task: Dict[str, Any]) -> dict:
     """Read the existing validated continuation before dispatch or context assembly."""
     ctx.owner_wait_resume = task.get("_owner_wait_resume")
     ctx.budget_pause_resume = task.get("_budget_pause_resume")
-    ctx.working_recovery = task.get("_working_recovery")
-    from ouroboros.owner_wait import load_owner_wait
-    saved_wait = load_owner_wait(ctx)
-    if not saved_wait and ctx.budget_pause_resume:
+    ctx.working_recovery = (task.get("_working_recovery") or {}) if "_working_recovery" in task else None
+    from ouroboros.owner_wait import governing_continuation, load_owner_wait
+    carrier = governing_continuation(task)
+    if carrier == "owner_wait":
+        return load_owner_wait(ctx)
+    if carrier == "exact_pause":
         from ouroboros.budget_pause import load_budget_pause
-        saved_wait = load_budget_pause(ctx)  # same-ID budget continuation (#1196)
-    if not saved_wait and isinstance(ctx.working_recovery, dict):
+        return load_budget_pause(ctx)
+    saved_wait = {}
+    if carrier == "working":
         from ouroboros.working_checkpoint import load_recovery
         try:
-            saved_wait = load_recovery(ctx)  # same/new-ID recovery continues its clocks
+            saved_wait = load_recovery(ctx)
         except Exception:
-            saved_wait = {}  # the loop discloses the unreadable source itself
+            pass  # The loop discloses the selected source's gap, without fallback.
     return saved_wait
 
 
@@ -181,7 +184,7 @@ def _restore_saved_clocks(ctx: Any, task: Dict[str, Any], saved_wait: Optional[d
     else:
         ctx.owner_wait_resume = task.get("_owner_wait_resume")
         ctx.budget_pause_resume = task.get("_budget_pause_resume")
-        ctx.working_recovery = task.get("_working_recovery")
+        ctx.working_recovery = (task.get("_working_recovery") or {}) if "_working_recovery" in task else None
     if saved_wait:
         from ouroboros.settings_integrity import restore_cognition
         from ouroboros.task_pacing import restore_cost_ceiling
@@ -887,7 +890,8 @@ class OuroborosAgent:
         )
         if _exec_note:
             messages.append({"role": "user", "content": _exec_note})
-        subagent_bootstrap.append_startup_receipt(ctx, messages, startup_wake)
+        # The loop delivers after restoring cognition, then saves before external ACK.
+        ctx._configured_startup_wake = startup_wake
         # The nanny postcondition's input fact for the loop's finalization seam:
         # THIS task was dispatched onto the delegated substrate. ALL economics
         # marks reset together per dispatch (F4) — defensive, since the

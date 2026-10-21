@@ -32,6 +32,7 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
 
     options = request.param if isinstance(request.param, tuple) else (request.param, False)
     scoped, timed = options[:2]
+    saved = len(options) > 2 and options[2] in {"saved", "saved_unreadable"}
     if timed:
         from datetime import datetime, timezone
         import time
@@ -48,15 +49,38 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
     if timed:
         assert task["deadline_at"] == deadline
     task["configured_subagent"] = _snapshot(_settings(_session_row()), "session-builder")
+    if saved:
+        from ouroboros.contracts.task_contract import build_task_contract
+        from ouroboros.tools.control_delegation import stamp_depth_provenance
+
+        task["delegation_role"] = "subagent"
+        task["parent_cognitive_route"] = {"model": "same-model", "effort": "high"}
+        # This is a newly admitted child, not a legacy row lacking depth authority.
+        contract = build_task_contract(task)
+        contract["delegation_budget"]["depth_remaining"] = 3
+        task["task_contract"], _ = stamp_depth_provenance(
+            contract, attempted_depth=task["depth"], max_depth=3)
     sent = worker(host, monkeypatch)
     workers.assign_tasks()
     assert len(sent) == 1 and not host.pending
     task = host.running["child1"]["task"]
     from ouroboros.agent import OuroborosAgent
 
+    if saved:
+        from ouroboros import subagents
+        from ouroboros.agent_dispatch import resolve_dispatch_axes
+
+        # A real first worker resolves its profile before starting the leaf and
+        # recording the authority fingerprint; restore must compare that binding.
+        with monkeypatch.context() as first_dispatch:
+            first_dispatch.setattr(daemon, "ensure_owned_gateway", lambda: Gateway())
+            first_dispatch.setattr(subagents, "route_health", lambda *_a, **_kw: ("", ""))
+            assert resolve_dispatch_axes(task).executor == "harness"
     OuroborosAgent._persist_running_record(SimpleNamespace(env=SimpleNamespace(drive_root=host.root)), task)
     assert task["admitted_dispatch"] == "possible"
     assert load_task_result(host.root, "child1")["admitted_dispatch"] == "possible"
+    from ouroboros.contracts.task_contract import build_task_contract
+    initial_authority = build_task_contract(task)
     process = InertProcess()
     from supervisor import worker_pool_lifecycle
     for module in (workers, worker_pool_lifecycle):  # an inert handle's fake PID reaches no OS process
@@ -75,6 +99,10 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
     atomic_write_json(host.root / "state/delegate_supervision/child1.json", {
         "schema": 1, "run_id": "run-1", "status": "sleeping", "journal_cursor": 7,
     })
+    if saved:
+        from tests.test_working_checkpoint import _saved_working_state
+
+        _saved_working_state(host.root, monkeypatch, "child1")
     if len(options) > 2 and options[2] == "resumed":
         from ouroboros.budget_pause import STATE_RESUMED, set_budget_pause
 
@@ -90,6 +118,15 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
     selected = recovery.prepare_planned_restart_handoffs(host.root, host.running)
     assert selected == {"child1"}
     handoff = recovery._read(host.root, "child1")
+    if saved:
+        from supervisor.restart_retention import prepare_restart_returns
+
+        assert prepare_restart_returns(host.root, host.running, host.pending,
+            transaction_id=handoff["restart_transaction_id"]) == {"child1"}
+        if options[2] == "saved_unreadable":
+            from ouroboros.working_checkpoint import checkpoint_path
+
+            checkpoint_path(host.root, "child1", task["_attempt"]).write_text("{unreadable", encoding="utf-8")
     assert workers.kill_workers(
         terminal_status="cancelled", result_reason="Planned self-restart", preserve_pending=True,
         preserve_running_task_ids=selected, reconcile_delegate_custody=False, archive_service_logs=False,
@@ -99,7 +136,7 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
                 if json.loads(line).get("type") == "zombie_prevention_cleanup"]
     assert cleanups[-1]["preserved_successors"] == ["child1"]
     assert host.pending[0]["_attempt"] == handoff["new_attempt"]
-    if len(options) > 2:
+    if len(options) > 2 and options[2] == "resumed":
         assert host.pending[0]["_budget_pause_resume"]["grant_id"] == "spent-resume"
         assert workers.kill_workers(terminal_status="cancelled", result_reason="Second stop door",
                                     reconcile_delegate_custody=False, archive_service_logs=False)
@@ -110,7 +147,7 @@ def prepared(host, tmp_path, monkeypatch, request):  # noqa: F811
     monkeypatch.setattr(daemon, "ensure_owned_gateway", lambda: Gateway())
     monkeypatch.setenv(recovery.PLANNED_RESTART_TRANSACTION_ENV, handoff["restart_transaction_id"])
     windows_successor(monkeypatch, host.root, handoff["restart_transaction_id"])
-    return SimpleNamespace(host=host, task=task, handoff=handoff)
+    return SimpleNamespace(host=host, task=task, handoff=handoff, initial_authority=initial_authority)
 
 
 def restore(case):
@@ -129,6 +166,7 @@ def test_exact_planned_handoff_reaches_worker_once(prepared, monkeypatch, adopt_
     import ouroboros.tools.delegate as delegate
 
     case = prepared
+    assert "_working_recovery" not in case.host.pending[0], "no saved cognition keeps the existing handoff path"
     if adopt_before_restore:
         assert recovery.pre_adopt_planned_handoffs(case.host.root, case.host.pending) == {"child1"}
     restore(case)
@@ -471,7 +509,7 @@ def composed(host, tmp_path, monkeypatch):  # noqa: F811
         host.root, host.running, restart_transaction_id=transaction_id, additional_task_ids=owner_waits)
     assert owner_waits == {"asker"} and planned == {"asker", "child1"}
     assert prepare_restart_returns(host.root, host.running, list(host.pending), transaction_id=transaction_id,
-                                   owner_wait_ids=planned) == {"saved-root"}
+                                   owner_wait_ids=owner_waits) == {"saved-root"}
     assert workers.kill_workers(
         force=True, terminal_status="cancelled", result_reason="Planned self-restart", stop_source="server_shutdown",
         preserve_running_task_ids=planned, retain_saved_work=True, preserve_pending=True,

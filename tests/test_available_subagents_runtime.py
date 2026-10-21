@@ -443,11 +443,11 @@ def test_real_task_context_bootstraps_before_context_and_any_llm(monkeypatch, tm
         "drive_root": str(drive), "budget_drive_root": str(drive),
     })
     assert order == ["physical_start", "context_build"]
-    assert any("CONFIGURED SESSION STARTUP / WAKE RECEIPT" in item["content"] for item in messages)
-    receipt = next(item["content"] for item in messages if "CONFIGURED SESSION STARTUP / WAKE RECEIPT" in item["content"])
-    assert "configured_session_started" in receipt
-    assert "run-pre-start" in receipt
-    assert "Waiting is your decision" in receipt
+    assert not any("CONFIGURED SESSION STARTUP / WAKE RECEIPT" in item["content"] for item in messages)
+    # The loop appends only after its continuation has restored messages[:].
+    receipt = json.loads(_ctx._configured_startup_wake)
+    assert receipt["status"] == "configured_session_started"
+    assert receipt["startup"]["run_id"] == "run-pre-start"
     assert _ctx._configured_actor_bootstrap["selected_subagent_id"] == "session-builder"
     assert _ctx._configured_actor_bootstrap["canonical_work_order"]
     assert _ctx._configured_actor_bootstrap["physical_started"] is True
@@ -719,17 +719,14 @@ def test_actor_first_delegate_start_rejects_alternate_snapshot(monkeypatch, tmp_
 
 
 def test_actor_first_retry_cannot_turn_coordination_prompt_into_work_order_prefix(monkeypatch, tmp_path):
+    """The coordination text never becomes the work order: the retry hands the shared
+    validator an empty prompt, so an unrecorded token is refused by name before any
+    daemon access, and the advisory text is disclosed as not sent (#1614)."""
     import ouroboros.subagent_runtime as runtime
     import ouroboros.claudexor_daemon as daemon
 
-    class Gateway:
-        def harnesses(self):
-            return [{"id": "codex", "manifest": {"capabilities": {}}}]
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr(daemon, "ensure_owned_gateway", Gateway)
+    monkeypatch.setattr(daemon, "ensure_owned_gateway",
+                        lambda: pytest.fail("a refused retry must not reach the daemon"))
     snapshot = _snapshot(_settings(_session_row()), "session-builder")
 
     ctx = SimpleNamespace(
@@ -744,17 +741,12 @@ def test_actor_first_retry_cannot_turn_coordination_prompt_into_work_order_prefi
             "work_order_chars": 250001,
         },
     )
-    monkeypatch.setattr(
-        runtime, "exact_start",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("an over-budget retry must refuse before exact_start")
-        ),
-    )
     out = json.loads(runtime.delegate_start_entry(
         ctx, "coordination text is not the canonical assignment", retry_of="inv-1",
     ).text)
     assert out["status"] == "refused"
-    assert out["reason"] == "configured_work_order_unavailable"
+    assert out["reason"] == "unknown_invocation"
+    assert out["coordination_text"].startswith("not sent")
 
 
 def test_actor_first_legacy_retry_replays_recorded_partial_body(monkeypatch, tmp_path):
@@ -782,7 +774,14 @@ def test_actor_first_legacy_retry_replays_recorded_partial_body(monkeypatch, tmp
     )
     out = json.loads(runtime.delegate_start_entry(ctx, "ignored", retry_of="inv-legacy").text)
     assert out["status"] == "started"
-    assert starts == [(stored_prompt, {"retry_of": "inv-legacy", "_resolved_binding": None})]
+    # The entry reads no prompt itself (#1614): '' lets the shared validator replay
+    # the stored body, and the caller's text rides only as undelivered advice.
+    assert starts == [("", {"retry_of": "inv-legacy", "_resolved_binding": None,
+                            "_coordination_context": "ignored"})]
+    from ouroboros.tools.delegate_integration import _validated_invocation
+
+    record, refusal = _validated_invocation(tmp_path, "inv-legacy", ctx.task_id, "")
+    assert refusal is None and record["request"] == {"prompt": stored_prompt}
 
 
 def test_actor_first_bootstrap_adopts_existing_handoff_without_new_start(monkeypatch, tmp_path):

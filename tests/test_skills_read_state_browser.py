@@ -212,13 +212,13 @@ def test_skills_late_enrichment_preserves_presence_and_portalled_menu(skills_bro
         page.evaluate("keptField.dispatchEvent(new CompositionEvent('compositionend', {bubbles:true, data:'2'}))")
         trigger = card.locator('[data-skill-menu-trigger]')
         trigger.click()
-        page.evaluate("window.keptMenu=document.querySelector('body > .skills-card-menu-dialog');window.keptMenuFocus=document.activeElement")
-        publish = page.locator('body > .skills-card-menu-dialog .skills-submit-hub')
+        page.evaluate("window.keptMenu=document.querySelector('body > .skills-card-menu-dialog:not([data-leaving])');window.keptMenuFocus=document.activeElement")
+        publish = page.locator('body > .skills-card-menu-dialog:not([data-leaving]) .skills-submit-hub')
         assert publish.get_attribute('data-submit-disabled') == 'true'
         assert "status unavailable" in publish.get_attribute('data-submit-reason')
         skills.release("/api/state", {"github_token_configured": True})
-        page.wait_for_function("document.querySelector('body > .skills-card-menu-dialog .skills-submit-hub').dataset.submitDisabled === 'false'")
-        assert page.evaluate("keptMenu === document.querySelector('body > .skills-card-menu-dialog') && keptMenuFocus === document.activeElement && keptField === document.querySelector('[name=inline_max_rounds]')")
+        page.wait_for_function("document.querySelector('body > .skills-card-menu-dialog:not([data-leaving]) .skills-submit-hub').dataset.submitDisabled === 'false'")
+        assert page.evaluate("keptMenu === document.querySelector('body > .skills-card-menu-dialog:not([data-leaving])') && keptMenuFocus === document.activeElement && keptField === document.querySelector('[name=inline_max_rounds]')")
         assert field.input_value() == '27'
         page.keyboard.press('Escape')
         skills.hold.discard('/api/state')
@@ -315,9 +315,9 @@ def test_installed_never_waits_for_sources_or_catalogs(skills_browser, browser_n
         assert ("GET", "/api/skill-catalog") not in skills.requests, "Installed never reads a catalog"
         assert any(path == "/api/skill-sources" for _, path in skills.requests)
         card.locator('[data-official-mark]').click()
-        assert page.locator('.skills-mark-popup').count() == 0, 'the promise names its source: it waits for it'
+        assert page.locator('.skills-mark-popup:not([data-leaving])').count() == 0, 'the promise names its source: it waits for it'
         skills.release("/api/skill-sources")
-        popup = page.locator('.skills-mark-popup')
+        popup = page.locator('.skills-mark-popup:not([data-leaving])')
         popup.wait_for()
         assert "the maintainer of Ouroboros vouches for this exact version" in popup.inner_text()
         assert "github.com/razzant/OuroborosHub" in popup.inner_text()
@@ -350,8 +350,8 @@ def test_skills_late_enrichment_keeps_local_toggle_and_publish_pending(skills_br
         skills.release('/api/skills/lifecycle-queue', {'events': []})
         assert page.evaluate('keptToggle === document.querySelector(".skills-toggle") && keptToggle.disabled && !keptToggle.checked')
         card.locator('[data-skill-menu-trigger]').click()
-        page.evaluate('window.keptPublish=document.querySelector("body > .skills-card-menu-dialog .skills-submit-hub")')
-        page.locator('body > .skills-card-menu-dialog .skills-submit-hub').click()
+        page.evaluate('window.keptPublish=document.querySelector("body > .skills-card-menu-dialog:not([data-leaving]) .skills-submit-hub")')
+        page.locator('body > .skills-card-menu-dialog:not([data-leaving]) .skills-submit-hub').click()
         page.wait_for_function('keptPublish.disabled')
         skills.release('/api/state', {'github_token_configured': False})
         page.wait_for_timeout(100)
@@ -390,19 +390,19 @@ def test_a_menu_opened_during_a_reread_survives_it(skills_browser, browser_name)
         skills.hold = {'/api/extensions'}
         for failed in (True, False):
             page.locator('#skills-refresh').click()
-            if page.locator('body > .skills-card-menu-dialog[open]').count() == 0:
+            if page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]').count() == 0:
                 page.locator('[data-skill-menu-trigger]').click()
-            menu = page.locator('body > .skills-card-menu-dialog[open]')
+            menu = page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]')
             menu.wait_for()
-            page.evaluate("window.keptMenu = document.querySelector('body > .skills-card-menu-dialog[open]')")
+            page.evaluate("window.keptMenu = document.querySelector('body > .skills-card-menu-dialog:not([data-leaving])[open]')")
             if failed:
                 skills.release('/api/extensions', {'error': 'Primary offline'}, 503)
             else:
                 skills.release('/api/extensions', {'skills': [WEATHER], 'live': {}})
             page.wait_for_function("!document.querySelector('#skills-refresh').disabled")
-            assert page.evaluate("keptMenu === document.querySelector('body > .skills-card-menu-dialog[open]')")
+            assert page.evaluate("keptMenu === document.querySelector('body > .skills-card-menu-dialog:not([data-leaving])[open]')")
         page.keyboard.press('Escape')
-        assert page.locator('body > .skills-card-menu-dialog[open]').count() == 0
+        assert page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]').count() == 0
     finally:
         if skills:
             skills.close(browser)
@@ -468,7 +468,7 @@ def test_skills_tabs_and_bottom_edge_menu(skills_browser, browser_name, width):
         trigger.scroll_into_view_if_needed()
         trigger.focus()
         trigger.press("Enter")
-        menu = page.locator('.skills-card-menu-dialog[open]')
+        menu = page.locator('.skills-card-menu-dialog:not([data-leaving])[open]')
         menu.wait_for(state="visible")
         assert page.locator(':focus').get_attribute("role") == "menuitem"
         page.keyboard.press("End")
@@ -483,7 +483,7 @@ def test_skills_tabs_and_bottom_edge_menu(skills_browser, browser_name, width):
         }""")
         capture(page, browser_name, width, "bottom-edge-menu")
         page.keyboard.press("Escape")
-        assert page.locator('.skills-card-menu-dialog[open]').count() == 0
+        assert page.locator('.skills-card-menu-dialog:not([data-leaving])[open]').count() == 0
         assert trigger.evaluate("element => element === document.activeElement")
 
         trigger.press("Enter")
@@ -492,7 +492,7 @@ def test_skills_tabs_and_bottom_edge_menu(skills_browser, browser_name, width):
         dialog = page.locator(".confirm-dialog")
         dialog.wait_for(state="visible")
         assert "Delete" in dialog.inner_text()
-        assert page.locator('.skills-card-menu-dialog[open]').count() == 0
+        assert page.locator('.skills-card-menu-dialog:not([data-leaving])[open]').count() == 0
         page.keyboard.press("Escape")
         dialog.wait_for(state="detached")
         assert trigger.evaluate("element => element === document.activeElement")

@@ -48,8 +48,7 @@ def _read_source(root, entry, ref):
 def observe_run(root, entry, detail: dict) -> bool:
     """Publish exact execution/question facts, never collection, control or consumption."""
     summary = c.summary_of(detail)
-    named = summary.get("runId") or summary.get("id") or detail.get("runId")
-    if named and str(named) != entry.run_id:
+    if c.names_another_run(detail, entry.run_id):  # a run held by its job id is still this run
         raise ValueError("execution observation belongs to another run")
     state = str(summary.get("state") or "")
     seq = detail.get("lastSeq", 0)

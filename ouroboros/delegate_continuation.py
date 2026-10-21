@@ -522,19 +522,20 @@ def terminal_continuity(run_id: str, summary: Dict[str, Any]) -> Dict[str, Any]:
     facts: Dict[str, Any] = {}
     if isinstance(summary.get("resumable"), dict):
         facts["resumable"] = summary["resumable"]
-    lines = [_receipt_line(run_id, row) for row in summary.get("continuity") or () if isinstance(row, dict)]
+    names = custody.held_run_names({"summary": summary}, run_id)  # a run held by its job id
+    lines = [_receipt_line(names, row) for row in summary.get("continuity") or () if isinstance(row, dict)]
     if lines:
         facts["continuity"] = lines
     return facts
 
 
-def _receipt_line(run_id: str, row: Dict[str, Any]) -> str:
+def _receipt_line(names: frozenset, row: Dict[str, Any]) -> str:
     """One continued try: carrier, accounts, memory, attested model, and every non-default flag."""
     source = row.get("from") if isinstance(row.get("from"), dict) else {}
     target = row.get("to") if isinstance(row.get("to"), dict) else {}
     parts = [f"try {row.get('tryIndex')} ({row.get('attemptId') or '?'}): {row.get('carrier') or '?'} "
              f"after {row.get('cause') or '?'}"
-             + (f" of run {source.get('runId')}" if source.get("runId") and source.get("runId") != run_id else ""),
+             + (f" of run {source.get('runId')}" if source.get("runId") and str(source["runId"]) not in names else ""),
              f"profile {source.get('profileId') or '?'} -> {target.get('profileId') or '?'}",
              f"memory {row.get('memory') or 'unknown'}",
              f"model {row.get('observedModel') or 'unattested'}"]

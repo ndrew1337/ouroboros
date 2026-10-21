@@ -454,12 +454,16 @@ def test_loop_acks_each_delivered_wake_but_exposes_only_questions_its_text_carri
     assert result.status == "error" and result.meta == {"supervision_wake_id": "wake"}
     text = render_result_view(result.text, head_chars=80, tail_chars=80)[0] if view == "partial" else result.text
     _deliver(ctx, text, monkeypatch, partial=view == "partial", error=True, tool="delegate_wait", meta=result.meta)
+    assert sup._load_state(ctx, "")["pending_wake"], "delivery alone cannot ACK unsaved content"
+    from ouroboros.working_checkpoint import flush_content_acks
+
+    flush_content_acks(ctx)  # The incorporated save boundary; _deliver only appends.
     pending = sup._load_state(ctx, "").get("pending_wake")
     if view == "partial":
         assert pending and sleep_custody.seen_interactions(ctx) == {}, "a partial view proves no delivery"
     else:
         assert not pending, "a delivered refusal wake is acknowledged, so it never replays"
-        assert sleep_custody.seen_interactions(ctx) == {"run-a": ["q1"] if view == "complete_refusal" else []}
+        assert sleep_custody.seen_interactions(ctx) == ({"run-a": ["q1"]} if view == "complete_refusal" else {})
 
 
 def test_supervision_id_without_delivered_question_cannot_mark_sleep_exposure(tmp_path):
@@ -471,7 +475,7 @@ def test_supervision_id_without_delivered_question_cannot_mark_sleep_exposure(tm
     sup._save_state(ctx, {"run_id": "run-a", "pending_wake": {"wake_id": "wake",
         "interaction_ids": ["q1"], "payload": payload}})
     assert sup.acknowledge_pending_wake(ctx, {"supervision_wake_id": "wake"})
-    assert sleep_custody.seen_interactions(ctx).get("run-a") == []
+    assert sleep_custody.seen_interactions(ctx) == {}
     assert sup._load_state(ctx, "")["interaction_acknowledged_ids"] == ["q1"], "old ACK is not sleep exposure"
 
 

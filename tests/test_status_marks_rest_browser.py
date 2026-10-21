@@ -15,11 +15,12 @@ from tests import test_subscription_setup_browser as setup_browser
 subscription_ui = setup_browser.subscription_ui
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
-# What a token resolves to on this page, as the browser serializes the colour of a property.
-PROBE = """window.__probe = (value, property = 'color') => {
+# What a token resolves to on this page (or inside `host`, where a surface's material restates it), as the browser
+# serializes the colour of a property.
+PROBE = """window.__probe = (value, property = 'color', host = document.body) => {
     const el = document.createElement('i');
     el.style[property] = value;
-    document.body.append(el);
+    host.append(el);
     const resolved = getComputedStyle(el)[property];
     el.remove();
     return resolved;
@@ -47,7 +48,7 @@ QUESTIONS = [
     ("unanswered", {"state": "open"}, "neutral", "--text-meta"),
     ("continued", {"state": "open", "wait_for_answer": True, "wait_ended_at": "2026-10-19T10:00:00Z"}, "neutral", "--text-meta"),
     ("finished", {"state": "expired_terminal", "wait_for_answer": True}, "neutral", "--text-meta"),
-    ("answered", {"state": "answered", "answered_index": 0}, "ok", "--green"),
+    ("answered", {"state": "answered", "answered_index": 0}, "ok", "--tone-recorded-mark"),
     ("replaced", {"state": "superseded"}, "ink", "--text-disabled"),
     ("closed", {"state": "closed", "closed_reason": "Closed by the owner."}, "ink", "--text-disabled"),
     ("unreadable", {"state": "unknown"}, "neutral", "--text-meta"),
@@ -71,12 +72,15 @@ def test_question_head_mark_is_amber_only_while_the_task_waits(subscription_ui, 
         const decision = createChatDecision({ apiFetch: () => new Promise(() => {}), showToast: () => {},
             frameNode: media.bubbleFrameNode });
         const column = document.querySelector('#chat-messages');
+        // The tokens as they resolve beside the mark: inside the dark Ouroboros voice its own inks (ui.css).
+        const tokens = ['--amber', '--text-meta', '--text-disabled', '--tone-recorded-mark'];
         const read = (node) => {
             const mark = node.querySelector('.chat-quiz-status > .status-mark.chat-quiz-mark');
             const box = mark.getBoundingClientRect();
             return { shape: mark.dataset.shape, hue: mark.dataset.hue, width: box.width, height: box.height,
                 color: getComputedStyle(mark.querySelector('i')).backgroundColor,
-                word: node.querySelector('.chat-quiz-status-text').textContent };
+                word: node.querySelector('.chat-quiz-status-text').textContent,
+                tokens: Object.fromEntries(tokens.map((t) => [t, __probe(`var(${t})`, 'color', mark.parentElement)])) };
         };
         window.__readQuizMark = read;
         const out = {};
@@ -100,11 +104,15 @@ def test_question_head_mark_is_amber_only_while_the_task_waits(subscription_ui, 
         mark = marks[quiz_id]
         assert (mark["shape"], mark["hue"]) == ("dot", hue), (quiz_id, mark)
         assert mark["width"] == pytest.approx(7, abs=0.5) and mark["height"] == pytest.approx(7, abs=0.5), mark
-        assert mark["color"] == page.evaluate("t => __probe(`var(${t})`)", token), (quiz_id, mark, token)
+        assert mark["color"] == mark["tokens"][token], (quiz_id, mark, token)
     assert marks["waiting"]["word"] == "Waiting for your answer"
     assert marks["finished"]["word"] == "Unanswered · task finished" and marks["closed"]["word"] == "Question closed"
     assert marks["waiting"]["color"] != marks["unanswered"]["color"], "the owner's dot must differ from neutral"
-    assert marks["sending"]["color"] == page.evaluate("__probe('var(--text-meta)')"), marks["sending"]
+    assert marks["sending"]["color"] == marks["sending"]["tokens"]["--text-meta"], marks["sending"]
+    # The recorded answer's dot is the owner's own (DESIGN "Quiz card"): the ok green on white, his blue on dark.
+    owner = page.evaluate("__probe('var(--user-sender)')")
+    green = page.evaluate("__probe('var(--green)')")
+    assert marks["answered"]["color"] == (green if theme == "light" else owner), marks["answered"]
 
 
 SKILL = {"name": "demo", "type": "extension", "version": "1.0.0", "description": "Demo skill", "enabled": False,

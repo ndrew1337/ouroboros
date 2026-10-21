@@ -21,6 +21,8 @@ from ouroboros._usage_rows import REVIEW_ATTRIBUTION_KEYS  # noqa: F401 -- deleg
 from ouroboros.delegate_custody_usage import (
     disclosed_spend,
     disclosed_tokens,  # noqa: F401 -- public custody vocabulary used by collection
+    held_run_names,
+    names_another_run,
     project_retirement_lock,
     summary_of,
 )
@@ -1399,10 +1401,12 @@ __all__ = [
     "disclosed_spend",
     "disposition_lock_path",
     "emit",
+    "held_run_names",
     "idempotency_key",
     "is_terminal",
     "invocation_record",
     "lookup",
+    "names_another_run",
     "new_invocation_id",
     "open_containment_faults",
     "open_runs",

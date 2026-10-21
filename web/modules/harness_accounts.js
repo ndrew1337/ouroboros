@@ -39,7 +39,7 @@
 // Pure helpers up top are node-tested without a DOM.
 
 import { apiFetch } from './api_client.js';
-import { createAccountResourcesController, resourcePanelId, resourceReadGap,
+import { capabilityMarkup, createAccountResourcesController, resourcePanelId, resourceReadGap,
     resourceSummary, targetFor } from './account_resources.js';
 import {
     FACET_ACCOUNTS,
@@ -55,6 +55,7 @@ import {
     accountName,
     accountRows,
     bindStatusSurface,
+    capabilityMarksReadFailedAt,
     claudexorPreparationLine,
     claudexorStatus,
     facetReadState,
@@ -1044,6 +1045,7 @@ export function renderAgentAccountsSection() {
                 an earlier version may require a download. Retry a waiting task separately.
             </div>
             <div id="harness-accounts-error" class="settings-inline-status" data-tone="error" hidden></div>
+            <div id="harness-model-marks-note" class="settings-inline-status" data-tone="muted" hidden></div>
             <div id="harness-accounts-groups" class="agent-family-list"></div>
             <div id="harness-login-card"></div>
             <div class="settings-toolbar">
@@ -1099,7 +1101,7 @@ function rowHtml(row, payload, facets = {}) {
                 <strong>${escapeHtml(name)}</strong>
                 <span class="ui-status" data-tone="${badge.tone}">${escapeHtml(badge.label)}</span>
             </div>
-            <div class="harness-account-meta muted">${escapeHtml(meta)}</div>
+            <div class="harness-account-meta muted">${escapeHtml(meta)}${capabilityMarkup(row, payload)}</div>
             <div class="harness-account-actions">
                 <button type="button" class="btn btn-default" data-resources aria-expanded="false" aria-controls="${escapeHtml(resourcePanelId(row))}">▸ Resources</button>
                 <button type="button" class="btn btn-default" data-harness-login>${escapeHtml(loginAction.label)}</button>${rowActions}
@@ -1171,6 +1173,13 @@ function renderRows() {
         errorBox.dataset.tone = state.removeError ? 'error' : 'warn';
     }
     const payload = state.store.snapshot || {};
+    const marksNote = document.getElementById('harness-model-marks-note');
+    if (marksNote) {
+        const failedAt = capabilityMarksReadFailedAt(payload);
+        marksNote.hidden = !failedAt;
+        marksNote.textContent = failedAt
+            ? `Temporary model marks could not be read \u00b7 checked ${formatRelativeAge(Date.parse(failedAt), 'just now')}` : '';
+    }
     const accountsRead = state.store.facet(FACET_ACCOUNTS);
     const quotaRead = state.store.facet(FACET_QUOTA);
     // The family-mounted login card lives INSIDE this container, so the

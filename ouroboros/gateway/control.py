@@ -526,7 +526,7 @@ def _stop_repo_writers(reason: str) -> list[str]:
             return_ids = prepare_restart_returns(DRIVE_ROOT, worker_state.RUNNING, list(worker_state.PENDING),
                                                 transaction_id=restart_transaction_id,
                                                 direct=worker_state.direct_chat_turns(),
-                                                owner_wait_ids=preserve_running_task_ids)
+                                                owner_wait_ids=owner_wait_ids)
         except Exception as exc:
             open_repo_writer_admission()
             log.warning("Managed update owner-wait handoff preparation failed", exc_info=True)

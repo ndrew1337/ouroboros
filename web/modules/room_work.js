@@ -27,7 +27,10 @@ import {
     OUTCOME_TONES, amberNote, clock, openWorkControls, workControls, workMenuActions, workQuestion, workRowView,
 } from './work_status.js';
 import { showToast } from './toast.js';
+import { motionMs, reducedMotion } from './motion.js';
 
+// The closed Shade rises back under the bar as it fades (room_work.css rw-unfold, reversed).
+const SHADE_FOLDS = [{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-6px)' }];
 const NAME_CHARS = 160;
 const REPLY_CHARS = 60;
 const GROUP_RANK = { needs: 0, progress: 1, waiting: 2, unconfirmed: 3, latest: 4 };
@@ -724,11 +727,29 @@ export function createRoomWork({
     }
 
     // ---- behaviour
+    // The Shade folds away the way it unfolded: closed at once (its state, its focus), it stays drawn, inert, until its
+    // motion ends; opened again meanwhile, it stops folding where it is.
+    let folding = null;
+    function foldAway() {
+        const ms = motionMs('--motion-fade');
+        if (!ms || reducedMotion() || typeof surface.animate !== 'function') { surface.hidden = true; return; }
+        surface.inert = true;
+        const fold = surface.animate(SHADE_FOLDS, { duration: ms, easing: 'ease-in', fill: 'forwards' });
+        folding = fold;
+        fold.finished.then(() => { if (folding === fold && !open) surface.hidden = true; }, () => {}).finally(() => {
+            if (folding !== fold) return;
+            folding = null;
+            surface.inert = false;
+            fold.cancel();
+        });
+    }
+
     function openSurface(viaKeyboard = false) {
         if (open || destroyed || trigger.disabled || trigger.hidden) return;
         open = true;
         frozen = new Map();
         order = [];
+        if (folding) { const fold = folding; folding = null; surface.inert = false; fold.cancel(); }
         surface.hidden = false;
         openHost?.setAttribute('data-rw-open', '');
         render();
@@ -742,7 +763,7 @@ export function createRoomWork({
         if (!open) return;
         open = false;
         closeTaskControlMenu();
-        surface.hidden = true;
+        foldAway();
         openHost?.removeAttribute('data-rw-open');
         frozen = null;
         order = [];

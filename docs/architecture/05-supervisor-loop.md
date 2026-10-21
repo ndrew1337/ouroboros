@@ -92,7 +92,7 @@ Cooperative project checkpointing (`supervisor/events_coop_checkpoint.py`) runs 
 
 ### Bridge intake and commands
 
-Bridge intake retains identity, transport and durable acceptance; failed handlers requeue only their unprocessed memory tail, never accepted rows. Room input goes to its sole live reader, including a warm question wait, excluding queued/held work. Explicit tell owes mail without resuming. Answers try the reading asker, then proven admitted successors under each admission lock, then named fresh-head ingress at the saved publication address. Mail stays owed until saved-read acknowledgement. Panic has emergency ingress.
+Bridge intake retains identity, transport and durable acceptance; failed handlers requeue only their unprocessed memory tail, never accepted rows. Room input goes to its sole live reader, a warm question wait included, queued/held work not. Tell and answers owe mail to living work until its saved read, never resuming it: the asker, then proven admitted successors under each admission lock; else named ingress at the saved publication address for the asker's earliest live late-answer head or a fresh head. Panic has emergency ingress.
 
 The bridge recognizes `/panic`, `/restart`, `/review`, `/evolve [on|off]`, `/bg [start|stop|status]` and `/status`; other text enters ordinary agent routing. External transports invoke them only with positive owner identity and a transport-specific owner-chat binding known current; unknown refuses and registers nobody; Panic keeps its positively observed immutable binding until owner Reset closes it (`PanicIngress`). Commands reuse runtime-mode, queue, cancellation and typed-result authority. Archive readers keep rotated runtime logs' timelines (§1).
 

@@ -427,6 +427,62 @@ test('applyQuizStateFrame settles an existing card and ignores unknown ids', asy
     }
 });
 
+// The owner's recorded answer names itself (question_presentation.paintChosenAnswer): after its label a spoken name and an
+// aria-hidden word, both `Your choice`; ui.css shows the word only where the theme draws it.
+const CHOSEN = [['chat-quiz-option-chosen-name', 'chat-quiz-option-chosen-cue'], 'Your choice', 'Your choice', 'true'];
+const chosenParts = (card) => card.querySelectorAll('.chat-quiz-option').map((button) => {
+    const name = button.querySelector('.chat-quiz-option-chosen-name');
+    const cue = button.querySelector('.chat-quiz-option-chosen-cue');
+    if (!name && !cue) return null;
+    const after = button.children.map((child) => child.className);
+    const label = after.indexOf('chat-quiz-option-label');
+    return [after.slice(label + 1, label + 3), name?.textContent, cue?.textContent, cue?.getAttribute('aria-hidden')];
+});
+
+test('the recorded answer says `Your choice` after its label, moves with a corrected record and repaints nothing unchanged', () => {
+    const fx = fixture();
+    try {
+        const card = fx.decision.buildQuizCard({ ...WS_MSG, options: [{ label: 'Yes', recommended: true }, { label: 'No', detail: 'wait for CI' }] });
+        const root = {};
+        assert.deepEqual(chosenParts(card), [null, null], 'an open question names no choice');
+        assert.equal(fx.decision.applyQuizStateFrame(root, { quiz_id: 'qz-1', task_id: 't-1', state: 'answered', answered_index: 1 }), true);
+        assert.deepEqual(chosenParts(card), [null, CHOSEN]);
+        const no = card.querySelectorAll('.chat-quiz-option')[1];
+        assert.deepEqual(no.children.map((child) => child.className),
+            ['chat-quiz-option-label', 'chat-quiz-option-chosen-name', 'chat-quiz-option-chosen-cue', 'chat-quiz-option-detail']);
+        const cue = no.querySelector('.chat-quiz-option-chosen-cue');
+        assert.equal(fx.decision.applyQuizStateFrame(root, { quiz_id: 'qz-1', task_id: 't-1', state: 'answered', answered_index: 1 }), false,
+            'the same record writes nothing');
+        assert.equal(no.querySelector('.chat-quiz-option-chosen-cue'), cue);
+        // The canonical record names another option: the words leave the old one and follow the new one.
+        assert.equal(fx.decision.applyQuizStateFrame(root, { quiz_id: 'qz-1', task_id: 't-1', state: 'answered', answered_index: 0 }), true);
+        assert.deepEqual(chosenParts(card), [CHOSEN, null]);
+        assert.deepEqual(card.querySelectorAll('.chat-quiz-option')[0].children.map((child) => child.className),
+            ['chat-quiz-option-label', 'chat-quiz-option-chosen-name', 'chat-quiz-option-chosen-cue', 'chat-quiz-option-recommended'],
+            'the owner\'s choice before the asker\'s recommendation');
+    } finally { fx.restore(); }
+});
+
+test('a comment-only answer and an answer still being sent name no chosen option', async () => {
+    let finish;
+    const fx = fixture({ fetchImpl: () => new Promise((resolve) => { finish = resolve; }) });
+    try {
+        const own = fx.decision.buildQuizCard({ ...WS_MSG, quiz_id: 'qz-own' });
+        fx.decision.applyQuizStateFrame({}, { quiz_id: 'qz-own', task_id: 't-1', state: 'answered', comment: 'neither — use duckdb' });
+        assert.equal(own.dataset.state, 'answered');
+        assert.deepEqual(chosenParts(own), [null, null], 'the owner\'s own words chose no option');
+        const card = fx.decision.buildQuizCard(WS_MSG);
+        const button = card.querySelectorAll('.chat-quiz-option')[1];
+        button.click();
+        assert.ok(button.classList.contains('pending-choice'));
+        assert.deepEqual(chosenParts(card), [null, null], 'a pending choice is not a recorded one');
+        finish({ ok: true, status: 200, json: async () => ({ ok: true, state: 'answered', answered_index: 1 }) });
+        await turn();
+        assert.equal(card.dataset.state, 'answered');
+        assert.deepEqual(chosenParts(card), [null, CHOSEN], 'the recorded answer names itself once confirmed');
+    } finally { fx.restore(); }
+});
+
 test('a live quiz_state frame carries the owner comment onto the card like replay does (#471)', () => {
     const fx = fixture();
     try {
@@ -750,6 +806,21 @@ test('a routing click posts the routing decision id with a STABLE request id', a
         assert.equal(card.dataset.state, 'answered');
         assert.ok(card.querySelectorAll('.chat-quiz-option')[1].classList.contains('chosen'));
         assert.deepEqual(markOf(card), ['dot', 'ok', false]);
+        assert.deepEqual(chosenParts(card), [null, CHOSEN], 'the routed destination is the owner\'s choice');
+    } finally { fx.restore(); }
+});
+
+test('a destination another click is still routing is marked, and named `Your choice` only once it is recorded', async () => {
+    const fx = fixture({ fetchImpl: async () => ({ ok: false, status: 409, json: async () => ({ state: 'pending', answered_index: 1 }) }) });
+    try {
+        const bubble = routingBubble('cm-7');
+        fx.decision.renderRoutingDecision(bubble, ROUTING_ANNOTATION);
+        const card = bubble.querySelector('.chat-routing-card');
+        card.querySelectorAll('.chat-quiz-option')[0].click();
+        await turn();
+        assert.equal(card.dataset.state, 'pending');
+        assert.ok(card.querySelectorAll('.chat-quiz-option')[1].classList.contains('chosen'), 'the destination being routed');
+        assert.deepEqual(chosenParts(card), [null, null], 'not yet the owner\'s recorded choice');
     } finally { fx.restore(); }
 });
 

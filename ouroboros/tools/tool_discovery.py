@@ -106,12 +106,9 @@ def list_available_tools(
     that namespace, an MCP row as ``raw MCP name → callable name``. It describes
     the catalog observed now, not what an earlier request carried.
     """
-    from ouroboros.extension_liveness import liveness_observation
-
-    with liveness_observation():  # one look at the catalog: both passes share the skill inventory
-        schemas = registry.schemas()
-        omissions = registry.capability_omissions()
-        callable_rows = {row["name"]: row for row in registry.callable_rows() or []}
+    schemas = registry.schemas()
+    omissions = registry.capability_omissions()
+    callable_rows = {row["name"]: row for row in registry.callable_rows() or []}
     rows = [
         {**callable_rows[row["name"]], "loaded": row["residency"] == "loaded",
          "description": (" ".join(callable_rows[row["name"]]["raw_description"].split())[:120]

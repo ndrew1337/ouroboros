@@ -131,12 +131,12 @@ def _record_startup_refusal(
 
 
 def bootstrap_before_context(ctx: Any, task: Mapping[str, Any], dispatch: Any) -> str:
-    """Start the selected session leaf before the first model round (charter).
+    """Start a fresh leaf, or retain saved supervision for restoration before admission.
 
     An ``agent_session`` child means "this work executes on the harness": the
     substrate choice was the PARENT's, made by selecting the row, so the host
     executes it — freeze the route, start the exact leaf, enter supervision —
-    before any metered round (owner decisions 2026-08-28, N1=A). The nanny's
+    before any metered round for fresh work. Saved cognition chooses its next operation. The nanny's
     model rounds exist for judgment on meaningful wakes. Blocked routes and
     definite start refusals end the child unrun and typed at $0; custody
     uncertainty always wakes the model instead. Proven recovery handoffs are
@@ -157,45 +157,57 @@ def bootstrap_before_context(ctx: Any, task: Mapping[str, Any], dispatch: Any) -
     # Hydrate immutable route/work-order authority before every recovery
     # branch. A recovered or already-settled physical run must never fall
     # back to the generic selector/prompt path on the resumed nanny.
+    from ouroboros.owner_wait import governing_continuation
+
+    continuation = governing_continuation(task)
     actor_ready = _prepare_actor_first_bootstrap(ctx, task, dispatch)
+    if continuation and bool(getattr(dispatch, "blocked", False)) and str(
+            getattr(getattr(dispatch, "executor_resolution", None), "reason", "")) in {
+                "configured_session_route_invalid", "parent_cognitive_route_missing"}:
+        _record_startup_refusal(ctx, task, reason=dispatch.executor_resolution.reason)
+        return ""
     recovery = _adopt_recovery_handoff(ctx, task)
     if recovery:
+        # Every restored path, recovery_required included, reads its physical history locally.
+        _ground_restored_activity(ctx, task)
         return _with_coordination_context(ctx, recovery)
     actor_bootstrap = getattr(ctx, "_configured_actor_bootstrap", {})
     actor_bootstrap = actor_bootstrap if isinstance(actor_bootstrap, dict) else {}
-    if isinstance(task.get("_budget_pause_resume"), dict):
-        # Same-ID budget continuation (#1196): the paused attempt's own episode
-        # already decided this leaf's physical start and the restored transcript
-        # carries its receipts. The host hydrates the durable custody facts and
-        # mints NO second invocation over a settled or disposed leaf — a
-        # replacement start is the model's explicit decision after admission.
+    if continuation:
+        # Even an unreadable locator or a zero-run episode restores cognition
+        # before choosing a start. Local invalid-route/cognitive faults stay real.
         from ouroboros import delegate_custody as custody
-        from ouroboros.delegate_evidence import task_execution_evidence
 
         try:
-            evidence = task_execution_evidence(
-                custody.custody_root(ctx), str(getattr(ctx, "task_id", "") or task.get("id") or ""))
+            from ouroboros.delegate_custody_current import task_snapshot
+
+            known = task_snapshot(custody.custody_root(ctx), str(getattr(ctx, "task_id", "") or task.get("id") or ""))
+            facts = {
+                "runs": [{"run_id": run.run_id, "settled": run.settled,
+                          "terminal_state": run.terminal_state, "liveness": "unobserved"}
+                         for run in known["runs"].values() if not run.review_owned],
+                "pending_invocations": [{"pending_invocation_id": item["invocation_id"],
+                                         "retry_of": item["invocation_id"]}
+                                        for item in known["pending"] if not custody.review_owned_source(item.get("source"))],
+            }
         except Exception:
-            evidence = {"evidence_read_failed": True}
-        evidence = evidence if isinstance(evidence, dict) else {"evidence_read_failed": True}
+            facts = {"custody_read": "failed"}
+        evidence = _ground_restored_activity(ctx, task, unreadable="custody_read" in facts)
         started = int(evidence.get("delegated_runs_started") or 0)
-        if started:
-            _mark_physical_activity(ctx)
-        elif evidence.get("evidence_read_failed"):
-            # Unreadable custody may hide a prior run: UNKNOWN fences a new start.
-            actor_bootstrap.update({
-                "zero_run_evidence_status": "unknown",
-                "zero_run_evidence_gaps": ["custody_evidence_unreadable"],
-                "exact_start_pending": False,
-            })
         try:
             payload = json.loads(actor_ready)
         except (TypeError, ValueError):
             payload = {}
-        payload["status"] = "configured_session_budget_continuation"
+        actor_bootstrap["exact_start_pending"] = False
+        payload["startup"]["exact_start_pending"] = False
+        payload["status"] = ("configured_session_budget_continuation" if continuation == "exact_pause"
+                             else "configured_session_continuation")
+        payload["availability"] = dict(getattr(dispatch, "availability", None) or {})
         payload["continuation"] = {
-            "delegated_runs_started": started, "physical_start": "not_repeated",
+            "delegated_runs_started": None if evidence.get("evidence_read_failed") else started,
+            "physical_start": "not_repeated",
             "custody_read": "failed" if evidence.get("evidence_read_failed") else "ok",
+            "liveness": "unobserved", **facts,
         }
         return _with_coordination_context(ctx, json.dumps(payload, ensure_ascii=False, indent=2))
     fenced = (
@@ -318,6 +330,15 @@ def _adopt_recovery_handoff(ctx: Any, task: Mapping[str, Any]) -> str:
         return json.dumps({
             "status": "configured_session_recovery_wake", "recovery": adoption,
         }, ensure_ascii=False, indent=2)
+    if status == "adopted" and adoption.get("liveness") == "unobserved":
+        if adoption.get("run_id"):
+            _mark_physical_activity(ctx)
+        else:
+            ctx._configured_actor_bootstrap["exact_start_pending"] = False
+        return json.dumps({
+            "status": "configured_session_continuation", "recovery": adoption,
+            "wake": adoption.get("wake") or {},
+        }, ensure_ascii=False, indent=2)
     if status == "settled_recovered":
         _mark_physical_activity(ctx)
         return json.dumps({
@@ -361,6 +382,35 @@ def _mark_physical_activity(ctx: Any) -> None:
     if isinstance(bootstrap, dict):
         bootstrap["physical_started"] = True
         bootstrap["exact_start_pending"] = False
+
+
+def _ground_restored_activity(ctx: Any, task: Mapping[str, Any], *, unreadable: bool = False) -> dict[str, Any]:
+    """Ground a restored episode's physical history in local custody, never a probe.
+
+    Any started non-review run is activity. Unreadable custody may hide one, so
+    it fences a new start as UNKNOWN instead of reading as zero.
+    """
+    from ouroboros import delegate_custody as custody
+    from ouroboros.delegate_evidence import task_execution_evidence
+
+    try:
+        evidence = task_execution_evidence(
+            custody.custody_root(ctx), str(getattr(ctx, "task_id", "") or task.get("id") or ""))
+    except Exception:
+        evidence = None
+    evidence = evidence if isinstance(evidence, dict) else {"evidence_read_failed": True}
+    if unreadable:
+        evidence["evidence_read_failed"] = True
+    bootstrap = getattr(ctx, "_configured_actor_bootstrap", None)
+    if int(evidence.get("delegated_runs_started") or 0):
+        _mark_physical_activity(ctx)
+    elif evidence.get("evidence_read_failed") and isinstance(bootstrap, dict) and not bootstrap.get("physical_started"):
+        bootstrap.update({
+            "zero_run_evidence_status": "unknown",
+            "zero_run_evidence_gaps": ["custody_evidence_unreadable"],
+            "exact_start_pending": False,
+        })
+    return evidence
 
 
 def actor_first_unresolved_fact(
@@ -698,7 +748,8 @@ def _prepare_actor_first_bootstrap(
         "canonical_work_order": work_order,
         "work_order_fingerprint": work_order_fingerprint,
         "work_order_chars": work_order_chars,
-        "route_available": not bool(getattr(dispatch, "blocked", False)),
+        "route_available": (None if (getattr(dispatch, "availability", None) or {}).get("status") == "unobserved"
+                            else not bool(getattr(dispatch, "blocked", False))),
         "exact_start_pending": True,
         "physical_started": False,
         # The dispatch's effort decision for the LEAF ({requested, applied, source}): the
@@ -763,7 +814,7 @@ def _prepare_actor_first_bootstrap(
 
 
 def append_startup_receipt(
-    ctx: Any, messages: list[dict[str, Any]], startup_wake: str,
+    ctx: Any, messages: list[dict[str, Any]], startup_wake: str, seen: Optional[set] = None,
 ) -> None:
     if not startup_wake:
         return
@@ -789,6 +840,15 @@ def append_startup_receipt(
             "wait/answer/cancel controls, and start a replacement only after its "
             "terminal settlement is verified."
         )
+    elif receipt_status in {"configured_session_continuation", "configured_session_budget_continuation"}:
+        guidance = (
+            "This saved episode is continuing; the host did not start another leaf. "
+            "Liveness is unobserved. Use delegate_wait for a known run, or retry_of with "
+            "the exact pending_invocation_id to resolve a pending start. Use the restored "
+            "conversation and custody facts to decide; do not repeat completed effects "
+            "or replace a possibly live run. A further delegate_start remains your decision "
+            "under the existing custody checks."
+        )
     else:
         # Everything else is unresolved physical custody: a durable zero-run
         # fence, unreadable receipt evidence, unfinished recovery, or a start
@@ -803,16 +863,37 @@ def append_startup_receipt(
             "delegation_zero_run decision (incomplete|unknown). This receipt "
             "never authorizes native/API fallback."
         )
+    delivered = _startup_view(
+        startup_wake, receipt, getattr(ctx, "_loop_mailbox_seen_ids", None) if seen is None else seen)
     messages.append({
         "role": "user",
         "content": (
-            "[CONFIGURED SESSION STARTUP / WAKE RECEIPT]\n" + startup_wake
+            "[CONFIGURED SESSION STARTUP / WAKE RECEIPT]\n" + delivered
             + "\n" + guidance
         ),
     })
-    from ouroboros.delegate_supervision import acknowledge_pending_wake
+    from ouroboros.delegate_supervision import acknowledge_pending_wake, stage_pending_wake_exposure
+    from ouroboros.working_checkpoint import defer_content_ack
 
-    acknowledge_pending_wake(ctx, startup_wake)
+    if seen is not None:
+        ctx._loop_mailbox_seen_ids = seen
+    stage_pending_wake_exposure(ctx, delivered)
+    # The canonical receipt, not its narrowed view, names every id the ACK covers.
+    defer_content_ack(ctx, lambda: acknowledge_pending_wake(ctx, startup_wake))
+    ctx._configured_startup_wake = ""
+
+
+def _startup_view(raw: str, receipt: Any, seen: Any) -> str:
+    """The receipt as delivered: one wake copy, without mail the restored transcript holds."""
+    if not isinstance(receipt, dict) or not isinstance(receipt.get("wake"), dict):
+        return raw
+    from ouroboros.delegate_supervision import unseen_wake_view
+
+    view = {**receipt, "wake": unseen_wake_view(receipt["wake"], seen)}
+    recovery = view.get("recovery")
+    if isinstance(recovery, dict) and recovery.get("wake") == receipt["wake"]:
+        view["recovery"] = {key: value for key, value in recovery.items() if key != "wake"}
+    return raw if view == receipt else json.dumps(view, ensure_ascii=False, indent=2)
 
 
 __all__ = [

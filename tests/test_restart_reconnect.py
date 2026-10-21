@@ -86,9 +86,12 @@ def test_server_enables_ws_ping_and_heartbeat():
     assert "ws_ping_timeout=20" in server_source
 
 
-def test_index_includes_reconnect_overlay():
-    source = _read("web/index.html")
-    assert 'id="reconnect-overlay"' in source
+def test_a_dropped_socket_is_said_in_the_room_bar_not_behind_a_veil():
+    """Owner 20.10 (4A): no grey veil covers the app while the socket comes back; the room's own bar says
+    Reconnecting… with its ring, and what was sent waits for the connection."""
+    assert 'reconnect-overlay' not in _read("web/index.html")
+    assert 'reconnect-overlay' not in _read("web/modules/ws.js")
+    assert "view('offline', 'Reconnecting…', 'offline', 'ring')" in _read("web/modules/work_status.js")
 
 
 def test_index_page_disables_cache():

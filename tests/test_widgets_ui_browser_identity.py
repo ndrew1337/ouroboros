@@ -411,9 +411,9 @@ def test_widget_policy_menu_uses_shared_keyboard_position_and_page_lifetime(brow
         trigger = card.locator('[data-widget-menu-trigger]')
         card.frame_locator('iframe').locator('#increment').click()
         page.evaluate("window.keptFrame = document.querySelector('iframe')")
-        assert card.locator('.skills-card-menu-dialog').is_hidden()
+        assert card.locator('.skills-card-menu-dialog:not([data-leaving])').is_hidden()
         trigger.click()
-        menu = page.locator('body > .skills-card-menu-dialog[open]')
+        menu = page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]')
         menu.wait_for()
         geometry = menu.evaluate("""menu => {
             const r = menu.getBoundingClientRect();
@@ -428,10 +428,10 @@ def test_widget_policy_menu_uses_shared_keyboard_position_and_page_lifetime(brow
         assert page.evaluate("document.activeElement.dataset.widgetStartMode") == "manual"
         page.keyboard.press('Escape')
         assert trigger.evaluate("trigger => trigger === document.activeElement")
-        assert page.locator('body > .skills-card-menu-dialog').count() == 0
-        assert card.locator('.skills-card-menu-dialog').is_hidden()
+        assert page.locator('body > .skills-card-menu-dialog:not([data-leaving])').count() == 0
+        assert card.locator('.skills-card-menu-dialog:not([data-leaving])').is_hidden()
         page.keyboard.press('Enter')
-        page.locator('body > .skills-card-menu-dialog[open]').wait_for()
+        page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]').wait_for()
         page.keyboard.press('Escape')
         assert trigger.evaluate("trigger => trigger === document.activeElement")
         trigger.click()
@@ -444,7 +444,7 @@ def test_widget_policy_menu_uses_shared_keyboard_position_and_page_lifetime(brow
         page.wait_for_function("document.querySelector('[data-widget-start-mode=retain]').getAttribute('aria-checked') === 'true'")
         trigger.click()
         page.evaluate("showWidgets('chat')")
-        assert page.locator('body > .skills-card-menu-dialog').count() == 0
+        assert page.locator('body > .skills-card-menu-dialog:not([data-leaving])').count() == 0
         assert page.evaluate("document.querySelector('iframe') === keptFrame")
         assert card.frame_locator('iframe').locator('#count').inner_text() == '1'
 
@@ -526,8 +526,8 @@ def test_widget_policy_binding_survives_persisted_pagehide_but_disposes_on_exit(
             dispatchEvent(new PageTransitionEvent('pageshow', {persisted: true}));
         }""")
         trigger.click()
-        page.locator('body > .skills-card-menu-dialog[open]').wait_for()
+        page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]').wait_for()
         page.keyboard.press("Escape")
         page.evaluate("dispatchEvent(new PageTransitionEvent('pagehide', {persisted: false}))")
         trigger.click()
-        assert page.locator('body > .skills-card-menu-dialog[open]').count() == 0
+        assert page.locator('body > .skills-card-menu-dialog:not([data-leaving])[open]').count() == 0

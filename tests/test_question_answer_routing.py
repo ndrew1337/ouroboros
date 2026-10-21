@@ -102,19 +102,32 @@ def test_bound_claim_and_unrelated_room_reader_cannot_take_the_answer(tmp_path, 
     assert answer(app).status_code == 200 and _inbox(bridge) == []
 
 
-def test_held_asker_keeps_hold_and_gets_no_mailbox_answer(tmp_path, monkeypatch):
+def test_held_asker_keeps_its_hold_and_holds_its_answer(tmp_path, monkeypatch):
+    """A living asker that reads no mail now still holds its answer: no new head, the hold stays,
+    and the card says the task reads it when it continues; once released it reads it once."""
     from ouroboros.owner_mailbox import drain_owner_entries
+    from ouroboros.project_dialogue import QUESTION_STATUS
     app, bridge, q, task = runtime(tmp_path, monkeypatch)
     task["_owner_hold"] = True
     response = answer(app)
     assert response.status_code == 200, response.text
-    assert task["_owner_hold"] is True
-    assert not drain_owner_entries(tmp_path, "asker")
-    assert len(_inbox(bridge)) == 1
+    assert task["_owner_hold"] is True and _inbox(bridge) == []
+    assert [entry["msg_id"] for entry in drain_owner_entries(tmp_path, "asker")] == ["quiz_answer:asker:q"]
+    assert debt(tmp_path)["recipient_task_id"] == "asker"
+    assert debt(tmp_path)["reason_code"] == "awaiting_recipient_read"
+    assert QUESTION_STATUS["answer_saved"] == "Answer saved · the task reads it when it continues"
+    task.pop("_owner_hold")
+    ctx, _messages = drain(tmp_path, "asker")
+    assert [r["content"] for r in ctx._owner_directives] == ["exact answer"]
+    assert debt(tmp_path)["state"] == "delivered"
 
 
-def test_last_drain_race_recovers_unread_answer_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize("held", [False, True])
+def test_last_drain_race_recovers_unread_answer_once(tmp_path, monkeypatch, held):
+    """The recipient ended before reading its answer (a held one was stopped): exactly one fresh head."""
     app, bridge, q, task = runtime(tmp_path, monkeypatch)
+    if held:
+        task["_owner_hold"] = True
     assert answer(app).status_code == 200
     assert debt(tmp_path)["state"] == "owed"
     q.RUNNING.clear()
@@ -174,7 +187,7 @@ def mail(root, kind):
 
 
 @pytest.mark.parametrize("hold", ["", "restart_hold", "owner_pause"])
-def test_cold_sleeping_asker_reads_its_own_answer_unless_held(tmp_path, monkeypatch, hold):
+def test_cold_sleeping_asker_holds_its_own_answer_and_wakes_only_unheld(tmp_path, monkeypatch, hold):
     from ouroboros.budget_pause import budget_pause_row
     from ouroboros.owner_pause import fence_closed, read_fence
     from supervisor.events_budget import budget_hold_fact
@@ -189,9 +202,9 @@ def test_cold_sleeping_asker_reads_its_own_answer_unless_held(tmp_path, monkeypa
         assert debt(tmp_path)["recipient_task_id"] == "asker"
         assert woke and budget_pause_row(tmp_path, "asker")["sleep_ready"]["reason"] == "owner_text"
         return
-    # A held or owner-paused sleeper is not the reader: a fresh head answers and the hold stays.
-    assert mail(tmp_path, "quiz_answer") == [] and len(_inbox(bridge)) == 1
-    assert debt(tmp_path)["route"] == "fresh_head" and not woke
+    # A held or owner-paused sleeper holds its answer unread: no fresh head, no wake, the hold stays.
+    assert mail(tmp_path, "quiz_answer") == ["quiz_answer:asker:q"] and _inbox(bridge) == []
+    assert debt(tmp_path)["recipient_task_id"] == "asker" and not woke
     if hold == "restart_hold":
         assert budget_hold_fact(q.PENDING[0])["reason"] == "owner_restart_hold"
     else:
@@ -199,12 +212,13 @@ def test_cold_sleeping_asker_reads_its_own_answer_unless_held(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("held", [False, True])
-def test_cold_sleeping_asker_learns_the_owner_closure_unless_held(tmp_path, monkeypatch, held):
+def test_cold_sleeping_asker_learns_the_owner_closure_and_wakes_only_unheld(tmp_path, monkeypatch, held):
     from supervisor.sleep_wake import wake_ready_sleepers
     app, _bridge, q = sleeping_asker(tmp_path, monkeypatch, "restart_hold" if held else "")
     response = _post(app, {"decision_id": "quiz:asker:q", "request_id": "close", "action": "close"})
     assert response.status_code == 200, response.text
-    assert mail(tmp_path, "quiz_closed") == ([] if held else ["quiz_closed:q"])
+    # A held sleeper finds the closure in its mailbox when it continues; only an unheld one wakes now.
+    assert mail(tmp_path, "quiz_closed") == ["quiz_closed:q"]
     assert any(outcome.get("ok") for outcome in wake_ready_sleepers(q)) is not held
 
 

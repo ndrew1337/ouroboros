@@ -520,11 +520,13 @@
       "acceptance_clause": "The task used up its review rounds before the answer was signed off."
     },
     {
-      "name": "an unknown acceptance reason stays raw rather than borrowing a wrong sentence",
+      "name": "An unknown cause is raw in host text and neutral beside exact details",
       "record": {"status": "completed", "outcome_axes": {"execution": {"status": "ok"}, "review": {"status": "degraded", "acceptance_decision": {"status": "finalized_unaccepted", "reason": "some_future_reason"}}}},
       "phase": "warn",
       "headline": "Done with warnings",
-      "acceptance_clause": "some_future_reason."
+      "acceptance_clause": "some_future_reason.",
+      "described_clause": "The recorded reason has no description yet.",
+      "undescribed": ["some_future_reason"]
     },
     {
       "name": "reviewers approved the earlier revision: Done, and the row says which revision",

@@ -7,12 +7,11 @@ verdict, one listing shares one skill inventory, and the next listing looks agai
 """
 from __future__ import annotations
 
-import pathlib
 
 import pytest
 
 import ouroboros.loop as loop_mod
-from ouroboros import extension_liveness, extension_loader
+from ouroboros import extension_loader
 from ouroboros.tool_policy import initial_tool_schemas
 from ouroboros.tools.registry import ToolRegistry
 
@@ -54,35 +53,6 @@ def test_a_skills_tools_share_one_liveness_verdict(catalog, monkeypatch):
     assert sorted(asked) == ["deskx", "kee"]  # once per skill, not 27 times
     assert {name for name in rows if rows[name]["skill"] == "deskx"} <= names
     assert not {name for name in rows if rows[name]["skill"] == "kee"} & names  # a dead skill's tools are absent
-
-
-def test_one_listing_reads_the_skill_inventory_once_and_the_next_listing_reads_it_again(catalog, monkeypatch):
-    registry, _rows = catalog
-    peers, identities = [], []
-    monkeypatch.setattr(extension_liveness, "discover_skill_peers",
-                        lambda root, repo_path=None: peers.append(repo_path) or ())
-    monkeypatch.setattr(extension_liveness, "discover_skill_identity",
-                        lambda root, name, repo_path=None: identities.append(name) or [])
-    loop_mod._setup_dynamic_tools(registry, initial_tool_schemas(registry, context_mode="nano"), [], context_mode="nano")
-    peers.clear(), identities.clear()
-    registry.execute("list_available_tools", {})
-    assert len(peers) == 1 and sorted(identities) == ["deskx", "kee"]  # schemas() and callable_rows() share it
-    registry.execute("list_available_tools", {})
-    assert len(peers) == 2 and sorted(identities) == ["deskx", "deskx", "kee", "kee"]  # nothing outlives a listing
-
-
-def test_outside_an_observation_each_check_discovers_afresh(tmp_path, monkeypatch):
-    peers = []
-    monkeypatch.setattr(extension_liveness, "discover_skill_peers",
-                        lambda root, repo_path=None: peers.append(1) or ())
-    monkeypatch.setattr(extension_liveness, "discover_skill_identity", lambda root, name, repo_path=None: [])
-    for _ in range(2):
-        assert extension_liveness.is_extension_live("deskx", pathlib.Path(tmp_path)) is False
-    assert len(peers) == 2
-    with extension_liveness.liveness_observation():
-        for _ in range(2):
-            extension_liveness.is_extension_live("deskx", pathlib.Path(tmp_path))
-    assert len(peers) == 3
 
 
 def test_a_skills_name_lists_its_namespace_and_the_overview_names_the_skill(catalog, monkeypatch):

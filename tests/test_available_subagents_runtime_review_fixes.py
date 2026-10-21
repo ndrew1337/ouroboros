@@ -484,7 +484,7 @@ def test_delegate_start_recipes_match_the_fresh_start_schema():
     schema = next(
         entry.schema for entry in delegate.get_tools() if entry.name == "delegate_start"
     )["parameters"]
-    assert schema["required"] == ["prompt"]
+    assert schema["required"] == []  # retry_of may omit prompt (#1614); recipes below still name it
     assert not ({"anyOf", "oneOf", "allOf"} & schema.keys())
     assert "required for direct starts including continue_from" in schema["properties"]["subagent_id"]["description"]
     assert "Omit subagent_id or receive a typed conflict" in (

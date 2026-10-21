@@ -127,7 +127,7 @@ def test_a_staged_reply_is_the_fields_first_line(shell_ui, tmp_path, width):
     facts = {'engine': shell_ui['engine'], 'width': width}
     try:
         page.wait_for_selector('#page-chat .chat-quote--composer', state='attached')
-        # The strip slides in (chat-quote-in, 160 ms): measure where it rests.
+        # The strip opens by its fold (chat_reply.js, the sheet curve): measure where it rests.
         page.evaluate("""() => Promise.all(document.querySelector('#page-chat .chat-quote--composer')
             .getAnimations().map((a) => a.finished))""")
         settle(page)

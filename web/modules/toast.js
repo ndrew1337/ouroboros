@@ -29,7 +29,20 @@ export function showToast(message, tone = 'info', { ttl = 6000, action = null, h
     toast.setAttribute('role', cleanTone === 'danger' ? 'alert' : 'status');
     toast.textContent = message || '';
     const dismiss = () => {
+        if (toast.classList.contains('is-hiding')) return;
+        // It fades where it stood, out of the column, while the toasts that stay glide into its place at once: the
+        // shift is measured here, the glide is the stylesheet's (none with reduced motion).
+        const stay = [...(stack.children)].filter((el) => el !== toast);
+        const before = stay.map((el) => el.offsetTop);
+        Object.assign(toast.style, { position: 'absolute', top: `${toast.offsetTop}px`, right: '0', width: `${toast.offsetWidth}px` });
         toast.classList.add('is-hiding');
+        const moved = stay.filter((el, i) => {
+            const shift = before[i] - el.offsetTop;
+            if (shift) { el.style.setProperty('--toast-shift', `${shift}px`); el.setAttribute('data-gliding', ''); }
+            return shift !== 0;
+        });
+        void stack.offsetHeight;  // the shifted places are where the glide starts
+        moved.forEach((el) => el.removeAttribute('data-gliding'));
         setTimeout(() => toast.remove(), 180);
     };
     if (action?.label && typeof action.run === 'function') {

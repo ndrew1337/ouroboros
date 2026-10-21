@@ -188,7 +188,10 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
 
     Six ways a token is not replayable, each answered by name: no record, another
     task's, already bound, definitely refused (its id is retired — replaying wedges a
-    permanent 409), no canonical body, prompt disagrees. One author for all six.
+    permanent 409), no canonical body or prompt (a legacy_gap included), prompt
+    disagrees. One author for all six. Empty text asserts nothing, so the recorded
+    prompt is replayed (#1614); any other text, whitespace included, must be what the
+    original call was given.
     """
     record = custody.invocation_record(drive, retry_token)
     if record is None:
@@ -197,7 +200,8 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "drive. Start a new run with a plain "
                            "delegate_start(subagent_id=..., prompt=...).",
                            retry_of=retry_token)
-    if record["task_id"] != task_id:
+    # A legacy_gap proves neither its owner nor its body: it stays unrecorded below, never replayed.
+    if record["state"] != "legacy_gap" and record["task_id"] != task_id:
         return None, _fail("delegate_start", "invocation_not_owned",
                            "retry_of names another task's invocation. A delegated start "
                            "may only be retried by the task that requested it.",
@@ -213,8 +217,9 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "id is retired. Start a new run with a plain "
                            "delegate_start(subagent_id=..., prompt=...).",
                            retry_of=retry_token)
-    body = record["request"]
-    if not isinstance(body, dict) or not body:
+    body = record.get("request")
+    prompt = body.get("prompt") if isinstance(body, dict) else None
+    if not isinstance(prompt, str) or not prompt:
         return None, _fail("delegate_start", "invocation_request_unrecorded",
                            "That invocation's durable row carries no canonical request "
                            "body, so it cannot be replayed byte-identically. Its outcome "
@@ -222,11 +227,11 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "the original invocation before starting a replacement.",
                            retry_of=retry_token)
     from ouroboros.delegate_continuation import retry_matches_caller_text
-    if str(body.get("prompt") or "") != text and not retry_matches_caller_text(record, text):
+    if text and prompt != text and not retry_matches_caller_text(record, text):
         return None, _fail("delegate_start", "retry_prompt_mismatch",
                            "retry_of replays the RECORDED invocation, but the prompt "
-                           "you passed differs from the one it sent. Pass the original "
-                           "prompt to retry, or drop retry_of to start a new run.",
+                           "you passed differs from the one it sent. Omit prompt (or pass "
+                           "'') to replay it, or drop retry_of to start a new run.",
                            retry_of=retry_token)
     return record, None
 
@@ -250,19 +255,25 @@ class _RetryBinding(NamedTuple):
     resource_ref: Dict[str, Any]
     processing: Dict[str, Any]
     execution_binding_fingerprint: str
+    max_seconds_basis: str
+    continuation: Any   # delegate_continuation.ContinuationStart: the recorded lineage
 
 
-def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token: str,
-                              text: str) -> Tuple[Optional[_RetryBinding], Optional[ToolResult]]:
+def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token: str, text: str, *,
+                              max_seconds: Any = None, geometry: Tuple[Any, Any] = (None, None),
+                              ) -> Tuple[Optional[_RetryBinding], Optional[ToolResult]]:
     """Rebuild a retried start from its stored invocation, or refuse it typed.
 
     The stored invocation is the SINGLE SOURCE of EVERY retry fact (route, shape,
-    root, project, key), validated BEFORE any daemon call so a refused token
-    registers nothing. A MUTATING replay additionally re-proves its C1 binding:
-    the row must carry the snapshot/baseline binding (pre-C1 rows refused), the
-    task's PRESENT workspace must still resolve to the recorded authority
-    target, and the recorded snapshot must still exist on disk.
+    root, project, key, cap and its basis, continuation lineage), validated BEFORE
+    any daemon call so a refused token registers nothing. A MUTATING replay
+    additionally re-proves its C1 binding: the row must carry the snapshot/baseline
+    binding (pre-C1 rows refused), the task's PRESENT workspace must still resolve
+    to the recorded authority target, and the recorded snapshot must still exist on
+    disk. Last, the call's own request arguments may not contradict the replay: new
+    geometry refuses, and an explicit ``max_seconds`` must equal the recorded cap.
     """
+    from ouroboros.delegate_continuation import replayed_custody
     from ouroboros.subagents import DelegatedRunShape, DelegationRoute
 
     record, refusal = _validated_invocation(
@@ -343,6 +354,18 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
                     "delegate_start(subagent_id=..., prompt=...) (it will take a "
                     "fresh snapshot).",
                     retry_of=retry_token, snapshot_id=snapshot_id)
+    if geometry != (None, None):
+        return None, _fail("delegate_start", "retry_selector_conflict",
+                           "A retry replays its recorded directory strategy and scope; omit new geometry arguments.")
+    seconds = int(request_body.get("maxSeconds") or 0)
+    try:  # read as bounded_max_seconds reads it: zero, negative or malformed means omitted
+        asked = max(0, int(max_seconds)) if max_seconds is not None else 0
+    except (TypeError, ValueError):
+        asked = 0
+    if asked and asked != seconds:
+        return None, _fail("delegate_start", "retry_selector_conflict",
+                           f"A retry replays its recorded max_seconds={seconds}; omit max_seconds to retry.",
+                           retry_of=retry_token, recorded_max_seconds=seconds)
     return _RetryBinding(
         request_body=request_body,
         route=route,
@@ -352,7 +375,7 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
         project_id=project_id,
         owned_project_id=(project_id if record.get("project_owned") else ""),
         project_persistent=_record_persistent(record),
-        seconds=int(request_body.get("maxSeconds") or 0),
+        seconds=seconds,
         snapshot_id=snapshot_id,
         target_root=target_root,
         baseline_sha=str(record.get("baseline_sha") or ""),
@@ -361,6 +384,10 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
                       if isinstance(record.get("resource_ref"), dict) else {}),
         processing=deepcopy(record.get("processing") if isinstance(record.get("processing"), dict) else {}),
         execution_binding_fingerprint=str(record.get("execution_binding_fingerprint") or ""),
+        # The replayed body is byte-identical, so its cap basis is the recorded one
+        # too, never re-derived from today's clocks.
+        max_seconds_basis=str(record.get("max_seconds_basis") or ""),
+        continuation=replayed_custody(record),
     ), None
 
 

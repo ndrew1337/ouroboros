@@ -540,7 +540,7 @@ def _expired_card(bridge, monkeypatch):
                             assumption="sqlite meanwhile", task_id="task-1") == (True, "ok")
     reconcile_terminal(bridge.drive, "task-1")
     monkeypatch.setattr(td, "request_drive_root", lambda request: bridge.drive)
-    monkeypatch.setattr(td, "_live_root_task", lambda task_id: (None, "task_not_live"))
+    monkeypatch.setattr(td, "_live_root_task", lambda task_id, **_: (None, "task_not_live"))
     forwarding = threading.Event()
     accept = message_bus.accept_local_message
 

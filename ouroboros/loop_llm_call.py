@@ -714,7 +714,7 @@ def classify_llm_exception(exc: Exception, safe_error: str = "") -> LlmErrorClas
     if getattr(exc, "code", "") == "model_outcome_unknown":
         return LlmErrorClassification("provider_outcome_unknown", False)
     if getattr(exc, "code", "") == "model_substituted": return LlmErrorClassification("model_substituted", False, 0, exc.code)  # a well-formed request the route answered with another model: chain-eligible, never cools the requested one
-    if getattr(exc, "code", "") in {"unsupported_parameter", "invalid_continuation", "auth_changed", "model_unavailable", "model_source_unavailable", "model_catalog_identity_mismatch"}:
+    if getattr(exc, "code", "") in {"unsupported_parameter", "invalid_continuation", "auth_changed", "model_unavailable", "model_source_unavailable", "model_catalog_identity_mismatch", "model_capability_refused", "model_retry_invalid"}:
         return LlmErrorClassification("bad_request", False, _exception_status_code(exc), exc.code)
     if getattr(exc, "code", "") in {"auth_required", "auth_unavailable", "auth_refresh_failed"}:
         return LlmErrorClassification("auth_error", False, _exception_status_code(exc), exc.code)
@@ -1232,7 +1232,7 @@ def _take_response_facts(usage: Dict[str, Any], msg: Dict[str, Any], accumulated
     model_facts = usage.get("claudexor") or {}
     accumulated_usage["_model_route"] = dict(model_facts.get("route") or {})
     accumulated_usage["_model_substitutions"] = model_facts.get("substituted") or []
-    for stale in ("_last_llm_error", "_last_llm_error_kind", "_last_llm_failure", "_last_llm_retry_same_request",
+    for stale in ("_last_llm_error", "_last_llm_error_kind", "_last_llm_failure", "_acting_route_failure", "_last_llm_retry_same_request",
                   "_last_llm_status_code", "_last_llm_provider_code", "_last_llm_provider_message",
                   "_last_llm_provider_fields", "_last_llm_provider_message_cut", "_last_llm_resource_refusal",
                   "_last_llm_output_exhausted", "_last_llm_attempt_custody"):
@@ -1362,7 +1362,7 @@ def call_llm_with_retry(
     activity_attempt = task_attempt if task_attempt is not None or not owner or owner.task_id != task_id else owner.attempt
     response_cache_bypass_requested = False
     for attempt in range(transient_budget):
-        accumulated_usage.pop("_last_llm_failure", None)  # a pre-send refusal cannot borrow the previous attempt
+        for stale in ("_last_llm_failure", "_acting_route_failure"): accumulated_usage.pop(stale, None)  # a pre-send refusal cannot borrow the previous attempt
         if _deadline_not_dispatched(
             deadline_ts, accumulated_usage, drive_logs,
             task_id=task_id, model=model, round_idx=round_idx, round_id=round_id, reserve_sec=transport_reserve_sec,

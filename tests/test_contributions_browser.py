@@ -144,7 +144,7 @@ def test_a_saved_reply_offers_the_skill_action_and_a_failing_page_module_costs_o
     action.click()
     toast(page, "Saved to Groceries").wait_for()
     answer.locator(".message").click(button="right")
-    menu = page.locator(".chat-row-menu")
+    menu = page.locator(".chat-row-menu:not([data-leaving])")
     menu.wait_for()
     assert menu.locator("[role=menuitem]").all_inner_texts()[-1] == "Save to list", "after the row's own doors, in words"
     page.keyboard.press("Escape")
@@ -172,7 +172,7 @@ def test_plus_lists_skill_sections_then_host_items_and_each_does_its_verb(subscr
     field = page.locator("#chat-input")
     field.click()
     page.click("#page-chat #chat-plus")
-    menu = page.locator(".chat-plus-menu")
+    menu = page.locator(".chat-plus-menu:not([data-leaving])")
     menu.wait_for()
     items = menu.locator("[role=menuitem]").all_inner_texts()
     assert [text.strip() for text in items] == [
@@ -278,7 +278,7 @@ def test_chips_take_the_room_the_capsules_leave_and_fold_into_one_more_chip(subs
                     # The row has no room even for "+N" (☰ leads a phone's row): "+" lists every chip under its skill.
                     assert after["shown"] == [] and after["moreRight"] is None, (where, after)
                     page.click("#page-chat [data-composer-plus]")
-                    listed = page.locator(".chat-plus-menu [data-plus-item^='chip:']")
+                    listed = page.locator(".chat-plus-menu:not([data-leaving]) [data-plus-item^='chip:']")
                     listed.first.wait_for()
                     assert listed.count() == count, (where, listed.all_inner_texts())
                     assert listed.first.inner_text().strip() == "Meter 1 7%", where
@@ -294,7 +294,7 @@ def test_chips_take_the_room_the_capsules_leave_and_fold_into_one_more_chip(subs
                 if after["folded"]:
                     assert after["moreRight"] <= after["slot"]["right"] + 0.5, (where, after)
                     page.click("#page-chat .chat-chip-more")
-                    listed = page.locator(".chat-plus-menu [role=menuitem]")
+                    listed = page.locator(".chat-plus-menu:not([data-leaving]) [role=menuitem]")
                     listed.first.wait_for()
                     assert listed.count() == after["folded"], (where, listed.all_inner_texts())
                     hidden_first = count - after["folded"] + 1

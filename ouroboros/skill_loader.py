@@ -1422,8 +1422,9 @@ def discover_skill_identity(
     name: str,
     *,
     repo_path: str | None = None,
+    locations: tuple[_SkillLocationCandidate, ...] | None = None,
 ) -> List[LoadedSkill]:
-    """Execution resolver: ordinary discovery/collision rules for one identity.
+    """Execution resolver, optionally sharing this observation's ordinary locations.
 
     A manifestless peer stays invisible, exactly as in passive discovery.
     Liveness, reconcile and extension children all use this resolver; the
@@ -1431,7 +1432,9 @@ def discover_skill_identity(
     its deliberately stricter manifestless ambiguity.
     """
     safe = _sanitize_skill_name(name)
-    candidates = tuple(item for item in _skill_location_inventory(drive_root, repo_path=repo_path) if item.name == safe)
+    if locations is None:
+        locations = _skill_location_inventory(drive_root, repo_path=repo_path)
+    candidates = tuple(item for item in locations if item.name == safe)
     return _load_skill_location_candidates(candidates, drive_root=drive_root)
 
 
@@ -1442,11 +1445,8 @@ def find_skill(
     repo_path: str | None = None,
 ) -> Optional[LoadedSkill]:
     """Return one skill by name, including broken manifests with ``load_error``."""
-    safe = _sanitize_skill_name(name)
-    for skill in discover_skill_identity(drive_root, name, repo_path=repo_path):
-        if skill.name == safe:
-            return skill
-    return None
+    skills = discover_skill_identity(drive_root, name, repo_path=repo_path)
+    return skills[0] if skills else None
 
 
 def list_available_for_execution(

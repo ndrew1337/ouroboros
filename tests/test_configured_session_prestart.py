@@ -442,7 +442,8 @@ def test_a_budget_continuation_never_pre_starts_the_leaf_again_and_hydrates_cust
     assert starts == []  # no second physical invocation
     assert receipt["status"] == "configured_session_budget_continuation"
     assert receipt["continuation"] == {
-        "delegated_runs_started": 1, "physical_start": "not_repeated", "custody_read": "ok"}
+        "delegated_runs_started": 1, "physical_start": "not_repeated", "custody_read": "ok",
+        "liveness": "unobserved", "runs": [], "pending_invocations": []}
     bootstrap = ctx._configured_actor_bootstrap
     assert bootstrap["physical_started"] is True and bootstrap["exact_start_pending"] is False
     assert ctx._nanny_physical_activity_seed is True  # nanny economics see the adopted run

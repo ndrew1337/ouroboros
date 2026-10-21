@@ -1063,6 +1063,46 @@ def current_model_wait() -> TaskModelWait | None:
     return _CURRENT.get()
 
 
+def announce_capability_refusal(error: Exception, *, drive_root: Any) -> None:
+    """One owner notice per account/model episode when no account can serve a model.
+
+    An account-service fact, not a helper's answer and not a timer: the engine's
+    typed facts decide (``capability_notice``), its episode is the delivery id, and
+    the unchanged durable outbox sends one row however many helpers hit it; a
+    successful differential call never enters here. The task that first saw it is
+    named, not part of the id. A bare library caller gets the same diagnostics on
+    its error and no chat side effect.
+    """
+    from ouroboros.llm_substitution import capability_notice
+
+    owner = current_model_wait()
+    if owner is None or owner.closed:
+        return
+    notice = capability_notice(getattr(error, "problem", None) or {})
+    if notice is None:
+        return
+    delivery_id, text = notice
+    root = owner.canonical_root or drive_root
+    try:
+        from ouroboros.projects_registry import task_presentation_snapshot
+
+        label = task_presentation_snapshot(root, owner.task_id, task=owner.task).get("target_label") or ""
+    except Exception:
+        label = ""  # the notice outranks its label
+    try:
+        from supervisor.schedule_notes import owner_chat_id
+        from supervisor.terminal_delivery import enqueue_terminal_delivery_outcome
+
+        enqueue_terminal_delivery_outcome(root, {
+            "type": "send_message", "chat_id": owner_chat_id(root), "task_id": "",
+            "text": text + (f"\nFirst seen in {label}." if label else ""), "role": "system",
+            "system_type": "model_capability_notice", "delivery_id": delivery_id,
+        }, event_queue=owner.event_queue)
+    except Exception:
+        import logging
+        logging.getLogger(__name__).warning("Capability refusal notice could not be queued", exc_info=True)
+
+
 @contextlib.contextmanager
 def operation_wait_scope(owner: TaskModelWait) -> Iterator[TaskModelWait]:
     """Bind an already-paid operation's own wait owner for its caller and workers.

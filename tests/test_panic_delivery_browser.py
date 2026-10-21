@@ -29,9 +29,8 @@ def _typed(page):
 
 def _facts(page):
     return page.evaluate('''() => {
-        const overlay = document.querySelector('#reconnect-overlay.visible');
-        const button = overlay ? overlay.querySelector('#reconnect-panic:not([hidden])')
-            : document.querySelector('[data-chat-command="panic"]');
+        // No veil covers the app while the socket comes back (owner 20.10, Q4): the room's own Panic stays its control.
+        const button = document.querySelector('[data-chat-command="panic"]');
         const box = button?.getBoundingClientRect();
         const hit = box && document.elementFromPoint(box.x + box.width/2, box.y + box.height/2);
         const toast = document.querySelector('#toast-stack .toast');
@@ -54,8 +53,7 @@ def _facts(page):
             toast: toast ? {text: toast.innerText, clipped: toast.scrollWidth > toast.clientWidth + 1,
                 on_screen: rect.left >= 0 && rect.right <= innerWidth && rect.bottom <= innerHeight} : null,
             page_overflow: document.documentElement.scrollWidth > innerWidth + 1,
-            feedback_above_overlay: Number(getComputedStyle(document.querySelector('#toast-stack')).zIndex)
-                > Number(getComputedStyle(document.querySelector('#reconnect-overlay')).zIndex),
+            veil: Boolean(document.querySelector('#reconnect-overlay')),
         };
     }''')
 
@@ -135,7 +133,7 @@ def test_real_controls_bridge_first_offline_failure_and_no_successor_replay(pani
     page.evaluate('window.__ouroWs.reconnectDelay = 60000; window.__ouroWs.ws.close()')
     page.wait_for_function('!window.__ouroWs.ws')
     old_generations = len(generations)
-    expect(page.locator('#reconnect-panic')).to_be_hidden()
+    expect(page.locator('#reconnect-overlay')).to_have_count(0)
     _typed(page)
     expect(page.get_by_text(FAILURE, exact=True).first).to_be_visible()
     expect(page.locator('.confirm-dialog')).to_have_count(0)
@@ -148,32 +146,19 @@ def test_real_controls_bridge_first_offline_failure_and_no_successor_replay(pani
     facts = _facts(page)
     assert facts['queued'] == [] and len(generations) == old_generations
     assert facts['toast'] == {'text': FAILURE, 'clipped': False, 'on_screen': True}
-    assert facts['button'] is None and not facts['page_overflow']
+    assert facts['button']['hit'] and not facts['veil'] and not facts['page_overflow'], facts
     assert facts['user_bubbles'] == 0 and facts['draft'] == '/panic' and 'note.txt' in facts['attachments']
-    assert facts['feedback_above_overlay']
     assert not facts['resend'] and all('/panic' not in value for _, value in facts['kept'])
 
-    # The overlay also reaches the independent desktop bridge while the server is unavailable.
+    # With no veil, the room's own Panic reaches the independent desktop bridge while the server is unavailable.
     page.evaluate('''() => {
         window.pywebview = {api: {panic_stop: async () => { window.__bridgeCalls++; return {status:'stopping'}; }}};
         window.dispatchEvent(new Event('pywebviewready'));
     }''')
-    expect(page.locator('#reconnect-panic')).to_be_visible()
-    expect(page.locator('#reconnect-panic')).to_have_text('Panic')
-    expect(page.locator('#reconnect-panic')).to_have_attribute('title', 'Stop all workers')
-    page.locator('#reconnect-panic').click()
+    button.click()
     page.wait_for_function('window.__bridgeCalls === 3')
     assert len(panic_messages()) == before
-    # This skipped i18n root translates its own control on the shared language event.
-    page.evaluate('''async () => {
-        const {setLanguage} = await import('/static/modules/i18n.js');
-        await setLanguage('ru', {language:'ru', english:false, revision:1, entries:{
-            Panic:{text:'Паника'}, 'Stop all workers':{text:'Остановить все процессы'}
-        }});
-    }''')
-    expect(page.locator('#reconnect-panic')).to_have_text('Паника')
-    expect(page.locator('#reconnect-panic')).to_have_attribute('title', 'Остановить все процессы')
-    page.screenshot(path=str(evidence / f'{name}-desktop-ru.png'), scale='css')
+    page.screenshot(path=str(evidence / f'{name}-desktop.png'), scale='css')
     desktop_facts = _facts(page)
     assert desktop_facts['button']['visible'] and desktop_facts['button']['hit']
     if width < 720:
@@ -182,7 +167,7 @@ def test_real_controls_bridge_first_offline_failure_and_no_successor_replay(pani
     page.evaluate('''() => {
         window.pywebview.api.panic_stop = () => new Promise((_, reject) => {window.__bridgeReject = reject});
     }''')
-    page.locator('#reconnect-panic').click()
+    button.click()
     page.wait_for_function('Boolean(window.__bridgeReject)')
     # The normal connection owner now opens a successor; offline gestures are never replayed.
     page.evaluate('window.__ouroWs.connect()')

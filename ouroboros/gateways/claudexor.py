@@ -1552,13 +1552,14 @@ def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     if not isinstance(run_dir, str) or not run_dir.strip():
         return {}
     import yaml  # type: ignore
+    from ouroboros.delegate_custody_usage import held_run_names
 
     try:
         record = yaml.safe_load(
             (pathlib.Path(run_dir) / "final" / "telemetry.yaml").read_text(encoding="utf-8"))
     except (OSError, ValueError, RuntimeError, yaml.YAMLError):
         return {}
-    if not isinstance(record, dict) or record.get("run_id") != run_id:
+    if not isinstance(record, dict) or str(record.get("run_id") or "") not in held_run_names(detail, run_id):
         return {}
     final_id, attempts = record.get("final_attempt_id"), record.get("attempts")
     if not isinstance(final_id, str) or not final_id.strip() or not isinstance(attempts, list):

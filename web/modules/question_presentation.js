@@ -57,9 +57,13 @@ export function questionPresentation(row = {}) {
             return { status: tr('question.status.closure_pending', 'Question closed · update pending') };
         }
         // An accepted late answer whose dispatch witness ended with its process: no retry knows more.
-        return { status: row.question_delivery.reason_code === 'late_answer_delivery_unknown'
+        // An answer in its task's mailbox waits for that task to read it, also through a pause.
+        const reason = row.question_delivery.reason_code;
+        return { status: reason === 'late_answer_delivery_unknown'
             ? tr('question.status.answer_unknown', 'Answer recorded · delivery unknown')
-            : tr('question.status.answer_pending', 'Answer recorded · delivery pending') };
+            : reason === 'awaiting_recipient_read'
+                ? tr('question.status.answer_saved', 'Answer saved · the task reads it when it continues')
+                : tr('question.status.answer_pending', 'Answer recorded · delivery pending') };
     }
     const key = lifecycleKey(row);
     // The English words stay the source (and the Python twin's); the install language reads
@@ -140,6 +144,33 @@ export function appendRecommendedBadge(button) {
     badge.className = 'chat-quiz-option-recommended';
     badge.textContent = tr('quiz.recommended', 'recommended');
     button.append(badge);
+}
+
+const CHOSEN_PARTS = ['chat-quiz-option-chosen-name', 'chat-quiz-option-chosen-cue'];
+
+/**
+ * The owner's recorded answer names itself (docs/DESIGN.md "Quiz card"): after the option's label, `Your choice` joins
+ * its accessible name in every theme, and a decorative copy shows where the theme draws it (ui.css
+ * --chosen-answer-cue-display). Only the canonical selection carries them: a pending choice, a comment-only answer or
+ * another option never does. Idempotent; true when it wrote.
+ */
+export function paintChosenAnswer(button, chosen) {
+    const parts = CHOSEN_PARTS.map((name) => button.querySelector(`.${name}`));
+    if (chosen && parts.every(Boolean)) return false;
+    if (!chosen && !parts.some(Boolean)) return false;
+    parts.forEach((part) => part?.remove());
+    if (!chosen) return true;
+    const words = tr('quiz.your_choice', 'Your choice');
+    const [spoken, shown] = CHOSEN_PARTS.map((name) => {
+        const part = document.createElement('span');
+        part.className = name;
+        part.textContent = words;
+        return part;
+    });
+    shown.setAttribute('aria-hidden', 'true');
+    const label = button.querySelector('.chat-quiz-option-label');
+    if (label) { label.after(shown); label.after(spoken); } else button.append(spoken, shown);
+    return true;
 }
 
 

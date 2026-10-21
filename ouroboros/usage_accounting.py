@@ -1234,7 +1234,8 @@ def bind_provider_generation(generation_id: str, *, reservation: Optional[Attemp
 
 
 def _retain_physical_failure(reservation, *, exc=None, response=None):
-    """Failure source is durable before a caller can retry or replace its capture."""
+    """Failure source is durable before a caller can retry or replace its capture.
+    With ``exc`` only once the answer path ended: ``ended_unbound_model_request`` reads that."""
     payload = None
     try:
         payload = provider_failure_payload(exc) if exc is not None else _plain(response)

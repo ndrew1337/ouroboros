@@ -972,7 +972,11 @@ def await_messages_entry() -> ToolEntry:
 
 def _count_live_sibling_children(ctx: ToolContext, status_drive_root: Path, *, exclude_task_id: str) -> int:
     """Count this parent's children still running/scheduled/requested (excluding the one
-    just waited on). Advisory only — a failure returns 0 so it never breaks wait_task."""
+    just waited on). Advisory only — a failure returns 0 so it never breaks wait_task.
+
+    Select indexed, stored row facts in any role, without decoding task bodies.
+    The typed parent identity applies even when its body is padded or unreadable.
+    """
     parent_id = str(getattr(ctx, "task_id", "") or "").strip()
     if not parent_id:
         return 0
@@ -981,16 +985,12 @@ def _count_live_sibling_children(ctx: ToolContext, status_drive_root: Path, *, e
             STATUS_REQUESTED,
             STATUS_RUNNING,
             STATUS_SCHEDULED,
-            list_task_results,
         )
+        from ouroboros.task_store import task_facts
 
-        live = 0
-        for item in list_task_results(status_drive_root, statuses=[STATUS_RUNNING, STATUS_SCHEDULED, STATUS_REQUESTED]):
-            if str(item.get("task_id") or item.get("id") or "") == exclude_task_id:
-                continue
-            if str(item.get("parent_task_id") or "") == parent_id:
-                live += 1
-        return live
+        return len(task_facts(
+            status_drive_root, where="parent_task_id=? AND task_id<>? AND status IN (?,?,?)",
+            params=(parent_id, exclude_task_id, STATUS_RUNNING, STATUS_SCHEDULED, STATUS_REQUESTED)))
     except Exception:
         return 0
 

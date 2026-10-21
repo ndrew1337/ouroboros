@@ -658,7 +658,7 @@ def test_no_module_defines_the_same_top_level_name_twice():
     root = pathlib.Path(__file__).resolve().parents[1]
     offenders = []
     for path in sorted(root.rglob("*.py")):
-        parts = set(path.parts)
+        parts = set(path.relative_to(root).parts)
         if parts & {".git", "node_modules", "venv", ".venv", "build", "dist"}:
             continue
         try:
@@ -680,3 +680,21 @@ def test_no_module_defines_the_same_top_level_name_twice():
             if count > 1 and not name.startswith("__"):
                 offenders.append(f"{path.relative_to(root)}: {name} defined {count}x")
     assert not offenders, "Top-level names defined more than once:\n" + "\n".join(offenders)
+
+
+@pytest.mark.parametrize("ancestor, relative, detected", [
+    *[(name, "dup.py", True) for name in (".git", "node_modules", "venv", ".venv", "build", "dist")],
+    *[("checkout", f"{name}/dup.py", False) for name in (".git", "node_modules", "venv", ".venv", "build", "dist")],
+    ("build", "Build/dup.py", True),
+])
+def test_duplicate_scan_exclusions_are_relative_to_checkout(tmp_path, monkeypatch, ancestor, relative, detected):
+    root = tmp_path / ancestor / "source"
+    path = root / relative
+    path.parent.mkdir(parents=True)
+    path.write_text("x = 1\nx = 2\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "__file__", str(root / "tests" / "test_smoke.py"))
+    if detected:
+        with pytest.raises(AssertionError, match="dup.py: x defined 2x"):
+            test_no_module_defines_the_same_top_level_name_twice()
+    else:
+        test_no_module_defines_the_same_top_level_name_twice()

@@ -9,6 +9,8 @@ helper (builder A's owner); no transport, reviewer or model is involved.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ouroboros import delegate_custody as dc
@@ -141,8 +143,10 @@ def test_an_observation_without_the_independence_fact_keeps_holding(tmp_path, mo
 
 
 def _open_attempt(root, *, source, slot=None, review_skill="", request_source=None):
-    """One unresolved API attempt through the real scope merge: the bound scope
-    carries the slot attribution, the request may stamp its route's own ``source``."""
+    """One API attempt still in flight through the real scope merge: the bound scope
+    carries the slot attribution, the request may stamp its route's own ``source``.
+    Its send has not returned, so it is a model request with no result for every census
+    (an unbound send that already raised is not: tests/test_completed_model_handoff.py)."""
     from ouroboros import usage_accounting as ua
 
     slot = (SLOT if source.startswith("review_substrate") else "") if slot is None else slot
@@ -150,13 +154,11 @@ def _open_attempt(root, *, source, slot=None, review_skill="", request_source=No
                           **({"category": "task_acceptance_review", "review_slot_id": slot} if slot else {}),
                           review_skill=review_skill)
     with ua.usage_scope(scope):
-        def send():
-            raise RuntimeError("unknown send")
-        with pytest.raises(RuntimeError, match="unknown send"):
-            ua.execute_physical_attempt(ua.AttemptRequest(model="m", provider="test", reservation_usd=0.2,
-                                                          **({"source": request_source} if request_source else {})), send)
+        reservation = ua.reserve_attempt(ua.AttemptRequest(
+            model="m", provider="test", reservation_usd=0.2, **({"source": request_source} if request_source else {})))
+        ua.mark_dispatched(reservation, local_answer_owner_pid=os.getpid())
     row = ua.read_usage_records(root, final_only=True)[-1]
-    assert row["state"] == "unresolved"
+    assert row["state"] == "dispatched"
     assert (row["source"], row["review_slot_id"], row["review_skill"]) == (
         request_source or source, slot, review_skill)
     return row["attempt_id"]

@@ -145,8 +145,8 @@ def conflicting_writers(q: Any, predecessor: str, *, drive_root: Any = None,
     panel still finishes and attaches its verdict. Missing or unknown
     provenance, ordinary delegations, author research copies, author model
     attempts, tool/process/merge/executor custody and unreadable custody keep
-    holding. Retained terminal HTTP failures without a receiver are not writers,
-    even with unresolved cost; this pure classification applies to every consumer.
+    holding. Retained raised sends without a receiver are not writers, even
+    with unresolved cost; this pure classification applies to every consumer.
     The empty default is the complete census for every other consumer.
     """
     from ouroboros.budget_pause import observe_task_runs

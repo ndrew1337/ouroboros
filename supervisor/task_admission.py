@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional
 
 from ouroboros.depth_evidence import parse_task_depth
+from ouroboros.owner_wait import governing_continuation  # re-export for admission callers
 from ouroboros.task_results import (
     STATUS_CANCELLED,
     STATUS_FAILED,
@@ -527,21 +528,6 @@ def commit_dispatch_marks(task: dict, projections: list) -> Optional[bool]:
         log.warning("Committed dispatch evidence for %s could not be read back", task.get("id"), exc_info=True)
         return None
     return True if all(projection.verify(stored) for projection in projections) else None
-
-
-def governing_continuation(task: dict) -> str:
-    """Name the ONE carrier the loop resumes: owner wait, then exact pause, then saved work.
-
-    The loop loads the first present carrier and never falls back when it fails,
-    so admission validates that carrier alone. A later carrier legitimately
-    retains the earlier saved-work locator; a valid newer one never reads it, and
-    an invalid one never falls back to it. Null snapshot fields are absent.
-    """
-    if task.get("_owner_wait_resume"):
-        return "owner_wait"
-    if task.get("_budget_pause_resume"):
-        return "exact_pause"
-    return "working" if "_working_recovery" in task else ""
 
 
 def _owner_wait_current(task: dict, stored: dict) -> bool:

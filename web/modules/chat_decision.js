@@ -8,7 +8,7 @@ import { paintAttachmentOutcome } from './chat_attachments.js';
 import { nameProjectReference, projectReference } from './project_reference.js';
 import { ANSWERABLE_QUIZ_STATES, QUIZ_LIFECYCLE, questionMark, questionPresentation, waitFacts, WAIT_FIELDS,
     normalizeQuiz, hostFactsLine, appendRecommendedBadge, renderOwnerAnswer, questionDeliveryPending, unknownDeliveryRemovable,
-    appendQuestionReplyControls } from './question_presentation.js';
+    appendQuestionReplyControls, paintChosenAnswer } from './question_presentation.js';
 import { fmt, tr, tx } from './i18n.js';
 import { syncQuestionMaterials } from './result_files.js';
 import { createStatusMark, paintStatusMark } from './status_mark.js';
@@ -657,6 +657,7 @@ export function createChatDecision({
                     btn.classList.toggle('chosen', chosen);
                     changed = true;
                 }
+                if (paintChosenAnswer(btn, chosen)) changed = true;
             });
             return changed;
         });
@@ -867,6 +868,7 @@ export function createChatDecision({
                     btn.classList.toggle('chosen', chosen);
                     changed = true;
                 }
+                if (paintChosenAnswer(btn, chosen && state === 'answered')) changed = true;
             });
             return changed;
         });

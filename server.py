@@ -1134,7 +1134,7 @@ def _perform_supervisor_restart(
         # the off-loop schedule duty admits nothing after this copy.
         prepare_restart_returns(ctx.DRIVE_ROOT, ctx.RUNNING, name_queue_returns(ctx.PENDING, "planned_restart"),
                                 transaction_id=restart_transaction_id,
-                                direct=direct_chat_turns(), owner_wait_ids=planned_handoffs)
+                                direct=direct_chat_turns(), owner_wait_ids=owner_waits)
     except Exception:
         log.debug("Planned self-restart delegate handoff preparation failed", exc_info=True)
     try:

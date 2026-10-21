@@ -7,10 +7,11 @@ stale page) answers 409 ``card_stale`` instead of reaching whatever control now 
 that id. An action declaring ``once: true`` keeps only its first press (a later one
 answers 409 with the winner). The card store records the press first, then it is
 delivered: into the authoring task's mailbox as a ``card_input`` frame while that task
-still reads its mail, else as the owner's own message in the card's chat
-(``deliver_as_owner_message``, the late-quiz path) — their words only (the pressed
-label and the form's values), as a reply to the card's row. A failed delivery stays
-``owed``; the same ``request_id`` retries it, whatever the card became since.
+lives (a paused, held or queued author keeps it until it continues and reads it:
+``awaiting_recipient_read``; no hold is released), else as the owner's own message in
+the card's chat (``deliver_as_owner_message``, the late-quiz path) — their words only
+(the pressed label and the form's values), as a reply to the card's row. A failed
+delivery stays ``owed``; the same ``request_id`` retries it, whatever the card became since.
 """
 
 from __future__ import annotations
@@ -74,9 +75,10 @@ def _checked_values(raw: Any, action: Dict[str, Any]) -> Tuple[Optional[Dict[str
 
 def _deliver(drive_root: pathlib.Path, record: Dict[str, Any], submission: Dict[str, Any],
              source: str) -> Tuple[str, str]:
-    """``(delivery, reason)`` for one recorded press: ``delivered``, ``forwarded`` or ``owed``."""
+    """``(delivery, reason)`` for one recorded press: ``delivered`` (``awaiting_recipient_read`` while
+    its living author reads no mail now), ``forwarded`` or ``owed``."""
     from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
-    from ouroboros.gateway.task_decision import _live_root_task, deliver_as_owner_message
+    from ouroboros.gateway.task_decision import _mail_holder, deliver_as_owner_message
     from ouroboros.owner_mailbox import KIND_CARD_INPUT, write_owner_message
     from supervisor import queue as q
     from supervisor.workers import get_direct_chat_agent
@@ -91,12 +93,16 @@ def _deliver(drive_root: pathlib.Path, record: Dict[str, Any], submission: Dict[
         agent = get_direct_chat_agent(task_id)
         # Room intake's admission owner: no mailbox write after the author's final drain closed.
         with getattr(agent, "_owner_message_admission_lock", None) or q._queue_lock:
-            task, _reason = _live_root_task(task_id)
+            task, reason = _mail_holder(task_id)
             if task is not None:
                 drive = pathlib.Path(drive_root) if agent is not None else q._task_drive_for_task(task, task_id)
+                # Paused, held or queued: the press waits for it like an answer does, and its read settles the wait.
+                waits = reason == "task_not_reading"
                 if write_owner_message(drive, text, task_id, msg_id=f"card_input:{card_id}:{request_id}",
-                                       kind=KIND_CARD_INPUT):
-                    return "delivered", ""
+                                       kind=KIND_CARD_INPUT, card_delivery={
+                                           "card_id": card_id, "request_id": request_id,
+                                           "canonical_root": str(drive_root)} if waits else None):
+                    return "delivered", "awaiting_recipient_read" if waits else ""
                 return "owed", "mailbox_write_failed"
     chat_id = record.get("publication_chat_id", record.get("chat_id"))
     if type(chat_id) is not int or is_a2a_chat_id(chat_id) or chat_id == HIDDEN_CHAT_ID:
@@ -123,7 +129,8 @@ async def answer_card_decision(drive_root: pathlib.Path, body: Dict[str, Any], *
     """Record and deliver one press; ``(status, DecisionResponse)``. The caller checked ``request_id``."""
     import asyncio
 
-    from ouroboros.card_store import CardStoreError, find_submission, load_card, mark_delivery, record_submission
+    from ouroboros.card_store import (CardStoreError, find_submission, load_card, mark_delivery, press_wait,
+                                      record_submission)
     from ouroboros.contracts.plugin_api import ExtensionRegistrationError
     from ouroboros.extension_ui_validation import validate_card_components
 
@@ -174,7 +181,7 @@ async def answer_card_decision(drive_root: pathlib.Path, body: Dict[str, Any], *
                      "winner": {"request_id": str(winner.get("request_id") or ""), "at": str(winner.get("at") or ""),
                                 "delivery": str(winner.get("delivered") or "owed")}}
     submission, record = outcome["submission"], outcome["record"]
-    delivery, reason = str(submission.get("delivered") or "owed"), ""
+    delivery, reason = str(submission.get("delivered") or "owed"), press_wait(submission)
     if delivery == "owed":
         try:
             delivery, reason = await run_sync_to_completion(_deliver, drive_root, record, submission, source)
@@ -182,7 +189,9 @@ async def answer_card_decision(drive_root: pathlib.Path, body: Dict[str, Any], *
             log.warning("Card press delivery remains owed for %s", card_id, exc_info=True)
             delivery, reason = "owed", "card_delivery_failed"
         if delivery != "owed":
-            record = await asyncio.to_thread(mark_delivery, drive_root, card_id, request_id, delivery) or record
+            record = await asyncio.to_thread(mark_delivery, drive_root, card_id, request_id, delivery, reason) or record
+            if delivery == "delivered":  # the answer says what the record says: a read that came first ended the wait
+                reason = press_wait(find_submission(record, request_id) or {})
     try:
         from supervisor.card_delivery import send_card_state
         from supervisor.message_bus import get_bridge
@@ -194,7 +203,7 @@ async def answer_card_decision(drive_root: pathlib.Path, body: Dict[str, Any], *
                "delivery": delivery, "card_id": card_id, "revision": int(record.get("revision") or 1)}
     if delivery == "owed":
         return 202, {**payload, "reason_code": reason}
-    return 200, payload
+    return 200, {**payload, "reason_code": reason} if reason else payload
 
 
 __all__ = ["answer_card_decision", "card_input_frame", "owner_press_text"]

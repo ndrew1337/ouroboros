@@ -173,6 +173,7 @@ HOST_ROW_CLASSES = {
     "host_progress": ("card_row", 1),
     "initialization_notice": ("not_started", 1),
     "managed_update_notice": ("runtime_state", 2),
+    "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),
     "project_completion_summary": ("main_lifecycle", 1),
     "project_handoff": ("main_lifecycle", 1),

@@ -195,7 +195,7 @@ def test_ui_projects_sidebar_unread_and_keyboard_menu(direct_server_with_data):
                 kebab = page.locator('.nav-project-kebab[aria-label="Actions for Alpha project"]')
                 kebab.focus()
                 kebab.press("Enter")
-                menu = page.locator('.project-row-menu[role="menu"]')
+                menu = page.locator('.project-row-menu:not([data-leaving])[role="menu"]')
                 menu.wait_for(state="visible", timeout=5_000)
                 assert page.locator(':focus').get_attribute("data-prm") == "pin"  # the menu's first action
                 box = menu.bounding_box()
@@ -720,8 +720,8 @@ def test_ui_smoke_phase3_declarative_widgets_and_settings(direct_server_with_dat
                 callout = card.locator('.widget-callout')
                 assert metric.get_attribute("data-tone") == "ok"
                 assert callout.get_attribute("data-tone") == "warn"
-                assert metric.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(130, 234, 185)"
-                assert callout.evaluate("element => getComputedStyle(element).borderLeftColor") == "rgb(242, 212, 65)"
+                assert metric.evaluate("e => getComputedStyle(e).borderLeftColor") == "rgb(131, 228, 153)"
+                assert callout.evaluate("e => getComputedStyle(e).borderLeftColor") == "rgb(247, 203, 88)"
 
                 emitted = page.evaluate(
                     """async (skill) => {

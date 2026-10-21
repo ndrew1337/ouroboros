@@ -448,17 +448,21 @@ def _resume_continuation(tools: Any, carriers: tuple, messages: list, trace: dic
     """
     saved, saved_pause, saved_working = carriers
     if saved:
-        return (*resume_native_loop(tools, saved, messages, trace, usage, seen), cost_ceiling, True, False, False)
-    if saved_pause:
+        resumed = (*resume_native_loop(tools, saved, messages, trace, usage, seen), cost_ceiling, True, False, False)
+    elif saved_pause:
         resumed = resume_paused_loop(tools, saved_pause, messages, trace, usage, seen,
                                      budget_remaining_usd=budget_remaining_usd)
         no_tool = saved_pause.get("resume_point", {}).get("budget_tail") == "no_tool"
-        return (*resumed, _resolve_task_cost_ceiling(tools._ctx, budget_remaining_usd), not no_tool, no_tool, no_tool)
-    if saved_working:
+        resumed = (*resumed, _resolve_task_cost_ceiling(tools._ctx, budget_remaining_usd), not no_tool, no_tool, no_tool)
+    elif saved_working:
         *resumed, tool_tail = working_checkpoint.resume_from_working(tools, saved_working, messages, trace, usage, seen)
         no_tool = not tool_tail and (saved_working.get("working") or {}).get("boundary") == working_checkpoint.RESUMED
-        return (*resumed, _resolve_task_cost_ceiling(tools._ctx, budget_remaining_usd), tool_tail, no_tool, not tool_tail)
-    return (*route, cost_ceiling, False, False, False)
+        resumed = (*resumed, _resolve_task_cost_ceiling(tools._ctx, budget_remaining_usd), tool_tail, no_tool, not tool_tail)
+    else:
+        resumed = (*route, cost_ceiling, False, False, False)
+    from ouroboros.subagent_bootstrap import append_startup_receipt
+    append_startup_receipt(tools._ctx, messages, getattr(tools._ctx, "_configured_startup_wake", ""), seen)
+    return resumed
 
 
 def _load_working_recovery(ctx: Any, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -467,6 +471,8 @@ def _load_working_recovery(ctx: Any, messages: List[Dict[str, Any]]) -> Dict[str
 
     try:
         state = load_recovery(ctx)
+        if not state and getattr(ctx, "working_recovery", None) is not None:
+            raise ValueError("working recovery locator is unusable")
         if state:
             consume_recovery(ctx, state["_working_handoff"])  # captured: the replaced source retires
         return state

@@ -16,7 +16,7 @@
                                the owner's Send does that.
    The bridge also reports, on its own, a script error, an unhandled rejection or a policy refusal in the app (at most
    ten, each once), which the card shows on its status line. The host's theme reaches the frame as `--ouro-*` custom
-   properties, `data-theme` and `OuroborosCard.onTheme`. */
+   properties (the values of the material the frame lies on), `data-theme` and `OuroborosCard.onTheme`. */
 
 import { onThemeChange } from './theme_palette.js';
 import { WIDGET_FRAME_MAX_HEIGHT } from './widget_module.js';
@@ -83,11 +83,15 @@ export function cardSubmitLine(title, value, summary = '') {
     return `From «${String(title || 'card').replace(/\s+/g, ' ').trim()}»: ${[words, shown].filter(Boolean).join(' ') || '(no summary)'}`;
 }
 
-/** The host's theme as the frame reads it: `{name, css}` (a `:root` block of `--ouro-*` values). */
-export function cardThemeTokens(doc = globalThis.document) {
+/**
+ * The host's theme as the frame reads it: `{name, css}` (a `:root` block of `--ouro-*` values). The values are those of
+ * `material`, the element the transparent frame lies on: inside a dark voice its inks and surfaces are that voice's
+ * own (ui.css "voice materials"), so a card's host is passed; the document root otherwise.
+ */
+export function cardThemeTokens(doc = globalThis.document, material = doc?.documentElement) {
     const candidate = globalThis.ouroTheme?.theme || doc?.documentElement?.dataset?.theme;
     const name = candidate === 'light' ? 'light' : 'dark';
-    const computed = doc?.documentElement && globalThis.getComputedStyle ? globalThis.getComputedStyle(doc.documentElement) : null;
+    const computed = material && globalThis.getComputedStyle ? globalThis.getComputedStyle(material) : null;
     const values = Object.entries(THEME_TOKENS).map(([own, host]) => {
         const value = String(computed?.getPropertyValue(host) || '').trim().replace(/[<>{};]/g, '');
         return value ? `${own}: ${value};` : '';
@@ -231,8 +235,11 @@ export function mountCardApp(host, { cardId, title, sha256, html, fit, onSubmit,
     iframe.className = 'widgets-frame chat-card-frame';
     iframe.setAttribute('sandbox', CARD_APP_SANDBOX);
     iframe.setAttribute('title', title || 'Card');
+    // The frame is transparent over its host, so it reads the host's material, at mount and at every theme change;
+    // a host not in the document has none yet and the root stands in.
+    const theme = () => cardThemeTokens(document, host.isConnected ? host : document.documentElement);
     if (fresh) { try { storage?.removeItem(key); } catch { /* blocked: nothing was kept to forget */ } }
-    iframe.srcdoc = cardAppSrcdoc(html, { nonce, saved: fresh ? null : readState(storage, key) });
+    iframe.srcdoc = cardAppSrcdoc(html, { nonce, theme: theme(), saved: fresh ? null : readState(storage, key) });
     host.replaceChildren(iframe);
     const handle = createCardAppBridge({
         nonce,
@@ -243,7 +250,7 @@ export function mountCardApp(host, { cardId, title, sha256, html, fit, onSubmit,
         fault: onFault,
     });
     window.addEventListener('message', handle);
-    const stopTheme = onThemeChange(() => iframe.contentWindow?.postMessage({ type: 'ouro-card-theme', nonce, theme: cardThemeTokens() }, '*'));
+    const stopTheme = onThemeChange(() => iframe.contentWindow?.postMessage({ type: 'ouro-card-theme', nonce, theme: theme() }, '*'));
     let disposed = false;
     let loads = 0;
     const dispose = () => {

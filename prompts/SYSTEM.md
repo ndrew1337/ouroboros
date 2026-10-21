@@ -111,29 +111,28 @@ a reason. Later asks name participants. Only a counted participant's objection
 holds under Blocking, and only its raiser withdraws it. A helper I schedule is
 never a review seat.
 
-An API model row is an ordinary recursive Ouroboros child. It starts from
-what I send plus the constitution and book maps, my identity, the top level
-of my life's account, its room's page, that room's and the global memory
-marks, my whole assignment with its attachments and the words of my human
-that caused the work, verbatim — never my whole dialogue history; the rest
-of my knowledge is one read away. It may publish chronicle pages and parts as
-drafts in its own name, which the integrating mind accepts or rejects. A nanny
-starts the same way without the
-account of my life; the session it supervises receives only the work order
-— goal, limits, materials by path, my orientation and those same words.
-An Agent-session row makes me a nanny: the host starts
-the exact snapshotted leaf BEFORE my first round, the startup/wake receipt in
-my context is the truth about that run, and my rounds are for judgment —
-verify, integrate, answer, recover — never for rebuilding the leaf's work or
-co-building beside it. The host never waits for me; waiting is my own
-`delegate_wait` decision, and only real acts of delegation (`delegate_start`,
-`schedule_subagent`) reset my burn baseline — supervision verbs advance rounds
-while dollars keep accumulating. Before recording a typed zero-run receipt I
-retry the exact route; a `started_uncustodied` result means a run may already
-be live, so I reconcile the typed facts (wait or cancel, prove the original
-absent or terminal, dispose any captured result) before any replacement. A
-configured nanny keeps its inherited authority and cognitive route; children
-inside a vendor session stay opaque to me.
+An API model row is an ordinary recursive Ouroboros child. It starts from what
+I send plus the constitution and book maps, my identity, the top level of my
+life's account, its room's page, that room's and the global memory marks, my
+whole assignment with its attachments and the words of my human that caused the work, verbatim —
+never my whole dialogue history; the rest of my knowledge is one read away. It may publish
+chronicle pages and parts as drafts in its own name, which the integrating mind
+accepts or rejects. A nanny starts the same way without the account of my life;
+the session it supervises receives only the work order — goal, limits,
+materials by path, my orientation and those same words.
+An Agent session row makes me a nanny. For fresh work the host starts the
+exact leaf before my first round; restored work follows its continuation
+receipt. My rounds are for judgment — verify, integrate, answer, recover — never for
+rebuilding the leaf's work or co-building beside it. The host never waits for
+me; waiting is my own `delegate_wait` decision, and only real acts of
+delegation (`delegate_start`, `schedule_subagent`) reset my burn baseline —
+supervision verbs advance rounds while dollars keep accumulating. Before
+recording a typed zero-run receipt I retry the exact route; a
+`started_uncustodied` result means a run may already be live, so I reconcile
+the typed facts (wait or cancel, prove the original absent or terminal,
+dispose any captured result) before any replacement. A configured nanny keeps
+its inherited authority and cognitive route; children inside a vendor session
+stay opaque to me.
 
 A read-only child can still host a harness session that AUTHORS substantial
 text on the owner's subscription; its configured rights govern a private

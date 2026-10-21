@@ -1,8 +1,10 @@
-"""Address accepted answers to their asker, an admitted successor, or a fresh head.
+"""Address accepted answers to their living asker, an admitted successor, or a fresh head.
 
-Mailbox write is owed delivery, never a read receipt. A final drain/terminal
-race is repaired from the durable recipient and ACK identity; no room's sole
-unrelated reader and no claimed-but-unadmitted Continue may take the answer.
+A living asker holds its answers while paused, held or queued and reads them
+when it continues. Mailbox write is owed delivery, never a read receipt. A
+final drain/terminal race is repaired from the durable recipient and ACK
+identity; no room's sole unrelated reader and no claimed-but-unadmitted
+Continue may take the answer.
 """
 from __future__ import annotations
 
@@ -73,7 +75,7 @@ def acknowledge_answer(root, recipient: str, entry: dict) -> None:
 
 
 def deliver_answer(root, asker: str, quiz_id: str, block: dict, live_reader, fallback) -> tuple[bool, str]:
-    """Return (forwarded_to_fresh_head, reason); a live mailbox remains owed until ACK."""
+    """Return (forwarded_to_owner_ingress, reason); a living recipient's mailbox remains owed until ACK."""
     from ouroboros.owner_mailbox import KIND_QUIZ_ANSWER, mail_read_state, mailbox_holds, write_owner_message
     from ouroboros.owner_quiz import mark_discharged, recorded_answer_frame, quiz_states
     from ouroboros.utils import utc_now_iso
@@ -132,8 +134,9 @@ def deliver_answer(root, asker: str, quiz_id: str, block: dict, live_reader, fal
         # The selected reader ended before admission. Follow its existing
         # Continue under that recipient's own lock before using a fresh head.
         recipient, task = reading_recipient(root, admitted_successor(root, recipient), live_reader)
-    # No reader. Named ingress carries an explicit question-answer fact, which
-    # bypasses ordinary room intake and cannot release any old task's hold.
+    # No living holder. Named ingress carries the typed question-answer fact: owner
+    # routing gives it only to the asker's live late-answer head, else a fresh head;
+    # it releases no hold.
     block = _update_delivery(root, asker, quiz_id, {"recipient_task_id": "", "msg_id": f"quiz_late_answer:{asker}:{quiz_id}",
         "route": "fresh_head", "state": "owed", "reason_code": "asker_not_reading"}) or block
     forwarded, reason = fallback(root, asker, quiz_id, block, source=str(block.get("answer_source") or "web"))

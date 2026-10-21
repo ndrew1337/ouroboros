@@ -896,7 +896,8 @@ def run_delegated_review_session(
         thread_receipt: Dict[str, Any] = {}
         if use_thread:
             thread_receipt, thread_id, turn_id = _session_thread_receipt(
-                gateway, thread_id, run_id, turn_id, route, observed, continued=bool(continuations))
+                gateway, thread_id, run_id, turn_id, route, observed, continued=bool(continuations),
+                run_names=custody.held_run_names(detail, run_id))
         state.pop("pending_invocation_id", None)
         state.pop("delegated_run_id", None)
         return {
@@ -992,14 +993,15 @@ def _combined_session_usage(custody: Any, stopped: List[Dict[str, Any]],
 
 
 def _session_thread_receipt(gateway: Any, thread_id: str, run_id: str, turn_id: str, route: Any,
-                            observed: Dict[str, Any], *, continued: bool) -> Tuple[Dict[str, Any], str, str]:
+                            observed: Dict[str, Any], *, continued: bool,
+                            run_names: Any = ()) -> Tuple[Dict[str, Any], str, str]:
     """The thread receipt of the seat's final run, with the thread and turn it names."""
     from ouroboros.review_thread_continuity import review_thread_receipt as receipt_for
 
     try:
         receipt = receipt_for(gateway, thread_id, run_id, turn_id,
                               expected_profile=str(getattr(route, "profile_id", "") or ""),
-                              applied_profile=observed.get("profile_id", ""))
+                              applied_profile=observed.get("profile_id", ""), run_names=run_names)
     except ReviewRouteUnavailable as exc:
         if not continued or exc.code != "review_thread_receipt_missing":
             raise

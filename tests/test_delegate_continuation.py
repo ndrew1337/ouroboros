@@ -622,19 +622,25 @@ def test_a_continuation_retried_after_an_unknown_outcome_replays_its_lineage(tmp
     assert state["run-first"].superseded_by == "run-next"
 
 
-def test_empty_retry_of_an_ordinary_start_still_requires_the_recorded_prompt(tmp_path, monkeypatch):
+def test_empty_retry_of_an_ordinary_start_replays_the_recorded_request(tmp_path, monkeypatch):
+    """#1614: the retained invocation IS the request, so '' reuses it; whitespace is text."""
     from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
     lost = ClaudexorUnavailable("daemon_unreachable", "connection reset", status_code=503)
     _select_transport_access(monkeypatch, "readonly")   # a read-only child (#1609)
-    _r, unknown, _ctx, _calls = _start(
+    original, unknown, _ctx, _calls = _start(
         tmp_path, monkeypatch, acting=False, run_id="run-first", prompt="original work", start_error=lost)
     invocation = unknown["pending_invocation_id"]
     request, refusal, _ctx, calls = _start(
-        tmp_path, monkeypatch, acting=False, run_id="run-first", prompt="",
+        tmp_path, monkeypatch, acting=False, run_id="run-first", prompt=" ",
         start_kwargs={"retry_of": invocation})
     assert refusal["reason"] == "retry_prompt_mismatch" and request is None and calls == []
-    assert [row["invocation_id"] for row in custody.pending_invocations(tmp_path)] == [invocation]
+    request, payload, _ctx, calls = _start(
+        tmp_path, monkeypatch, acting=False, run_id="run-first", prompt="",
+        start_kwargs={"retry_of": invocation})
+    assert payload["status"] == "started" and payload["invocation_id"] == invocation
+    assert calls == [original] and request["prompt"] == "original work"
+    assert custody.pending_invocations(tmp_path) == []
 
 
 def test_an_unavailable_snapshot_lock_is_a_typed_claim_refusal(tmp_path, monkeypatch):
@@ -752,5 +758,5 @@ def test_no_resume_causes_are_untouched_by_the_continuation_seam():
 
 @pytest.mark.parametrize("cause", ["vendor_limit", "pool_exhausted"])
 def test_receipt_lines_tolerate_partial_rows(cause):
-    line = continuation._receipt_line("run-1", {"carrier": "native", "cause": cause})
+    line = continuation._receipt_line(frozenset({"run-1"}), {"carrier": "native", "cause": cause})
     assert line.startswith("try None (?): native after " + cause) and "model unattested" in line

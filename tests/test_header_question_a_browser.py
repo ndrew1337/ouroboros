@@ -71,14 +71,18 @@ def _seed(page):
         'components': [{'type': 'metric', 'label': 'Processed', 'value': '42'}]})]}))
 
 
-def _open(ui, width, height):
+def _open(ui, width, height, theme=None, seed=None):
     page = ui['new_page'](viewport={'width': width, 'height': height}, has_touch=width < 720)
     page.set_default_timeout(10_000)
-    _seed(page)
+    if theme:  # the System theme under this OS appearance (no stored choice: an app frame has no storage)
+        page.emulate_media(color_scheme=theme)
+    (seed or _seed)(page)
     origin = urlparse(ui['url']).netloc
     page.route('**/*', lambda r: r.fallback() if urlparse(r.request.url).netloc == origin else r.abort())
     page.goto(ui['url'] + '/')
     page.wait_for_selector('#chat-input', state='attached')
+    if theme:
+        assert page.evaluate('document.documentElement.dataset.theme') == theme
     return page
 
 
@@ -108,6 +112,14 @@ QUESTION_GEOMETRY = """() => {
         bubble: box(bubble), footBox: box(foot), page: document.scrollingElement.scrollWidth - innerWidth};
 }"""
 
+# Every box in the Main question's bubble, keyed by its place in the tree.
+BOXES = """() => {
+    const bubble = document.querySelector('#chat-messages .chat-bubble.project-question');
+    const key = (el) => { const path = []; for (let n = el; n !== bubble; n = n.parentElement) path.unshift(`${n.tagName}${[...n.parentElement.children].indexOf(n)}`); return path.join('/'); };
+    return Object.fromEntries([bubble, ...bubble.querySelectorAll('*')].map((el) => { const r = el.getBoundingClientRect();
+        return [el === bubble ? 'bubble' : key(el), [r.x, r.y, r.width, r.height].map((v) => Math.round(v * 100) / 100)]; }));
+}"""
+
 GROWTH = """async () => {
     const field = document.querySelector('#chat-messages .project-question-card .chat-quiz-comment');
     const frame = field.closest('.chat-quiz-comment-box'), send = frame.querySelector('.chat-quiz-send');
@@ -127,14 +139,16 @@ GROWTH = """async () => {
 }"""
 
 
+# The anatomy holds in both themes: the dark voices change colours and the materials inside the answer, never a size.
+@pytest.mark.parametrize('theme', ['light', 'dark'])
 @pytest.mark.parametrize('width,height', [(956, 801), (390, 844)])
-def test_question_card_voice_line_one_row_head_answer_frame_and_foot(engine_ui, width, height):
+def test_question_card_voice_line_one_row_head_answer_frame_and_foot(engine_ui, width, height, theme):
     engine = engine_ui['engine']
-    page = _open(engine_ui, width, height)
+    page = _open(engine_ui, width, height, theme)
     try:
         page.locator('#chat-messages .project-question-card .chat-quiz-comment').wait_for()
         facts = page.evaluate(QUESTION_GEOMETRY)
-        print(json.dumps({'question_a_geometry': facts, 'engine': engine, 'viewport': [width, height]}))
+        print(json.dumps({'question_a_geometry': facts, 'engine': engine, 'viewport': [width, height], 'theme': theme}))
         # Voice line: `Ouroboros` and the Project it comes from, one 28px row; the name gives way inside the card.
         assert facts['voice'] == ['sender', 'chat-live-project-card-btn'], facts
         assert round(facts['capsule']['h']) == 28 and facts['capsule']['right'] <= facts['cardRight'] + 0.5, facts
@@ -149,6 +163,13 @@ def test_question_card_voice_line_one_row_head_answer_frame_and_foot(engine_ui, 
         # Foot: the host's sentence after the time, never inside the card; no edge line widens the bubble.
         assert facts['foot'] == ['msg-time', 'chat-quiz-host-facts'] and FACTS in facts['footText'], facts
         assert not facts['factsInCard'] and facts['footBox']['right'] <= facts['bubble']['right'] and facts['page'] <= 0, facts
+        # The other theme repaints the same card in place and moves no box of it.
+        boxes = page.evaluate(BOXES)
+        for scheme in ('dark' if theme == 'light' else 'light', theme):
+            page.emulate_media(color_scheme=scheme)
+            page.wait_for_function('scheme => document.documentElement.dataset.theme === scheme', arg=scheme)
+            moved = {key: [box, boxes.get(key)] for key, box in page.evaluate(BOXES).items() if box != boxes.get(key)}
+            assert not moved and page.evaluate(QUESTION_GEOMETRY) == facts, (scheme, moved)
         growth = page.evaluate(GROWTH)
         print(json.dumps({'question_a_growth': growth, 'engine': engine}))
         heights = {step['lines']: step['height'] for step in growth['steps']}
@@ -158,7 +179,7 @@ def test_question_card_voice_line_one_row_head_answer_frame_and_foot(engine_ui, 
         assert growth['steps'][-1]['height'] == heights[1], 'and shrinks again'
         assert all(step['inside'] for step in growth['steps']), growth
         assert growth['ring'] not in ('', 'none'), 'the frame wears the field focus idiom'
-        setup_browser.capture(page, f'question-a-{engine}-{width}')
+        setup_browser.capture(page, f'question-a-{engine}-{width}-{theme}')
         # The Project's own card, opened by its reference as tests/test_ui_result_browser.py presses it: the capsule
         # is in the bubble's voice line, so a locator inside the card finds none. The same head, no Project to name.
         pointer = page.locator('#chat-messages .project-question-card[data-quiz-id="q-sound"]')
@@ -172,7 +193,62 @@ def test_question_card_voice_line_one_row_head_answer_frame_and_foot(engine_ui, 
         assert own.evaluate("el => el.closest('.chat-bubble').querySelector('.chat-bubble-voice')") is None
         assert own.evaluate("el => el.closest('.chat-bubble').querySelector('.chat-bubble-foot').textContent").count(FACTS) == 1
         own.evaluate("el => el.scrollIntoView({block: 'center'})")
-        setup_browser.capture(page, f'question-a-project-{engine}-{width}')
+        setup_browser.capture(page, f'question-a-project-{engine}-{width}-{theme}')
+    finally:
+        page.close()
+
+
+SETTLED = {**BLOCK, 'quiz_id': 'q-settled', 'state': 'answered', 'answered_index': 1, 'recommended_index': 0,
+           'options': ['A. Keep the quiet treatment', 'B. Use my own direction'],
+           'option_details': ['One colour family inside the answer.', 'A distinct recorded answer, with readable detail.']}
+
+
+def _seed_settled(page):
+    """Main holds one question its own task asked, answered by the owner (history replays the settled card)."""
+    _seed(page)
+    page.unroute('**/api/chat/history*')
+    page.route('**/api/chat/history*', lambda r: r.fulfill(json={'progress': [], 'messages': [{
+        'role': 'assistant', 'msg_type': 'quiz', 'task_id': 'task-settled', 'chat_id': 1, 'ts': SETTLED['asked_at'],
+        'text': SETTLED['question'], 'quiz': {k: v for k, v in SETTLED.items() if k != 'question'}}]}))
+
+
+SETTLED_FACTS = """(card) => {
+    const box = (el) => el.getBoundingClientRect();
+    const head = card.querySelector('.chat-quiz-head');
+    const centres = [...head.querySelectorAll('.chat-quiz-chip, .chat-quiz-status')].map((el) => box(el).y + box(el).height / 2);
+    const chosen = card.querySelector('.chat-quiz-option.chosen');
+    const cue = chosen.querySelector('.chat-quiz-option-chosen-cue');
+    const parts = [...chosen.querySelectorAll('.chat-quiz-option-chosen-name, .chat-quiz-option-chosen-cue')];
+    const kept = box(chosen).height, line = cue.getClientRects().length ? box(cue).height : 0;
+    const places = parts.map((part) => [part, part.parentNode, part.nextSibling]);
+    parts.forEach((part) => part.remove());
+    const without = box(chosen).height;
+    places.reverse().forEach(([part, parent, next]) => parent.insertBefore(part, next));
+    return {status: card.querySelector('.chat-quiz-status-text').textContent, head: Math.round(box(head).height),
+        spread: Math.max(...centres) - Math.min(...centres), parts: parts.length, kept, without, line,
+        gap: parseFloat(getComputedStyle(chosen).rowGap), shown: cue.getClientRects().length > 0};
+}"""
+
+
+@pytest.mark.parametrize('theme', ['light', 'dark'])
+def test_a_settled_question_names_the_owners_choice_and_keeps_its_anatomy(engine_ui, theme):
+    # The owner's recorded answer says `Your choice` in its accessible name in both themes; on dark the word also shows
+    # inside the chosen card as exactly one more line, on white it takes no room. The head keeps its one row.
+    page = _open(engine_ui, 956, 801, theme, _seed_settled)
+    try:
+        card = page.locator('#chat-messages .chat-quiz-card[data-quiz-id="q-settled"]')
+        card.wait_for()
+        facts = card.evaluate(SETTLED_FACTS)
+        print(json.dumps({'question_settled': facts, 'engine': engine_ui['engine'], 'theme': theme}))
+        assert facts['status'] == 'You answered' and facts['head'] == 28 and facts['spread'] <= 1, facts
+        chosen, other = card.locator('.chat-quiz-option.chosen'), card.locator('.chat-quiz-option:not(.chosen)')
+        assert chosen.count() == 1 and other.count() == 1 and facts['parts'] == 2, facts
+        assert chosen.aria_snapshot().count('Your choice') == 1 and 'Your choice' not in other.aria_snapshot()
+        if theme == 'dark':
+            assert facts['shown'] and abs(facts['kept'] - facts['without'] - facts['line'] - facts['gap']) <= 0.5, facts
+        else:
+            assert not facts['shown'] and facts['kept'] == facts['without'], facts
+        setup_browser.capture(page, f'question-settled-{engine_ui["engine"]}-{theme}')
     finally:
         page.close()
 

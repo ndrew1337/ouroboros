@@ -27,7 +27,7 @@ from ouroboros.llm_attempt import _attempt_request, _candidate_before_dispatch, 
 from ouroboros.llm_capability_policy import model_catalog as model_catalog, catalog_admits_model as catalog_admits_model
 from ouroboros.send_clock import stamp_clock_note
 from ouroboros.llm_substitution import (
-    AccountRotation, SubstitutionBudget, substitution_fact, failed_account_preference,
+    AccountRotation, CapabilityRetry, SubstitutionBudget, capability_refusal_text, substitution_fact, failed_account_preference,
     take_failed_account_preference)
 from ouroboros.model_slots import MODEL_ACCOUNTS_KEY, model_role_option
 from ouroboros.model_wait import ModelWaitInterrupted, current_model_wait, prepared_call_scope
@@ -113,6 +113,8 @@ class ClaudexorModelError(RuntimeError):
     @property
     def display_message(self) -> str:
         """Show typed provider details without changing exception classification text."""
+        if self.code == "model_capability_refused":
+            return sanitize_tool_result_for_log(capability_refusal_text(self.problem) or str(self))
         context = self.problem.get("context") or {}
         fields = (("stage", "stage"), ("errorCode", "cause"))
         if self.code != "model_outcome_unknown":
@@ -775,7 +777,8 @@ def _reset_native(payload: dict, error: ClaudexorModelNotDispatched, invocation:
 
 def _accounted_request(invocation: _ModelInvocation):
     # Every invocation is a new host preparation: Main's clock line, kept by the idempotent upload/rejoin.
-    invocation.payload = stamp_clock_note(invocation.payload)
+    if not invocation.payload.get("retryOfOperationId"):
+        invocation.payload = stamp_clock_note(invocation.payload)
     # The engine relays to the vendor: its loopback address is not where the model runs (a not-started receipt is a remote-hop fact).
     request = replace(_attempt_request(invocation.target, invocation.payload), route_is_loopback=False,
                       force_unknown_reservation=True, max_completion_tokens=invocation.output_reserve)
@@ -834,9 +837,9 @@ def chat_claudexor(target: dict, messages: list, tools: list | None, **parameter
     payload = _request(target, messages, tools, parameters)
     retry_preparation = None
     native_repaired = processing_repaired = False
-    substitution, rotation = SubstitutionBudget(ClaudexorModelError), AccountRotation()
+    substitution, rotation, capability = SubstitutionBudget(ClaudexorModelError), AccountRotation(), CapabilityRetry()
     all_operations_not_started = True
-    for _preparation in range(3 + substitution.redos + rotation.CEILING):
+    for _preparation in range(4 + substitution.redos + rotation.CEILING):
         invocation = _ModelInvocation(target, payload, parameters)
         try:
             with prepared_call_scope(retry_preparation or {}) as prepared:
@@ -847,18 +850,26 @@ def chat_claudexor(target: dict, messages: list, tools: list | None, **parameter
                                                   late_owner=_usage_wait.late_transport_custody(invocation))
                 all_operations_not_started = False  # even a discarded substituted response ran
                 invocation.capture = last_physical_attempt_capture()
+                if capability.original is not None:
+                    substitution.redos = substitution.used  # the correlated operation is the last send
                 if substitution.admit(invocation, result):
                     # Every later request in this round leaves account selection to the engine.
                     retry_preparation, parameters = None, {**parameters, "_no_account_preference": True}
                     payload = _request(target, payload["messages"], payload["tools"], {**(prepared or parameters), "_no_account_preference": True})
                     continue
                 adopt_turn_state((prepared or parameters).get("model_turn_state"), invocation.payload, result)
-                return rotation.disclose(substitution.disclose(invocation.finish(result)))
+                return capability.disclose(rotation.disclose(substitution.disclose(invocation.finish(result))))
         except ClaudexorModelNotDispatched as error:
             all_operations_not_started &= getattr(getattr(error, "physical_attempt_capture", None), "state", None) == "released"
             error.presence_all_operations_not_started = all_operations_not_started
             if invocation.response_ref:
                 invocation.acknowledge()
+            updated = capability.refused(invocation, error)
+            if updated is not None:
+                retry_preparation, payload = None, updated
+                continue
+            if capability.ends_chain(error):
+                raise
             updated = (_processing_retry_payload(payload, error)
                        if not processing_repaired and "standard" in target.get("processing_preferences", []) else None)
             if updated is not None:
@@ -874,6 +885,12 @@ def chat_claudexor(target: dict, messages: list, tools: list | None, **parameter
             retry_preparation = _native_retry_preparation(target, payload, parameters, error)
         except ClaudexorModelError as error:
             all_operations_not_started = False
+            updated = capability.refused(invocation, error)
+            if updated is not None:
+                retry_preparation, payload = None, updated
+                continue
+            if capability.ends_chain(error):
+                raise
             if not rotation.refused_call(target, parameters, invocation, error):
                 raise
             retry_preparation, parameters, payload = rotation.reask(parameters, payload)
@@ -885,6 +902,7 @@ def chat_claudexor(target: dict, messages: list, tools: list | None, **parameter
                                                and error.physical_attempt_capture.state == "released")
                 cause.presence_all_operations_not_started = all_operations_not_started
                 raise cause from None
+            capability.unsent(error)
             raise
         finally:
             _usage_wait.close_unless_abandoned(invocation)  # an owner Pause's abandoned wait: the sender closes it
@@ -965,9 +983,9 @@ async def chat_claudexor_async(target: dict, messages: list, tools: list | None,
     payload = _request(target, messages, tools, parameters)
     retry_preparation = None
     native_repaired = processing_repaired = False
-    substitution, rotation = SubstitutionBudget(ClaudexorModelError), AccountRotation()
+    substitution, rotation, capability = SubstitutionBudget(ClaudexorModelError), AccountRotation(), CapabilityRetry()
     all_operations_not_started = True
-    for _preparation in range(3 + substitution.redos + rotation.CEILING):
+    for _preparation in range(4 + substitution.redos + rotation.CEILING):
         invocation = _ModelInvocation(target, payload, parameters)
         try:
             with prepared_call_scope(retry_preparation or {}) as prepared:
@@ -986,18 +1004,26 @@ async def chat_claudexor_async(target: dict, messages: list, tools: list | None,
                     late_owner=_usage_wait.late_transport_custody(invocation))
                 all_operations_not_started = False
                 invocation.capture = last_physical_attempt_capture()
+                if capability.original is not None:
+                    substitution.redos = substitution.used
                 if await invocation.offload(substitution.admit, invocation, result):
                     # Every later request in this round leaves account selection to the engine.
                     retry_preparation, parameters = None, {**parameters, "_no_account_preference": True}
                     payload = _request(target, payload["messages"], payload["tools"], {**(prepared or parameters), "_no_account_preference": True})
                     continue
                 adopt_turn_state((prepared or parameters).get("model_turn_state"), invocation.payload, result)
-                return rotation.disclose(substitution.disclose(await invocation.offload(invocation.finish, result)))
+                return capability.disclose(rotation.disclose(substitution.disclose(await invocation.offload(invocation.finish, result))))
         except ClaudexorModelNotDispatched as error:
             all_operations_not_started &= getattr(getattr(error, "physical_attempt_capture", None), "state", None) == "released"
             error.presence_all_operations_not_started = all_operations_not_started
             if invocation.response_ref:
                 await invocation.offload(invocation.acknowledge)
+            updated = await invocation.offload(capability.refused, invocation, error)
+            if updated is not None:
+                retry_preparation, payload = None, updated
+                continue
+            if capability.ends_chain(error):
+                raise
             updated = (_processing_retry_payload(payload, error)
                        if not processing_repaired and "standard" in target.get("processing_preferences", []) else None)
             if updated is not None:
@@ -1013,6 +1039,12 @@ async def chat_claudexor_async(target: dict, messages: list, tools: list | None,
             retry_preparation = _native_retry_preparation(target, payload, parameters, error)
         except ClaudexorModelError as error:
             all_operations_not_started = False
+            updated = await invocation.offload(capability.refused, invocation, error)
+            if updated is not None:
+                retry_preparation, payload = None, updated
+                continue
+            if capability.ends_chain(error):
+                raise
             if not rotation.refused_call(target, parameters, invocation, error):
                 raise
             retry_preparation, parameters, payload = rotation.reask(parameters, payload)
@@ -1025,6 +1057,7 @@ async def chat_claudexor_async(target: dict, messages: list, tools: list | None,
                 if isinstance(cause, ClaudexorModelError):
                     cause.presence_all_operations_not_started = all_operations_not_started
                 raise cause from None
+            capability.unsent(error)
             raise
         finally:
             if not invocation.defer_close:

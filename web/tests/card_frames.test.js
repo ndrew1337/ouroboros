@@ -6,7 +6,7 @@ import test from 'node:test';
 
 import {
     CARD_APP_CSP, CARD_APP_SANDBOX, CARD_STATE_MAX_BYTES, INLINE_FRAME_FLOOR, cardAppSrcdoc, cardSubmitLine,
-    createCardAppBridge, createInlineFit, inlineFrameHeight, mountCardApp,
+    cardThemeTokens, createCardAppBridge, createInlineFit, inlineFrameHeight, mountCardApp,
 } from '../modules/card_frames.js';
 import { WIDGET_FRAME_MAX_HEIGHT } from '../modules/widget_module.js';
 import { installCardDom } from './helpers/card_dom.js';
@@ -147,6 +147,60 @@ test('an app that navigates its frame away is removed at its second document', (
         assert.equal(left, 1);
         assert.equal(window.listeners('message'), 0);
     } finally {
+        dom.restore();
+    }
+});
+
+// What getComputedStyle reads, per element and theme: the room's root values, and the darker voice's own material on
+// a card's host (ui.css "voice materials"); light has no voice material, so its host reads the root's values.
+const MATERIALS = {
+    dark: { root: { '--text-primary': '#efeff2', '--surface-tray': 'rgba(255, 255, 255, 0.045)', '--status-error-fg': '#fe9498' },
+        host: { '--text-primary': '#fcf9f9', '--surface-tray': '#832336', '--status-error-fg': '#ffc2c6' } },
+    light: { root: { '--text-primary': '#20232b', '--surface-tray': 'rgba(32, 35, 43, 0.03)', '--status-error-fg': '#b42332' },
+        host: { '--text-primary': '#20232b', '--surface-tray': 'rgba(32, 35, 43, 0.03)', '--status-error-fg': '#b42332' } },
+};
+const packetValues = (css) => Object.fromEntries([...css.matchAll(/(--ouro-(?:text|tray|error)): ([^;]+);/g)].map((m) => [m[1], m[2]]));
+
+test('an app reads the material its frame lies on: the connected host at mount and at every theme change', () => {
+    const dom = installCardDom();
+    const prior = Object.getOwnPropertyDescriptor(globalThis, 'ouroTheme');
+    try {
+        let theme = 'dark';
+        const host = document.createElement('div');
+        globalThis.getComputedStyle = (element) => ({
+            getPropertyValue: (name) => MATERIALS[theme][element === host ? 'host' : 'root'][name] || '' });
+        Object.defineProperty(globalThis, 'ouroTheme', { configurable: true, value: { get theme() { return theme; } } });
+        const mount = () => mountCardApp(host, { cardId: 'card_t', title: 'Tray', sha256: 't', html: '', fit: { fit() {} }, onSubmit() {} });
+        const srcdocPacket = () => packetValues(host.querySelector('iframe').srcdoc.match(/<style id="ouro-card-theme">(.*?)<\/style>/)[1]);
+        // A host outside the document has no material yet: the root's values stand in.
+        const detached = mount();
+        assert.deepEqual(srcdocPacket(), { '--ouro-text': '#efeff2', '--ouro-tray': 'rgba(255, 255, 255, 0.045)', '--ouro-error': '#fe9498' });
+        detached();
+        host.isConnected = true;
+        const dispose = mount();
+        const frame = host.querySelector('iframe');
+        assert.deepEqual(srcdocPacket(), { '--ouro-text': '#fcf9f9', '--ouro-tray': '#832336', '--ouro-error': '#ffc2c6' },
+            'inside the dark voice the error ink is the voice\'s readable word on its own tray');
+        const nonce = frame.srcdoc.match(/const nonce = "([^"]+)"/)[1];
+        const posted = [];
+        frame.contentWindow = { postMessage: (message, origin) => posted.push([message, origin]) };
+        for (const next of ['light', 'dark']) {
+            theme = next;
+            window.emit('ouro:theme-changed');
+        }
+        assert.equal(host.querySelector('iframe'), frame, 'a theme change repaints the same frame');
+        assert.deepEqual(posted.map(([message, origin]) => [message.type, message.nonce, origin, message.theme.name, packetValues(message.theme.css)]), [
+            ['ouro-card-theme', nonce, '*', 'light', { '--ouro-text': '#20232b', '--ouro-tray': 'rgba(32, 35, 43, 0.03)', '--ouro-error': '#b42332' }],
+            ['ouro-card-theme', nonce, '*', 'dark', { '--ouro-text': '#fcf9f9', '--ouro-tray': '#832336', '--ouro-error': '#ffc2c6' }],
+        ]);
+        dispose();
+        window.emit('ouro:theme-changed');
+        assert.equal(posted.length, 2, 'a disposed frame hears no theme');
+        assert.equal(window.listeners('ouro:theme-changed'), 0);
+        // Without a material the packet is the document root's, as before.
+        assert.deepEqual(packetValues(cardThemeTokens().css), { '--ouro-text': '#efeff2', '--ouro-tray': 'rgba(255, 255, 255, 0.045)', '--ouro-error': '#fe9498' });
+    } finally {
+        if (prior) Object.defineProperty(globalThis, 'ouroTheme', prior); else delete globalThis.ouroTheme;
         dom.restore();
     }
 });

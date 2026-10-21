@@ -936,7 +936,8 @@ def owner_provider_message(failure: Any) -> str:
     (its ``message``). A Python exception repr is never one of those: it stays in
     the durable ``llm_api_error`` event and ``_last_llm_error`` for diagnostics
     (#1369). Nor is a Claudexor engine error's text: its ``display_message`` joins
-    host-side diagnostics (stage, cause, engine code, the engine's own message)
+    host-side diagnostics (stage, cause, engine code, the engine's own message, or a
+    capability refusal's typed accounts and reasons)
     and its provider body stays private, so only its typed provider fields speak
     (``owner_provider_fields``). The owner's row bounds it (``provider_failure_hint``).
     """
@@ -1155,6 +1156,14 @@ def provider_recovery_hint(accumulated_usage: Dict[str, Any]) -> str:
             " The provider refused the stored continuation of this conversation "
             "rather than the request itself. Dropping it and sending the same "
             "conversation again is the repair, and this round already spent it."
+        )
+    from ouroboros.llm_substitution import capability_refused
+
+    if kind == "bad_request" and capability_refused(accumulated_usage):
+        return (
+            " The accounts tried cannot serve this model, and this round asks no other account. "
+            "A later request may reach another one; when none can, the owner chat names them "
+            "and Accounts shows any temporary marks."
         )
     if kind in {"quota_exhausted", "auth_error", "request_too_large", "bad_request", "context_overflow"}:
         guidance = {

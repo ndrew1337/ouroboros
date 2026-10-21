@@ -760,11 +760,11 @@ def _handle_send_quiz_state(evt: Dict[str, Any], ctx: Any) -> None:
                      require_write=True)
             mark_quiz_history_written(ctx.DRIVE_ROOT, tid, qid)
         if block.get("closed_actor") == "owner" and not (block.get("delivery") or {}).get("mailbox_at"):
-            from ouroboros.gateway.task_decision import _live_root_task
+            from ouroboros.gateway.task_decision import _mail_holder
             from ouroboros.owner_mailbox import KIND_QUIZ_CLOSED, write_owner_message
             from supervisor.queue import _task_drive_for_task
 
-            task, _refusal = _live_root_task(tid)
+            task, _refusal = _mail_holder(tid)  # a paused author learns it when it continues
             if task is not None:
                 frame = (f"[Owner question closed without answer] quiz {qid} — "
                          f"closed {block['closed_at']}. Reason: {block['closed_reason']}\n"

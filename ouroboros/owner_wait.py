@@ -309,6 +309,22 @@ def saved_sleep_checkpoint(root: Any, task_id: str, attempt: int | None = None) 
     return wait, state
 
 
+def governing_continuation(task: dict) -> str:
+    """Name the ONE carrier the loop resumes: owner wait, then exact pause, then saved work.
+
+    The loop loads the first present carrier and never falls back when it fails,
+    so admission validates that carrier alone. A later carrier legitimately
+    retains the earlier saved-work locator; a valid newer one never reads it, and
+    an invalid one never falls back to it. Falsy wait/pause fields are absent;
+    working recovery is selected by presence, even with an unusable locator.
+    """
+    if task.get("_owner_wait_resume"):
+        return "owner_wait"
+    if task.get("_budget_pause_resume"):
+        return "exact_pause"
+    return "working" if "_working_recovery" in task else ""
+
+
 def load_owner_wait(ctx: Any, handoff: dict | None = None) -> dict:
     """Resolve a selected handoff; a stale snapshot cannot revive a spent wait."""
     handoff = handoff or getattr(ctx, "owner_wait_resume", None)

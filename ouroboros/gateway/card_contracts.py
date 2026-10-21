@@ -23,13 +23,15 @@ class CardSubmissionSummary(TypedDict):
     """One recorded owner press: which control, its label as drawn, when, and its delivery
     (``delivered`` into the authoring task's mailbox, ``forwarded`` as the owner's message
     after that task ended, ``owed`` while neither has happened). ``request_id`` retries an
-    owed press, after a reload too."""
+    owed press, after a reload too. ``reason_code`` ``awaiting_recipient_read``: delivered
+    to a paused, held or queued author that has not read it yet."""
 
     action_id: str
     label: str
     at: str
     delivery: Literal["owed", "delivered", "forwarded"]
     request_id: str
+    reason_code: NotRequired[str]
 
 
 class CardOutbound(ChatReferenceFields):
@@ -47,7 +49,7 @@ class CardOutbound(ChatReferenceFields):
 
 
 class CardStateOutbound(TypedDict):
-    """A shown card changed: a new body (``card.revision`` grew) or a recorded press. Read
+    """A shown card changed: a new body (``card.revision`` grew) or a press recorded or read. Read
     ``GET /api/cards/{card_id}`` again; it is a signal, never a second card."""
 
     type: Literal["card_state"]

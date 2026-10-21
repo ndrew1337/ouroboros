@@ -155,7 +155,10 @@ def record_task_execution(task: Mapping[str, Any], usage: Mapping[str, Any], *, 
     snapshot = task.get("configured_subagent") or {}
     identity = execution_identity(snapshot)
     availability = task.get("subagent_availability") or {}
-    if identity["kind"] == "agent_session" and availability.get("status") == "unavailable" and availability.get("reason"):
+    from ouroboros.owner_wait import governing_continuation
+
+    if (identity["kind"] == "agent_session" and not governing_continuation(task)
+            and availability.get("status") == "unavailable" and availability.get("reason")):
         route, _, model = identity["target_id"].partition("=")
         record_last_delegation(route=route, requested_model=model, applied_model="",
             run_id="task:" + str(task.get("id") or ""), task_id=str(task.get("id") or ""),

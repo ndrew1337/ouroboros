@@ -564,6 +564,26 @@ def working_saved(root: Any, task_id: str, attempt: int, *, task: Optional[Dict[
         return False
 
 
+def attach_preserved_successor_source(
+    drive_root: Any, task_id: str, successor: Dict[str, Any], prior_task: Dict[str, Any], attempt: int,
+) -> None:
+    """Freeze a stopped successor's cognition, retaining a gap if freezing fails.
+
+    Preserved successors bypass boot's RUNNING-row recovery. Native owner waits
+    already carry their source and keep their attempt, so need no second freeze.
+    """
+    if isinstance(successor.get("_owner_wait_resume"), dict):
+        return
+    from ouroboros.working_checkpoint import attach_recovery
+
+    root = pathlib.Path(prior_task.get("budget_drive_root") or drive_root)
+    saved = working_saved(root, task_id, attempt, task=prior_task)
+    if not attach_recovery(root, successor, source_task_id=task_id, from_attempt=attempt,
+                           cause="restart", prior_task=prior_task) and saved:
+        successor.setdefault("_working_recovery", {
+            "source_task_id": task_id, "from_attempt": attempt, "cause": "restart"})
+
+
 def _txn():
     from ouroboros import delegate_recovery as dr
 

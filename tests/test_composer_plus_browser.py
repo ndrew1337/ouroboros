@@ -21,13 +21,13 @@ from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 PLUS = "#page-chat #chat-plus"
-MENU = ".chat-plus-menu"
+MENU = ".chat-plus-menu:not([data-leaving])"
 ATTACH = f"{MENU} [data-plus-item='attach']"
 FACTS = """() => {
     const box = (node) => { if (!node) return null; const r = node.getBoundingClientRect();
         return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
     const plus = document.querySelector('#page-chat #chat-plus');
-    const menu = document.querySelector('.chat-plus-menu');
+    const menu = document.querySelector('.chat-plus-menu:not([data-leaving])');
     const page = document.querySelector('#page-chat');
     const active = document.activeElement;
     return {

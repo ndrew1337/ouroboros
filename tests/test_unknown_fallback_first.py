@@ -519,3 +519,28 @@ def test_chosen_primary_refusal_keeps_existing_episode_bounds_and_unknown_custod
     assert not loop_transport.primary_refusal_wait(ctx, kind)
     ctx.current_task_type, ctx.exact_model_route = "task", True
     assert not loop_transport.primary_refusal_wait(ctx, kind)
+
+
+# -- The capability no-salvage verdict belongs to the acting route ------------------------------
+
+
+def _model_refusal(code):
+    from ouroboros.llm_claudexor import ClaudexorModelError
+
+    return ClaudexorModelError({"code": code, "message": "The provider refused this request.", "retryable": False,
+                                "context": {"httpStatus": 400}})
+
+
+@pytest.mark.parametrize("other", ["invalid_request", "unsupported_parameter"])
+@pytest.mark.parametrize("primary_refused", [True, False], ids=["primary_cannot_serve", "fallback_cannot_serve"])
+def test_the_salvage_decision_belongs_to_the_acting_route(data_root, tmp_path, monkeypatch, primary_refused, other):
+    """A route that cannot serve its model gets no salvage summary; a failed configured fallback's
+    refusal neither grants nor takes away the acting route's own salvage."""
+    monkeypatch.setenv("OUROBOROS_MODEL_FALLBACKS", "fb/one")
+    capability = "model_capability_refused"
+    llm = _RouteLLM(data_root, **{PRIMARY: [lambda: _model_refusal(capability if primary_refused else other)],
+                                  "fb/one": [lambda: _model_refusal(other if primary_refused else capability)]})
+    text, _usage, _trace, _registry = _run(tmp_path, llm, direct=True)
+    assert [model for model, _messages in llm.sent] == [PRIMARY, "fb/one"] + ([] if primary_refused else [PRIMARY])
+    if not primary_refused:
+        assert "answer from " + PRIMARY in text

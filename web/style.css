@@ -36,6 +36,12 @@ body {
     inherits: false;
     initial-value: 0;
 }
+/* The finger's settle (drawer_drag.js writes it on the drawer, its scrim and the room card) is not inherited either:
+   written on the room card it would restyle every row of the room at the release, the moment the drawer latches. */
+@property --drawer-settle {
+    syntax: '*';
+    inherits: false;
+}
 
 #app {
     display: grid;
@@ -50,6 +56,8 @@ body {
 /* An older desktop page can survive a source update with its old #divider in the DOM.
    Keep that retired grid child out of flow while the WebView reloads newer assets. */
 #app > #divider { display: none; }
+/* Its old reconnect veil too (7.7.0 and older; the veil is gone, owner 20.10 Q4): never shown, never taking room. */
+#reconnect-overlay { display: none !important; }
 
 /* App navigation shell: a docked sidebar column, a drawer in the stack layout. */
 /* The shell's icon controls (☰, the drawer's ×, a Project's ×): one round neutral capsule holding one glyph, the
@@ -562,6 +570,26 @@ html[data-layout="stack"] .resize-handle { display: none; }
 .chat-bubble.project-answer > .system-message-actions,
 .chat-bubble.assistant > .system-message-actions { align-items: center; padding-block: var(--space-2) var(--space-1); }
 .project-answer-limitation { color: var(--text-meta); white-space: normal; overflow-wrap: anywhere; }
+/* A Project ending with no authored answer (project_answer.js paintEnding): the work's name and true outcome, then its
+   cause, recorded details and labelled preserved output, in the System voice at reading size; the Project's name is the
+   reference under it. The same details follow an answer's limitation that names an undescribed code. */
+.chat-bubble.system > .message.project-ending {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+}
+.project-ending-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 var(--space-2); min-width: 0; }
+.project-ending-title { min-width: 0; font-weight: 500; }
+.project-ending-cause, .project-ending-salvage { margin: 0; }
+.project-ending-salvage { color: var(--text-meta); }
+.project-ending-details, .chat-episode-codes { color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); overflow-wrap: anywhere; }
+.project-answer-limitation + .project-ending-details { margin-top: var(--space-1); }
+.project-ending-details > summary { width: fit-content; min-height: var(--touch-target-min); align-content: center; cursor: pointer; }
+.project-ending-details > summary:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; }
+.project-ending-details > p { margin: var(--space-1) 0 0; }
 /* Main's questions and owner actions (docs/DESIGN.md "Project question mirror"). The waiting
    pill is one of the composer's pills (Swarm / Context / Effort): their row, height and type, at
    the row's end, amber for "waits for you"; a narrow row keeps the glyph and the number. */
@@ -1527,6 +1555,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }
+@media (prefers-reduced-motion: reduce) {
+    .status-badge.thinking { animation: none; }
+}
 
 /* History navigation at the top edge of the rendered window. */
 .chat-load-older {
@@ -1715,10 +1746,19 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
    chat_reading_position.js marks the feed [data-resizing], and the browser lays out only the rows near the screen;
    every other row keeps the size it was last laid out at (the `auto` above remembers it; 160px stands in only for a
    row never laid out). Once the width holds, the mark goes, every row is laid out at the final width and the
-   reading place is re-applied in that same frame. Never lazy at rest: a row that takes its real size only as it
-   nears the screen moves the passage being read in WebKit, and landings, history pages and the bottom are measured
-   against exact rows (tests/test_chat_lazy_rows_browser.py). */
+   reading place is re-applied in that same frame. */
 :is(#chat-messages, .chat-messages)[data-resizing] > * {
+    content-visibility: auto;
+}
+
+/* Rows asleep at rest (chat_row_sleep.js; owner 20.10, 3A): a bubble or work card laid out at the feed's width with
+   everything in it, and more than a screen from the view, is skipped and keeps that size, its own; a row that
+   changes, comes near the view, a new width, theme or fonts wake it. Only such rows: a row that takes its real size
+   only as it nears the screen moves the passage being read in WebKit, as does a contained row near the view (WebKit's
+   scroll anchoring then fails); landings, history pages and the bottom are measured against exact rows
+   (tests/test_chat_lazy_rows_browser.py, tests/test_chat_row_sleep_browser.py). With the rows far away skipped,
+   moving the room card under the drawer no longer restyles and repaints the whole feed. */
+:is(#chat-messages, .chat-messages) > [data-laid] {
     content-visibility: auto;
 }
 
@@ -2011,8 +2051,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     background: var(--system-bubble-bg);
 }
 
+/* A message waiting for its echo: faded on white; on dark it keeps full ink and its words below say so. */
 .chat-bubble.pending {
-    opacity: 0.78;
+    opacity: var(--message-pending-opacity);
     border-style: dashed;
 }
 
@@ -2304,9 +2345,9 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 .chat-live-phase[data-chip-tone="live"] > .status-mark { min-width: calc(3 * var(--mark-dot) + 2 * var(--mark-gap)); }
 
 .chat-live-phase[data-chip-tone="live"] {
-    color: var(--accent-light);
+    color: var(--status-live-fg);
     border-color: var(--accent-25);
-    background: var(--accent-10);
+    background: var(--status-live-bg);
 }
 
 .chat-live-phase[data-chip-tone="owner"] {
@@ -3653,13 +3694,13 @@ html[data-layout="stack"] .nav-drawer-backdrop {
        while it goes it is not a target. */
     opacity: 0;
     pointer-events: none;
-    transition: opacity var(--drawer-settle, 280ms) ease;
+    transition: opacity var(--drawer-settle, var(--motion-close)) ease;
     touch-action: pan-y pinch-zoom;  /* a sideways finger on the scrim drags the drawer closed (drawer_drag.js) */
 }
 html[data-layout="stack"] body.nav-drawer-open .nav-drawer-backdrop {
     opacity: 1;
     pointer-events: auto;
-    transition-duration: var(--drawer-settle, 340ms);
+    transition-duration: var(--drawer-settle, var(--motion-open));
 }
 @starting-style {
     html[data-layout="stack"] body.nav-drawer-open .nav-drawer-backdrop { opacity: 0; }
@@ -3677,8 +3718,8 @@ html[data-layout="stack"] #primary-sidebar {
        drag (--drawer-settle, drawer_drag.js). */
     transform: translateX(-16%);
     opacity: 0.5;
-    transition: transform var(--drawer-settle, 280ms) cubic-bezier(0.32, 0.72, 0, 1),
-        opacity var(--drawer-settle, 280ms) ease;
+    transition: transform var(--drawer-settle, var(--motion-close)) var(--ease-sheet),
+        opacity var(--drawer-settle, var(--motion-close)) ease;
     padding-bottom: calc(var(--space-3) + var(--inset-bottom));
     touch-action: pan-y;  /* a sideways finger is the drawer's (drawer_drag.js); up and down scroll the list */
 }
@@ -3712,7 +3753,7 @@ html[data-layout="stack"] #primary-sidebar.open {
     transform: none;
     opacity: 1;
     box-shadow: -64px 0 0 var(--surface-side);
-    transition-duration: var(--drawer-settle, 340ms);
+    transition-duration: var(--drawer-settle, var(--motion-open));
 }
 /* Under a finger (drawer_drag.js) everything that moves follows one number, --drawer-p (0 closed … 1 open), with no
    transition: the drawer comes up from under the room, the room slides as the card, its veil fades its words.
@@ -3732,17 +3773,13 @@ html[data-layout="stack"] body .nav-drawer-backdrop.dragging {
     transition: none;
 }
 /* The room (Main, or a Project open over it) is the card: opaque, so the drawer under it never shows through, and
-   pushed aside from its left edge. */
-html[data-layout="stack"] #content,
-html[data-layout="stack"] .project-panel.open {
-    transform-origin: 0 50%;
-}
-html[data-layout="stack"] body.nav-drawer-open :is(#content, .project-panel.open) {
+   pushed aside from its left edge (each room's own stack rule: transform-origin 0 50%). */
+html[data-layout="stack"] body.nav-drawer-open :is(#content, .project-panel) {
     transform: translateX(var(--drawer-w)) scale(0.96);
     border-radius: var(--room-card-radius);
     box-shadow: var(--room-card-shadow);
     overflow: hidden;
-    transition-duration: var(--drawer-settle, 340ms);
+    transition-duration: var(--drawer-settle, var(--motion-open));
 }
 /* Under a finger. `body` makes it as specific as the open card's rule above, so a finger that takes the open drawer
    back, or pulls it past open, moves the card too; the veil's rule below likewise. */
@@ -3767,11 +3804,11 @@ html[data-layout="stack"] .room-veil {
     pointer-events: none;
     background: var(--bg-primary);
     opacity: 0;
-    transition: opacity var(--drawer-settle, 280ms) ease;
+    transition: opacity var(--drawer-settle, var(--motion-close)) ease;
 }
 html[data-layout="stack"] body.nav-drawer-open .room-veil {
     opacity: 0.42;
-    transition-duration: var(--drawer-settle, 340ms);
+    transition-duration: var(--drawer-settle, var(--motion-open));
 }
 html[data-layout="stack"] body .room-veil.dragging {
     opacity: calc(0.42 * min(var(--drawer-p, 0), 1));
@@ -3781,19 +3818,100 @@ html[data-layout="stack"] body .room-veil.dragging {
     html[data-layout="stack"] :is(#primary-sidebar, #primary-sidebar.open, .nav-drawer-backdrop, #content,
         .project-panel, .room-veil) { transition: none; }
 }
+/* A place chosen in the open drawer changes inside the card (shell_motion.js; owner 20.10, 4A). The page that leaves
+   stays displayed for the beat, out of the flow, while its words fade; a Project room that leaves lies over the
+   arriving one inside the panel. The Project panel is the card whether arriving or leaving while the drawer is painted
+   open (above), so it never rises over the drawer. */
+#content > .page[data-leaving] {
+    display: flex;
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+.chat-instance-panel[data-leaving] {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+}
+/* Main's words fade under a cover of its own background (shell_motion.js `fade`): the page is its stacking context,
+   so the cover lies over everything in it. */
+html[data-layout="stack"] #page-chat { isolation: isolate; }
+html[data-layout="stack"] #page-chat > .shell-cover {
+    position: absolute;
+    inset: 0;
+    z-index: 2147483647;
+    background: var(--bg-primary);
+    opacity: 0;  /* at rest it covers nothing: a fade that ends without holding its last frame leaves the room seen */
+    pointer-events: none;
+}
+/* The chosen place's pill: the chosen row's own fill (and its left mark) under the drawer's rows, sliding from the old
+   row to the tapped one during the beat, turning from a place's fill into a Project's veil on the way; the rows' own
+   fills step aside meanwhile and take the place back in one frame. */
+html[data-layout="stack"] #primary-sidebar > .shell-pill {
+    position: absolute;
+    z-index: 0;
+    pointer-events: none;
+    transform-origin: 0 50%;
+    will-change: transform, opacity;
+}
+html[data-layout="stack"] .shell-pill > i {
+    position: absolute;
+    inset: 0;
+}
+html[data-layout="stack"] .shell-pill > .shell-pill-place {
+    background: var(--tone-crimson);
+    border-radius: var(--radius-inner);
+}
+html[data-layout="stack"] .shell-pill > .shell-pill-place::before {
+    content: '';
+    position: absolute;
+    left: 3px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 17px;
+    border-radius: 0 3px 3px 0;
+    background: var(--place-mark);
+}
+html[data-layout="stack"] .shell-pill > .shell-pill-project {
+    background: var(--project-08);
+    border-radius: var(--radius-sm);
+}
+html[data-layout="stack"] #primary-sidebar.shell-sliding :is(.nav-row.active, .nav-project-row.active),
+html[data-layout="stack"] #primary-sidebar.shell-sliding .sidebar-head {
+    background: transparent;
+}
+html[data-layout="stack"] #primary-sidebar.shell-sliding .nav-row.active::before { opacity: 0; }
+html[data-layout="stack"] #primary-sidebar.shell-handoff :is(.nav-row, .nav-project-row) { transition: none; }
+/* Under the closed drawer the room card hides its rows: their moving marks rest instead of running unseen (most of a
+   page's running animations), and start again with the drawer, in the page's one phase (status_mark.js). */
+html[data-layout="stack"] #primary-sidebar:not(.open):not(.dragging) {
+    --mark-wave: none;
+}
+/* A tap on a drawer row answers with its colour at once (a press is colour, never a sink): without a hover the rows
+   had only iOS's grey flash. */
+.nav-row,
+.nav-section-toggle {
+    -webkit-tap-highlight-color: transparent;
+}
+.nav-row:not(.active):active,
+.nav-section-toggle:active {
+    background: var(--tone-quiet-hover);
+}
 html[data-layout="stack"] .unread-badge {
     min-width: 14px;
     height: 14px;
 }
 html[data-layout="stack"] #content {
+    transform-origin: 0 50%;
     grid-column: 1;
     padding-left: 0;
     padding-bottom: var(--inset-bottom);
     z-index: var(--z-room);
     background: var(--bg-primary);
-    transition: transform var(--drawer-settle, 280ms) cubic-bezier(0.32, 0.72, 0, 1),
-        border-radius var(--drawer-settle, 280ms) cubic-bezier(0.32, 0.72, 0, 1),
-        box-shadow var(--drawer-settle, 280ms) ease;
+    transition: transform var(--drawer-settle, var(--motion-close)) var(--ease-sheet),
+        border-radius var(--drawer-settle, var(--motion-close)) var(--ease-sheet),
+        box-shadow var(--drawer-settle, var(--motion-close)) ease;
 }
 /* The stack layout's header is one row of at most 56px at normal scale: `☰ · title · status … Panic · ⋯`
    (owner Q4=A). Nothing wraps: the title ellipsizes, Restart and the budget are inside ⋯ (chat.js places them). */
@@ -5140,34 +5258,6 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 ::-webkit-scrollbar-thumb { background: var(--accent-18); border-radius: var(--radius-xs); }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-35); }
 
-#reconnect-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(var(--shell-rgb), 0.95);
-    z-index: var(--z-reconnect);
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 12px;
-    color: var(--text-primary);
-    font-size: 14px;
-    font-weight: 500;
-}
-#reconnect-overlay.visible { display: flex; }
-/* Feedback from the overlay's own Panic action stays readable above it. */
-#reconnect-overlay.visible ~ .toast-stack { z-index: var(--z-emergency-feedback); }
-#reconnect-panic[hidden] { display: none; }
-#reconnect-overlay .spinner {
-    width: 32px;
-    height: 32px;
-    border: 3px solid var(--divider);
-    border-top-color: var(--accent);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-
 .cost-table {
     width: 100%;
     border-collapse: collapse;
@@ -5903,6 +5993,14 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     to { opacity: 0; transform: translateY(8px); }
 }
 
+/* A toast that stays glides into the place of one that left, while that one fades where it stood (toast.js writes
+   only the measured shift). */
+.toast { transition: transform var(--motion-close) var(--ease-sheet); }
+.toast[data-gliding] { transform: translateY(var(--toast-shift, 0px)); transition: none; }
+@media (prefers-reduced-motion: reduce) {
+    .toast { transition: none; }
+}
+
 .skills-tabs {
     margin-bottom: 14px;
 }
@@ -6331,12 +6429,10 @@ button.skills-mark { cursor: pointer; min-height: 0; }
     gap: 12px;
 }
 
-/* Confirm/input/alert dialogs must stay usable over EVERY overlay — the
-   reconnect shade sits at 1000 (the Panic confirm is the canonical case: it
-   must be clickable while the socket is down). Content modals
-   (:where(.marketplace-modal-backdrop), 90) deliberately stay under the
-   shade — their actions need a live connection anyway. Overlay scale:
-   modals 90 · toasts/menus 120 · reconnect 1000 · dialogs 1100. */
+/* Confirm/input/alert dialogs must stay usable over EVERY overlay (the Panic
+   confirm is the canonical case: it must be clickable while the socket is
+   down; no veil covers the app then, owner 20.10 Q4). Overlay scale:
+   modals 90 · toasts/menus 120 · dialogs 1100. */
 .confirm-dialog-backdrop {
     z-index: 1100;
 }
@@ -7000,6 +7096,9 @@ button.skills-mark { cursor: pointer; min-height: 0; }
     0%, 100% { opacity: 0.2; }
     50% { opacity: 0.7; }
 }
+@media (prefers-reduced-motion: reduce) {
+    .widget-status[data-state="refreshing"]::after { animation: none; }
+}
 
 .widget-tab-list {
     display: flex;
@@ -7141,14 +7240,14 @@ html[data-layout="stack"] .chat-toolbar-row {
    data-fold holds from the fold until the row is back, so all of it runs back on the same curve. */
 html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-toolbar-row {
     max-height: var(--fold-row-h);
-    transition: max-height 300ms cubic-bezier(0.32, 0.72, 0, 1), margin-bottom 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    transition: max-height 300ms var(--ease-sheet), margin-bottom 300ms var(--ease-sheet);
 }
 html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-toolbar-row {
     max-height: 0;
     margin-bottom: calc(-1 * var(--space-2));
 }
 html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-toolbar-row > .composer-menu {
-    transition: transform 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    transition: transform 300ms var(--ease-sheet);
 }
 html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-toolbar-row > .composer-menu {
     transform: translateY(var(--fold-menu-dy, 0px));
@@ -7164,7 +7263,7 @@ html[data-layout="stack"] .chat-input-wrap[data-fold]:not([data-folded]) .chat-t
     transition: opacity 160ms ease 140ms, visibility 0s;
 }
 html[data-layout="stack"] .chat-input-wrap[data-fold] .chat-field {
-    transition: box-shadow 0.2s, background 0.2s, margin-inline-start 300ms cubic-bezier(0.32, 0.72, 0, 1);
+    transition: box-shadow 0.2s, background 0.2s, margin-inline-start 300ms var(--ease-sheet);
 }
 html[data-layout="stack"] .chat-input-wrap[data-folded] .chat-field {
     margin-inline-start: calc(var(--composer-control-height) + 6px + var(--space-2));
@@ -7747,6 +7846,7 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
     flex-direction: column;
     flex: 1;
     min-height: 0;
+    position: relative;  /* a Project room that leaves lies over the arriving one (shell_motion.js) */
 }
 
 .project-panel-backdrop {
@@ -7839,6 +7939,21 @@ html[data-layout="docked"] .project-panel {
 }
 html[data-layout="docked"] .project-panel {
     max-width: 100%;
+    /* It comes in from the window's right edge with its room in it and goes back there whole, opaque all the way, on
+       the drawer's curve; only its scrim fades (owner 20.10, Q2 A). #app clips what lies past the edge. */
+    transform: translateX(100%);
+    opacity: 1;
+    transition: transform var(--motion-close) var(--ease-sheet);
+}
+html[data-layout="docked"] .project-panel.open {
+    transform: none;
+    transition-duration: var(--motion-open);
+}
+html[data-layout="docked"] .project-panel-backdrop {
+    transition: opacity var(--motion-close) ease;
+}
+html[data-layout="docked"] .project-panel-backdrop.open {
+    transition-duration: var(--motion-fade);
 }
 
 /* The stack layout: the project thread is a full-width layer over the room. It has no outside to tap and dims nothing:
@@ -7854,11 +7969,14 @@ html[data-layout="stack"] .project-panel {
     border-left: none;
     /* A full-screen room must occlude Main, not show its text through glass. */
     background: var(--bg-primary);
+    /* Pushed aside from its left edge, open or not: with the origin only on .open, a Project card closing at
+       scale(.96) pivoted about its centre and jumped 8px the frame it lost the class. */
+    transform-origin: 0 50%;
     transform: translateY(14px);
     /* It rises on the sheet curve, and moves as the room card with the drawer (above) on the same one. */
-    transition: transform var(--drawer-settle, 280ms) cubic-bezier(0.32, 0.72, 0, 1), opacity 180ms ease,
-        border-radius var(--drawer-settle, 280ms) cubic-bezier(0.32, 0.72, 0, 1),
-        box-shadow var(--drawer-settle, 280ms) ease;
+    transition: transform var(--drawer-settle, var(--motion-close)) var(--ease-sheet), opacity var(--motion-fade) ease,
+        border-radius var(--drawer-settle, var(--motion-close)) var(--ease-sheet),
+        box-shadow var(--drawer-settle, var(--motion-close)) ease;
 }
 
 html[data-layout="stack"] .project-panel.open {
@@ -7878,6 +7996,13 @@ body.keyboard-open .project-panel {
     .chat-scroll-bottom-btn {
         transition: none;
     }
+    /* Docked, the panel appears where it stands with a short fade instead of travelling. */
+    html[data-layout="docked"] .project-panel {
+        transform: none;
+        opacity: 0;
+        transition: opacity var(--motion-fade) ease;
+    }
+    html[data-layout="docked"] .project-panel.open { opacity: 1; }
     .chat-load-older[aria-busy="true"] .chat-load-older-btn {
         animation: none;
     }
@@ -9122,6 +9247,10 @@ body.keyboard-open .project-panel {
     line-height: var(--line-meta);
     color: var(--text-meta);
 }
+/* The owner's own record: an answered question's words and its ok dot (ui.css --mark-ok) take the recorded-answer
+   roles, the owner's blue on dark, the meta words and ok dot on white. An answer whose delivery is unknown keeps its
+   owner dot. */
+.chat-quiz-card[data-state="answered"] .chat-quiz-status { color: var(--tone-recorded-answer); --mark-ok: var(--tone-recorded-mark); }
 .chat-quiz-question {
     font-size: var(--type-body);
     line-height: var(--line-body, 1.5);
@@ -9154,8 +9283,9 @@ body.keyboard-open .project-panel {
 }
 /* An offered answer is an elevated card (owner 16.10: Material's elevated card, a choice and never a field): the
    capsule surface on the rest shadow like every pressable thing, the object radius because an answer can be a
-   paragraph; hover and press change its colour. Once the question settles the cards lie flat and the chosen one
-   takes the green tone. */
+   paragraph; hover and press change its colour. Once the question settles the other cards lie flat and the chosen
+   one takes the chosen-answer tone (ui.css: the owner's sapphire keeping its lift on dark, the green tone flat on
+   white) and names itself `Your choice`. */
 .chat-quiz-options {
     display: flex;
     flex-direction: column;
@@ -9181,7 +9311,10 @@ body.keyboard-open .project-panel {
 .chat-quiz-option:hover:not(:disabled) { background: var(--surface-capsule-hover); }
 .chat-quiz-option:active:not(:disabled) { filter: var(--press); }
 .chat-quiz-option:disabled { color: var(--text-disabled); cursor: default; background: var(--surface-tray); box-shadow: none; }
-.chat-quiz-option.chosen { color: var(--status-ok-fg); background: var(--tone-green); }
+.chat-quiz-option.chosen { color: var(--tone-chosen-answer-ink); background: var(--tone-chosen-answer); }
+/* A settled answer is a record: its chosen card keeps the lift the theme gives it. A chosen card that still takes a
+   press (a choice dialog's radio card) stands like every capsule. */
+.chat-quiz-option.chosen:disabled { box-shadow: var(--tone-chosen-answer-shadow); }
 .chat-quiz-option.pending-choice {
     transition: none;
     box-shadow: var(--elev-rest), inset 0 0 0 1px var(--focus-accent-border);
@@ -9189,7 +9322,7 @@ body.keyboard-open .project-panel {
     color: var(--text-primary);
 }
 .chat-quiz-card [aria-disabled="true"] { cursor: default; }
-.chat-quiz-card [aria-disabled="true"]:not(.pending-choice) { opacity: .75; }
+.chat-quiz-card [aria-disabled="true"]:not(.pending-choice) { opacity: var(--quiz-held-opacity); }
 .chat-quiz-card [aria-disabled="true"]:hover:not(.pending-choice) {
     background: var(--surface-tray);
 }
@@ -9213,12 +9346,21 @@ body.keyboard-open .project-panel {
     color: var(--text-meta);
 }
 .chat-quiz-option:disabled .chat-quiz-option-detail { color: var(--text-disabled); }
-.chat-quiz-option.chosen .chat-quiz-option-detail { color: var(--text-meta); }
-.chat-quiz-option-recommended {
+.chat-quiz-option.chosen .chat-quiz-option-detail { color: var(--tone-chosen-answer-detail); }
+/* A small word beside an option's label: the asker's recommendation, and on the owner's chosen answer `Your choice`
+   (question_presentation.paintChosenAnswer), drawn where the theme shows it (--chosen-answer-cue-display) and in the
+   answer's accessible name in every theme. On the chosen card both take its ink. */
+.chat-quiz-option-recommended,
+.chat-quiz-option-chosen-cue {
     margin-left: var(--space-2, 8px);
     font-size: var(--type-meta);
     font-weight: 600;
-    color: var(--status-ok-fg);
+}
+.chat-quiz-option-recommended { color: var(--tone-recommended); }
+.chat-quiz-option-chosen-cue { display: var(--chosen-answer-cue-display); color: var(--tone-chosen-answer-ink); }
+.chat-quiz-option.chosen .chat-quiz-option-recommended { color: var(--tone-chosen-answer-ink); }
+.chat-quiz-option-chosen-name {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
 }
 /* Free answer: the owner's own words when no offered option fits, in one frame that holds its Send as the composer
    holds its own. The frame wears the field's hairline and, while the words have focus, the field focus idiom; a card
@@ -9407,7 +9549,7 @@ body.keyboard-open .project-panel {
     overflow: hidden;
 }
 .chat-quote[data-author="user"] { --quote-ink: var(--user-sender); --quote-tint: var(--user-bubble-from); }
-.chat-quote[data-author="assistant"] { --quote-ink: var(--assistant-sender); --quote-tint: var(--accent-10); }
+.chat-quote[data-author="assistant"] { --quote-ink: var(--quote-assistant-ink); --quote-tint: var(--accent-10); }
 .chat-quote[data-author="system"] { --quote-ink: var(--system-sender); --quote-tint: var(--system-bubble-bg); }
 .chat-quote::before {
     content: "";
@@ -9520,14 +9662,32 @@ body.keyboard-open .project-panel {
     display: flex;
     align-items: center;
     gap: var(--space-2);
-    margin: var(--space-2) var(--space-2) 0;
+    /* Its own bottom margin takes the text row 4 px closer (the row keeps its padding), so all the room the strip
+       takes is its own box: its fold takes it back whole. It lies over the row's padding, its controls whole. */
+    margin: var(--space-2) var(--space-2) calc(var(--space-1) - var(--space-2));
+    z-index: 1;
     padding-inline-end: var(--space-2);
     border-radius: calc(var(--radius-sheet) - var(--space-2));
     /* The quote's tint on the field itself: the field is already the glass, and fills never stack. */
     background: var(--quote-tint);
-    animation: chat-quote-in 0.16s ease-out;
 }
-.chat-field > .chat-quote--composer + .chat-text-row { padding-top: var(--space-1); }
+/* It opens and closes like the capsule row's fold (owner 20.10, Q6): its height from 0 on the sheet curve while its
+   words fade, and its insets taken back while it is shut, so the field grows and shrinks with it (chat_reply.js
+   measures --reply-h and the room the strip takes at rest, --reply-room). */
+.chat-field > .chat-quote--composer[data-motion] {
+    overflow: hidden;
+    max-height: var(--reply-h);
+    transition: max-height var(--motion-close) var(--ease-sheet), margin-top var(--motion-close) var(--ease-sheet),
+        margin-bottom var(--motion-close) var(--ease-sheet), opacity var(--motion-fade) ease;
+}
+.chat-field > .chat-quote--composer:is([data-motion="shut"], [data-hold]) {
+    max-height: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    opacity: 0;
+}
+/* Held through the first frame after it was staged (chat_reply.js): shut at once, then it opens from the next. */
+.chat-field > .chat-quote--composer[data-hold] { transition: none; }
 /* The sent draft's copy in flight (send_flight.js; DESIGN "The composer field"): the new bubble's own look, fixed over
    the room for one motion, above a Project and below the drawer, inert. */
 .chat-bubble.chat-send-flight {
@@ -9562,11 +9722,8 @@ body.keyboard-open .project-panel {
 }
 .chat-quote-cancel:hover { background: var(--menu-item-hover); color: var(--text-primary); }
 .chat-quote-cancel:focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: -2px; }
-@keyframes chat-quote-in {
-    from { opacity: 0; transform: translateY(var(--space-1)); }
-}
 @media (prefers-reduced-motion: reduce) {
-    .chat-field > .chat-quote--composer { animation: none; }
+    .chat-field > .chat-quote--composer[data-motion] { transition: none; }
 }
 /* A finger needs the shared touch target on the controls these blocks add (the clamp toggle, the doubt's actions);
    the time under the doubt's actions then keeps clear of the Reply / Copy targets that sit on its line. */
@@ -9808,12 +9965,16 @@ body.keyboard-open .project-panel {
     z-index: 3;
     box-shadow: var(--elev-rest), 0 0 0 100vmax transparent;
     transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1), box-shadow 0.24s ease-out;
+    /* The row's menu answers the press: iOS would also select a word under it and open its own edit menu over ours. */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
 }
 :root[data-theme] :is(.chat-bubble, .chat-live-card)[data-row-press="hold"] { transform: scale(0.985); }
 :root[data-theme] :is(.chat-bubble, .chat-live-card)[data-row-press="lift"] {
     transform: scale(1.012);
     box-shadow: var(--elev-float), 0 0 0 100vmax var(--row-lift-dim);
-    transition: transform 0.24s cubic-bezier(0.32, 0.72, 0, 1), box-shadow 0.24s ease-out;
+    transition: transform 0.24s var(--ease-sheet), box-shadow 0.24s ease-out;
 }
 :is(.chat-bubble, .chat-live-card)[data-row-swipe] {
     position: relative;
@@ -9821,7 +9982,7 @@ body.keyboard-open .project-panel {
 }
 /* The swipe's own motion wins over a closed menu's lift still on its way back: 1:1 under the finger, its curve home. */
 :root[data-theme] :is(.chat-bubble, .chat-live-card)[data-row-swipe="drag"] { transition: none; }
-:root[data-theme] :is(.chat-bubble, .chat-live-card)[data-row-swipe="settle"] { transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1); }
+:root[data-theme] :is(.chat-bubble, .chat-live-card)[data-row-swipe="settle"] { transition: transform 0.22s var(--ease-sheet); }
 /* The reply mark at the room's right side: it fills as the row nears the reply point and takes the accent there. */
 .chat-row-reply-mark {
     position: fixed;
@@ -9921,7 +10082,7 @@ body.keyboard-open .project-panel {
     :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"]:hover { background: var(--tone-amber-hover); }
 }
 :root[data-theme] :is(.project-panel-close, .mobile-nav-toggle, .nav-drawer-close) { border-radius: var(--pill-radius); }
-:root[data-theme] .chat-header-btn.danger.ui-chrome-control { background: var(--tone-red); color: var(--status-error-fg); }
+:root[data-theme] .chat-header-btn.danger.ui-chrome-control { background: var(--tone-red); color: var(--panic-ink); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control {
     border-color: transparent; background: var(--surface-capsule); box-shadow: var(--elev-rest); transition: var(--motion-tone);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);

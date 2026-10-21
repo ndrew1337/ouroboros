@@ -29,8 +29,6 @@ window.chat=createChatInstance({ws,state:{activePage:'chat',projectChatIds:new S
     mountEl:document.getElementById('content'),stateSnapshots:{begin:()=>({generation:1,requestedAt:Date.now()}),
     gate(){return Promise.resolve(this.begin());},isCurrent:()=>true,
     apply(request,data){window.chat?.hydrateStateSnapshot(data);}}});
-document.getElementById('reconnect-overlay').hidden=true;
-document.getElementById('reconnect-overlay').style.display='none';
 window.addEventListener('ouro:open-project',event=>{window.openedProject=event.detail;});
 </script>"""
 
@@ -215,7 +213,7 @@ def test_turn_into_project_keeps_the_card_as_its_portal(project_chat):
 def test_the_row_menu_opens_by_pointer_keyboard_and_touch_and_gives_focus_back(project_chat, tmp_path):
     page, expect = project_chat["page"], project_chat["expect"]
     card = _card(page, "creation")
-    menu = page.locator('.chat-row-menu')
+    menu = page.locator('.chat-row-menu:not([data-leaving])')
     card.locator('[data-live-title]').click(button="right")
     expect(menu.locator('[role="menuitem"]')).to_have_text(["Reply", "Copy", "Open project", "Pause", "Stop…"])
     expect(menu.locator('[role="menuitem"]').first).to_be_focused()
@@ -273,7 +271,7 @@ def test_a_reply_sends_only_the_quoted_rows_address(project_chat, tmp_path):
     expect(echo.locator('.chat-quote .chat-quote-author')).to_have_text("Ouroboros")
     # A work card's Reply is its row menu's (owner 17.10, Q9 B); it quotes the work by its task address.
     _card(page, "creation").locator('[data-live-title]').click(button="right")
-    page.locator('.chat-row-menu [data-row-action="reply"]').click()
+    page.locator('.chat-row-menu:not([data-leaving]) [data-row-action="reply"]').click()
     page.fill('#chat-input', "Stop after the third run")
     page.locator('#chat-send').click()
     assert page.evaluate("() => sentFrames.at(-1).reply_to") == "task:creation"
@@ -463,9 +461,9 @@ _MARK_MATERIAL = """buttons => {
     const probe = document.body.appendChild(document.createElement('i'));
     probe.style.color = 'var(--bg-primary)';
     const page = rgba(getComputedStyle(probe).color);
-    probe.style.color = 'var(--project)';
-    const ink = getComputedStyle(probe).color;
-    probe.remove();
+    // The Project ink where the reference lies: inside the dark Ouroboros voice, that voice's own (ui.css materials).
+    const inkAt = node => { probe.style.color = getComputedStyle(node).getPropertyValue('--project').trim(); return getComputedStyle(probe).color; };
+    const dark = document.documentElement.dataset.theme !== 'light';
     const painted = node => {
         const layers = [];
         for (let el = node; el; el = el.parentElement) layers.unshift(rgba(getComputedStyle(el).backgroundColor));
@@ -474,11 +472,12 @@ _MARK_MATERIAL = """buttons => {
     const lum = c => ['r', 'g', 'b'].map(k => c[k] / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
         .reduce((sum, v, i) => sum + v * [0.2126, 0.7152, 0.0722][i], 0);
     const contrast = (a, b) => (Math.max(lum(a), lum(b)) + 0.05) / (Math.min(lum(a), lum(b)) + 0.05);
-    return buttons.map(button => {
+    const marks = buttons.map(button => {
         const icon = button.querySelector('.chat-live-project-icon'), name = button.querySelector('.chat-live-project-name');
         const fill = painted(button), beneath = painted(button.parentElement);
         return {host: button.classList.contains('chat-live-bound-pointer') ? 'footer'
-                : button.closest('.msg-routing-annotation') ? 'receipt' : 'capsule', ink,
+                : button.closest('.msg-routing-annotation') ? 'receipt' : 'capsule', ink: inkAt(button),
+            voice: dark && Boolean(button.closest('.chat-bubble.assistant, .chat-live-card')),
             tile: rgba(getComputedStyle(icon).backgroundColor).a,
             fill: rgba(getComputedStyle(button).backgroundColor).a,
             glyph: getComputedStyle(icon).color, name: getComputedStyle(name).color,
@@ -486,6 +485,8 @@ _MARK_MATERIAL = """buttons => {
             fill_on_beneath: contrast(fill, beneath),
             name_on_fill: contrast(rgba(getComputedStyle(name).color), fill)};
     });
+    probe.remove();
+    return marks;
 }"""
 
 
@@ -519,7 +520,8 @@ def test_project_reference_is_one_tinted_fill_with_no_tile_behind_its_glyph(proj
     assert sorted(mark["host"] for mark in marks) == ["capsule", "capsule", "footer", "footer", "receipt"]
     for mark in marks:
         assert mark["tile"] == 0, mark
-        assert 0 < mark["fill"] < 1, mark
+        # A tint on the room and on white; inside the dark Ouroboros voice the voice's own opaque capsule step.
+        assert mark["fill"] == 1 if mark["voice"] else 0 < mark["fill"] < 1, mark
         assert mark["glyph"] == mark["name"] == mark["ink"], mark
         assert mark["glyph_on_fill"] >= 3, mark
         assert mark["fill_on_beneath"] * 2 < mark["name_on_fill"], mark

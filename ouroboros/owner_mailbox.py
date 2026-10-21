@@ -244,6 +244,13 @@ def acknowledge_transcript_entry(
     if entry.get("quiz_delivery"):
         from ouroboros.question_answers import acknowledge_answer
         acknowledge_answer(drive_root, task_id, entry)
+    if isinstance(press := entry.get("card_delivery"), dict):
+        from ouroboros.card_store import acknowledge_press
+        try:  # a press left showing its wait is cosmetic; the drain goes on
+            acknowledge_press(press.get("canonical_root") or drive_root, str(press.get("card_id") or ""),
+                              str(press.get("request_id") or ""))
+        except Exception:
+            log.warning("Card press read receipt failed for %s", msg_id, exc_info=True)
     if entry.get("relay"):
         from ouroboros.owner_relay import acknowledge_relay
         acknowledge_relay(entry.get("relay_canonical_root") or drive_root, task_id, entry)
@@ -261,6 +268,7 @@ def write_owner_message(
     client_message_id: str = "",
     late_answer: Optional[Dict[str, Any]] = None,
     quiz_delivery: Optional[Dict[str, Any]] = None,
+    card_delivery: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an owner message or typed control entry to a task's mailbox.
 
@@ -272,7 +280,8 @@ def write_owner_message(
     ``late_answer`` is the typed ``{task_id, quiz_id}`` provenance of an owner
     message that answers a finished task's quiz card (stored additively when
     valid): the drain rebuilds the card's frame for the model from it, while
-    ``text`` stays the owner's own words.
+    ``text`` stays the owner's own words. ``card_delivery`` names the living-card
+    press ``{card_id, request_id, canonical_root}`` its read settles.
     """
     from ouroboros.install_identity import StoreForeign, require_owned_root
 
@@ -291,6 +300,8 @@ def write_owner_message(
 
     if quiz_delivery:
         entry["quiz_delivery"] = dict(quiz_delivery)
+    if card_delivery:
+        entry["card_delivery"] = dict(card_delivery)
     late_ref = late_answer_ref(late_answer)
     if late_ref is not None:
         entry["late_answer"] = late_ref
@@ -747,9 +758,10 @@ def drain_owner_entries(
                 # out here is a written fact nobody can read.
                 if str(entry.get("client_message_id") or ""):
                     drained["client_message_id"] = str(entry["client_message_id"])
-                # Same for a late quiz answer's typed provenance: the drain
-                # rebuilds the card frame for the model from it.
-                for relay_field in ("relay", "owner_rows", "source_task_id", "source_row", "quiz_delivery", "relay_canonical_root", "sender_origin"):
+                # Same for a late quiz answer's typed provenance (the drain rebuilds
+                # the card frame for the model from it) and a card press's read receipt.
+                for relay_field in ("relay", "owner_rows", "source_task_id", "source_row", "quiz_delivery", "card_delivery",
+                                    "relay_canonical_root", "sender_origin"):
                     if relay_field in entry:
                         drained[relay_field] = entry[relay_field]
                 if isinstance(entry.get("late_answer"), dict):

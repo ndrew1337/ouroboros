@@ -304,18 +304,29 @@ def _crash_retry(tmp_path):
     return task
 
 
-def test_the_startup_receipt_acknowledges_the_replayed_wake_for_the_new_attempt_after_append(
+def _save_delivered_startup(registry, messages):
+    from ouroboros.working_checkpoint import save_ready
+
+    limit = SimpleNamespace(tools=registry, messages=messages, llm_trace={"tool_calls": []},
+                            accumulated_usage={}, owner_msg_seen=set(), round_idx=1,
+                            tool_schemas=[], budget_tail="tool")
+    save_ready(limit)
+
+
+def test_the_startup_receipt_acknowledges_the_replayed_wake_after_incorporated_save(
         tmp_path, ack_spy):
     from ouroboros.subagent_bootstrap import _adopt_recovery_handoff, append_startup_receipt
 
     task = _crash_retry(tmp_path)
     successor = _registry(tmp_path, attempt=2)
-    # ``_prepare_task_context`` order: adopt (bootstrap) -> build the context -> append the receipt.
+    # Bootstrap stages; the restored loop appends and saves before ACK.
     startup = _adopt_recovery_handoff(successor._ctx, task)
     assert json.loads(startup)["status"] == "configured_session_recovered_wake"
     messages = _fresh_messages(tmp_path, successor, attempt=2)
     ack_spy.transcript = messages
     append_startup_receipt(successor._ctx, messages, startup)
+    assert _acks(tmp_path) == [("run-1", TASK, "1")]
+    _save_delivered_startup(successor, messages)
     assert messages[-1]["content"].startswith("[CONFIGURED SESSION STARTUP / WAKE RECEIPT]")
     assert _acks(tmp_path) == [("run-1", TASK, "1"), ("run-1", TASK, "2")]
     assert len(ack_spy.seen) == 1 and ack_spy.seen[0][0] == "2"
@@ -332,6 +343,8 @@ def test_the_first_request_after_a_crash_retry_dates_its_health_snapshot(tmp_pat
     startup = _adopt_recovery_handoff(successor._ctx, task)
     messages = _fresh_messages(tmp_path, successor, attempt=2)
     append_startup_receipt(successor._ctx, messages, startup)
+    assert _acks(tmp_path) == [("run-1", TASK, "1")]
+    _save_delivered_startup(successor, messages)
     receipt = messages[-1]["content"]
     assert '"status": "terminal"' in receipt and '"run_id": "run-1"' in receipt
     # Health is captured before startup appends the receipt. Its historical claim

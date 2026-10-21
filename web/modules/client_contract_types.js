@@ -740,6 +740,7 @@
  * @property {string} at
  * @property {'owed'|'delivered'|'forwarded'} delivery
  * @property {string} request_id
+ * @property {string=} reason_code  // 'awaiting_recipient_read' until a paused, held or queued author reads it
  */
 
 /**

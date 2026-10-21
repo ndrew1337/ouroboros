@@ -103,7 +103,7 @@ def test_observed_executor_role_activity_and_project_pointer_live_replay(subscri
     trigger.click()
     page.locator('#executor-proof .rw-shade .rw-main', has_text='UI coherence').click()
     assert input_box.input_value() == 'Message stays in this Project'
-    assert page.locator('#executor-proof .rw-shade').is_hidden()
+    page.locator('#executor-proof .rw-shade').wait_for(state='hidden')  # it folds away, then hides
     terminal={**child,'is_progress':True,'subagent_event':'completed','status':'completed','result':'Checks complete',
               'ts':'2026-09-09T10:01:00Z','execution_evidence':{'delegated_runs_started':1,'delegated_runs_settled':1,
               'delegated_runs_failed':0,'harness_models':['Cursor Grok 4.6 Extra High Fast']}}
