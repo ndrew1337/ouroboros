@@ -57,13 +57,25 @@ test('memory disclosures keep the catalog window unit and measurement source', (
     assert.match(callSettingsHtml({provider:'missing',catalogs:[]}), /memory window for this selection is not known/);
 });
 
-test('thinking shows the lowest catalog fallback and labels a deliberate engine default with its note', () => {
-    const thinking = {...catalog.models[1], default:true, notes:[['thinking', 'The engine chooses its effort for a blank setting.']]};
+test('thinking labels its lowest default honestly and keeps explicit levels and other defaults', () => {
+    const thinking = {...catalog.models[1], default:true, notes:[['thinking', 'Fixture thinking note.']]};
     const config = {provider:catalog.id, catalogs:[{...catalog,models:[thinking]}]};
     assert.match(callSettingsHtml({...config, thinking:'obsolete'}), /value="small" selected/);
     const blank = callSettingsHtml({...config, thinking:''});
-    assert.match(blank, /value="" selected>Engine’s default<\/option>/);
-    assert.match(blank, /data-call-knob-note="thinking">The engine chooses its effort for a blank setting\./);
+    assert.match(blank, /value="" selected>Lowest \(default\)<\/option>/);
+    assert.doesNotMatch(blank, />Engine’s default<\/option>/);
+    assert.match(blank, /Engine’s default model/);
+    assert.match(blank, /Engine’s default voice/);
+    assert.match(blank, /data-call-knob-note="thinking">Fixture thinking note\./);
     assert.match(callSettingsHtml({...config, thinking:'large'}), /value="large" selected/);
     assert.doesNotMatch(callSettingsHtml({provider:catalog.id,catalogs:[catalog]}), /name="thinking"/);
+});
+
+test('an unavailable engine offers status guidance without making manual grants the setup flow', () => {
+    const available = callSettingsHtml({provider:catalog.id, catalogs:[catalog]});
+    const missing = callSettingsHtml({provider:'missing:voice', catalogs:[catalog]});
+    assert.match(missing, /Choose another engine or check its status in Skills\./);
+    assert.doesNotMatch(missing, /Enable an engine skill|grant its credential/);
+    assert.doesNotMatch(available, /check its status in Skills/);
+    assert.match(available, /ordinary memory and tools/);
 });

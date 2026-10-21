@@ -460,6 +460,8 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     page.locator('[data-settings-tab="advanced"]').click()
     form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
     catalogs = subscription_ui['call_config']['catalogs']
+    expect(page.locator('#page-settings')).to_contain_text(
+        'The call skills are on by default. To talk, turn on Calls (beta), choose an engine and add its API key in Settings → Accounts.')
     by_id = {catalog['id']: catalog for catalog in catalogs}
     expect(form.locator('[name="provider"] option')).to_have_count(len(catalogs))
     assert form.locator('[name="provider"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == list(by_id)
@@ -489,7 +491,7 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     form.locator('[name="model"]').select_option(thinking['id'])
     assert_catalog_model(gemini, thinking)
     expect(form.locator('[name="thinking"]')).to_have_value(thinking['thinking_levels'][0])
-    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Engine’s default')
+    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Lowest (default)')
     form.locator('[name="thinking"]').select_option(thinking['thinking_levels'][-1])
     grok = by_id['grok_realtime:grok']
     form.locator('[name="provider"]').select_option(grok['id'])

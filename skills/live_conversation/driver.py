@@ -409,9 +409,14 @@ class _Call:
                 raise refusal
 
     async def peers(self):
+        # The host's independent control watcher owns Stop/Panic/budget reads.
+        # Awaiting those store reads here makes owner audio queue and overflow.
         while True:
-            await self.host.check()
             if self.hub.closed or self.hub.ended_by_owner:
+                return
+            if self.provider_closed:
+                # The ended transport owns this resume transition. Keep any
+                # pending refit for the resumed response's quiet boundary.
                 return
             if self.hub.peers():
                 self.empty_since = time.monotonic()
@@ -434,27 +439,34 @@ class _Call:
                         return
                     if self.renewal_deadline is not None and time.monotonic() >= self.renewal_deadline:
                         raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
-            event = self.hub.next_event(0)
-            if isinstance(event, cp.PeerAudio) and self.input_rate and not self.provider_closed:
-                self.meeting_audio |= event.role == cp.PEER_MEETING
-                await self.session.send(Audio(event.pcm, self.input_rate))
-            elif isinstance(event, cp.PeerVideo):
-                if not self.host.model.vision:
-                    raise RealtimeSetupError("vision_unsupported", "selected engine does not accept images")
-                await self.session.send(Video(event.data, event.mime))
-            elif isinstance(event, cp.PeerControl):
-                message = event.message
-                if message["type"] == "played":
-                    item = message["item_id"]
-                    if (event.role == cp.PEER_OWNER or
-                            (self.hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
-                        self.played[item] = min(message["played_ms"], int(self.audio_ms.get(item, 0)))
-                        if self.played[item] > 0 and self.played[item] >= int(self.audio_ms.get(item, 0)) - 20:
-                            await self.finish_spoken(item, completed=True)
-                elif message["type"] == "context":
-                    row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
-                    await self.host.observe_context(row)
-                    await self.context_update((row,))
+            # Drain every currently due frame before polling renewal or sleeping.
+            # A buffered websocket send need not suspend, so yield explicitly to
+            # the provider and host watcher even while more media is due.
+            while not (self.hub.closed or self.hub.ended_by_owner or self.provider_closed):
+                event = self.hub.next_event(0)
+                if event is None:
+                    break
+                if isinstance(event, cp.PeerAudio) and self.input_rate:
+                    self.meeting_audio |= event.role == cp.PEER_MEETING
+                    await self.session.send(Audio(event.pcm, self.input_rate))
+                elif isinstance(event, cp.PeerVideo):
+                    if not self.host.model.vision:
+                        raise RealtimeSetupError("vision_unsupported", "selected engine does not accept images")
+                    await self.session.send(Video(event.data, event.mime))
+                elif isinstance(event, cp.PeerControl):
+                    message = event.message
+                    if message["type"] == "played":
+                        item = message["item_id"]
+                        if (event.role == cp.PEER_OWNER or
+                                (self.hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
+                            self.played[item] = min(message["played_ms"], int(self.audio_ms.get(item, 0)))
+                            if self.played[item] > 0 and self.played[item] >= int(self.audio_ms.get(item, 0)) - 20:
+                                await self.finish_spoken(item, completed=True)
+                    elif message["type"] == "context":
+                        row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
+                        await self.host.observe_context(row)
+                        await self.context_update((row,))
+                await asyncio.sleep(0)
             await asyncio.sleep(.01)
 
     async def mailbox(self):

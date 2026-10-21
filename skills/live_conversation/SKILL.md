@@ -18,9 +18,11 @@ contributes:
     render: {kind: host, entry: ui/index.js}
 ---
 
-Calls are a beta, off by default. Enable this feature and one of the separate
-Gemini, Grok or OpenAI engine skills, grant that engine its credential, then
-choose its engine, model and voice from the loaded catalogs in Calls (beta).
+Calls are a beta, off by default. The call skills are on by default. To talk,
+turn on Calls (beta), choose an engine and add its API key in Settings → Accounts.
+Gemini, Grok and OpenAI supply the engine, model and voice choices from their
+loaded catalogs. The owner's skill auto-grant setting still applies; with it off,
+requested permissions await approval in Skills.
 Having a key does not turn on calls; an unavailable selection is never replaced.
 The selected catalog supplies supported controls, privacy and memory-window
 facts. Call instructions and engine choices apply to the next call. Microphone,
