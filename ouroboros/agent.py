@@ -878,8 +878,7 @@ class OuroborosAgent:
             review_context_builder=lambda: build_review_context(review_env),
             ctx=ctx,
             tool_schemas=initial_tool_schemas(self.tools, context_mode=get_context_mode()),
-            **({"route_resolver": self._realtime_turn.resolve_route}
-               if getattr(self, "_realtime_turn", None) is not None else {}),
+            **({"route_resolver": self._realtime_turn.resolve_route} if getattr(self, "_realtime_turn", None) is not None else {}),
         )
         # The second of the three places a reduction must reach (the durable record
         # above is the first, `[SUBTASK_OUTCOME]` the third). It is appended HERE,
@@ -965,8 +964,7 @@ class OuroborosAgent:
     ) -> Callable[[str], Any]:
         """Keep a task's progress address stable after its worker turn ends."""
         def emit_task_progress(text: str, **kwargs: Any) -> None:
-            # A producer can attach per-row facts; the callback's frozen task
-            # provenance still wins over them after this worker changes tasks.
+            # A producer can attach per-row facts; the callback's frozen task provenance still wins after this worker changes tasks.
             meta = dict(kwargs.pop("_progress_meta_override", None) or {})
             meta.update(progress_meta or {})
             self._emit_progress(

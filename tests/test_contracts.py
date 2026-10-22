@@ -1341,9 +1341,7 @@ def test_plugin_api_surface_is_frozen():
         "register_supervised_task",
         "register_companion_process",
         "subscribe_event",
-        "get_skill_token",
-        "register_realtime_provider",  # 2.1, additive and in-process only
-        "register_live_conversation",  # 2.1, the call feature, in-process only
+        "get_skill_token", "register_realtime_provider", "register_live_conversation",  # 2.1: additive, in-process only
     }
     members = {
         m for m in dir(PluginAPI)
@@ -1372,12 +1370,6 @@ def test_plugin_api_version_matches_documented_surface():
 
     assert LEGACY_PLUGIN_API_GENERATION == "1.3"
     assert PLUGIN_API_SURFACE_FINGERPRINTS[PLUGIN_API_VERSION] == plugin_api_surface_fingerprint()
-    # The additive voice generation keeps the 2.0 surface negotiable; one generation, one fingerprint.
-    assert PLUGIN_API_SURFACE_FINGERPRINTS["2.0"] == (
-        "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca")
-    assert "realtime_provider" in VALID_EXTENSION_PERMISSIONS
-    assert {"live_conversation", "call_peer"} <= VALID_EXTENSION_PERMISSIONS
-    assert set(PLUGIN_API_SURFACE_FINGERPRINTS) == {"2.0", "2.1"}
 
 
 def test_extension_route_methods_contract_matches_server_dispatch():

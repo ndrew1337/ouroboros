@@ -136,3 +136,16 @@ def test_built_in_engines_declare_labelled_dated_windows(skill, window, credenti
     assert accepted is None or accepted >= window
     assert catalog.credential_settings == (credential,)
     assert catalog.privacy
+
+
+def test_plugin_api_2_1_is_one_additive_generation_over_the_negotiable_2_0_surface():
+    from ouroboros.contracts.plugin_api import (PLUGIN_API_SURFACE_FINGERPRINTS, PLUGIN_API_VERSION,
+                                                VALID_EXTENSION_PERMISSIONS, plugin_api_surface_fingerprint)
+
+    # The additive voice generation keeps the 2.0 surface negotiable; one generation, one fingerprint.
+    assert PLUGIN_API_VERSION == "2.1"
+    assert PLUGIN_API_SURFACE_FINGERPRINTS == {
+        "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
+        "2.1": plugin_api_surface_fingerprint(),
+    }
+    assert {"realtime_provider", "live_conversation", "call_peer"} <= VALID_EXTENSION_PERMISSIONS

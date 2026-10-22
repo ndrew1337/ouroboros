@@ -609,10 +609,7 @@ def _rebind_context_fit_plan(
         estimate_context_prompt_tokens(messages, tool_schemas, provider=str(route.get("provider") or "")),
         view_kind=plan.view_kind,
     )
-    route_facts = getattr(evidence, "route_facts", {}) or {}
-    window_basis = str(route_facts.get("basis") or "")
-    ratio = 1.0 if window_basis == "estimator" else ratio
-    from ouroboros.context_window import resolve_window
+    from ouroboros.context_window import estimator_ratio, resolve_window, route_window_kwargs
     output_reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local", use_local)), evidence=evidence)
     scope = route.get("window_observation_fp", evidence.route_fp)
     bound = bool(scope) and (route.get("provider") != "claudexor" or bool((route.get("options") or {}).get("account_fingerprint")))
@@ -636,12 +633,11 @@ def _rebind_context_fit_plan(
             "accountFingerprint": str(getattr(evidence, "account_fingerprint", "") or ""),
         } if route.get("provider") == "claudexor" else {},
         evidence_source=str(getattr(evidence, "source", "") or ""),
-        working_reserve_tokens=route_facts.get("working_reserve_tokens"),
-        window_basis=window_basis,
+        **route_window_kwargs(evidence),
         window_record=window, window_witness_bound=bound, route_base_url=str(route.get("base_url") or ""),
     ).reproject_for_route(  # the shown view kept while it fits this route's window, else narrowed
-        window_tokens=window_tokens, known_window=known_window, ratio=ratio, output_reserve=output_reserve,
-        tool_schemas=tool_schemas, start_mode=start_mode, current_messages=messages)
+        window_tokens=window_tokens, known_window=known_window, ratio=estimator_ratio(evidence, ratio),
+        output_reserve=output_reserve, tool_schemas=tool_schemas, start_mode=start_mode, current_messages=messages)
     mode = rebound.initial_mode
     projected_prompt_tokens = rebound.projected_tokens_with_tools(mode, tool_schemas)
     shown = messages[0] if messages else None

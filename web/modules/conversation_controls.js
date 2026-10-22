@@ -27,3 +27,19 @@ export function bindConversationControls({ composer, page, chatId, ws }) {
     rooms.add(room); room.sync();
     return () => { rooms.delete(room); active?.destroy(); composer.hasPendingWork = priorPending; };
 }
+
+// The room facts a call surface takes from the shell. A directly opened Project need not be in the
+// bounded sidebar census, so an unknown chat id names the active project panel.
+export function projectRoomOptions({ rows, nav, state, title, freshProjectRow, openProjectPanel, showPage, destroyProjectInstance }) {
+    return ({ page, chatId }) => {
+        const project = chatId === 1 ? null : rows().find(row => Number(row.chat_id) === chatId)
+            || { id: nav.activeProjectId, chat_id: chatId, name: title.textContent };
+        const current = () => project ? nav.activeProjectId === project.id : !nav.activeProjectId;
+        return {
+            label: () => project ? freshProjectRow(project).name || project.id : 'Main',
+            onScreen: () => state.activePage === 'chat' && !page.hidden && current(),
+            reveal: () => project ? openProjectPanel(freshProjectRow(project), { openOnly: true }) : showPage('chat'),
+            onSettled: () => queueMicrotask(() => { if (project && !current()) destroyProjectInstance(project.id); }),
+        };
+    };
+}

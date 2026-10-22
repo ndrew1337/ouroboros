@@ -7,7 +7,7 @@ The observations share the capability JSON store; old stores need no migration.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Any, Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -184,3 +184,14 @@ def observed_plan(plan, usage):
     record = getattr(plan, "window_record", None)
     return replace(plan, route_fp=fp, window_record=replace(record, route_fp=fp) if record else None,
                    model_route=dict(observed), window_witness_bound=True)
+
+
+def route_window_kwargs(evidence: Any) -> Dict[str, Any]:
+    """The plan fields a declared route window carries (a call's RouteFacts): its working reserve and its units."""
+    facts = getattr(evidence, "route_facts", {}) or {}
+    return {"working_reserve_tokens": facts.get("working_reserve_tokens"), "window_basis": str(facts.get("basis") or "")}
+
+
+def estimator_ratio(evidence: Any, ratio: float) -> float:
+    """An estimator-based window is fitted on raw estimates (density 1); a provider window keeps the measured density."""
+    return 1.0 if route_window_kwargs(evidence)["window_basis"] == "estimator" else ratio
