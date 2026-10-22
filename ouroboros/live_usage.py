@@ -54,6 +54,19 @@ def _raw_body(raw: Mapping) -> Mapping:
     return raw
 
 
+def input_token_witness(raw_usage: Mapping) -> int | None:
+    """Provider input total, including cache once; neither output nor an estimate.
+
+    An absent modality split cannot calibrate text density, but the provider's
+    aggregate input count still witnesses the input it accepted.
+    """
+    raw = _raw_body(raw_usage)
+    totals = [raw[key] for key in ("input_tokens", "promptTokenCount", "prompt_token_count") if key in raw]
+    if totals and all(type(value) is int and value > 0 and value == totals[0] for value in totals):
+        return totals[0]
+    return None
+
+
 def text_input_witness(usage: Mapping, raw_usage: Mapping) -> int | None:
     """Only an explicit text modality split can calibrate selected text."""
     text = usage.get("text_input_tokens")

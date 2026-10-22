@@ -281,6 +281,7 @@ class ConversationHost:
         self.quote = None
         self.responses, self.completed = {}, set()
         self._physical_context = None
+        self._renewal_window = self._renewal_facts = None
         self._held_input = self._growth = 0
         self._history_at_receipt = 0
         self._history_version, self._history_cached_version, self._history_tokens = 0, -1, 0
@@ -537,6 +538,9 @@ class ConversationHost:
         self.observe("response", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
         self._record_text_density(key, usage, raw_usage)
+        if status == "completed":
+            from ouroboros.realtime_setup import observe_live_input
+            observe_live_input(self, raw_usage)
         held = [usage.get(axis) for axis in ("text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens")]
         measured = 0
         if self.model.facts.basis == "estimator":
@@ -588,13 +592,18 @@ class ConversationHost:
 
     def renewal_due(self):
         facts = self.model.facts
-        if facts.conversation_window_tokens is None or not self._selected_raw_estimate and not self._held_input:
+        window, reserve = facts.conversation_window_tokens, facts.working_reserve_tokens or 0
+        # Session/response boundaries resolve stores. Audio polling only reads
+        # that snapshot; a different catalog cannot borrow its resolved window.
+        if self._renewal_window is not None and self._renewal_facts == facts:
+            window, reserve = self._renewal_window.total_equivalent, self._renewal_window.reserve
+        if not window or not self._selected_raw_estimate and not self._held_input:
             return False
         density = (getattr(self._physical_context, "measurement_density", 1.0)
                    if facts.basis == "provider" else 1.0)
         held = self._held_input or math.ceil(self._selected_raw_estimate * density)
         pending = math.ceil(max(0, self._history_estimate() - self._history_at_receipt) * density)
-        return held + pending + self._growth + (facts.working_reserve_tokens or 0) >= facts.conversation_window_tokens
+        return held + pending + self._growth + reserve >= window
 
     async def observe_context(self, row):
         from ouroboros.context_budget import bound_host_row

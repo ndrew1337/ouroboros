@@ -87,6 +87,29 @@ def text_input_estimate(messages, tools):
 CONTEXT_CAPACITY_DETAIL = "This room's context and working reserve do not fit this engine's window."
 
 
+def observe_live_input(host, raw_usage):
+    """Teach the ordinary window owner at a completed response boundary.
+
+    The session's captured plan owns the account scope even if credentials have
+    changed since open. WindowRecord decides whether acceptance can raise a
+    declared limit; retention and estimator windows keep their own units.
+    """
+    from dataclasses import replace
+    from ouroboros.context_window import observation_scope, record_observation, resolve_window
+    from ouroboros.live_usage import input_token_witness
+
+    plan = host.plan
+    accepted = input_token_witness(raw_usage)
+    if (not host._connection_accounting or host.model.facts.basis != "provider"
+            or not plan.window_witness_bound or not accepted):
+        return
+    reserve = host._physical_context.response_reserve_tokens
+    record_observation(host.ctx.drive_root, observation_scope(plan), accepted=accepted, reserve=reserve)
+    record = resolve_window(plan, plan.window_record.reserve, root=host.ctx.drive_root)
+    host.plan = host.ctx.context_fit_plan = replace(plan, window_record=record, window_tokens=record.total_equivalent)
+    host._renewal_window = resolve_window(host.plan, reserve, root=host.ctx.drive_root)
+
+
 def session_candidate(host, factory, options):
     """Refit current canonical rows through the ordinary window ladder, then seal.
 
@@ -174,6 +197,7 @@ def session_candidate(host, factory, options):
         evidence = {"fit": asdict(fit), "route_facts": asdict(facts), "tool_count": len(host.schemas),
                     "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "units": facts.basis}
         if refusal is None:
+            host._renewal_window, host._renewal_facts = physical_window, facts
             host._session_instructions = options.instructions
             host._selected_text_estimate = text_input_estimate(rows, host.schemas)
             host._density_input = host._selected_text_estimate
