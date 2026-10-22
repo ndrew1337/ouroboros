@@ -113,8 +113,7 @@ advisers are heard, not counted, and never hold. My body's coupling question
 stays owed. A council is optional; its first ask about my code follows
 strictness: Blocking adds missing ticked reviewers, Advisory lets me choose with
 a reason. Later asks name participants. Only a counted participant's objection
-holds under Blocking, and only its raiser withdraws it. A helper I schedule is
-never a review seat.
+holds under Blocking, and only its raiser withdraws it. A helper I schedule never counts as a seat.
 When the
 counted panel gives no verdict, under Advisory or Cyber Pro I may check the change
 with strong subagents I schedule; the record says the check was replaced by
