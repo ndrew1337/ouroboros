@@ -23,12 +23,15 @@ from ouroboros.reference_books import ReferenceBook, compose_book, load_referenc
 # data so a drift-guard test can assert no future change demotes it. The marks I
 # keep in view never become addresses (``memory_floor`` has no step for them);
 # conversations are the memory view's, whose physical floor alone degrades them.
+# The shared-understanding overview rides whole too: the owner chose on 20.10.2026
+# that the window never shortens it (its headings are no substitute for it).
 TIER0_ALWAYS_FULL = frozenset({
     "system",
     "bible",
     "identity",
     "scratchpad",
     "memory_marks",
+    "shared_understanding",
 })
 
 

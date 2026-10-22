@@ -55,10 +55,9 @@ def build_knowledge_sections(
         if overview_text.strip():
             reader = f"knowledge_read(topic='{OVERVIEW_TOPIC}', scope='global')"
             heading = f"## Shared understanding\n\nSource: {reader}.\n\n"
-            # The whole authored orientation is the full text. Its operative view is its own
-            # outline and the summary Ouroboros authored for it, never a slice of its prose.
-            sections.append(HostSection("shared_understanding", heading + overview_text,
-                                        _shared_understanding_view(overview, overview_text, reader), reader=reader))
+            # The whole authored orientation rides whole in every request: the owner chose on
+            # 20.10.2026 that the window never shortens the overview (TIER0_ALWAYS_FULL).
+            sections.append(HostSection("shared_understanding", heading + overview_text, reader=reader))
         else:
             sections.append(_SHARED_UNDERSTANDING_GAP)  # present but empty is still unauthored
     except FileNotFoundError:
@@ -125,22 +124,6 @@ def build_knowledge_sections(
         except Exception:
             log.debug("project journal/workpad context injection failed", exc_info=True)
     return sections
-
-
-def _shared_understanding_view(overview: Any, text: str, reader: str) -> str:
-    """The overview's own headings verbatim, its authored summary, and its size.
-
-    The summary is the note's own ``summary`` field, carried here because the index's outline
-    view shows titles; a note without one is a named gap, never prose taken from the body.
-    """
-    source = overview.source
-    headings = [source.text_at(item.span).strip() for item in source.headings] if source is not None else []
-    summary = (f"Its authored summary:\n{overview.summary.strip()}" if overview.summary.strip()
-               else "It has no authored summary yet (no summary field)")
-    outline = "\n".join(headings) if headings else (
-        f"(its headings are unavailable: {overview.parse_error or 'the source did not parse'})")
-    return (f"## Shared understanding\n\nIts own headings, verbatim:\n{outline}\n\n{summary}\n\nFull text: {reader}. "
-            f"Its body is {len(text)} characters under {len(headings)} headings.")
 
 
 def _build_registry_digest(env: Any) -> str:

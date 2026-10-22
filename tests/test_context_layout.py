@@ -16,7 +16,8 @@ def test_tier0_protected_core_declared():
     assert cl.TIER0_WHOLE_OR_OUTLINE == {"project_knowledge_index", "knowledge_index"}
     assert not cl.TIER0_WHOLE_OR_OUTLINE & cl.TIER0_ALWAYS_FULL
     assert "recent_dialogue" not in cl.TIER0_ALWAYS_FULL
-    assert set(cl.TIER0_ALWAYS_FULL) == kept | {"memory_marks"}
+    # The shared-understanding overview joined on 22.10 by the owner's choice (20.10): never shortened.
+    assert set(cl.TIER0_ALWAYS_FULL) == kept | {"memory_marks", "shared_understanding"}
 
 
 def test_index_floor_order_and_whole_or_outline_fact_have_one_owner():

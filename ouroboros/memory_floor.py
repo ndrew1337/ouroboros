@@ -423,7 +423,7 @@ def mode_views(snapshot: Optional[mv.MemoryViewSnapshot], *, preferred: str, fix
 # Host producers before indexes, then the existing memory ladder. These are window
 # steps only: a preferred target or a working margin cannot relocate service facts.
 HOST_STEPS = ("runtime", "registry", "installed_skills",
-              "drive_state", "shared_understanding", "pattern_register", "world", "subagents",
+              "drive_state", "pattern_register", "world", "subagents",
               "execution_reflections", "architecture_map", "development_map")
 
 
