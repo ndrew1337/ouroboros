@@ -18,7 +18,8 @@ from typing import Any, Dict, Optional
 from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
-from ouroboros.server_control import (PanicIngress, execute_panic_stop as _execute_panic_stop_impl, exit_after_restart,
+from ouroboros.server_control import (PanicIngress, execute_panic_stop as _execute_panic_stop_impl,
+                                      exit_after_restart, exit_after_shutdown,
                                       restart_current_process as _restart_current_process_impl)  # noqa: F401 — restart lifecycle binding
 from ouroboros.owned_shutdown import (begin_owned_stop, finish_unconfirmed_stops, start_inherited_import,
                                        stop_owned_work)
@@ -809,7 +810,7 @@ def _run_supervisor(settings: dict) -> None:
 
     offset = 0
     crash_count = 0
-    _last_custody_reap = [time.time()]
+    _last_custody_reap = [0.0]  # recovered checking copies become eligible off-loop after readiness
     _last_review_job_reconcile = [time.time()]
     # The watchdog was started before startup recovery; never start another here.
 
@@ -1142,7 +1143,8 @@ async def lifespan(app):
     if not _exit_signalled.is_set():
         _supervisor_stop.clear()  # a fresh lifespan owns a fresh generation (symmetric with the teardown set)
     body_stop = threading.Event()  # lifespan ownership survives a cognitive supervisor revival; the boot coordinator's stop
-    start_body = (lambda: None) if pytest_default_real_data_dir else bind_body_lifespan(lifespan_drive_root, body_stop)
+    start_body = (lambda: None) if pytest_default_real_data_dir else bind_body_lifespan(
+        lifespan_drive_root, body_stop, collection_ready=_supervisor_ready.is_set)
     # A provider-ready boot starts the supervisor once the store published and the extensions registered.
     startup_provider_ready = has_startup_ready_provider(settings)
     if not startup_provider_ready:  # readiness follows the store's publication (store_switch.when_ready below)
@@ -1531,8 +1533,8 @@ def main() -> int:
                 _restart_current_process(args.host, actual_port)
         except Exception:
             log.exception("Restart failed; cleanup or transfer is unconfirmed, custody retained")
-            return exit_after_restart(1)  # Panic retains termination even when cleanup/transfer failed.
-        exit_after_restart(RESTART_EXIT_CODE)
+            return exit_after_shutdown(1)  # Panic retains termination even when cleanup/transfer failed.
+        exit_after_shutdown(RESTART_EXIT_CODE)
 
     restart_thread = threading.Thread(target=_check_restart, daemon=True)
     restart_thread.start()
@@ -1552,5 +1554,41 @@ def main() -> int:
     return 0
 
 
+def executable_main() -> None:
+    """Command boundary: unwind lifecycle cleanup before bypassing capture joins."""
+    import signal
+    from ouroboros.platform_layer import SHUTDOWN_SIGNALS
+
+    exit_signal = None
+
+    def stop(signum, _frame):
+        # Uvicorn replays here after its lifespan. Never interrupt main's final
+        # restart join; before serving, its existing stop latch ends startup.
+        nonlocal exit_signal
+        exit_signal = signum
+        _exit_signalled.set()
+        _supervisor_stop.set()
+
+    handlers = {}
+    try:
+        signals = list(SHUTDOWN_SIGNALS)
+        if hasattr(signal, "SIGBREAK"):
+            signals.append(signal.SIGBREAK)
+        for signum in signals:
+            handlers[signum] = signal.signal(signum, stop)
+        code = main()
+        if exit_signal is not None:
+            code = 128 + exit_signal
+        try:
+            sys.stdout.flush()
+            sys.stderr.flush()
+        except (OSError, ValueError):
+            code = code or 120  # Broken/closed output cannot restore the executor join.
+        exit_after_shutdown(code)  # Accepted Panic retains its writes and exit.
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    executable_main()

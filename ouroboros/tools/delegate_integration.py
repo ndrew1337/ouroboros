@@ -622,8 +622,8 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
                                      retain_investigation: bool = True) -> Optional[Dict[str, Any]]:
     """The drive-rooted core of the terminal capture — same contract, no ToolContext.
 
-    One capture author for both the nanny flow and the RECONCILIATION path (orphan sweep, kill-path
-    reconcile, pending-invocation recovery), so they cannot drift in what a "captured patch" is; the
+    One ordinary capture author for foreground collection, the body and disposition;
+    startup/control reconciliation leaves its work pending. Reviewers use their native owner. The
     apply/reject DECISION stays with a live owner, never taken here — an evidence-only investigation has
     none to take, so its ready capture is retained as evidence at once (#1609). ``patch_captured`` MEANS
     "a usable patch artifact exists" (C1-R3): the custody row is minted only over a ready-status
@@ -632,6 +632,9 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
     """
     from ouroboros.delegate_directory import is_directory_run, capture_directory_result, directory_capture_block
     from ouroboros.tools.subagent_integration_delegated import retain_run_evidence
+
+    if entry is None or entry.review_owned:
+        return None  # the review owner compares against its frozen subject, never a product baseline
 
     def finish(block, transport=None):
         return retain_run_evidence(drive, entry, block, transport) if retain_investigation else block

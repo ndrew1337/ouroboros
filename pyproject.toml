@@ -70,7 +70,7 @@ dependencies = [
 
 [project.scripts]
 ouroboros = "ouroboros.cli:main"
-ouroboros-web = "server:main"
+ouroboros-web = "server:executable_main"
 
 [project.urls]
 Homepage = "https://github.com/razzant/ouroboros"

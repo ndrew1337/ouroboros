@@ -94,8 +94,17 @@ def write_workspace_patch_artifacts(
     acting_constraint = _acting_constraint_from_task(task)
     task_base_sha = str(acting_constraint.base_sha or "").strip() if acting_constraint else ""
     preflight_head = _preflight_head_from_task(task)
-    if not task_base_sha and not preflight_head and _preflight_head_present(task):
-        preflight_head = _GIT_UNBORN_HEAD
+    if not task_base_sha and not preflight_head and (acting_constraint or _preflight_head_present(task)):
+        manifest = _empty_patch_manifest(root, status=ARTIFACT_STATUS_FAILED, errors=[{
+            "type": "workspace_base_unknown",
+            "message": "The required original Git basis was not recorded; the workspace is retained without a patch.",
+        }])
+        manifest.update(base_provenance="unknown", note=manifest["errors"][0]["message"])
+        patch_path.unlink(missing_ok=True)
+        atomic_write_json(manifest_path, manifest, trailing_newline=True)
+        return [{"kind": "workspace_patch_manifest", "name": manifest_path.name,
+                 "path": str(manifest_path), **stream_artifact_file(manifest_path),
+                 "workspace_root": str(root)}], manifest
     base_ref, base_head, base_is_empty_tree = _workspace_patch_base(
         root,
         errors,
@@ -308,7 +317,9 @@ def write_workspace_patch_artifacts(
         "manifest_name": "workspace_patch.json",
         "base_provenance": ("task_constraint" if task_base_sha else "admission_head" if preflight_head
                             else "empty_tree" if base_is_empty_tree else "capture_head"),
-        "base_explanation": "Application patch relative to the recorded base; includes eligible workspace changes and may include branch differences. It does not attribute authorship.",
+        "base_explanation": ("Application patch relative to the recorded base; includes eligible workspace changes and may include branch differences. It does not attribute authorship."
+                             if task_base_sha or preflight_head else
+                             "Current workspace comparison at capture time; no original admission basis was recorded. It does not attribute authorship."),
         "comparison_note": "No auxiliary comparison target was selected. Use vcs_diff(base=..., head=...) for two trees, or base only for the current worktree.",
         "current_branch": _git_stdout(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], root, allow_rc={0, 1}, errors=diagnostics).strip(),
         "tracking_upstream": _git_stdout(["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], root, allow_rc={0, 128}, errors=diagnostics).strip(),
@@ -456,32 +467,16 @@ def _workspace_patch_base(
             return expected_base_sha, expected_base_sha, False
         return resolved, resolved, False
 
-    head_errors: List[Dict[str, Any]] = []
-    head = _git_stdout(["git", "rev-parse", "--verify", "HEAD"], root, allow_rc={0}, errors=head_errors).strip()
-    if head:
-        return head, head, False
+    from ouroboros.workspace_preflight import git_head_basis
 
-    worktree_errors: List[Dict[str, Any]] = []
-    inside = _git_stdout(
-        ["git", "rev-parse", "--is-inside-work-tree"],
-        root,
-        allow_rc={0},
-        errors=worktree_errors,
-    ).strip()
-    if inside == "true" and _head_reflog_exists(root):
-        errors.extend(head_errors)
-        errors.append({
-            "type": "git_invalid_head",
-            "command": ["git", "rev-parse", "--verify", "HEAD"],
-            "message": "HEAD could not be resolved but the repository has HEAD history; refusing to treat it as unborn",
-        })
-        return "HEAD", "", False
-    if inside == "true":
+    head, state = git_head_basis(root)
+    if state == "known":
+        return head, head, False
+    if state == "unborn":
         empty_tree = _git_empty_tree_oid(root, errors)
         if empty_tree:
             return empty_tree, _GIT_UNBORN_HEAD, True
-
-    errors.extend(head_errors or worktree_errors)
+    errors.append({"type": "git_invalid_head", "message": "HEAD could not be verified; unborn state is unproven"})
     return "HEAD", "", False
 
 
@@ -888,14 +883,12 @@ def _preflight_head_from_task(task: Dict[str, Any]) -> str:
     meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     preflight = meta.get("workspace_preflight") if isinstance(meta.get("workspace_preflight"), dict) else {}
     git = preflight.get("git") if isinstance(preflight.get("git"), dict) else {}
-    return str(git.get("head") or "")
+    return str(git.get("head") or (_GIT_UNBORN_HEAD if git.get("head_state") == "unborn" else ""))
 
 
 def _preflight_head_present(task: Dict[str, Any]) -> bool:
     meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
-    preflight = meta.get("workspace_preflight") if isinstance(meta.get("workspace_preflight"), dict) else {}
-    git = preflight.get("git") if isinstance(preflight.get("git"), dict) else {}
-    return "head" in git
+    return "workspace_preflight" in meta
 
 
 def _acting_constraint_from_task(task: Dict[str, Any]):

@@ -9634,12 +9634,9 @@ body.keyboard-open .project-panel {
     text-overflow: clip;
 }
 
-/* Notes between works (chat_relay_deck.js; DESIGN "Replies"): a relay row's bubble is dressed as a note card in the
-   work card's material, a list row: a 36 px tile that says who wrote (Main's glyph, or the Projects glyph in Project
-   ink), the name over `to this work · time`, one capsule; then the teller's line for the owner, and on request the note
-   as written with the row's own actions. A closed deck shows its latest card with the edges of up to two cards behind
-   it (plates of the card's own shadow, each a step narrower), the older cards tucked; open, the cards stand in a column
-   under a caption. */
+/* Notes between works (chat_relay_deck.js; DESIGN "Replies"): the sender's Project reference, time,
+   blue owner quotations, and one inline more/less control in the work card's material. Every consecutive relay
+   joins a deck; the front card names earlier cards with owner words. The rows keep their own identity/actions. */
 /* Specific enough to win over the voices' own bubble rules further down (one more class than they carry). */
 :root[data-theme] .chat-bubble.assistant.chat-relay-note {
     align-self: flex-start;
@@ -9673,31 +9670,29 @@ body.keyboard-open .project-panel {
     display: flex;
     align-items: center;
     gap: var(--space-3);
-    min-height: 36px;
+    min-height: 32px;
 }
 .chat-relay-deck-caption { flex: 1 1 auto; min-width: 0; color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
 .chat-relay-deck-caption b { color: var(--text-primary); font-weight: 600; }
-.chat-relay-deck-note { display: block; }
-.chat-relay-card-head { display: flex; align-items: center; gap: var(--space-3); min-height: 36px; }
-.chat-relay-tile {
-    flex: none;
-    display: grid;
-    place-items: center;
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--surface-capsule);
-    box-shadow: var(--elev-rest);
-    color: var(--text-secondary);
-}
-.chat-relay-tile svg { display: block; width: 18px; height: 18px; }
-.chat-relay-note[data-kind="project"] .chat-relay-tile { color: var(--project); }
-.chat-relay-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
-.chat-relay-from, .chat-relay-sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.chat-relay-from { color: var(--text-primary); font-size: var(--type-body); font-weight: 600; line-height: var(--line-title); }
+.chat-relay-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); min-height: 28px; }
+.chat-relay-card-head > .chat-live-project-card-btn { max-width: 62%; }
+.chat-relay-from { min-width: 0; overflow-wrap: anywhere; color: var(--text-primary); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta); }
 .chat-relay-sub { color: var(--text-meta); font-size: var(--type-meta); line-height: var(--line-meta); }
 .chat-relay-time { font-variant-numeric: tabular-nums; }
-.chat-relay-act { flex: none; }
+.chat-relay-act { flex: none; margin-inline-start: auto; }
+.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more) {
+    border: 0; background: none; box-shadow: none; padding: 0; min-height: 0; font: inherit; cursor: pointer;
+    color: var(--text-primary); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta);
+}
+.chat-relay-note :is(.chat-relay-act, .chat-relay-hide) { text-decoration: underline; text-underline-offset: 3px; }
+.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more):hover { background: none; box-shadow: none; text-decoration: underline; }
+.chat-relay-note :is(.chat-relay-act, .chat-relay-hide, .chat-relay-more):focus-visible { outline: 2px solid var(--focus-accent-border); outline-offset: 2px; }
+.chat-relay-act[hidden] { display: none; }
+.chat-relay-words-inside { margin-top: var(--space-2); color: var(--user-sender); font-size: var(--type-meta); font-weight: 600; line-height: var(--line-meta); }
+.chat-relay-words-inside::before { content: ''; display: inline-block; width: 3px; height: 0.9em; border-radius: 2px; background: currentColor; margin-right: var(--space-2); vertical-align: -1px; }
+.chat-relay-excerpt { display: flex; align-items: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
+.chat-relay-more { flex: none; }
+.chat-relay-note > .chat-relay-more { margin-top: var(--space-2); }
 .chat-relay-act-label { display: inline-flex; align-items: baseline; }
 .chat-relay-count {
     display: inline-grid;
@@ -9709,17 +9704,23 @@ body.keyboard-open .project-panel {
 }
 .chat-relay-count > .chat-relay-count-value { grid-area: 1 / 1; }
 .chat-relay-gist {
-    margin: var(--space-2) 0 0;
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
     color: var(--assistant-text);
     font-size: var(--type-body);
     line-height: var(--line-body);
     overflow-wrap: anywhere;
-    /* Two lines at most, even when a note's first word is longer than a line: the note itself is one press away. */
-    max-height: calc(2em * var(--line-body));
+    /* Three lines leave the inline more control at the end of the visible text. */
+    max-height: calc(3em * var(--line-body));
     overflow: hidden;
 }
+.chat-relay-note[data-raw="1"] .chat-relay-gist { max-height: none; overflow: visible; }
+.chat-relay-note[data-raw="1"] .chat-relay-gist[data-raw="1"] { display: none; }
 /* Without the teller's line the note's own first words stand in, in the meta ink: they were written for the work. */
 .chat-relay-gist[data-raw="1"] { color: var(--text-meta); }
+.chat-relay-note .chat-clamp { -webkit-line-clamp: 3; line-clamp: 3; }
+.chat-relay-note .chat-clamp[data-expanded="1"] { -webkit-line-clamp: unset; line-clamp: unset; }
 .chat-relay-note > :is(.chat-quote, .chat-relay-quotes) { margin-top: var(--space-3); }
 .chat-relay-raw-label {
     margin-top: var(--space-3);

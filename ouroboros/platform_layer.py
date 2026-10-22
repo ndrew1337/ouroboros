@@ -26,6 +26,7 @@ IS_MACOS = sys.platform == "darwin"
 IS_LINUX = sys.platform.startswith("linux")
 
 PATH_SEP = ";" if IS_WINDOWS else ":"
+SHUTDOWN_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 _SUBPROCESS_NO_WINDOW = (
     getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) if IS_WINDOWS else 0
 )
@@ -1302,9 +1303,8 @@ def install_shutdown_signal_handlers(handler) -> None:
     """Install SIGINT and POSIX SIGTERM handlers that only set a flag/event.
 
     The caller's main thread owns teardown, never the signal frame."""
-    signal.signal(signal.SIGINT, handler)
-    if not IS_WINDOWS:
-        signal.signal(signal.SIGTERM, handler)
+    for signum in SHUTDOWN_SIGNALS[:1] if IS_WINDOWS else SHUTDOWN_SIGNALS:
+        signal.signal(signum, handler)
 
 
 def subprocess_hidden_kwargs() -> dict:

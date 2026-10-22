@@ -141,6 +141,7 @@ def summarize_workspace_preflight(preflight: Dict[str, Any]) -> Dict[str, Any]:
         "workspace_root": str(preflight.get("workspace_root") or ""),
         "git": {
             "head": str(git.get("head") or ""),
+            "head_state": str(git.get("head_state") or ("known" if git.get("head") else "unknown")),
             "branch": str(git.get("branch") or ""),
             "dirty": bool(git.get("dirty")),
             "status_count": int(git.get("status_count") or 0),
@@ -569,13 +570,42 @@ def session_service_facts(service: ServiceDirectories, data_root: Any) -> str:
             + f"{links}.\n")
 
 
+def git_head_basis(root: pathlib.Path) -> Tuple[str, str]:
+    """A readable commit, positively unborn branch, or unknown; a failed probe is never unborn."""
+    def probe(*args):
+        return subprocess.run(["git", *args], cwd=str(root), capture_output=True,
+                              text=True, timeout=5, check=False)
+
+    try:
+        head = probe("rev-parse", "--verify", "HEAD^{commit}")
+        if head.returncode == 0 and head.stdout.strip():
+            return head.stdout.strip(), "known"
+        branch = probe("symbolic-ref", "--quiet", "HEAD")
+        if branch.returncode or not branch.stdout.strip().startswith("refs/heads/"):
+            return "", "unknown"
+        missing = probe("show-ref", "--verify", "--quiet", branch.stdout.strip())
+        history = probe("rev-parse", "--git-path", "logs/HEAD")
+        if missing.returncode == 1 and history.returncode == 0 and history.stdout.strip():
+            log_path = root / history.stdout.strip()
+            try:
+                size = log_path.stat().st_size
+            except FileNotFoundError:
+                size = 0
+            if size == 0:
+                return "", "unborn"
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return "", "unknown"
+
+
 def _git_snapshot(root: pathlib.Path) -> Dict[str, Any]:
-    head = _git_stdout(root, ["git", "rev-parse", "HEAD"], timeout=5).strip()
+    head, head_state = git_head_basis(root)
     branch = _git_stdout(root, ["git", "rev-parse", "--abbrev-ref", "HEAD"], timeout=5).strip()
     status = _git_stdout(root, ["git", "status", "--porcelain=v1", "--untracked-files=all"], timeout=8)
     entries = [line for line in status.splitlines() if line.strip()]
     return {
         "head": head,
+        "head_state": head_state,
         "branch": branch,
         "dirty": bool(entries),
         "status_count": len(entries),

@@ -1148,11 +1148,10 @@ def settle_run(drive_root: Any, gateway: Any, custody: RunCustody, detail: Dict[
     # money/retirement, including a repeated settlement: the body can collect
     # it after the engine disappears. Never fetch output or wait for capture on
     # the stop path; an unavailable source is a gap, not a reason to delay Stop.
-    if not custody.review_owned:
-        try:
-            observe_run(drive_root, custody, detail)
-        except Exception:
-            log.warning("Terminal observation was not retained for %s", custody.run_id, exc_info=True)
+    try:
+        observe_run(drive_root, custody, detail)
+    except Exception:
+        log.warning("Terminal observation was not retained for %s", custody.run_id, exc_info=True)
 
     if custody.settled:
         return {"settled": True, "ledger_recorded": custody.ledger_recorded,

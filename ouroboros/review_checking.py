@@ -1,27 +1,22 @@
 """Private checking copies for reviewer seats with configured technical rights (#1609).
 
-A ``workspace_write`` or ``full`` reviewer works in its OWN folder. Git and skill subjects
-freeze ONCE per wave (``freeze_checking_source``), before any seat starts. Ordinary folders
-stay live (owner decision 2026-10-17, 1A); those seats see concurrent author edits.
-Git ``index`` freezes the real staged index (the commit gate's subject); ``worktree`` freezes
-tracked/untracked files through a private index, over HEAD. Ignored ``.review-drive`` evidence
-is copied into a retained view at that moment. An ordinary ``workspace`` is read in place.
+A writable reviewer uses its own folder. Git/skill subjects freeze once per wave before
+dispatch; ordinary folders stay live (owner decision 2026-10-17, 1A). Git ``index`` freezes
+the real staged index; ``worktree`` freezes tracked/untracked files through a private index
+over HEAD. Ignored ``.review-drive`` evidence gets a retained view at the same moment.
 
-``prepare_seat_area`` keys a seat's copy by its physical operation: an independent Git clone
-(own refs, stash, config and hooks, source objects borrowed read-only), with HEAD at the subject's
-parent and index/worktree at the frozen tree; a skill's retained-view copy; or an empty working
-folder beside a workspace. The frozen tree object, original root and retained view stay readable.
-Rejoining an operation keeps its copy unchanged; remaking one uses the frozen evidence views.
+``prepare_seat_area`` keys copies by physical operation: an independent Git clone with
+own refs/stash/config/hooks, borrowed read-only objects, HEAD at the parent and index/worktree
+at the frozen tree; a retained skill view; or an empty folder beside a live workspace.
+Rejoin keeps the copy; remaking uses its frozen tree, original root and retained views.
 
-Nothing a seat changes is applied. At terminal, ``capture_seat_evidence`` retains the whole
-Git binary delta, or changed skill files (same-stat content compared) plus typed entry metadata;
-workspace folders have no delta. It also retains ``.review-evidence/`` without a byte bound,
-writes a receipt, then deletes a one-shot copy regardless of the engine's process census
-(owner decision 2026-10-12: copies live only as long as reviews). Named gaps still release;
-unlistable/unreadable paths keep the copy for ``prune_review_checkouts``. A thread's copy stays
-bound; its next turn first captures an unobserved prior turn. Git omits untracked special entries,
-ignored outputs outside ``.review-evidence/`` (listed, not retained) and frozen ``.review-drive``
-inputs. A full-access copy is not an OS sandbox.
+At terminal, ``capture_seat_evidence`` retains whole Git deltas or changed skill entries
+(same-stat bytes compared), plus whole ``.review-evidence/``; workspace folders have no delta.
+Nothing is applied. Its receipt precedes one-shot deletion regardless of process census
+(owner 2026-10-12). Named gaps release; unreadable/unlistable paths keep copies for recovery.
+Threads keep their active copy; a failed predecessor moves under its operation for retry.
+Git omits untracked special entries, ignored outputs outside ``.review-evidence/`` (listed)
+and frozen ``.review-drive`` inputs. Full access is not an OS sandbox.
 """
 
 from __future__ import annotations
@@ -668,12 +663,10 @@ def _capture_directory(home: pathlib.Path, marker: Mapping[str, Any]) -> pathlib
 def capture_seat_evidence(data_root: Any, task_id: str, operation_id: str) -> Dict[str, Any]:
     """Retain one terminal seat's changes as evidence, then remove its one-shot copy.
 
-    The receipt (``summary.json``) is written first; a ``retained`` or ``partial`` capture
-    then deletes the copy, and a repeated call only retries that deletion. A thread copy
-    stays bound to its thread (``thread_seat_area``). Each operation has its own immutable
-    evidence store, and captures of one copy are serialized across processes by its seat
-    lock. Never raises: a capture that could not complete keeps the copy and names the
-    error; ``{}`` means this operation had no checking copy.
+    ``summary.json`` precedes deletion; ``retained``/``partial`` repeats only retry cleanup.
+    Active thread copies stay. The seat lock serializes captures across processes, with
+    immutable evidence per operation. Failure keeps the copy and names the error without
+    raising; ``{}`` means the operation had no checking copy.
     """
     home = seat_dir(data_root, task_id, operation_id)
     try:
@@ -705,15 +698,17 @@ def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str
     except CheckingAreaUnavailable as exc:
         return {"status": "capture_failed", "area": str(area), "error": str(exc)}
     thread_seat = str(marker.get("thread_seat") or "")
-    if thread_seat:
+    # A failed predecessor moves under its operation; its local copy wins after a crash too.
+    thread_copy = bool(thread_seat and not _checking_area_present(area))
+    if thread_copy:
         area = seat_dir(data_root, task_id, f"thread:{thread_seat}") / "area"
     prior = _receipt(data_root, task_id, operation_id)
     if prior.get("status") in _RECEIPTED:
-        return prior if thread_seat else _release_area(area, prior)
+        return prior if thread_copy else _release_area(area, prior)
     if area.is_symlink():
         return {"status": "capture_failed", "area": str(area),
                 "error": "checking area was replaced by a symlink; target was not read"}
-    if thread_seat:
+    if thread_copy:
         try:
             active = json.loads((area.parent / "checking.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -728,14 +723,15 @@ def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str
     delta: Dict[str, Any] = {}
     errors = []
     try:
-        # Retry into a new generation so changed output kinds cannot collide,
-        # and previously returned receipts still address their original bytes.
+        # Immutable retry generations prevent kind collisions and preserve earlier receipts' bytes.
         if evidence.exists():
             marker["capture_id"] = uuid.uuid4().hex
             evidence = _capture_directory(home, marker)
         evidence.mkdir(parents=True, exist_ok=True)
         compare = {"git_tree": _git_delta, "directory": _directory_delta}.get(str(source.get("kind")))
         try:  # a workspace seat's folder started empty: what it publishes is its output
+            if compare is None and source.get("kind") != "workspace":
+                raise CheckingAreaUnavailable("the original checking source is unknown; copy retained")
             delta = compare(area, source, evidence, budget, gaps) if compare else {}
         except Exception as exc:
             errors.append(f"{type(exc).__name__}: {exc}")
@@ -748,6 +744,16 @@ def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str
                    "evidence_dir": str(evidence), "source": dict(source), "gaps": gaps, **delta}
         if errors:
             summary.update(error="; ".join(errors), area=str(area))
+        if errors and {k: v for k, v in summary.items() if k != "evidence_dir"} == {
+                k: v for k, v in prior.items() if k != "evidence_dir"}:
+            # Reuse identical failures, checking bytes too: partial files may be absent from the inventory.
+            old = _capture_directory(home, json.loads((home / "checking.json").read_text(encoding="utf-8")))
+            files = {p.relative_to(evidence) for p in evidence.rglob("*") if p.is_file()}
+            previous = {p.relative_to(old) for p in old.rglob("*") if p.is_file() and p != old / "summary.json"}
+            if files == previous and all(_same_bytes(evidence / p, old / p) for p in files):
+                from ouroboros.subagent_worktrees import _force_rmtree
+                _force_rmtree(evidence)
+                return prior
         atomic_write_json(evidence / "summary.json", summary)  # the receipt precedes any deletion
         if marker.get("capture_id"):
             atomic_write_json(home / "checking.json", marker)
@@ -758,7 +764,7 @@ def _capture_locked(data_root: Any, task_id: str, operation_id: str) -> Dict[str
 
             _force_rmtree(evidence)  # copies keep read-only modes, which Windows refuses to unlink
         return {"status": "capture_failed", "area": str(area), "error": f"{type(exc).__name__}: {exc}"}
-    return summary if thread_seat or errors else _release_area(area, summary)
+    return summary if thread_copy or errors else _release_area(area, summary)
 
 
 def _receipt_path(data_root: Any, task_id: str, operation_id: str) -> pathlib.Path:
@@ -795,14 +801,11 @@ def thread_seat_area(data_root: Any, task_id: str, seat: str, source: Mapping[st
                      operation_id: str = "") -> str:
     """The persistent checking clone a writable seat's sticky thread owns as its root.
 
-    The engine binds this exact root at creation. No synthetic commits or engine
-    worktrees: HEAD, index, working bytes and ignored inputs remain host-owned.
-    Recovery of an operation reuses its copy. Under the seat lock the prune shares, a new
-    turn first captures the turn that last used the copy, then refreshes the copy from its
-    own subject; a copy whose capture failed moves under its own turn instead of being
-    deleted. The turn is refused, with the copy kept, when that capture wrote no receipt
-    (a full volume), the copy's marker cannot be read or names no operation, or the copy
-    cannot be moved or removed (on Windows: a leftover process still holds it).
+    The engine binds this exact root; HEAD/index/bytes/ignored inputs remain host-owned.
+    Recovery reuses it. Under the shared seat lock, a new turn captures its predecessor
+    before refreshing from its own subject; failed copies move under their own operation.
+    A missing receipt, unreadable/unnamed operation or failed move/removal refuses the new
+    turn and keeps the copy (Windows processes may still hold it).
     """
     with _seat_locked(seat_dir(data_root, task_id, f"thread:{seat}")):
         return _thread_locked(data_root, task_id, seat, source, operation_id)

@@ -679,7 +679,7 @@ def retained_terminal_result(ctx, run_id, *, complete_only=True):
         return None
     payload = _retained_terminal_payload(ctx, entry, full=full)
     if payload is not None:
-        pending = collection_pending(entry)
+        pending = collection_pending(entry, root)
         runtime = body_runtime(root) if pending else None
         if runtime is not None:
             runtime.request(run_id)

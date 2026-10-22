@@ -232,7 +232,7 @@ def _retain_output(root, entry, detail, gateway, staging_task_id="", output_auth
 def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = None,
                      allow_review: bool = False, staging_task_id: str = "", stopped=None, failures=None,
                      output_authority=None) -> dict:
-    """One nonblocking result-owner entry for foreground, runtime and orphan recovery.
+    """One result-owner entry for foreground collection and the body, including recovered debt.
 
     A contending caller reads committed facts; it never times out an integration
     or evicts a live collector. No queue/root/money lock is held at this entry.
@@ -302,7 +302,7 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
                 capture = retain_run_evidence(root, entry, capture, gateway)
             if not closing and entry.project_persistent and entry.project_owned:
                 c.retire_project(root, gateway, entry)  # records kept, never deletes the project
-            return {"status": "collected" if not collection_pending(current.run(root, run_id)) else "pending",
+            return {"status": "collected" if not collection_pending(current.run(root, run_id), root) else "pending",
                     "settlement": money, "workspace_capture": capture, "output_retention": retention, "errors": errors}
         return {"status": "unavailable", "reason": "custody_missing"}
     finally:
@@ -382,13 +382,14 @@ def _collection_facts(entry):
 
 class BodyRuntime:
     """One generation's owned physical jobs. No background job grants actor authority."""
-    def __init__(self, root, *, stop_event=None, gateway_factory=None, max_workers=None):
+    def __init__(self, root, *, stop_event=None, gateway_factory=None, max_workers=None, collection_ready=None):
         from ouroboros.config import get_max_workers
         from ouroboros.platform_layer import process_start_time
 
         self.root = pathlib.Path(root).resolve()
         self.external_stop = stop_event
         self.gateway_factory = gateway_factory
+        self.collection_ready = collection_ready or (lambda: True)
         self.stop = threading.Event()
         self.changed = threading.Event()
         self.lock = threading.RLock()
@@ -592,9 +593,9 @@ class BodyRuntime:
         with self.lock:
             self.retry_requested.intersection_update(
                 rid for rid in self.retry_requested
-                if rid in self.collections or collection_pending(entries.get(rid)))
+                if rid in self.collections or collection_pending(entries.get(rid), self.root))
             for rid in list(self.collection_attempts):
-                if rid not in self.collections and not collection_pending(entries.get(rid)):
+                if rid not in self.collections and not collection_pending(entries.get(rid), self.root):
                     self.collection_attempts.pop(rid, None)
                     self.collection_failures.pop(rid, None)
                     self.retry_requested.discard(rid)
@@ -606,7 +607,7 @@ class BodyRuntime:
                     previous = self.reads.get(entry.run_id)
                     if (previous is None or previous.done()) and self.observation_gaps.get(entry.run_id) != self._observation_key(entry):
                         self.reads[entry.run_id] = self.observers.submit(self._observe, entry)
-                if collection_pending(entry):
+                if self.collection_ready() and collection_pending(entry, self.root):
                     previous = self.collections.get(entry.run_id)
                     facts, now = _collection_facts(entry), time.monotonic()
                     old, ended = self.collection_attempts.get(entry.run_id, (None, 0.0))
@@ -686,13 +687,14 @@ def current_activity(root, task_id: str, run_id: str, invocation_id: str = ""):
     return run_activity(fact)
 
 
-def start_body_runtime(root, *, stop_event=None, gateway_factory=None, max_workers=None) -> BodyRuntime:
+def start_body_runtime(root, *, stop_event=None, gateway_factory=None, max_workers=None, collection_ready=None) -> BodyRuntime:
     key = str(pathlib.Path(root).resolve())
     with _RUNTIME_LOCK:
         existing = _RUNTIMES.get(key)
         if existing is not None:
             return existing  # A closing generation is not replaced while its jobs remain.
-        runtime = BodyRuntime(key, stop_event=stop_event, gateway_factory=gateway_factory, max_workers=max_workers)
+        runtime = BodyRuntime(key, stop_event=stop_event, gateway_factory=gateway_factory, max_workers=max_workers,
+                              collection_ready=collection_ready)
         _RUNTIMES[key] = runtime
         return runtime
 

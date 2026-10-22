@@ -1,21 +1,15 @@
-// Notes between works (docs/DESIGN.md "Replies"): a note one work leaves another (`tell_task`) is written for that
-// work, so its room draws it as a note card, never as an Ouroboros reply. The relay row's own bubble becomes the card:
-// who wrote to this work and when, then the teller's one line for the owner (its `summary`; a note without one opens
-// with its own first words in the meta ink), and `Show note`, which opens the note as written with the row's own
-// actions (Reply, registered actions, Copy). Because the card is the row, its address, history identity, unread and
-// reading anchors, row menu, swipe and quote highlight stay the row's own.
-// Consecutive notes make one deck: the latest card in front, the edges of up to two behind it (drawn by the front
-// card itself), the older cards tucked away; `Show N notes` fans the deck out in place (the third height fold the bible
-// sanctions) and `Hide` folds it back. A relay that passes the owner's words is a card of its own, his words in their
-// quote panel above the summary line. Every change of height happens inside the room's stable-viewport write; motion
-// moves only position and opacity, so nothing changes size behind the reader's back. This module never decides what a
-// note says.
+// Notes between works (DESIGN "Replies"): each relay keeps its own row, address, actions and reading anchors.
+// Every consecutive relay joins a deck, including those carrying the owner's words. The latest card stands in
+// front; a blue mark names the earlier cards with his words. Show N notes / Hide controls the deck, while one
+// more / less control opens a card's note and all its quotations together inside a stable-viewport write.
 import { fmt, tr } from './i18n.js';
 import { formatMsgTime } from './utils.js';
-import { fitText } from './text_fit.js';
+import { fitText, fullText } from './text_fit.js';
 import { motionMs, reducedMotion } from './motion.js';
-import { PAGE_ICONS } from './page_icons.js';
+import { projectReference } from './project_reference.js';
+import { fetchJson } from './api_client.js';
 
+let nextNoteId = 0;
 const EDGES = 2;   // at most two edges behind the front card
 
 const node = (tag, cls, text) => {
@@ -25,7 +19,7 @@ const node = (tag, cls, text) => {
     return el;
 };
 const control = (cls, text) => {
-    const el = node('button', `btn btn-default btn-sm ui-hit-area ${cls}`, text);
+    const el = node('button', `ui-hit-area ${cls}`, text);
     el.type = 'button';
     return el;
 };
@@ -40,7 +34,12 @@ const transparent = (el) => el.hidden || Boolean(el.classList?.contains('typing-
  * One instance per room feed (chat_reply.js creates it beside the replies). `onDomWrite` is the room's stable-viewport
  * seam: every change that moves heights runs inside it.
  */
-export function createRelayDecks({ feed, onDomWrite = (write) => write(), formatTime = formatMsgTime } = {}) {
+export function createRelayDecks({ feed, onDomWrite = (write) => write(), formatTime = formatMsgTime,
+    lookupProject = async (chatId, signal) => {
+        const data = await fetchJson(`/api/projects?chat_id=${encodeURIComponent(chatId)}`, { signal });
+        return data?.projects?.length === 1 ? data.projects[0] : null;
+    } } = {}) {
+    const rooms = new Map(), lookup = new AbortController();
     const fresh = new Set();     // notes adopted since the last reconcile
     let scheduled = false, settled = false, destroyed = false;
 
@@ -66,7 +65,7 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         const fromMain = sender ? Number(sender.chat_id) === 1 : !quoted && Number(relay.source?.chat_id) === 1;
         const time = formatTime(row?.ts) || null;
         return {
-            quoted,
+            quoted, chatId: Number(sender?.chat_id),
             words: String(row?.text ?? bubble.querySelector(':scope > .message')?.textContent ?? '').trim(),
             summary: String(relay.summary || '').trim(),
             name: String(sender?.name || '').trim() || (fromMain ? 'Main' : tr('chat.relay.another_work', 'Another work')),
@@ -79,23 +78,43 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         bubble.dataset.kind = note.kind;
         bubble.dataset.raw = '0';
         const head = node('div', 'chat-relay-card-head');
-        const tile = node('span', 'chat-relay-tile');
-        tile.innerHTML = note.kind === 'main' ? PAGE_ICONS.chat : PAGE_ICONS.projects;
-        const who = node('div', 'chat-relay-who');
-        const sub = node('div', 'chat-relay-sub');
+        const from = node('span', 'chat-relay-from', note.name);
+        const sub = node('span', 'chat-relay-sub');
         const time = node('time', 'chat-relay-time', note.time);
         if (note.when) time.title = note.when;
-        sub.append(node('span', '', tr('chat.relay.to_this_work', 'to this work')), node('span', '', ' · '), time);
-        who.append(node('div', 'chat-relay-from', note.name), sub);
-        head.append(tile, who, control('chat-relay-act', tr('chat.relay.show_note', 'Show note')));
+        sub.append(node('span', '', tr('chat.relay.to_this_work', 'note to this work')), node('span', '', ' · '), time);
+        const act = control('chat-relay-act', '');
+        act.hidden = true;
+        head.append(from, sub, act);
+        // Only a host-resolved Project gets a reference. A missing/failed lookup stays an honest plain name.
+        // Cache per room feed, and cancel pending reads when that feed is disposed.
+        if (Number.isInteger(note.chatId) && note.chatId > 1) {
+            if (!rooms.has(note.chatId)) rooms.set(note.chatId, Promise.resolve()
+                .then(() => lookupProject(note.chatId, lookup.signal)).catch(() => null));
+            rooms.get(note.chatId).then((project) => {
+                if (destroyed || !project?.id || Number(project.chat_id) !== note.chatId) return;
+                onDomWrite(() => { from.replaceWith(projectReference(project)); return true; });
+            });
+        }
         const sender = bubble.querySelector(':scope > .sender');
         bubble.insertBefore(head, sender || bubble.firstElementChild);
+        const excerpt = node('div', 'chat-relay-excerpt');
         const gist = node('p', 'chat-relay-gist');
         if (!note.summary) gist.dataset.raw = '1';
-        const quote = bubble.querySelector(':scope > .chat-quote, :scope > .chat-relay-quotes');
-        (quote || sender || head).after(gist);
-        fitText(gist, note.summary || note.words, 2);
+        const more = control('chat-relay-more', tr('chat.relay.more', 'more'));
+        more.setAttribute('aria-expanded', 'false');
+        const id = `chat-relay-text-${++nextNoteId}`;
+        gist.id = `${id}-gist`;
         const message = bubble.querySelector(':scope > .message');
+        if (message) message.id ||= id;
+        const quotes = [...bubble.querySelectorAll('.chat-quote[data-mode="relay"] > .chat-quote-text')];
+        quotes.forEach((text, i) => { text.id ||= `${id}-quote-${i}`; });
+        more.setAttribute('aria-controls', [gist.id, message?.id, ...quotes.map(text => text.id)].filter(Boolean).join(' '));
+        bubble.__relayNote.more = more;
+        excerpt.append(gist, more);
+        const quote = bubble.querySelector(':scope > .chat-quote, :scope > .chat-relay-quotes');
+        (quote || sender || head).after(excerpt);
+        fitText(gist, note.summary || note.words, 3);
         if (message) bubble.insertBefore(node('div', 'chat-relay-raw-label', tr('chat.relay.as_written', 'Note as written')), message);
         bubble.addEventListener('click', (event) => onPress(bubble, event));
     }
@@ -137,7 +156,7 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         const text = node('div', 'chat-relay-deck-caption');
         const line = node('span', 'chat-relay-deck-line');
         line.append(node('b', '', fmt('{n} notes', { n: run.length })), node('span', '', range(run) ? ` · ${range(run)}` : ''));
-        text.append(line, node('span', 'chat-relay-deck-note', tr('chat.relay.not_for_you', 'Written for this work, not for you')));
+        text.append(line);
         top.append(text, control('chat-relay-hide', tr('chat.relay.hide', 'Hide')));
         return top;
     }
@@ -149,6 +168,7 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         const n = run.length;
         const deck = n > 1;
         const span = deck && open ? range(run) : '';
+        const quoted = run.slice(0, -1).filter(bubble => bubble.__relayNote.note.quoted).length;
         // A focused Hide follows its caption when the caption moves to another first card (an older note joined).
         const heldHide = run.some((bubble) => bubble.querySelector(':scope > .chat-relay-deck-top')?.contains(document.activeElement));
         let changed = false;
@@ -156,7 +176,7 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
             const front = i === n - 1;
             bubble.__relayRun = run;
             if (deck) bubble.__relayOpen = open;  // a note split off on its own keeps its deck's intent for a later join
-            const key = [n, i, deck && open ? 1 : 0, bubble.dataset.raw, i === 0 ? span : ''].join('|');
+            const key = [n, i, deck && open ? 1 : 0, bubble.dataset.raw, quoted, i === 0 ? span : ''].join('|');
             if (bubble.__relayPainted === key) return;
             bubble.__relayPainted = key;
             changed = true;
@@ -172,17 +192,25 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
                 if (top) top.replaceWith(fresh1); else bubble.prepend(fresh1);
                 if (held) fresh1.querySelector('.chat-relay-hide')?.focus({ preventScroll: true });
             } else top?.remove();
+            const oldMark = bubble.querySelector(':scope > .chat-relay-words-inside');
+            if (deck && !open && front && quoted) {
+                const label = quoted === 1 ? tr('chat.relay.earlier_words_one', 'Your words in 1 earlier note')
+                    : fmt('Your words in {n} earlier notes', { n: quoted });
+                if (oldMark) oldMark.textContent = label;
+                else bubble.querySelector(':scope > .chat-relay-card-head').after(node('div', 'chat-relay-words-inside', label));
+            } else oldMark?.remove();
             const act = actOf(bubble);
-            if (!act) return;
-            if (deck && !open && front) {
-                setCount(act, n);
-                act.setAttribute('aria-expanded', 'false');
-                return;
+            if (act) {
+                act.hidden = !(deck && !open && front);
+                if (!act.hidden) { setCount(act, n); act.setAttribute('aria-expanded', 'false'); }
             }
             const raw = bubble.dataset.raw === '1';
-            act.textContent = raw ? tr('chat.relay.hide_note', 'Hide note') : tr('chat.relay.show_note', 'Show note');
-            act.removeAttribute('aria-label');
-            act.setAttribute('aria-expanded', String(raw));
+            const more = bubble.__relayNote.more;
+            more.textContent = raw ? tr('chat.relay.less', 'less') : tr('chat.relay.more', 'more');
+            more.setAttribute('aria-expanded', String(raw));
+            more.setAttribute('aria-label', raw ? fmt('Collapse note from {name}', { name: bubble.__relayNote.note.name })
+                : fmt('Read full note and quoted words from {name}', { name: bubble.__relayNote.note.name }));
+
         });
         if (heldHide && !run[0].querySelector(':scope > .chat-relay-deck-top')?.contains(document.activeElement)) {
             run[0].querySelector(':scope > .chat-relay-deck-top .chat-relay-hide')?.focus({ preventScroll: true });
@@ -201,7 +229,13 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
             return;
         }
         if (event.target.closest('.chat-relay-act')) {
-            if (deck && !open) setOpen(run, true); else setRaw(bubble, bubble.dataset.raw !== '1');
+            const held = document.activeElement === actOf(bubble);
+            setOpen(run, true);
+            if (held) bubble.__relayNote.more.focus({ preventScroll: true });
+            return;
+        }
+        if (event.target.closest('.chat-relay-more')) {
+            setRaw(bubble, bubble.dataset.raw !== '1');
             return;
         }
         // The closed deck answers a press anywhere on its front card (never on its quote, a control, a link or a selection).
@@ -212,7 +246,22 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
     }
 
     function setRaw(bubble, on) {
-        onDomWrite(() => { bubble.dataset.raw = on ? '1' : '0'; paint(bubble.__relayRun || [bubble], bubble.dataset.deck === 'open'); return true; });
+        onDomWrite(() => {
+            bubble.dataset.raw = on ? '1' : '0';
+            const { note, more } = bubble.__relayNote;
+            const held = document.activeElement === more;
+            fitText(bubble.querySelector('.chat-relay-gist'), note.summary || note.words, on ? 0 : 3);
+            for (const text of bubble.querySelectorAll('.chat-quote[data-mode="relay"] > .chat-quote-text')) {
+                setData(text, 'expanded', on ? '1' : null);
+                fitText(text, fullText(text), on ? 0 : 3);
+            }
+            const message = bubble.querySelector(':scope > .message');
+            if (on && message) message.after(more);
+            else bubble.querySelector('.chat-relay-excerpt').append(more);
+            if (held) more.focus({ preventScroll: true });
+            paint(bubble.__relayRun || [bubble], bubble.dataset.deck === 'open');
+            return true;
+        });
         if (on) {
             const { open } = timing();
             for (const part of bubble.querySelectorAll(':scope > .chat-relay-raw-label, :scope > .message, :scope > .chat-message-actions')) {
@@ -246,14 +295,14 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
 
     /* ---- the feed ------------------------------------------------------------------------------------------------ */
     // Runs of consecutive notes in feed order: hidden rows and the typing row are transparent, any other row ends a
-    // run, and a relay with the owner's words is a run of its own.
+    // run. The presence of the owner's words never splits a run.
     function runs() {
         const out = [];
         let run = [];
         const flush = () => { if (run.length) out.push(run); run = []; };
         for (const el of [...feed.children]) {
             if (isNote(el)) {
-                if (el.__relayNote.note.quoted) { flush(); out.push([el]); } else run.push(el);
+                run.push(el);
             } else if (!transparent(el)) flush();
         }
         flush();
@@ -329,6 +378,8 @@ export function createRelayDecks({ feed, onDomWrite = (write) => write(), format
         destroy() {
             destroyed = true;
             watcher?.disconnect();
+            lookup.abort();
+            rooms.clear();
             fresh.clear();
         },
     };

@@ -1,6 +1,6 @@
 // Notes between works (chat_relay_deck.js) over the DOM double: a relay row's bubble is dressed as a note card and
 // keeps its row (address, history identity, actions); a run of notes is one deck with the latest card in front and the
-// older ones tucked; the owner's words keep a card of their own; a row between notes splits the run and taking it out
+// older ones tucked; a blue mark names tucked cards with the owner's words; a row between notes splits the run and taking it out
 // joins it again, still open; a note without the teller's line opens with its own words in the meta ink; the deck fans
 // out and folds back; a note opens as written; a quote's jump to a tucked note opens its deck. Motion and layout run in
 // the browser lane.
@@ -12,12 +12,12 @@ import { installDomDouble } from './dom_double.js';
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function fixture() {
+function fixture(options = {}) {
     const env = installDomDouble();
     const { el } = env;
     const feed = el('div', { className: 'chat-messages' });
     env.doc.body.append(feed);
-    const decks = createRelayDecks({ feed });
+    const decks = createRelayDecks({ feed, lookupProject: async () => null, ...options });
     let seq = 0;
     const note = (text, { summary = '', sender = { name: 'Main', chat_id: 1 }, quote = '', source = null } = {}) => {
         seq += 1;
@@ -42,7 +42,8 @@ function fixture() {
     };
     const visible = (bubble) => bubble.dataset.deckTucked !== '1';
     const act = (bubble) => bubble.querySelector('.chat-relay-act');
-    return { env, feed, decks, note, row, visible, act, close() { decks.destroy(); env.restore(); } };
+    const more = (bubble) => bubble.querySelector('.chat-relay-more');
+    return { env, feed, decks, note, row, visible, act, more, close() { decks.destroy(); env.restore(); } };
 }
 
 test('a run of notes is one deck of the rows themselves, the latest note in front, the older tucked', async () => {
@@ -65,7 +66,7 @@ test('a run of notes is one deck of the rows themselves, the latest note in fron
     } finally { f.close(); }
 });
 
-test('the owner\'s words keep a card of their own, and any other row ends a run', async () => {
+test('the owner\'s words join a deck, while any other row ends a run', async () => {
     const f = fixture();
     try {
         const first = f.note('first');
@@ -76,13 +77,14 @@ test('the owner\'s words keep a card of their own, and any other row ends a run'
         await settle();
         assert.equal(first.dataset.deckTucked, '1');
         assert.equal(second.dataset.deckEdges, '1', 'two notes: one edge behind the front card');
-        assert.equal(quoted.dataset.deck, undefined, 'a relay with his words is a card of its own');
+        assert.equal(quoted.dataset.deckTucked, '1', 'his words join the next note in a deck');
         const kids = quoted.children;
         const quoteAt = kids.indexOf(quoted.querySelector('.chat-quote'));
         assert.ok(quoteAt > kids.indexOf(quoted.querySelector('.chat-relay-card-head'))
-            && quoteAt < kids.indexOf(quoted.querySelector('.chat-relay-gist')), 'his words between the head and the line');
-        assert.equal(fourth.dataset.deck, undefined, 'a note after his words starts anew');
-        assert.equal(f.act(fourth).textContent, 'Show note');
+            && quoteAt < kids.indexOf(quoted.querySelector('.chat-relay-excerpt')), 'his words between the head and the line');
+        assert.equal(fourth.dataset.deck, 'closed');
+        assert.equal(f.act(fourth).textContent, 'Show 2 notes');
+        assert.equal(fourth.querySelector('.chat-relay-words-inside').textContent, 'Your words in 1 earlier note');
     } finally { f.close(); }
 });
 
@@ -125,7 +127,9 @@ test('an ordinary reconcile rewrites nothing: a focused Hide keeps its focus, a 
         f.decks.schedule();
         await settle();
         assert.equal(f.act(rows[2]).querySelector('.chat-relay-count'), count, 'an unchanged deck keeps its nodes');
+        f.act(rows[2]).focus();
         f.act(rows[2]).click();
+        assert.equal(f.env.doc.activeElement, f.more(rows[2]), 'focus stays on the visible front card');
         const hide = rows[0].querySelector('.chat-relay-hide');
         hide.focus();
         f.row('an answer lands');
@@ -158,7 +162,7 @@ test('a note read on its own opens the deck it joins, so the passage stays; Hide
     try {
         const first = f.note('a long note being read');
         await settle();
-        f.act(first).click();
+        f.more(first).click();
         assert.equal(first.dataset.raw, '1');
         const second = f.note('a second note arrives');
         await settle();
@@ -205,7 +209,7 @@ test('a note saved before its room was recorded says Main only when it came from
     } finally { f.close(); }
 });
 
-test('Show N notes fans the deck out; Show note opens the note as written with the row\'s actions; Hide folds it', async () => {
+test('Show N notes fans the deck out; more opens the note with the row\'s actions; Hide folds it', async () => {
     const f = fixture();
     try {
         const rows = [f.note('w1'), f.note('w2:as-written'), f.note('w3')];
@@ -216,12 +220,12 @@ test('Show N notes fans the deck out; Show note opens the note as written with t
         assert.match(rows[0].querySelector('.chat-relay-deck-top').textContent, /^3 notes · /);
         assert.equal(rows[2].dataset.deckEdges, undefined, 'open, no edges');
         const middle = rows[1];
-        assert.equal(f.act(middle).textContent, 'Show note');
-        f.act(middle).click();
+        assert.equal(f.more(middle).textContent, 'more');
+        f.more(middle).click();
         assert.equal(middle.dataset.raw, '1', 'the note as written and its Reply and Copy show');
-        assert.equal(f.act(middle).textContent, 'Hide note');
-        assert.equal(f.act(middle).getAttribute('aria-expanded'), 'true');
-        f.act(middle).click();
+        assert.equal(f.more(middle).textContent, 'less');
+        assert.equal(f.more(middle).getAttribute('aria-expanded'), 'true');
+        f.more(middle).click();
         assert.equal(middle.dataset.raw, '0');
         rows[0].querySelector('.chat-relay-hide').click();
         assert.ok(rows.slice(0, 2).every((bubble) => bubble.dataset.deckTucked === '1'));
@@ -266,4 +270,82 @@ test('a relay row the room decorates is dressed as a note; a bubble without the 
         assert.equal(relayRow.querySelector('.chat-message-reply') !== null, true, 'the row keeps its own Reply');
         assert.equal(plain.classList.contains('chat-relay-note'), false, 'only a relay row becomes a note');
     } finally { replies.destroy(); env.restore(); }
+});
+
+
+test('the blue mark counts earlier cards, excluding the front, and follows live arrivals and splits', async () => {
+    const f = fixture();
+    try {
+        const one = f.note('first', { quote: 'one' });
+        const two = f.note('second', { quote: 'two' });
+        const front = f.note('latest', { quote: 'front words' });
+        await settle();
+        assert.equal(front.querySelector('.chat-relay-words-inside').textContent, 'Your words in 2 earlier notes');
+        f.more(front).click();
+        assert.equal(front.dataset.deck, 'closed', 'more opens only this card, not the deck');
+        assert.equal(front.dataset.raw, '1');
+        f.act(front).click();
+        assert.equal(front.querySelector('.chat-relay-words-inside'), null);
+        one.querySelector('.chat-relay-hide').click();
+        assert.equal(f.env.doc.activeElement, f.act(front));
+        const latest = f.note('new arrival');
+        await settle();
+        assert.equal(latest.querySelector('.chat-relay-words-inside').textContent, 'Your words in 3 earlier notes');
+        const boundary = f.row('boundary');
+        f.feed.insertBefore(boundary, two);
+        f.decks.schedule();
+        await settle();
+        assert.equal(latest.querySelector('.chat-relay-words-inside').textContent, 'Your words in 2 earlier notes');
+        assert.equal(one.dataset.deck, undefined);
+    } finally { f.close(); }
+});
+
+test('hidden rows and typing are transparent, and a quoted tucked row is surfaced by a jump', async () => {
+    const f = fixture();
+    try {
+        const quoted = f.note('first', { quote: 'owner words' });
+        f.row('hidden').hidden = true;
+        f.feed.append(f.env.el('div', { className: 'typing-bubble' }));
+        const front = f.note('second', { sender: { name: 'Another work', chat_id: 42 } });
+        await settle();
+        assert.equal(quoted.dataset.deckTucked, '1');
+        assert.equal(front.dataset.deckEdges, '1');
+        assert.equal(f.decks.surface(quoted), quoted);
+        assert.equal(quoted.dataset.deckTucked, undefined);
+    } finally { f.close(); }
+});
+
+test('known sender rooms use the Project reference, unknown rooms remain plain and lookups are shared', async () => {
+    const lookups = [];
+    const project = { id: 'sender', chat_id: 42, name: 'Sender room' };
+    const f = fixture({ lookupProject: async id => { lookups.push(id); return id === 42 ? project : null; } });
+    try {
+        const known = f.note('known', { sender: { name: 'Saved name', chat_id: 42 } });
+        f.note('same room', { sender: { name: 'Saved name', chat_id: 42 } });
+        const absent = f.note('absent', { sender: { name: 'Gone room', chat_id: 99 } });
+        const old = f.note('old', { sender: { task_id: 'missing-task' }, source: { chat_id: 42 } });
+        await settle();
+        const reference = known.querySelector('[data-intent="open-project"]');
+        assert.equal(reference.getAttribute('aria-label'), 'Open project Sender room');
+        assert.equal(reference.querySelector('.chat-live-project-name').textContent, 'Sender room');
+        assert.equal(known.querySelector('.chat-relay-tile'), null);
+        assert.equal(absent.querySelector('.chat-relay-from').textContent, 'Gone room');
+        assert.equal(absent.querySelector('[data-intent="open-project"]'), null);
+        assert.equal(old.querySelector('.chat-relay-from').textContent, 'Another work');
+        assert.deepEqual(lookups, [42, 99], 'a quote source is never used as the sender destination');
+    } finally { f.close(); }
+});
+
+test('disposing a room aborts a pending sender lookup and prevents a late DOM write', async () => {
+    let resolve, signal;
+    const f = fixture({ lookupProject: (_id, pending) => { signal = pending; return new Promise(done => { resolve = done; }); } });
+    try {
+        const note = f.note('pending', { sender: { name: 'Known name', chat_id: 42 } });
+        await settle();
+        f.decks.destroy();
+        assert.equal(signal.aborted, true);
+        resolve({ id: 'known', chat_id: 42, name: 'Resolved room' });
+        await settle();
+        assert.equal(note.querySelector('[data-intent="open-project"]'), null);
+    } finally { f.close(); }
 });

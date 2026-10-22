@@ -52,7 +52,7 @@ _RECONCILE_SWEEP_LOCK = threading.Lock()
 _SCHEDULE_SWEEP_LOCK = threading.Lock()
 
 
-def bind_body_lifespan(drive_root: Any, stop_event: Any):
+def bind_body_lifespan(drive_root: Any, stop_event: Any, *, collection_ready=None):
     """Return this lifespan's idempotent post-publication starter.
 
     A previous lifespan keeps its physical jobs until they return. Only that
@@ -67,7 +67,7 @@ def bind_body_lifespan(drive_root: Any, stop_event: Any):
         with lock:
             if stop_event.is_set() or handover:
                 return
-            runtime = start_body_runtime(drive_root, stop_event=stop_event)
+            runtime = start_body_runtime(drive_root, stop_event=stop_event, collection_ready=collection_ready)
             if runtime.active:
                 return
 
@@ -76,7 +76,7 @@ def bind_body_lifespan(drive_root: Any, stop_event: Any):
                 with lock:
                     handover.clear()
                     if not stop_event.is_set():
-                        start_body_runtime(drive_root, stop_event=stop_event)
+                        start_body_runtime(drive_root, stop_event=stop_event, collection_ready=collection_ready)
 
             thread = threading.Thread(target=after_close, name="body-lifespan-handover", daemon=True)
             handover.append(thread)

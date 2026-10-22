@@ -1695,14 +1695,23 @@ above (its own card does not count).
 
 A relay is a note one work leaves another (`tell_task`), written for that work, so
 its room draws a note card, never an Ouroboros bubble (`web/modules/chat_relay_deck.js`):
-the sender's tile (Main's glyph, or the Projects glyph in Project ink) and name over
-`to this work · time`, the teller's line for the owner (`summary`; without it the
-note's first words in meta ink), and Show note, the note as written in a tray with
-Reply and Copy. Consecutive notes make one deck in the work card's material: the
-latest card in front, the edges of up to two behind, Show N notes fanning it out in
-place, Hide folding it. A relay passing the owner's words keeps its own card: every
-message passed on, complete with where/when (six lines, then Show all; files named,
-captionless files by name), above the summary. Telegram receives only a relay that
+the sender's room reference built by `project_reference.js` (Main is named without a
+glyph; an unknown room keeps its plain name), beside `note to this work · time`.
+The teller's line for the owner (`summary`; without it the note's first words in meta
+ink) ends with one `more` control. It expands the note as written in a tray, its
+Reply and Copy actions, and every quoted owner message together; `less` folds them.
+Visible owner quotes keep their blue quote component, where/when and named files
+(captionless files by name), clamped to three lines above the summary until expanded.
+All consecutive notes, from any sender and with or without the owner's words, make
+one deck in the work card's material: the latest card in front, the edges of up to
+two behind, Show N notes fanning it out in place, Hide folding it. Other visible row
+kinds end a run; hidden rows and typing stay transparent. A folded deck with quoted
+owner messages in earlier cards carries the blue mark `Your words in N earlier
+notes` (singular for one); N counts cards, not quotations. Fanning out reveals those
+quotes, and a jump to a tucked row opens its deck before landing on it.
+The owner chose this rule on 22 Oct 2026 (variant A): the blue mark now serves the
+16 Oct decision that his words stay prominent, including when their cards are tucked.
+Telegram receives only a relay that
 passes his words, as plain text. Main keeps its one receipt line. The row menu (right-click, Shift+F10, ContextMenu on the focused
 row, long press on touch) offers Reply, Copy, Open project and a work card's
 Resume, Pause and Stop… exactly when the card does. Esc/outside press closes it

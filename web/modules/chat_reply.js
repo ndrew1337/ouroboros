@@ -341,7 +341,7 @@ export function createChatReplies({ chatId, feed, input, key = '', reading, hist
             if (address) bubble.dataset.rowAddress = address;
             const sender = bubble.querySelector('.sender');
             const role = ROLE_NAMES.find((name) => bubble.classList.contains(name));
-            const relay = role === 'assistant' ? createRelayQuote(row?.relay, { onDomWrite }) : null;
+            const relay = role === 'assistant' ? createRelayQuote(row?.relay, { onDomWrite, card: bubble.dataset.systemType === 'relay_entry' }) : null;
             const quote = relay || createReplyQuote(row?.reply_to, { onJump: jump });
             if (quote && !relay && role !== 'user') {
                 quote.dataset.derived = '1';
