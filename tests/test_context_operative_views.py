@@ -95,3 +95,27 @@ def test_runtime_view_counts_schedules_candidates_and_the_letter_and_keeps_autho
     assert view["capabilities"] == data["capabilities"]
     assert "Daily check" not in section.operative_view and "Daily check" in section.full_text
     assert len(section.operative_view) < len(section.full_text) / 3 and data == before
+
+
+def test_runtime_view_counts_the_routing_manifests_history_and_keeps_their_omissions():
+    import json
+
+    from ouroboros.context_sections import runtime_host_section
+
+    finals = [{"task_id": f"r{i}", "final_answer": "What this root delivered. " * 40} for i in range(16)]
+    dialogue = [{"direction": "in", "text": "The owner's earlier words. " * 20} for _ in range(20)]
+    data = {"main_routing_manifest": {"projects": [], "root_tasks": [], "final_results": finals,
+                                      "recent_canonical_dialogue": dialogue,
+                                      "omissions": {"final_results": 3, "dialogue_gaps": []}},
+            "project_routing_manifest": {"final_results": finals[:5], "active_roots": [{"task_id": "live"}],
+                                         "omissions": {"active_roots": 0}}}
+    section = runtime_host_section(data)
+    view = json.loads(section.operative_view.split("\n\n", 1)[1])
+    main, project = view["main_routing_manifest"], view["project_routing_manifest"]
+    assert (main["final_results"]["count"], main["recent_canonical_dialogue"]["count"]) == (16, 20)
+    assert (project["final_results"]["count"], project["active_roots"]["count"]) == (5, 1)
+    # What was left out stays named exactly; the whole lists stay in the retained full section.
+    assert main["omissions"] == data["main_routing_manifest"]["omissions"]
+    assert "What this root delivered" not in section.operative_view
+    assert "What this root delivered" in section.full_text and "The owner's earlier words" in section.full_text
+    assert len(section.operative_view) < len(section.full_text) / 10

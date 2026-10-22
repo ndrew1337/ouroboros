@@ -307,7 +307,8 @@ _RUNTIME_COUNTED_LISTS = (
     ("capabilities", "delegation", "subagents_last_executions"),
     ("current_chat", "running_tasks"), ("current_chat", "addressable_root_tasks"),
     ("main_routing_manifest", "projects"), ("main_routing_manifest", "root_tasks"),
-    ("project_routing_manifest", "root_tasks"),
+    ("main_routing_manifest", "final_results"), ("main_routing_manifest", "recent_canonical_dialogue"),
+    ("project_routing_manifest", "final_results"), ("project_routing_manifest", "active_roots"),
     ("scheduled_tasks", "active"), ("scheduled_tasks", "held"), ("scheduled_tasks", "waiting"),
     ("scheduled_tasks", "delete_pending"), ("body_candidates",),
 )
@@ -318,9 +319,10 @@ def runtime_host_section(data: dict, coordination: str = "") -> HostSection:
     """Retain scalar facts and authority; show the producer's observational lists by exact count.
 
     Grants, constraints, task contracts, origin words, review obligations, the filesystem
-    affordances and the coordination ledger remain exact. Lists of past runs, routing rows,
-    schedules and body candidates become ``{"count": n}``; the update letter's prose its
-    character count. Unknown/new fields stay whole until their producer gives them a form.
+    affordances and the coordination ledger remain exact. Lists of past runs and their results,
+    recent dialogue, routing rows, schedules and body candidates become ``{"count": n}``; the
+    update letter's prose its character count. Unknown/new fields stay whole until their
+    producer gives them a form.
     """
     projected = copy.deepcopy(data)
     for paths, kind, fact in ((_RUNTIME_COUNTED_LISTS, list, "count"), (_RUNTIME_SIZED_TEXTS, str, "chars")):
