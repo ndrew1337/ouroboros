@@ -152,3 +152,70 @@ def test_retention_renewal_keeps_the_declared_window_and_growth_reserve(host_wor
             assert host.renewal_due()
 
     asyncio.run(host.session(consume, LiveOptions()))
+
+
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
+from tests.test_grok_openai_protocol import providers as providers, deny_network as deny_network, Wire
+
+
+@pytest.mark.parametrize('rotation', ['before_prepare', 'before_open'])
+def test_acceptance_belongs_to_the_account_the_connector_opened(host_world, monkeypatch, rotation, providers):
+    from ouroboros import capability_evidence as ce
+    from ouroboros.contracts.live_conversation import LiveOptions
+
+    host = host_world.host
+    root = host.ctx.drive_root
+    monkeypatch.setattr(ce, 'canonical_evidence_root', lambda: root)
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=133554, acceptance_can_raise=True))
+    first_scope = host.turn.observation_fingerprint()
+    factory, check = host_world.provider['session'], host.check
+    opened_scopes = []
+    checks = 0
+
+    registrations = {}
+    providers['openai'].module.register(SimpleNamespace(
+        register_realtime_provider=lambda name, **kw: registrations.update(kw),
+        get_settings=lambda keys: {'OPENAI_API_KEY': host_world.settings['TEST_CREDENTIAL']}))
+
+    @asynccontextmanager
+    async def fake_socket(url, **kwargs):
+        # Exercise the shipped connector, including its late get_settings read.
+        # The header is synthetic; no real credential or network is involved.
+        assert kwargs['extra_headers']['Authorization'] == 'Bearer second-synthetic-account'
+        opened_scopes.append(host.turn.observation_fingerprint())
+        yield Wire('openai')
+
+    import websockets.legacy.client
+    monkeypatch.setattr(websockets.legacy.client, 'connect', fake_socket)
+
+    async def controls_with_settings_edit():
+        nonlocal checks
+        checks += 1
+        await check()
+        # session() awaits controls before preparation and again before open.
+        # A Settings edit while that second asynchronous check waits is allowed.
+        if checks == (1 if rotation == 'before_prepare' else 2):
+            host_world.settings['TEST_CREDENTIAL'] = 'second-synthetic-account'
+
+    monkeypatch.setattr(host, 'check', controls_with_settings_edit)
+    host_world.provider['session'] = registrations['session']
+
+    async def complete(session):
+        host.response_started('account-witness')
+        host.response_done('account-witness', usage=token_usage(text_input_tokens=150000),
+            raw_usage={'input_tokens': 150000}, status='completed')
+
+    asyncio.run(host.session(complete, LiveOptions()))
+    actual_scope, = opened_scopes
+    assert actual_scope != first_scope
+    records = ce._load(root).get('main_windows', {})
+    accepted = lambda scope: max((row.get('accepted', 0) for row in
+        records.get(scope, {}).get('observations', [])), default=0)
+    # Returning to the first key must not borrow the other account's success.
+    from ouroboros.realtime_setup import session_candidate
+    host_world.settings['TEST_CREDENTIAL'] = 'test-credential'
+    _, returning, _ = session_candidate(host, factory, LiveOptions())
+    assert (accepted(first_scope), accepted(actual_scope),
+            returning.physical_context.capacity_total_tokens) == (0, 150000, 133554)

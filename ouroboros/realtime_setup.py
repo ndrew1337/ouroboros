@@ -126,7 +126,7 @@ def observe_live_input(host, raw_usage):
         resolve_window(host.plan, reserve, root=host.ctx.drive_root), host.model.facts)
 
 
-def session_candidate(host, factory, options):
+def session_candidate(host, factory, options, *, observation_fp=None):
     """Refit current canonical rows through the ordinary window ladder, then seal.
 
     Additional feature instructions and current schemas participate in the same
@@ -149,7 +149,7 @@ def session_candidate(host, factory, options):
     # and the ordinary ladder honours both. The physical guard below checks the larger.
     reserve = facts.working_reserve_tokens or plan.output_reserve_tokens
     limit = WindowLimit(window, "total", facts.source, facts.observed, facts.acceptance_can_raise) if known else None
-    scope = host.turn.observation_fingerprint()
+    scope = host.turn.observation_fingerprint() if observation_fp is None else observation_fp
     record = WindowRecord(scope, total=limit, reserve=reserve,
                           declared=(limit,) if limit else ())
     plan = replace(plan, route_fp=scope, window_witness_bound=bool(scope), window_record=record, window_tokens=window, status="confirmed" if known else "unprobeable", stale=False,

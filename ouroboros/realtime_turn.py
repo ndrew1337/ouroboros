@@ -26,20 +26,9 @@ class RealtimeTurn:
 
     def observation_fingerprint(self):
         """Route/account evidence from the provider's granted settings, retaining only a hash."""
-        from ouroboros.contracts.realtime import canonical_json, sha256
-        from ouroboros.extension_registry_state import _extensions, _lock
-        from ouroboros.realtime_setup import loaded_provider
+        from ouroboros.realtime_credentials import capture_session_credentials
 
-        provider = loaded_provider(self.provider)
-        required = provider["catalog"].credential_settings
-        with _lock:
-            apis = tuple(getattr(_extensions.get(provider["skill"]), "api_instances", ()))
-        for api in apis:
-            values = api.get_settings(required)
-            if all(values.get(key) for key in required):
-                return sha256(canonical_json({"provider": self.route.accounting_provider, "model": self.model,
-                    "endpoint": self.route.endpoint, "credentials": {key: values[key] for key in required}}))[:24]
-        return ""  # no bound account: stated route facts still apply, observations cannot transfer
+        return capture_session_credentials(self).scope
 
     def resolve_route(self, task, *, allow_fetch):
         """Ordinary fitting against this transport's exact cached route evidence.

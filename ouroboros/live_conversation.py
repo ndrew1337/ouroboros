@@ -439,6 +439,7 @@ class ConversationHost:
         from ouroboros.extension_registry_state import extension_work_scope
         from ouroboros.loop_model_call import _presend_context_fit
         from ouroboros.observability import persist_physical_candidate
+        from ouroboros.realtime_credentials import capture_session_credentials
         from ouroboros.realtime_setup import session_candidate
         from ouroboros.response_limits import positive_limit, resolve_response_limit
         from ouroboros.usage_accounting import PhysicalAttemptPreconditionFailed
@@ -455,30 +456,51 @@ class ConversationHost:
         options = replace(options, model_output_bound_tokens=bound)
         work = _LoopWork()
         work.task = asyncio.current_task()
+        credentials = capture_session_credentials(self.turn, provider)
+
+        async def prepare(*, rebound=False):
+            with credentials.activate():
+                session, request, evidence = session_candidate(
+                    self, provider["session"], options, observation_fp=credentials.scope)
+            connection["context_ready_at"] = time.time()
+            self.timing.setdefault("context_ready_at", connection["context_ready_at"])
+            self._physical_context = request.physical_context
+            self._held_input = self._growth = 0
+            self._history_at_receipt = self._history_estimate()
+            self._meter_watermark = 0.0
+            receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
+                task_id=self.ctx.task_id, attempt_id=f"call-{self.turn.spec.call_id}-{self.connection_number}" + ("-rebound" if rebound else ""),
+                candidate=session.wire, candidate_facts=evidence)
+            self.observe("host", canonical_json({"type": "call.prepared", **evidence,
+                                                 "manifest_ref": receipt["manifest_ref"]}))
+            return session, request
+
         with extension_work_scope(provider, work):
             async with self._tools_lock:
                 self.connection_number += 1
-                session, request, evidence = session_candidate(self, provider["session"], options)
-                connection = {"number": self.connection_number, "context_ready_at": time.time()}
+                connection = {"number": self.connection_number}
                 self.timing["connections"].append(connection)
-                self.timing.setdefault("context_ready_at", connection["context_ready_at"])
-                self._physical_context = request.physical_context
-                self._held_input = self._growth = 0
-                self._history_at_receipt = self._history_estimate()
-                self._meter_watermark = 0.0
-                receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
-                    task_id=self.ctx.task_id, attempt_id=f"call-{self.turn.spec.call_id}-{self.connection_number}",
-                    candidate=session.wire, candidate_facts=evidence)
-                self.observe("host", canonical_json({"type": "call.prepared", **evidence,
-                                                     "manifest_ref": receipt["manifest_ref"]}))
+                session, request = await prepare()
             try:
                 with _presend_context_fit() as admit:
                     if not admit(request):
                         raise PhysicalAttemptPreconditionFailed("context_capacity")
                     await self.check()
+                    latest = capture_session_credentials(self.turn, provider)
+                    if latest.scope != credentials.scope:
+                        # Controls/persistence can yield to a Settings edit. Refit
+                        # this account, then pin the same capture through open.
+                        await joined(session.close())
+                        credentials = latest
+                        async with self._tools_lock:
+                            session, request = await prepare(rebound=True)
+                        if not admit(request):
+                            raise PhysicalAttemptPreconditionFailed("context_capacity")
+                        await self.check()
                     self._connection_quote = copy.deepcopy(self.quote)
                     self._connection_accounting = True
-                    await session.open()
+                    with credentials.activate():
+                        await session.open()
                     connection["open_at"] = time.time()
                     self.timing.setdefault("session_open_at", connection["open_at"])
                     return await consume(session)

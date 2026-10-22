@@ -375,6 +375,7 @@ class PluginAPIImpl:
         with _lock:
             self._stage_surface_locked(_realtime_providers, self._staged.realtime_providers, key, {
                 "skill": self._skill, "route": route, "session": session, "catalog": catalog,
+                "_credential_api": self,
             }, "realtime provider")
 
     def register_live_conversation(self, name: str, handler: Callable[..., Any], *,
@@ -977,6 +978,8 @@ class PluginAPIImpl:
         log.log(level_no, "[ext %s] %s %s", self._skill, message, fields or "")
 
     def get_settings(self, keys: Sequence[str]) -> Dict[str, Any]:
+        from ouroboros.realtime_credentials import session_settings
+
         with self._api_lock:
             with _lock:
                 if self._runtime_closing or self._runtime_closed or self._skill in _unloading:
@@ -984,7 +987,7 @@ class PluginAPIImpl:
             if "read_settings" not in self._permissions:
                 # Missing permission fails closed without leaking key presence.
                 return {}
-            settings = self._current_settings()
+            settings = session_settings(self, self._current_settings())
             with _lock:
                 if self._runtime_closing or self._runtime_closed or self._skill in _unloading:
                     return {}
