@@ -496,7 +496,7 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
 
 
 def revise_text(root: Any, stream: str, seq: int, text: str) -> Dict[str, Any]:
-    """Revise one caption's text atomically; retain its allocated coordinate span and all other facts."""
+    """Revise a row's text atomically; retain its allocated span (mapped on export) and all other facts."""
     with transaction(root, write=True) as conn:
         existing = conn.execute(f"{_SELECT} WHERE stream=? AND seq=?", (stream, seq)).fetchone()
         if existing is None:
