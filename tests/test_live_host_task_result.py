@@ -5,19 +5,9 @@ import queue
 import time
 from types import SimpleNamespace
 
-import pytest
-
 from tests.test_live_conversation import host_world as host_world
 
 
-class TaskResultNotDelivered(AssertionError):
-    """The result reached chat, but never entered the still-open call's mailbox."""
-
-
-@pytest.mark.xfail(strict=True, raises=TaskResultNotDelivered, reason=(
-    'Y-D2: supervisor/events_chat_delivery.py:484 sends the final to chat but never relays it '
-    'to the active turn; ouroboros/live_conversation.py:320 only drains its incoming/owner mailbox.'
-))
 def test_started_task_result_reaches_live_call_but_other_room_does_not(host_world, monkeypatch):
     from ouroboros import agent_task_pipeline
     from ouroboros.contracts.live_conversation import LiveOptions
@@ -121,10 +111,9 @@ def test_started_task_result_reaches_live_call_but_other_room_does_not(host_worl
         assert session.opened and not session.closed and not host.hub.closed
         assert foreign_text not in str(rows) and foreign_text not in str(host.messages)
         matching = [row for row in rows if result_text in str(row.get('content'))]
-        if not matching:
-            raise TaskResultNotDelivered('Final result is in this room\'s chat, but the live mailbox returned no result row')
         [row] = matching
         assert row in host.messages and row['role'] == 'user'
+        assert task['id'] in row['content'] and '[System task message]' in row['content']
         # A reply from another task is addressed context, never owner authority.
         assert row.get('_host_context_kind') != 'owner_words'
         assert result_text not in str(getattr(state.ctx, '_owner_directives', []))

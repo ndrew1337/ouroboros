@@ -9,6 +9,7 @@ the live queue and the buffered return.
 
 from __future__ import annotations
 
+import contextlib
 import functools
 import logging
 import pathlib
@@ -208,6 +209,7 @@ def _register_delivered(ctx: Any, delivery_id: str, emitted: "Dict[str, Any] | N
     try:
         from supervisor.terminal_delivery import register_delivery, record_cancel_receipt_delivery
 
+        _relay_room_result(ctx.DRIVE_ROOT, delivery_id, emitted)
         if emitted and emitted.get("system_type") == "cancel_receipt":
             record_cancel_receipt_delivery(ctx.DRIVE_ROOT, str(emitted.get("task_id") or ""),
                                            delivery_id, emitted["chat_id"], strict=True)
@@ -219,6 +221,43 @@ def _register_delivered(ctx: Any, delivery_id: str, emitted: "Dict[str, Any] | N
     except Exception:
         log.debug("durable delivery registration failed", exc_info=True)
         return False
+
+
+def _relay_room_result(root: Any, delivery_id: str, emitted: "Dict[str, Any] | None") -> None:
+    """A delivered terminal answer is context for the room's other live direct turns.
+
+    Run before acknowledging delivery: a refused mailbox write keeps the sent
+    outbox row owed, so replay retries this handoff without sending chat twice.
+    """
+    from ouroboros.owner_mailbox import mailbox_drain_ended, mailbox_holds, write_task_message
+    from supervisor.active_activity import get_direct_activity_registry
+    from supervisor.terminal_delivery import TERMINAL_MESSAGE_ID
+    from supervisor.workers import direct_chat_turn
+
+    match = TERMINAL_MESSAGE_ID.fullmatch(delivery_id)
+    if not emitted or emitted.get("is_progress") or match is None:
+        return
+    source = str(emitted.get("task_id") or "")
+    if match.group("task") != source or not emitted.get("text"):
+        return
+    chat_id, root = int(emitted["chat_id"]), pathlib.Path(root)
+    for activity in get_direct_activity_registry().actors():
+        recipient = activity.activity_id
+        if activity.chat_id != chat_id or recipient == source:
+            continue
+        # The actor closes message admission under this same lock. Recheck its
+        # identity and room there so a completed/reused actor receives nothing.
+        lock = getattr(activity.actor, "_owner_message_admission_lock", None)
+        with lock if lock is not None else contextlib.nullcontext():
+            turn = direct_chat_turn(recipient)
+            if turn is None or turn["chat_id"] != chat_id or mailbox_drain_ended(root, recipient):
+                continue
+            msg_id = f"room-result:{delivery_id}:{recipient}"
+            if mailbox_holds(root, recipient, msg_id):
+                continue
+            if not write_task_message(root, f"Final result from task {source} in this room:\n{emitted['text']}",
+                                      recipient, source_task_id=source, provenance="system", msg_id=msg_id):
+                raise RuntimeError(f"Result mailbox delivery deferred for {recipient}")
 
 
 def _handoff_delivered_review(ctx: Any, task_id: str, delivery_id: str) -> None:
@@ -499,6 +538,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
         if delivery_id:
             emitted = {
                 "text": str(evt.get("text") or ""), "chat_id": chat_id, "task_id": task_id, "format": fmt,
+                "is_progress": is_progress,
                 "sent_at": utc_now_iso(),
                 "role": str(evt.get("role") or ""), "system_type": system_type,
                 "terminal_origin": str(evt.get("terminal_origin") or ""),
