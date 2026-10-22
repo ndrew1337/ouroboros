@@ -773,20 +773,23 @@ class ConversationHost:
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:
-            for job in list(self.tool_jobs):
-                await joined(job)
-        finally:
-            self.tool_jobs.clear()
             try:
-                for key, attempt in list(self.responses.items()):
-                    abandon_live_response(attempt, reason="call_ended_without_receipt")
-                    del self.responses[key]
+                for job in list(self.tool_jobs):
+                    await joined(job)
             finally:
-                self._response_text_estimates.clear()
-                self._density_input = 0
-                await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
-            # Evidence last, on every path (a cancellation included): a failed wire-log write never
-            # skips the custody above and never replaces the reason this call ended.
+                self.tool_jobs.clear()
+                try:
+                    for key, attempt in list(self.responses.items()):
+                        abandon_live_response(attempt, reason="call_ended_without_receipt")
+                        del self.responses[key]
+                finally:
+                    self._response_text_estimates.clear()
+                    self._density_input = 0
+                    await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
+        finally:
+            # Evidence last, after every custody step above has run (a cancellation at any of their
+            # awaits included): a failed wire-log write never skips custody and never replaces the
+            # reason this call ended.
             try:
                 self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
             except OSError:
