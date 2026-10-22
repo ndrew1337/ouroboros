@@ -941,3 +941,38 @@ def test_call_guidance_distinguishes_interrupting_an_answer_from_ending_the_call
         'acknowledge briefly and listen for the next request',
     ):
         assert distinction in text, (source, distinction)
+
+
+def test_call_text_speaks_before_slow_tools_offers_sight_and_keeps_the_language_caveat():
+    from skills.live_conversation.driver import CALL_INSTRUCTIONS, languages_opening_sentence
+
+    # The owner's 18.10 remarks: silence while a tool runs, and a voice unaware it could ask to see.
+    text = " ".join(CALL_INSTRUCTIONS.split())  # the block is wrapped by hand
+    assert "first say in a few words what I am doing, then call it" in text
+    assert "show the screen or camera (Show) or take a screenshot" in text
+    recorded = languages_opening_sentence(["ru-RU"])
+    assert "expects ru-RU" in recorded and "ask rather than switch" in recorded
+    assert "ask when unsure" in languages_opening_sentence([])
+
+
+def test_repeated_drops_without_an_answer_end_the_call_instead_of_resuming_forever():
+    from skills.live_conversation.driver import UNPROVEN_RESUMES
+
+    async def scenario():
+        host = Host()
+        task, session = await started(host)
+        try:
+            for n in range(1, UNPROVEN_RESUMES + 2):
+                session.emit('ready', input_rate=24000, output_rate=24000)
+                session.emit('resumable', handle=f'handle-{n}')
+                session.emit('closed', resumable=True, reason='lost')
+                if n <= UNPROVEN_RESUMES:
+                    await until(lambda: len(host.sessions) == n + 1)  # resumed on a fresh session
+                    session = host.sessions[n]
+            with pytest.raises(RealtimeSetupError, match='reconnect_failed'):
+                await asyncio.wait_for(task, 2)
+            assert len(host.sessions) == UNPROVEN_RESUMES + 1
+        finally:
+            host.hub.ended_by_owner = True
+            if not task.done(): await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())

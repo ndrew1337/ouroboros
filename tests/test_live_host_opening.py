@@ -42,3 +42,9 @@ def test_presence_selected_input_has_one_labelled_opening_across_connections(hos
         finally:
             await host.finish()
     asyncio.run(run())
+    # The start path leaves wall-clock facts (owner, 18.10 "profile it"): admitted, context ready, session open.
+    timing = host.trace['timing']
+    assert timing['admitted_at'] <= timing['context_ready_at'] <= timing['session_open_at']
+    assert [c['number'] for c in timing['connections']] == [1, 2] and all('open_at' in c for c in timing['connections'])
+    wire = [json.loads(line) for line in host.wire_path.read_text(encoding='utf-8').splitlines()]
+    assert any(json.loads(row['raw']).get('type') == 'call.timing' for row in wire if row['direction'] == 'host')

@@ -27,6 +27,10 @@ async def joined(awaitable):
     return result
 
 
+# A refused websocket handshake, typed for the owner: a wrong or revoked key, a quota, an outage.
+_HANDSHAKE_REFUSALS = {401: "authentication", 403: "authentication", 429: "rate_limit"}
+
+
 class JsonSession:
     # Providers may hold native transcription/boundary work after generation
     # stops. The feature waits for that work before replacing a connection.
@@ -40,7 +44,14 @@ class JsonSession:
 
     async def connect_wire(self):
         self.connection = self.connect(self.selected.model)
-        self.ws = await self.connection.__aenter__()
+        try:
+            self.ws = await self.connection.__aenter__()
+        except Exception as exc:  # noqa: BLE001 - only the handshake status is read; anything else keeps its type
+            status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+            code = _HANDSHAKE_REFUSALS.get(status) or ("engine_unavailable" if type(status) is int and status >= 500 else None)
+            if code is None:
+                raise
+            raise RealtimeSetupError(code, f"the voice service answered the connection with HTTP {status}") from exc
 
     async def write(self, payload):
         raw = canonical_json(payload)

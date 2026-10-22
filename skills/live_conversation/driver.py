@@ -19,6 +19,10 @@ from ouroboros.ui_language import normalize_language_tag
 from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
 
 
+# A transport bound, not a judgment: a session that keeps dropping before any answer completes is
+# resumed this many times, then the call ends with a typed reason instead of reconnecting forever.
+UNPROVEN_RESUMES = 3
+
 CALL_ENDING_GUIDANCE = (
     "Use end_call only when the owner wants the whole call to end: says goodbye or asks to hang up. "
     "An interruption such as 'stop', 'enough' or 'wait' ends the current answer, not the call; "
@@ -31,9 +35,12 @@ In a call my model is a realtime speech model, and I am still myself: the
 same core, memory, tools and judgment. I speak briefly, in the language of
 the spoken conversation whatever the interface language, and call tools
 myself. Work still running is pending, never done; long work becomes a task
-while we keep talking, and its result reaches me in the call. Links, code and
-lists go to the room's chat through `send_user_message`: saying a message or
-a URL aloud does not deliver it, so when asked to send something I use that
+while we keep talking, and its result reaches me in the call. When a tool will
+take a moment, I first say in a few words what I am doing, then call it: tools
+never pause the talk. When seeing would help, I ask the owner to show the
+screen or camera (Show) or take a screenshot through a desktop skill. Links,
+code and lists go to the room's chat through `send_user_message`: saying a
+message or a URL aloud does not deliver it, so when asked to send something I use that
 tool and confirm its result. Typed messages and other turns' replies in the
 room reach me during the call, and my words reach them. In a meeting I speak
 when it helps the people there; their voices are correspondents, not my
@@ -44,7 +51,8 @@ them as said.""" + "\n\n" + CALL_ENDING_GUIDANCE
 def languages_opening_sentence(languages):
     if languages:
         return (f"Speech recognition expects {', '.join(languages)}, as you recorded for these calls; when someone "
-                "speaks a language that is not listed, record the new list with set_call_languages.")
+                "speaks a language that is not listed, record the new list with set_call_languages. Recognition "
+                "can still take one language for another: when unsure, ask rather than switch.")
     return ("Speech recognition has no languages recorded for these calls yet and guesses each utterance: assume "
             "the owner's language from this room's correspondence and your memory and record it right away with "
             "set_call_languages, the owner's first; ask when unsure.")
@@ -157,6 +165,7 @@ class _Call:
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
+        self.unproven_resumes = 0  # provider drops since the last completed answer
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -426,6 +435,7 @@ class _Call:
                     self.hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
                     response = data["response_id"]
+                    self.unproven_resumes = 0
                     receipt = {key: data[key] for key in ("usage", "raw_usage", "status")}
                     if self.receipts.get(response) != receipt:
                         self.host.response_done(response, **receipt)
@@ -443,6 +453,10 @@ class _Call:
                 elif event.kind == "closed":
                     if not data.get("resumable") or not self.host.state.get("resume_handle"):
                         raise RealtimeSetupError("provider_closed", "provider ended the live connection")
+                    self.unproven_resumes += 1
+                    if self.unproven_resumes > UNPROVEN_RESUMES:
+                        raise RealtimeSetupError("reconnect_failed",
+                                                 "the voice connection kept dropping before it answered again")
                     self.provider_closed = True
                     self.connected.clear()
                     # The dead input transport cannot reach another VAD boundary.

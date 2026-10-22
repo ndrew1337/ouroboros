@@ -12,6 +12,7 @@ import functools
 import json
 import math
 import threading
+import time
 import weakref
 from contextlib import contextmanager
 from dataclasses import replace
@@ -222,6 +223,9 @@ class ConversationHost:
         self.config, self.model = turn.config, turn.catalog_model
         self.opening, self.state = turn.opening, {}
         self.trace = {"reasoning_notes": [], "tool_calls": []}
+        # Wall-clock facts of the call's start path, kept with the task trace and written to the
+        # wire log at the end: where the seconds before the first answer went (owner, 18.10).
+        self.timing = self.trace["timing"] = {"admitted_at": time.time(), "connections": []}
         self.plan = ctx.context_fit_plan
         if self.plan.model != turn.model or self.plan.provider != turn.route.accounting_provider:
             raise RealtimeSetupError("route", "call input must use the selected realtime route")
@@ -434,6 +438,9 @@ class ConversationHost:
             async with self._tools_lock:
                 self.connection_number += 1
                 session, request, evidence = session_candidate(self, provider["session"], options)
+                connection = {"number": self.connection_number, "context_ready_at": time.time()}
+                self.timing["connections"].append(connection)
+                self.timing.setdefault("context_ready_at", connection["context_ready_at"])
                 self._physical_context = request.physical_context
                 self._held_input = self._growth = 0
                 self._history_at_receipt = self._history_estimate()
@@ -451,6 +458,8 @@ class ConversationHost:
                     self._connection_quote = copy.deepcopy(self.quote)
                     self._connection_accounting = True
                     await session.open()
+                    connection["open_at"] = time.time()
+                    self.timing.setdefault("session_open_at", connection["open_at"])
                     return await consume(session)
             finally:
                 try:
@@ -478,6 +487,7 @@ class ConversationHost:
         key = response_id
         if key in self.responses or key in self.completed:
             return
+        self.timing.setdefault("first_response_at", time.time())
         # Only the first response has the sealed selection as its known text
         # denominator. Later native audio/transcripts must not become text input
         # witnesses merely because their captions entered canonical history.
@@ -755,6 +765,7 @@ class ConversationHost:
         """End call-lifetime custody, after sessions and owned work have drained."""
         from ouroboros.live_usage import abandon_live_response
 
+        self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:
