@@ -46,3 +46,24 @@ def test_aggregate_row_range_includes_interleaved_verbatim_rows(tmp_path):
                                    **{'from': addr(rows[0]), 'to': addr(rows[4])})
     for row in rows:
         assert row['text'] in result and addr(row) in result
+
+
+def test_aggregate_account_keeps_nested_told_records_and_reader(tmp_path):
+    from tests.test_common_story import _rooms, _snapshot
+    _rooms_map, _alpha, _beta, first, second, _helper = _rooms(tmp_path)
+    store = ChronicleStore(tmp_path)
+    sources = [first, second]
+    for index in range(2):
+        account = store.publish_account(room_id='1', text=f'Nested account {index}.',
+                                        sources=sources, author=MIND).record['id']
+        assert store.select_account(account, replaces=sources, author=MIND, reason='Told here.').ok
+        sources = [account]
+    snapshot = _snapshot(tmp_path)
+    pointers = mv.FloorLevel((('F5', (account,)),))
+    aggregate = mv.FloorLevel((*pointers.addressed, ('F5a', ('story',))))
+    told = '3 story records told through this account (including nested selections)'
+    assert told in mv.render_story(snapshot, pointers)
+    shown = mv.render_story(snapshot, aggregate)
+    assert told in shown and f"memory_read(node_id='{account}')" in shown
+    read = chronicle._memory_read(ctx_for(tmp_path), node_id=account)
+    assert 'Nested account 1.' in read and 'replaces 1:' in read

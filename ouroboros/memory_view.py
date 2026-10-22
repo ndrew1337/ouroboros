@@ -1060,7 +1060,10 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
             lines += ['', '### My older pages, parts and accounts, by address', _story_line(aggregate)]
         if not aggregate or entry['id'] not in shown:
             lines += (["", _page_pointer(entry)] if entry["id"] in shown else _page_lines(entry))
-            lines += _told_lines(entry["id"], told)
+        told_lines = _told_lines(entry["id"], told)
+        if aggregate and entry['id'] in shown and told_lines:
+            lines += [f"Account {entry['id']}; memory_read(node_id='{entry['id']}')"]
+        lines += told_lines
     lines += ["", _pages_line(snapshot.legacy_blocks)]
     if snapshot.legacy_blocks.get("accounts"):
         lines.append(accounts_line(snapshot.legacy_blocks))
@@ -1166,7 +1169,8 @@ def _room_text(room: Mapping[str, Any], gone: Mapping[str, List[str]]) -> str:
         lines += ["", "### My notes not yet sealed"] + _room_note_lines(room["notes"], gone)
     if room["lane1"]:
         lines += ["", f"### Open conversation since {room['since']} (verbatim: people and my replies)"]
-        aggregate = [item for item in room['lane1'] if item['address'] in mine | people
+        addressed = mine | people
+        aggregate = [item for item in room['lane1'] if item['address'] in addressed
                      and not item.get('immune')] if gone.get('F7a') else []
         grouped = {item['address'] for item in aggregate}
         for item in room['lane1']:
