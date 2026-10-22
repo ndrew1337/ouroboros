@@ -122,6 +122,17 @@ class LiveConversationTurn(RealtimeTurn):
             raise RealtimeSetupError("call_not_found", "this call's process-local hub ended")
         host = None
 
+        def close_admission():
+            from supervisor.workers import get_direct_chat_agent
+
+            actor = get_direct_chat_agent(ctx.task_id)
+            lock = getattr(actor, "_owner_message_admission_lock", None)
+            if lock is not None:
+                with lock:
+                    if (getattr(actor, "_current_task_id", None) == ctx.task_id
+                            and getattr(actor, "_realtime_turn", None) is self):
+                        actor._accepting_owner_messages = False
+
         async def owned():
             work = _LoopWork()
             work.task = asyncio.current_task()
@@ -145,6 +156,9 @@ class LiveConversationTurn(RealtimeTurn):
                         await controls
                     return await runner
                 finally:
+                    # No new mail once the receive loop ends, including while
+                    # tool custody and terminal-result post-work still run.
+                    close_admission()
                     for child in children:
                         if not child.done():
                             child.cancel()
@@ -193,6 +207,7 @@ class LiveConversationTurn(RealtimeTurn):
                 host.observe("host", canonical_json({"type": "call.ended", "reason": reason,
                     **({"failure": failure} if failure is not None else {})}))
         finally:
+            close_admission()  # also covers setup failures before owned() starts
             try:
                 if host is not None:
                     host.executor.shutdown(wait=True)

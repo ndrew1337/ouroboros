@@ -522,7 +522,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
             progress_meta = dict(progress_meta or {})
             progress_meta["delivery_id"] = delivery_id
         with timed_phase("sender", timing=evt.get("_finalization_timing") or {}):
-            ctx.send_with_budget(
+            send_facts = ctx.send_with_budget(
                 chat_id,
                 str(evt.get("text") or ""),
                 log_text=(str(log_text) if isinstance(log_text, str) else None),
@@ -538,6 +538,11 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
             )
         # Register only after send; a failed first copy must not suppress retry.
         if delivery_id:
+            # The send seam owns the final room lookup. Retain its selection,
+            # never a new binding read after transport (placement can race both).
+            # Legacy send-only adapters return None and keep the passed address.
+            if isinstance(send_facts, dict):
+                chat_id = int(send_facts["chat_id"])
             emitted = {
                 "text": str(evt.get("text") or ""), "chat_id": chat_id, "task_id": task_id, "format": fmt,
                 "is_progress": is_progress,
@@ -546,7 +551,7 @@ def _send_message(evt: Dict[str, Any], ctx: Any) -> Any:
                 "terminal_origin": str(evt.get("terminal_origin") or ""),
                 "terminal_projection_token": publication_token,
                 "routing": {"basis": "terminal_sender_bound_project", "intended_chat_id": int(evt["chat_id"]),
-                            "routed_chat_id": chat_id} if bound_chat == chat_id else None}
+                            "routed_chat_id": chat_id} if bound_chat == chat_id or chat_id != int(evt["chat_id"]) else None}
             _DELIVERED_MESSAGE_IDS.append((memory_id, {k: v for k, v in emitted.items() if k != "text"}))
             # Retain the physical-send fact before slower capture/ack. A failed registry
             # write is covered by the existing bounded in-process dedupe until replay.
