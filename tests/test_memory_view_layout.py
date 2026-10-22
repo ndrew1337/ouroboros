@@ -564,3 +564,15 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
     # The first request keeps the owner-mode selection: a full list is not what Nano sends there.
     assert (built.nano_projection.memory_facts["floor"]["physical_allowance_tokens"]
             == plan(meta + big, 1.0).nano_projection.memory_facts["floor"]["physical_allowance_tokens"])
+
+
+def test_aggregate_range_keeps_interleaved_verbatim_rows_in_place():
+    from ouroboros import memory_view as mv, memory_floor as mf
+    from tests import _memory_view_synthetic as syn
+    rows = [syn.spoken(i, 'ouroboros', 1000) for i in range(5)]
+    snap = syn.snapshot(room_facts=syn.room(lane1=rows))
+    level = mf.level_with(snap, mv.FULL_VIEW, ['F2:' + rows[i]['address'] for i in (1, 3)] + ['F7a:1'])
+    text = mv.render_room(snap, level)
+    assert text.index(rows[0]['line']) < text.index('2 earlier rows') < text.index(rows[2]['line']) < text.index(rows[4]['line'])
+    assert rows[1]['line'] not in text and rows[3]['line'] not in text
+    assert f"from='{rows[1]['address']}', to='{rows[3]['address']}'" in text

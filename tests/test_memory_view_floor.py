@@ -33,7 +33,7 @@ def test_role_budget_is_one_frame_and_reply_is_charged_once():
 def test_order_conversation_before_my_pages_and_oldest_reply_first():
     replies = [syn.spoken(1, "ouroboros", 5_000), syn.spoken(2, "ouroboros", 50_000)]
     snapshot = syn.snapshot(story=syn.pages(2, 12_000), room_facts=syn.room("1", lane1=replies))
-    assert mf.LADDER == ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F7", "F5")
+    assert mf.LADDER == ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F7", "F7a", "F5", "F5a")
     assert mf.fit_memory_view(snapshot, frame(tokens(snapshot))) == mv.FULL_VIEW
     level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 100))
     assert level.addressed == (("F2", (replies[0]["address"],)),)
@@ -84,10 +84,13 @@ def test_the_start_room_notice_names_owner_words_only_when_they_keep_the_view_ab
         known_window=True, output_reserve=65_536, ratio=1, non_memory_tokens=104_464)
     floor = facts["floor"]
     assert (floor["allowance_tokens"], floor["physical_allowance_tokens"]) == (5_000, 30_000)
-    assert "Start room is smaller than requested" in text
+    assert ("Start room is smaller than requested" in text) is owners
     assert ("uncovered owner words remain in view" in text) is owners
-    assert ("shortest forms" in text) is not owners
-    assert (dict(floor["steps"]).get("F2") == 400) is not owners and "F7" not in dict(floor["steps"])
+    assert "shortest forms" not in text
+    if not owners:
+        assert floor['steps']['F7a'] == 1 and 0 < floor['steps']['F2'] <= 400
+        assert mf.view_tokens(text) <= floor['allowance_tokens']
+    assert "F7" not in dict(floor["steps"])
 
 
 def test_other_rooms_have_range_directory_and_bounded_aggregate():
@@ -156,3 +159,20 @@ def test_floor_receipt_names_reachable_sources_and_never_promises_lossless_recal
     assert expected in note and "Nothing is lost" not in note and "brings it back" not in note
     assert "memory_read reads each" in note
     assert ("chronicle_write" in note) == (names is None or "enable_tools" in names)
+
+
+def test_list_forms_do_not_address_new_or_immune_rows_and_stay_silent_when_fit():
+    rows = [syn.spoken(i, 'ouroboros', 1000) for i in range(12)]
+    rows[4] = {**syn.spoken(4, 'human', 1000), 'owner_side': True, 'immune': True}
+    snap = syn.snapshot(room_facts=syn.room(lane1=rows), story=syn.pages(10, 2000))
+    held = mf.level_with(snap, mv.FULL_VIEW, ['F2:' + r['address'] for r in rows[:4]])
+    selected = mf.level_with(snap, held, ['F7a:1'])
+    text = mv.render_room(snap, selected)
+    assert '4 earlier rows, oldest first, by address' in text
+    assert f"from='{rows[0]['address']}', to='{rows[3]['address']}'" in text
+    assert all(row['line'] in text for row in rows[4:])
+    assert mf.fit_memory_view(snap, frame(tokens(snap))) == mv.FULL_VIEW
+    assert mf.fit_memory_view(snap, frame(10**9), kept=selected) == selected
+    assert mf.kept_level(snap, mf.view_facts(snap, selected, window_tokens=92000, mode='nano', allowances={})) == selected
+    note = mf.floor_note(selected, window_tokens=92000, mode='nano')
+    assert 'aggregate row ranges' in note

@@ -725,7 +725,11 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             non_memory_tokens=fixed, lowered_from=preferred if mode != preferred else None,
             tool_names=None if tool_schemas is None else sent.chosen,
             kept=None if kept is None else kept.get(start or preferred), saving=saved, boundary_tokens=boundary,
-            working_reserve_tokens=working_reserve_tokens)
+            working_reserve_tokens=working_reserve_tokens,
+            measure_text=lambda story, room: _request_tokens(_system_blocks(core, governance[form[mode]], story, room,
+                mode=mode, addressed=section_views(sections[mode], receipts)), user_content_json,
+                supplementary_messages_json=core.supplementary_messages_json,
+                current_messages=current_messages) + tool_schema_tokens(list(sent.schemas)) - fixed)
     if snapshot:
         story, room, facts = render()
         # Judged on the completed start view: Max keeps whole books only beside the whole story and the work room.

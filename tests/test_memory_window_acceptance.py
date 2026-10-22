@@ -147,7 +147,7 @@ def test_core_without_memory_still_reserves_two_eighths_for_a_root(monkeypatch):
             start(root)
 
 
-@pytest.mark.parametrize("replies,mode", [(2_400, "low"), (400, "max"), (24, "max")])
+@pytest.mark.parametrize("replies,mode", [(2_400, "max"), (400, "max"), (24, "max")])
 def test_owner_max_is_judged_on_the_completed_start_view_with_the_real_catalog(main_loop, monkeypatch, replies, mode):
     f = main_loop
     monkeypatch.setattr(cf, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
@@ -164,6 +164,8 @@ def test_owner_max_is_judged_on_the_completed_start_view_with_the_real_catalog(m
     assert f.run([{"content": "done"}])[0] == "done"
     sent = cf.estimate_context_prompt_tokens(f.inputs[0]["messages"], f.inputs[0]["tools"], provider="openai")
     assert plan.initial_mode == mode
+    if replies == 2400:
+        assert plan.projection(mode).memory_facts['floor']['steps']['F7a'] == 1
     assert (core.architecture_md in json.dumps(f.inputs[0]["messages"])) is (mode == "max")
     assert sent + plan.output_reserve_tokens + 2 * 400_000 // 8 <= 400_000
 

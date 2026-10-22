@@ -41,3 +41,16 @@ def test_selecting_a_later_entry_does_not_reorder_or_rewrite_the_earlier_story()
     revised = dataclasses.replace(snap, story=({**snap.story[0], "text": "Revised source"}, snap.story[1]))
     assert mv.render_story(revised, level) != short
     assert "Revised source" in mv.render_story(revised, level)
+
+
+def test_aggregate_bytes_depend_only_on_captured_source_and_form():
+    original, snap = plan()
+    selected = mf.select_view(original, 'max', ['F5:page-001', 'F5a:story'])
+    level = mf.kept_level(snap, selected.max_projection.memory_facts)
+    text = mv.render_story(snap, level)
+    prefix = mv.render_story(snap).split('### Main ·', 2)[0]
+    assert text.startswith(prefix) and 'Page 0.' in text and 'Page 1.' not in text
+    assert mv.render_story(mv.snapshot_from_json(mv.snapshot_json(snap)), level) == text
+    for bound in (500000, 1000000):
+        kept = mf.fit_memory_view(snap, {'margin': bound, 'physical': bound, 'budget': None}, kept=level)
+        assert kept == level and mv.render_story(snap, kept) == text

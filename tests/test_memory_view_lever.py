@@ -25,6 +25,38 @@ def plan():
                           65536, '"Assignment"', projection, replace(projection, mode="low"), core=core), snap
 
 
+def test_aggregate_lever_preserves_element_addresses_and_requires_uncovered_note():
+    p, snap = plan()
+    owner = 'F7:' + snap.room['lane1'][0]['address']
+    held = floor.level_with(snap, mv.FULL_VIEW, [owner], owner_note=True)
+    with pytest.raises(ValueError, match='working_note'):
+        floor.level_with(snap, held, ['F7a:1'])
+    grouped = floor.level_with(snap, held, ['F7a:1'], owner_note=True)
+    assert dict(grouped.addressed)['F7'] == dict(held.addressed)['F7']
+    first = floor.select_view(p, 'max', ['F5:page-000', 'F5a:story'])
+    second = floor.select_view(first, 'max', ['F5:page-001'])
+    assert dict(floor.kept_level(snap, second.max_projection.memory_facts).addressed)['F5'] == ('page-000', 'page-001')
+    assert '2 older pages, parts and accounts' in second.max_projection.system_content_json
+    with pytest.raises(ValueError, match='already addressed'):
+        floor.level_with(snap, mv.FULL_VIEW, ['F7a:1'])
+
+
+def test_compact_range_form_keeps_an_authored_capsule_for_uncovered_owner_words(tmp_path, monkeypatch):
+    p, snap = plan()
+    p = floor.select_view(p, 'max', ['F7:' + snap.room['lane1'][0]['address']], owner_note=True)
+    ctx = SimpleNamespace(context_fit_plan=p, active_context_mode='max')
+    messages, schemas = p.messages_for('max'), []
+    record_context_view(ctx, messages, schemas)
+    assert 'working_note' in _compact_context(ctx, view_address=['F7a:1'])
+    assert 'requested' in _compact_context(ctx, view_address=['F7a:1'], working_note='Keep the owner commitment.')
+    result = _run_round_compaction(messages, _context(tmp_path, ctx, schemas, monkeypatch))
+    assert ctx._context_view_receipt['status'] == 'applied'
+    assert 'Keep the owner commitment.' in json.dumps(result)
+    assert dict(floor.kept_level(snap, ctx.context_fit_plan.max_projection.memory_facts).addressed)['F7a'] == ('1',)
+    sources = list(tmp_path.rglob('*.json'))
+    assert any(snap.room['lane1'][0]['line'] in path.read_text() for path in sources)
+
+
 def test_addresses_refuse_core_and_governing_words_and_keep_prior_choices():
     p, snap = plan()
     first = floor.select_view(p, "max", ["F5:page-000"])

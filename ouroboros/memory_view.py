@@ -926,6 +926,20 @@ def _row_pointer(item: Mapping[str, Any], what: str) -> str:
     return f"{item['head']} ({what}, {item['chars']} chars — read by address)"
 
 
+def _rows_line(room: Mapping[str, Any], items: List[Dict[str, Any]]) -> str:
+    first, last = min(items, key=lambda i: i['pos']), max(items, key=lambda i: i['pos'])
+    mine = sum(item['kind'] == 'ouroboros' for item in items)
+    return (f"{len(items)} earlier rows, oldest first, by address ({mine} my replies, "
+            f"{len(items) - mine} people's words), {_minute(first['ts'])} → {_minute(last['ts'])}; "
+            f"memory_read(room_id='{room['room_id']}', rows=true, from='{first['address']}', to='{last['address']}'). "
+            "Verbatim rows within this range remain below in place.")
+
+
+def _story_line(items: List[Dict[str, Any]]) -> str:
+    return (f"{len(items)} older pages, parts and accounts by address, {items[0]['period']} → {items[-1]['period']}; "
+            "memory_read(story=true, start=0) lists every id and its exact reader.")
+
+
 def _facts_line(room: Mapping[str, Any], items: List[Dict[str, Any]]) -> str:
     """The earliest task lines of this room as one address line with their period (F1)."""
     last = max(items, key=lambda item: item["last_pos"])
@@ -1038,10 +1052,14 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
         lines += ["", "### Old memory retold by a helper before the update (not lived; exact sources readable by id)"]
         lines += retold_lines(pointers, taken)
     shown = set(gone.get("F5", ()))
+    aggregate = [entry for entry in pages if entry['id'] in shown] if gone.get('F5a') else []
     # A selected form changes this entry alone, without regrouping unrelated entries or changing their headers.
     for entry in pages:
-        lines += (["", _page_pointer(entry)] if entry["id"] in shown else _page_lines(entry))
-        lines += _told_lines(entry["id"], told)
+        if aggregate and entry is aggregate[0]:
+            lines += ['', '### My older pages, parts and accounts, by address', _story_line(aggregate)]
+        if not aggregate or entry['id'] not in shown:
+            lines += (["", _page_pointer(entry)] if entry["id"] in shown else _page_lines(entry))
+            lines += _told_lines(entry["id"], told)
     lines += ["", _pages_line(snapshot.legacy_blocks)]
     if snapshot.legacy_blocks.get("accounts"):
         lines.append(accounts_line(snapshot.legacy_blocks))
@@ -1118,8 +1136,16 @@ def _room_text(room: Mapping[str, Any], gone: Mapping[str, List[str]]) -> str:
         lines += ["", "### My notes not yet sealed"] + _note_lines(room["notes"])
     if room["lane1"]:
         lines += ["", f"### Open conversation since {room['since']} (verbatim: people and my replies)"]
-        lines += [_row_pointer(item, "my reply") if item["address"] in mine else _row_pointer(item, "words")
-                  if item["address"] in people else item["line"] for item in room["lane1"]]
+        aggregate = [item for item in room['lane1'] if item['address'] in mine | people
+                     and not item.get('immune')] if gone.get('F7a') else []
+        grouped = {item['address'] for item in aggregate}
+        for item in room['lane1']:
+            if aggregate and item is aggregate[0]:
+                lines.append(_rows_line(room, aggregate))
+            if item['address'] not in grouped:
+                lines.append(item['line'] if item.get('immune') else _row_pointer(item, 'my reply')
+                             if item['address'] in mine else _row_pointer(item, 'words')
+                             if item['address'] in people else item['line'])
     if room["lane2"]:
         early = [item for item in room["lane2"] if item["first"] in facts]
         lines += ["", "### Task facts of this conversation (host; one line per task; a row:… address reads with "
