@@ -87,6 +87,21 @@ def text_input_estimate(messages, tools):
 CONTEXT_CAPACITY_DETAIL = "This room's context and working reserve do not fit this engine's window."
 
 
+def _renewal_window(record, facts):
+    """Cache session growth room separately from physical response admission.
+
+    Retention and estimator declarations measure the session, with their own
+    working reserve. A large reply allowance does not consume that reserve.
+    Raiseable routes keep the resolved accepted-input frame, including its reserve.
+    """
+    from dataclasses import replace
+
+    if facts.acceptance_can_raise:
+        return record
+    declared = next((limit for limit in record.declared if limit.kind == "total"), None)
+    return replace(record, input=None, total=declared, reserve=facts.working_reserve_tokens or 0)
+
+
 def observe_live_input(host, raw_usage):
     """Teach the ordinary window owner at a completed response boundary.
 
@@ -107,7 +122,8 @@ def observe_live_input(host, raw_usage):
     record_observation(host.ctx.drive_root, observation_scope(plan), accepted=accepted, reserve=reserve)
     record = resolve_window(plan, plan.window_record.reserve, root=host.ctx.drive_root)
     host.plan = host.ctx.context_fit_plan = replace(plan, window_record=record, window_tokens=record.total_equivalent)
-    host._renewal_window = resolve_window(host.plan, reserve, root=host.ctx.drive_root)
+    host._renewal_window = _renewal_window(
+        resolve_window(host.plan, reserve, root=host.ctx.drive_root), host.model.facts)
 
 
 def session_candidate(host, factory, options):
@@ -197,7 +213,7 @@ def session_candidate(host, factory, options):
         evidence = {"fit": asdict(fit), "route_facts": asdict(facts), "tool_count": len(host.schemas),
                     "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "units": facts.basis}
         if refusal is None:
-            host._renewal_window, host._renewal_facts = physical_window, facts
+            host._renewal_window, host._renewal_facts = _renewal_window(physical_window, facts), facts
             host._session_instructions = options.instructions
             host._selected_text_estimate = text_input_estimate(rows, host.schemas)
             host._density_input = host._selected_text_estimate

@@ -34,6 +34,8 @@ def test_completed_input_keeps_units_reserve_and_active_account(
     host_world.provider['session'] = large_output_bound
 
     async def consume(session):
+        assert host._renewal_window.total_equivalent == window
+        assert host._renewal_window.reserve == (18000 if can_raise else 10000)
         # A settings edit during the connection cannot reattribute its receipt.
         host_world.settings['TEST_CREDENTIAL'] = 'rotated-synthetic-account'
         host.response_started('accepted')
@@ -47,6 +49,9 @@ def test_completed_input_keeps_units_reserve_and_active_account(
         assert current.reserve == 18000
         assert current.total_equivalent == (168000 if can_raise else window)
         assert current.usable == (150000 if can_raise else window - 18000)
+        assert host._renewal_window.total_equivalent == current.total_equivalent
+        assert host._renewal_window.reserve == (18000 if can_raise else 10000)
+        assert host._renewal_window.accepted == accepted
         rows = ce._load(root).get('main_windows', {}).get(old_scope, {}).get('observations', [])
         assert len(rows) == (1 if accepted else 0)
         if rows:
@@ -63,6 +68,7 @@ def test_completed_input_keeps_units_reserve_and_active_account(
         assert host.plan.window_record.route_fp != old_scope
         assert host.plan.window_record.accepted == 0
         assert host._renewal_window.total_equivalent == window
+        assert host._renewal_window.reserve == (18000 if can_raise else 10000)
 
     async def run():
         await host.session(consume, LiveOptions())
@@ -91,5 +97,58 @@ def test_only_completed_provider_input_is_window_evidence(host_world, monkeypatc
                            raw_usage=raw, status=status)
         assert resolve_window(host.plan, 10000, root=host.ctx.drive_root).accepted == 0
         assert host._renewal_window.total_equivalent == 133554
+
+    asyncio.run(host.session(consume, LiveOptions()))
+
+
+def test_retention_renewal_keeps_the_declared_window_and_growth_reserve(host_world, monkeypatch):
+    """A large per-response output allowance is not the session's renewal margin."""
+    import json
+    from dataclasses import asdict
+
+    host = host_world.host
+    root = host.ctx.drive_root
+    monkeypatch.setattr(ce, 'canonical_evidence_root', lambda: root)
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=92000, working_reserve_tokens=10000, acceptance_can_raise=False))
+    factory = host_world.provider['session']
+
+    def large_output_bound(*args, **kwargs):
+        session = factory(*args, **kwargs)
+        session.output_bound_tokens = 65536
+        return session
+
+    host_world.provider['session'] = large_output_bound
+
+    async def consume(session):
+        initial = host._renewal_window
+        host.response_started('retention-receipt')
+        host.response_done('retention-receipt', usage=token_usage(text_input_tokens=38607,
+            audio_input_tokens=222, audio_output_tokens=52), raw_usage={
+                'promptTokenCount': 38940, 'responseTokenCount': 52,
+                'promptTokensDetails': [{'modality': 'TEXT', 'tokenCount': 38607},
+                                       {'modality': 'AUDIO', 'tokenCount': 222}]}, status='completed')
+        current = host._renewal_window
+        print('RETENTION_RENEWAL ' + json.dumps({
+            'initial': asdict(initial), 'after_receipt': asdict(current),
+            'held': host._held_input, 'growth': host._growth,
+            'physical_reserve': host._physical_context.response_reserve_tokens,
+            'renewal_due': host.renewal_due()}, sort_keys=True))
+        assert initial.total_equivalent == current.total_equivalent == 92000
+        assert initial.reserve == current.reserve == 10000
+        assert current.accepted == 38940
+        assert host._physical_context.response_reserve_tokens == 65536
+        assert resolve_window(host.plan, 65536, root=root).reserve == 65536
+        rows = ce._load(root)['main_windows'][host.plan.route_fp]['observations']
+        assert rows[-1]['accepted'] == 38940 and rows[-1]['reserve'] == 65536
+        with monkeypatch.context() as polling:
+            polling.setattr(ce, '_load', lambda *a, **kw: pytest.fail('audio polling read the window store'))
+            assert not host.renewal_due()
+            host._held_input = 81999
+            host._growth = 0
+            host._history_at_receipt = host._history_estimate()
+            assert not host.renewal_due()
+            host._held_input = 82000
+            assert host.renewal_due()
 
     asyncio.run(host.session(consume, LiveOptions()))
