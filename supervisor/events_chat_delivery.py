@@ -255,7 +255,9 @@ def _relay_room_result(root: Any, delivery_id: str, emitted: "Dict[str, Any] | N
             msg_id = f"room-result:{delivery_id}:{recipient}"
             if mailbox_holds(root, recipient, msg_id):
                 continue
-            if not write_task_message(root, f"Final result from task {source} in this room:\n{emitted['text']}",
+            # Every terminal family rides (final, cancel, cascade): a turn waiting on a stopped task
+            # must learn that too, so the label names the ending, not a "final result".
+            if not write_task_message(root, f"Task {source} in this room has ended; its terminal message:\n{emitted['text']}",
                                       recipient, source_task_id=source, provenance="system", msg_id=msg_id):
                 raise RuntimeError(f"Result mailbox delivery deferred for {recipient}")
 
