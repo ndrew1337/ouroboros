@@ -607,6 +607,24 @@ class MinimumViewUnfit(ValueError):
     """The core, assignment, resident tools and work room cannot fit this route."""
     physical = True  # False: the request itself fits the window, only the start work room beside it does not
 
+    def __init__(self, message: str, *, fixed_tokens: int, memory_tokens: int,
+                 reserve_tokens: int, window_tokens: int, ratio: float, work_room_tokens: int = 0):
+        # Retain the fitter's exact rounding: fixed + memory is calibrated once.
+        self.raw_input_tokens = fixed_tokens + memory_tokens
+        self.measurement_density = ratio
+        self.fixed_input_tokens = math.ceil(fixed_tokens * ratio)
+        self.estimated_input_tokens = math.ceil(self.raw_input_tokens * ratio)
+        self.memory_view_tokens = self.estimated_input_tokens - self.fixed_input_tokens
+        self.response_reserve_tokens = reserve_tokens
+        self.window_tokens = window_tokens
+        self.deficit_tokens = max(0, self.estimated_input_tokens + reserve_tokens - window_tokens)
+        self.work_room_tokens = work_room_tokens
+        self.work_room_deficit_tokens = max(0, self.fixed_input_tokens + reserve_tokens + work_room_tokens - window_tokens)
+        super().__init__(f"{message}: fixed input={self.fixed_input_tokens}, memory view={self.memory_view_tokens}, "
+                         f"reply/working reserve={reserve_tokens}, window={window_tokens}, "
+                         f"deficit={self.deficit_tokens}, work room={work_room_tokens}, "
+                         f"fixed/work-room deficit={self.work_room_deficit_tokens} tokens")
+
 
 def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...]], user_content_json: str, *, preferred: str,
                       tool_schemas: Optional[List[Dict[str, Any]]], window_tokens: int, known_window: bool, output_reserve: int,
@@ -692,9 +710,10 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
         mode = "nano"
         sent, fixed, reserve, window, boundary, allowances = frame(mode)
     if kept is None and known_window and math.ceil(fixed * ratio) + reserve + work() > window:
-        unfit = MinimumViewUnfit(f"Core, assignment, resident control tools and work room cannot fit: "
-                                 f"{math.ceil(fixed * ratio)} input + {reserve} reply + {work()} work > {window} tokens")
         minimum = floor.minimal_view_tokens(snapshot, window_tokens=window) if snapshot else 0
+        unfit = MinimumViewUnfit("Core, assignment, resident control tools and work room cannot fit",
+                                 fixed_tokens=fixed, memory_tokens=minimum, reserve_tokens=reserve,
+                                 window_tokens=window, ratio=ratio, work_room_tokens=work())
         unfit.physical = math.ceil((fixed + minimum) * ratio) + reserve > window  # with my shortest memory view
         raise unfit
 
@@ -716,7 +735,9 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             sent, fixed, reserve, window, boundary, allowances = frame(mode)
             story, room, facts = render()
         if kept is None and known_window and math.ceil((fixed + floor.view_tokens(story) + floor.view_tokens(room)) * ratio) + reserve > window:
-            raise MinimumViewUnfit("Protected owner words and the minimum view cannot fit the usable input")
+            raise MinimumViewUnfit("Protected owner words and the minimum view cannot fit the usable input",
+                                   fixed_tokens=fixed, memory_tokens=floor.view_tokens(story) + floor.view_tokens(room),
+                                   reserve_tokens=reserve, window_tokens=window, ratio=ratio)
         receipt = floor.view_receipt(snapshot, story, room, facts)
     else:
         story, room, receipt = "", "", {}

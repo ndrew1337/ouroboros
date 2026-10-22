@@ -84,6 +84,9 @@ def text_input_estimate(messages, tools):
     return estimate_context_prompt_tokens(rows, tools)
 
 
+CONTEXT_CAPACITY_DETAIL = "This room's context and working reserve do not fit this engine's window."
+
+
 def session_candidate(host, factory, options):
     """Refit current canonical rows through the ordinary window ladder, then seal.
 
@@ -201,5 +204,5 @@ def session_candidate(host, factory, options):
             event = {"type": "call.fit_refused", **evidence, "manifest_ref": receipt["manifest_ref"]}
             host.trace["fit_refusal"] = event
             host.observe("host", canonical_json(event))
-            raise RealtimeSetupError("context_capacity", "This room's context and working reserve do not fit this engine's window.")
+            raise RealtimeSetupError("context_capacity", CONTEXT_CAPACITY_DETAIL)
         previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)
