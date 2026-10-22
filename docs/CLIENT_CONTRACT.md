@@ -242,6 +242,8 @@ answer through §7.
 - **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links`, `quiz` and `card` (a living card, §5 "Living cards").
 - **Core to client, signals only:**
   - `panic_accepted` confirms the emergency latch, not process exit (§15).
+  - `conversation_finished` says the room's live call ended; it carries the chat, call and task ids
+    and the reason (§5, the call socket).
   - `quiz_state` updates a question card; history shows the merged state.
   - `card_state` says a shown living card changed: read it again (§5 "Living cards").
   - `log` carries one runtime event row in `data` (`data.type` names the event) for live activity displays; the task's durable facts come from §6.
@@ -285,8 +287,8 @@ is refused.
 Failure returns `{ok:false, code, error}` with its HTTP status.
 
 The separate `/ws/call/{call_id}` socket carries bounded JSON controls and
-binary PCM16 media. `GET /api/contract.call_socket` publishes its header,
-payload limits and control-schema names (`gateway/call_contracts.py`);
+binary PCM16 media. `GET /api/contract` publishes its header, payload limits
+and control-schema names as `call_socket` (`gateway/call_contracts.py`);
 `call_protocol.py` owns the codec. A peer first sends
 `{type:"hello", protocol:1, role:"owner", mic, speaker, rate, video?}`.
 Directions may narrow its admitted rights. `mute`, `played`, `context`,
