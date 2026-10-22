@@ -97,6 +97,16 @@ def floor_allowances(*, window_tokens: Optional[int], output_reserve_tokens: Opt
             "budget": start["with_margin_tokens"] if target_tokens else None}
 
 
+def _memoized_measure(measure):
+    """One walk's immutable forms; never cache across captures or request envelopes."""
+    prices = {}
+    def measured(level):
+        if level.addressed not in prices:
+            prices[level.addressed] = measure(level)
+        return prices[level.addressed]
+    return measured
+
+
 def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Optional[int]], *,
                     kept: mv.FloorLevel = mv.FULL_VIEW, saving: int = 0,
                     measure: Optional[Callable[[mv.FloorLevel], int]] = None) -> mv.FloorLevel:
@@ -104,7 +114,8 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
     elements = degradable_elements(snapshot)
     old = {(step, ident) for step, ids in kept.addressed for ident in ids}
     taken = set(old)
-    measure = measure or (lambda level: view_tokens(mv.render_story(snapshot, level)) + view_tokens(mv.render_room(snapshot, level)))
+    measure = _memoized_measure(measure or (
+        lambda level: view_tokens(mv.render_story(snapshot, level)) + view_tokens(mv.render_room(snapshot, level))))
     current = measure(kept)
     bounds = [b for b in (allowances.get("margin"), allowances.get("budget")) if b is not None]
     bound = min(bounds) if bounds else None
@@ -164,13 +175,15 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
             # Their new addresses can use the same range form, without taking another row.
             if current > physical:
                 form = ('F7a', str((snapshot.room or {})['room_id']))
-                before, after = measure(level(taken)), measure(level(taken | {form}))
-                current = before
-                if after < before:
-                    taken.add(form)
-                    current = after
+                current = measure(level(taken))
+                if form not in taken:
+                    after = measure(level(taken | {form}))
+                    if after < current:
+                        taken.add(form)
+                        current = after
     # Held notes yield only after all earlier forms, never to a start target or requested saving.
-    current = measure(level(taken))
+    if physical is not None:
+        current = measure(level(taken))
     for step, ident, _whole, _short in elements:
         if physical is None or current <= physical:
             break
@@ -243,7 +256,11 @@ def level_with(snapshot: mv.MemoryViewSnapshot, kept: mv.FloorLevel, addresses: 
 
 
 def select_view(plan, mode: str, addresses: Iterable[str], *, owner_note: bool = False):
-    """Render selected forms from the captured source, preserving all other projections and the tail."""
+    """Render selected forms, preserving other projections and the tail.
+
+    The boundary's fit callback decides publication. Ordinary Main accepts an
+    authored restore with an advisory capacity deficit; dispatch fits it later.
+    """
     from ouroboros.context_fit import _governance_blocks, _system_blocks, _request_tokens
 
     if plan is None or getattr(plan, "core", None) is None or not plan.core.memory_view_json:
@@ -488,7 +505,16 @@ def minimal_view_tokens(snapshot: mv.MemoryViewSnapshot, *, window_tokens: Optio
         note = max((floor_note(level, window_tokens=window_tokens, mode="nano", lowered_from="max", tool_names=names)
                     for names in _PATH_CASES), key=view_tokens)  # an upper bound, whatever schemas it sends
         return view_tokens(mv.render_story(snapshot, level)) + view_tokens(mv.render_room(snapshot, level, floor_note=note))
-    return min(map(price, candidates))
+    # Optional list forms must earn their space, just as in the walk. Price
+    # every combination (at most eight) with its actual floor receipt; their
+    # interactions must not make an available pointer-only view impossible.
+    alternatives = []
+    for selected in candidates:
+        forms = [s for s in _LIST_FORMS if selected.get(s)]
+        for mask in range(1 << len(forms)):
+            omitted = {s for index, s in enumerate(forms) if mask & (1 << index)}
+            alternatives.append({s: ids for s, ids in selected.items() if s not in omitted})
+    return min(map(price, alternatives))
 
 
 # Host producers before indexes, then the memory walk, all under the same start budget.

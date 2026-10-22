@@ -60,7 +60,8 @@ def test_note_selection_and_restoration_survive_the_next_projection():
 
 
 @pytest.mark.parametrize('accept_restore', [False, True])
-def test_compact_context_selects_note_label_and_measures_whole_restoration(tmp_path, monkeypatch, accept_restore):
+def test_note_restoration_honours_explicit_fit_callback_verdict(tmp_path, monkeypatch, accept_restore):
+    """An explicit refusal blocks publication; Main's advisory estimate need not refuse."""
     p, snap = note_plan()
     note = snap.room['notes'][0]
     ctx = SimpleNamespace(context_fit_plan=p, active_context_mode='max')
