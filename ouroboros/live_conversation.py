@@ -10,6 +10,7 @@ import asyncio
 import copy
 import functools
 import json
+import logging
 import math
 import threading
 import time
@@ -23,6 +24,7 @@ from ouroboros.realtime_setup import _LoopWork, loaded_provider
 from ouroboros.realtime_session import joined
 from ouroboros.realtime_turn import RealtimeTurn
 
+log = logging.getLogger(__name__)
 
 _active_hosts = weakref.WeakSet()
 _active_hosts_lock = threading.Lock()
@@ -783,5 +785,9 @@ class ConversationHost:
                 self._response_text_estimates.clear()
                 self._density_input = 0
                 await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
-        # Evidence last: a failed wire-log write (a full volume) must never skip the custody above.
-        self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
+            # Evidence last, on every path (a cancellation included): a failed wire-log write never
+            # skips the custody above and never replaces the reason this call ended.
+            try:
+                self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
+            except OSError:
+                log.warning("call %s: timing evidence not written", self.turn.spec.call_id, exc_info=True)

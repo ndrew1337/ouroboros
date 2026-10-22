@@ -92,7 +92,11 @@ class RouteFacts:
     route: the largest input under which the model still held the conversation,
     measured or documented (``source``). ``accepted_input_tokens`` is evidence only:
     an input the endpoint once accepted. A larger accepted input never raises the
-    conversation window. ``working_reserve_tokens`` is the room inside the window the
+    conversation window. A window whose ``source`` names a retention measurement
+    (spoken turns held under it) is bound by retention, below what the endpoint
+    accepts; a route whose retention is not yet measured states its largest accepted
+    and answered input as the window (a successful request is a lower bound, never a
+    ceiling below it) and says so in ``source``. ``working_reserve_tokens`` is the room inside the window the
     conversation needs to grow in one session before the host renews it. ``basis``
     names the counter of these numbers: ``provider`` is the provider's own token
     count, which the host reaches through the route's calibrated density like any
