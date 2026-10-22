@@ -99,7 +99,11 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max'):
     ):
         add('live rooms', mv._live_text(tuple(rooms), gone) if rooms else '', form, len(rooms))
     room = snapshot.room or {}
-    add('this room notes', '\n'.join(mv._note_lines(room.get('notes', []))), count=len(room.get('notes', [])))
+    notes = room.get('notes', [])
+    short_notes = [note for note in notes if note['id'] in gone.get('F8', ())]
+    for form, selected_notes in (('whole', [note for note in notes if note not in short_notes]),
+                                 ('aggregate' if gone.get('F8a') else 'line', short_notes)):
+        add('this room notes', '\n'.join(mv._room_note_lines(selected_notes, gone)), form, len(selected_notes))
     ids = set(gone.get('F2', ())) | set(gone.get('F7', ())) | set(gone.get('F7p', ()))
     rows = [row for row in room.get('lane1', ()) if row['address'] in ids and not row.get('immune')]
     add('this room addresses', mv._rows_line(room, rows) if rows and gone.get('F7a') else '\n'.join(

@@ -38,6 +38,7 @@ import datetime
 import json
 import logging
 import pathlib
+import re
 from collections import Counter
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -1072,6 +1073,35 @@ def _note_lines(notes: List[Dict[str, Any]]) -> List[str]:
     return [f"note {note['id']} by {note['role']} on {note['date']}\n{_indented(note['text'])}" for note in notes]
 
 
+def _note_pointer(note: Mapping[str, Any]) -> str:
+    """A source-derived label, never a summary or a function of the start allowance."""
+    sentence = re.split(r'(?<=[.!?。！？])\s+', ' '.join(note['text'].split()), maxsplit=1)[0]
+    label = sentence if len(sentence) <= 160 else sentence[:159].rstrip() + '…'
+    return (f"note {note['id']} by {note['role']} on {note['date']}: {label}; "
+            f"memory_read(node_id='{note['id']}')")
+
+
+def _notes_line(notes: List[Dict[str, Any]]) -> str:
+    dates = sorted(note['date'] for note in notes)
+    roles = ', '.join(sorted({note['role'] for note in notes}))
+    return (f"{len(notes)} notes not yet sealed, {dates[0]} → {dates[-1]}, by {roles}; "
+            f"ids: {', '.join(note['id'] for note in notes)} (memory_read(node_id=…))")
+
+
+def _room_note_lines(notes: List[Dict[str, Any]], gone: Mapping[str, Any]) -> List[str]:
+    addressed = set(gone.get('F8', ()))
+    aggregate = [note for note in notes if note['id'] in addressed] if gone.get('F8a') else []
+    lines = []
+    for note in notes:
+        if aggregate and note is aggregate[0]:
+            lines.append(_notes_line(aggregate))
+        if note['id'] not in addressed:
+            lines.extend(_note_lines([note]))
+        elif not aggregate:
+            lines.append(_note_pointer(note))
+    return lines
+
+
 _LATE_REVIEW_INTRO = ("Reviewer feedback that settled after its work ended, kept here by the host for this room "
                       "until {who}. It is advice, not a decision or a veto; releasing it says it was dealt with, "
                       "not that it was agreed with.")
@@ -1133,7 +1163,7 @@ def _room_text(room: Mapping[str, Any], gone: Mapping[str, List[str]]) -> str:
         lines += [f"[{item['ts'] or 'time not recorded'}; owner; {item['ref']}] " + _indented(item["text"]).lstrip()
                   for item in room["origins"]]
     if room["notes"]:
-        lines += ["", "### My notes not yet sealed"] + _note_lines(room["notes"])
+        lines += ["", "### My notes not yet sealed"] + _room_note_lines(room["notes"], gone)
     if room["lane1"]:
         lines += ["", f"### Open conversation since {room['since']} (verbatim: people and my replies)"]
         aggregate = [item for item in room['lane1'] if item['address'] in mine | people

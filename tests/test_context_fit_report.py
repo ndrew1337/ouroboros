@@ -19,7 +19,7 @@ def fingerprint(root):
 def test_measurement_uses_ordinary_scale_fitter_and_composition(tmp_path, monkeypatch):
     from ouroboros import memory_floor as floor
     with monkeypatch.context() as old:
-        old.setattr(floor, 'LADDER', tuple(step for step in floor.LADDER if step not in {'F7a', 'F5a'}))
+        old.setattr(floor, 'LADDER', tuple(step for step in floor.LADDER if step not in {'F7a', 'F5a', 'F8', 'F8a'}))
         before = measure_core(scale.core(tmp_path), scale.tools(), root=tmp_path, window=92000, reserve=10000)
     assert before['verdict'] == 'MinimumViewUnfit' and before['deficit_tokens'] > 0
     result = measure_core(scale.core(tmp_path), scale.tools(), root=tmp_path, window=92000, reserve=10000)

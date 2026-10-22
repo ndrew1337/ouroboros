@@ -26,6 +26,7 @@ def test_owner_shape_admits_92000_without_shortening_protected_text(tmp_path, mo
     assert margin >= 0, f'input={input_tokens}, reserve=10000, window=92000, margin={margin}'
     assert plan.preferred_mode == mode and plan.initial_mode == 'nano'
     assert 'F7a' in shown.memory_facts['floor']['steps']
+    assert not mf.WINDOW_ONLY.intersection(shown.memory_facts['floor']['steps']), f'whole notes, margin={margin}'
     content = shown.system_content_json
     for block, size in scale.PROTECTED.items():
         label = {'system': 'SYSTEM', 'bible': 'BIBLE', 'identity': 'Identity',
@@ -62,7 +63,8 @@ def test_floor_size_depends_on_protected_items_not_history_count():
         level = mf.fit_memory_view(snap, {'margin': 0, 'physical': 0, 'budget': None})
         rendered = mv.render_story(snap, level) + mv.render_room(snap, level)
         sizes.append(len(rendered.encode()))
-        assert all(note['text'] in rendered for note in snap.room['notes'])
+        assert dict(level.steps)['F8'] == 6 and dict(level.steps)['F8a'] == 1
+        assert mv._notes_line(snap.room['notes']) in rendered
         assert all(row['line'] in rendered for row in snap.room['lane1'] if row.get('immune'))
     assert abs(sizes[1] / sizes[0] - 1) <= .05, f'floor bytes at 150/100 and 1500/1000: {sizes}'
     print(f'FLOOR_BYTES rows/pages=150/100:{sizes[0]}, 1500/1000:{sizes[1]}')

@@ -503,6 +503,8 @@ remote API, remote config) I `knowledge_read` its topic first and prefer dated
 knowledge over impression; external API, model, and library knowledge is stale
 unless recently verified.
 
+When I write an unsealed note with `chronicle_write`, its first sentence is its label, written so that a reader who sees only that line knows what the note holds.
+
 People's words and my own replies stay verbatim while their conversation is
 open and fits; when a matter closes — by its sense, not by a calendar — or the
 host says it no longer fits, I seal it with `chronicle_write` as a page in my

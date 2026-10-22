@@ -25,6 +25,54 @@ WAKE = {"id": "wake", "chat_id": 1, "_is_direct_chat": True,
         "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}
 
 
+def test_note_labels_and_aggregate_keep_readers_and_do_not_change_other_rooms():
+    from ouroboros import memory_view as mv, memory_floor as mf
+    from tests.test_memory_view_floor import note_snapshot
+    snap = note_snapshot()
+    snap.room['notes'][1]['text'] = 'A long first sentence ' * 30 + '.\nSecond sentence stays in the source.'
+    snap.room['notes'][2].update(role='child', date='2026-09-03')
+    level = mf.level_with(snap, mv.FULL_VIEW, ['F8:' + note['id'] for note in snap.room['notes']])
+    rendered = mv.render_room(snap, level)
+    first = snap.room['notes'][0]
+    assert (f"note {first['id']} by root on 2026-09-02: Label 0.; memory_read(node_id='{first['id']}')") in rendered
+    long_line = mv._note_pointer(snap.room['notes'][1])
+    label = long_line.split(': ', 1)[1].split('; memory_read')[0]
+    assert len(label) <= 160 and label.endswith('…') and '\n' not in long_line
+    aggregate = mf.level_with(snap, level, ['F8a:1'])
+    text = mv.render_room(snap, aggregate)
+    assert '6 notes not yet sealed, 2026-09-02 → 2026-09-03, by child, root; ids:' in text
+    assert all(note['id'] in text for note in snap.room['notes'])
+    assert '(memory_read(node_id=…))' in text
+    for other in snap.live_rooms:
+        assert '\n'.join(mv._live_room(other)) in text
+    assert mv.render_story(snap, aggregate) == mv.render_story(snap)
+
+
+def test_note_forms_leave_exact_sources_readable_and_do_not_capture_this_rounds_note(tmp_path):
+    from ouroboros import memory_floor as mf, memory_view as mv
+    from ouroboros.chronicle_store import ChronicleStore
+    from ouroboros.tools.chronicle import _memory_read
+    from tests.test_chronicle_tools import ctx_for, write
+    ctx = ctx_for(tmp_path)
+    sources = [write(ctx, kind='note', text=f'Label {i}.\n' + 'Unsealed exact words. ' * 160) for i in range(3)]
+    assert all(source['ok'] for source in sources)
+    task = {'id': 'next-turn', 'chat_id': 1, '_is_direct_chat': True}
+    snap = mv.capture_memory_view(tmp_path, task, mv.view_spec_for_task(task, tmp_path))
+    assert len(snap.room['notes']) == 3
+    original = mv.snapshot_json(snap)
+    later = write(ctx_for(tmp_path, task_id='next-turn'), kind='note', text='New this round. Keep this exact wording.')
+    assert later['ok']
+    for aggregate in (False, True):
+        level = mf.level_with(snap, mv.FULL_VIEW, ['F8:' + n['id'] for n in snap.room['notes']]
+                              + (['F8a:1'] if aggregate else []))
+        text = mv.render_room(snap, level)
+        for note in snap.room['notes']:
+            assert note['id'] in text and note['text'] in _memory_read(ctx, node_id=note['id'])
+        assert later['node_id'] not in {i for _s, ids in level.addressed for i in ids}
+    assert mv.snapshot_json(snap) == original
+    assert ChronicleStore(tmp_path).get(later['node_id'])['text'] == 'New this round. Keep this exact wording.'
+
+
 def _messages(env, memory, task, **kwargs):
     from ouroboros.context import build_llm_messages
 
