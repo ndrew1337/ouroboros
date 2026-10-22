@@ -14,9 +14,10 @@ env_from_settings: [OPENAI_API_KEY]
 
 Registers `openai_realtime:openai` for `gpt-realtime-2.1`. The host selects
 memory, roles, tools and output allowance. The provider owns wire layout,
-acknowledgements, captions, usage axes and its catalog. The 128,000-token window
-is documented, with spoken retention still a hypothesis; accepting 133,554 text
-tokens once on 2026-10-20 does not enlarge it. Automatic truncation is disabled.
+acknowledgements, captions, usage axes and its catalog. The route's window is the
+measured lower bound: 133,554 input tokens accepted and answered on 2026-10-20
+(documented context 128,000); spoken retention is still unmeasured. Automatic
+truncation is disabled.
 Text fields preserve every character and role across the observed 256000-character
 item limit. Images remain native input. Unsupported content fails explicitly.
 

@@ -12,17 +12,19 @@ from ouroboros.contracts.realtime import (
 # One address for both the connection and the declared route identity.
 ENDPOINT = "wss://api.openai.com/v1/realtime"
 ROUTE = RealtimeRoute(accounting_provider="openai_realtime", endpoint=ENDPOINT, model_prefix="openai::")
-# Documented 128,000-token context; one text probe was accepted at 133,554 tokens on
-# 20.10.2026 (acceptance, not retention). The window stays the documented figure, a
-# hypothesis until a spoken-retention probe measures it.
+# One text probe was accepted and answered at 133,554 input tokens on 20.10.2026, above the
+# documented 128,000. By the owner's rule (20.10) a successful request is the window's lower
+# bound, never a ceiling below it, so the route states that measurement; spoken retention is
+# not yet measured and a larger accepted input in a real call is recorded as evidence.
 CATALOG = ProviderCatalog(
     label="OpenAI", credential_settings=("OPENAI_API_KEY",),
     privacy="Call audio and the frames you show go to OpenAI.",
     models=(CatalogModel(
         "gpt-realtime-2.1", "gpt-realtime-2.1 \u2014 OpenAI\u2019s realtime voice model",
-        RouteFacts(conversation_window_tokens=128_000, accepted_input_tokens=133_554, working_reserve_tokens=10_000,
-                   basis="provider", source="documented context; spoken retention not yet measured",
-                   observed="2026-10-21"),
+        RouteFacts(conversation_window_tokens=133_554, accepted_input_tokens=133_554, working_reserve_tokens=10_000,
+                   basis="provider", source="accepted and answered at 133,554 input tokens (text probe 20.10.2026; "
+                   "documented context 128,000); spoken retention not yet measured",
+                   observed="2026-10-20"),
         default=True, vision=True,
         voices=tuple(CatalogVoice(name, name.capitalize()) for name in (
             "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse")),
