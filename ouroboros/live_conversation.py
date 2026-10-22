@@ -107,6 +107,7 @@ class LiveConversationTurn(RealtimeTurn):
                         else "The owner has just opened this call and can hear you now.")
         self.request = {"kind": "live_conversation", "feature": feature["key"], "provider": self.provider,
                         "model": self.native_model, "call_id": spec.call_id}
+        self.admitted_at = time.time()  # the turn is built at admission, before the task is queued and prepared
         self._lock, self._closed = threading.Lock(), False
 
     def run(self, ctx, messages, tools, *, task, initial_effort, incoming_messages=None, event_queue=None):
@@ -225,7 +226,9 @@ class ConversationHost:
         self.trace = {"reasoning_notes": [], "tool_calls": []}
         # Wall-clock facts of the call's start path, kept with the task trace and written to the
         # wire log at the end: where the seconds before the first answer went (owner, 18.10).
-        self.timing = self.trace["timing"] = {"admitted_at": time.time(), "connections": []}
+        # Admission precedes queueing and the ordinary context preparation; the host starts after them.
+        self.timing = self.trace["timing"] = {"admitted_at": getattr(turn, "admitted_at", None) or time.time(),
+                                              "host_started_at": time.time(), "connections": []}
         self.plan = ctx.context_fit_plan
         if self.plan.model != turn.model or self.plan.provider != turn.route.accounting_provider:
             raise RealtimeSetupError("route", "call input must use the selected realtime route")
@@ -765,7 +768,6 @@ class ConversationHost:
         """End call-lifetime custody, after sessions and owned work have drained."""
         from ouroboros.live_usage import abandon_live_response
 
-        self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:
@@ -781,3 +783,5 @@ class ConversationHost:
                 self._response_text_estimates.clear()
                 self._density_input = 0
                 await joined(asyncio.to_thread(self.executor.shutdown, wait=True))
+        # Evidence last: a failed wire-log write (a full volume) must never skip the custody above.
+        self.observe("host", canonical_json({"type": "call.timing", **self.timing}))

@@ -74,8 +74,8 @@ def register(api):
             try:
                 try:
                     stored = json.loads(path.read_text(encoding="utf-8"))
-                except (FileNotFoundError, ValueError):
-                    stored = {}  # an unreadable file never blocks the owner's own switch
+                except (OSError, ValueError):
+                    stored = {}  # a missing, unreadable or malformed file never blocks the owner's own switch
                 config = validate(await request.json())
                 if not config.provider:
                     raise RealtimeSetupError("configuration", "Choose an engine.")
@@ -97,6 +97,8 @@ def register(api):
                 if not config.enabled: end_feature_calls("live_conversation:call")
             except (ValueError, RealtimeSetupError) as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+            # The value just written is the view; a file the owner cannot read back never hides a saved change.
+            return JSONResponse(configuration_view(config, catalogs))
         return JSONResponse(configuration_view(configure(), catalogs))
 
     api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir))

@@ -125,9 +125,9 @@ def _plugin_catalog(skill):
 @pytest.mark.parametrize("skill,window,credential", [
     ("gemini_live", 92_000, "GEMINI_API_KEY"),
     ("grok_realtime", 80_000, "XAI_API_KEY"),
-    ("openai_realtime", 128_000, "OPENAI_API_KEY"),
+    ("openai_realtime", 133_554, "OPENAI_API_KEY"),  # the measured acceptance of 20.10, not the documented 128,000
 ])
-def test_built_in_engines_declare_labelled_windows_that_acceptance_never_raises(skill, window, credential):
+def test_built_in_engines_declare_labelled_dated_windows(skill, window, credential):
     catalog = _plugin_catalog(skill)
     default = catalog.model("")
     assert default.facts.conversation_window_tokens == window
