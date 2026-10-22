@@ -401,7 +401,13 @@ def import_segment(root: Any, stream: str, name: str) -> Dict[str, Any]:
         entry = mapped.get(offset)
         if entry is not None:
             _offset, seq, length, physical, digest = entry
-            if line.row is not None and line.length == physical and hashlib.sha256(data[offset:offset + physical]).hexdigest() == digest:
+            raw = data[offset:offset + line.length]
+            # A short write can leave a complete final object without only its LF.
+            # Restore that byte for verification, never for an interior or malformed line.
+            if (line.row is not None and line.length + 1 == physical
+                    and offset + line.length == len(data) and not raw.endswith(b"\n")):
+                raw += b"\n"
+            if line.row is not None and len(raw) == physical and hashlib.sha256(raw).hexdigest() == digest:
                 line = line._replace(seq=seq, length=length)
                 exported.add(seq)
                 verified.append(entry)

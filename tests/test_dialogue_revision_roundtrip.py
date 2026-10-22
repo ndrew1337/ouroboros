@@ -147,3 +147,58 @@ def test_revised_export_keeps_identity_when_rotation_sorts_before_old_archives(t
     di.cutover(tmp_path)
     selected = [row.row for row in ds.newest(tmp_path, 'chat', limit=1000) if row.seq >= first.seq]
     assert selected == [revised, following.row, chat('older-body', 'Older message.')]
+
+
+@pytest.mark.parametrize('revised', [False, True])
+def test_torn_export_missing_only_last_newline(tmp_path, monkeypatch, revised):
+    """R8 reviewer regression, including the unchanged-span control."""
+    di.cutover(tmp_path)
+    first = ds.append(tmp_path, 'chat', chat('', 'First.', direction='out'))
+    last = ds.append(tmp_path, 'chat', chat('', 'Last.', direction='out'))
+    revised_row = ds.revise_text(tmp_path, 'chat', last.seq, 'Last with a late correction.') if revised else last.row
+    payload = b''.join((ds.encode(row) + '\n').encode('utf-8') for row in (first.row, revised_row))
+    write = di.os.write
+    partial = False
+
+    def cut_after_json(fd, data):
+        nonlocal partial
+        raw = bytes(data)
+        if raw == payload:
+            partial = True
+            return write(fd, raw[:-1])
+        if partial and raw == b'\n':
+            raise SystemExit('process stopped between a short write and the final LF')
+        return write(fd, data)
+
+    with monkeypatch.context() as scope:
+        scope.setattr(di.os, 'write', cut_after_json)
+        with pytest.raises(SystemExit):
+            di.export_for_older_body(tmp_path)
+    live = tmp_path / 'logs/chat.jsonl'
+    assert live.read_bytes() == payload[:-1]
+    assert ds.meta(tmp_path, 'export_batch:chat') is not None
+    di.cutover(tmp_path)
+    assert chat_rows(tmp_path) == [first.row, revised_row]
+    assert ds.row_at(tmp_path, 'chat', last.seq).length == last.length
+
+
+@pytest.mark.parametrize('tail_kind', ['different', 'malformed'])
+def test_unterminated_export_tail_requires_the_exact_recorded_object(tmp_path, tail_kind):
+    di.cutover(tmp_path)
+    first = ds.append(tmp_path, 'chat', chat('', 'First.', direction='out'))
+    last = ds.append(tmp_path, 'chat', chat('', 'Last.', direction='out'))
+    revised = ds.revise_text(tmp_path, 'chat', last.seq, 'Corrected final text.')
+    di.export_for_older_body(tmp_path)
+    tail = ds.encode(revised).encode('utf-8')
+    if tail_kind == 'different':
+        tail = tail.replace(b'Corrected', b'Different')  # same byte length, different hash
+    else:
+        tail = tail[:-1] + b'!'  # same byte length, incomplete JSON
+    live = tmp_path / 'logs/chat.jsonl'
+    live.write_bytes((ds.encode(first.row) + '\n').encode('utf-8') + tail)
+    di.cutover(tmp_path)
+    expected = [first.row, revised]
+    if tail_kind == 'different':
+        expected.append({**revised, 'text': 'Different final text.'})
+    assert chat_rows(tmp_path) == expected
+    assert ds.range_coverage(tmp_path, 'chat')['gaps'] == int(tail_kind == 'malformed')
