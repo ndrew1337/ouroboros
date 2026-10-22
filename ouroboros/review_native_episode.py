@@ -423,6 +423,8 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
 
     def _observe_sent_view(self, messages: list, schemas: list) -> None:
         from ouroboros.tools.compact_context import record_context_view
+        from ouroboros.transcript_prefix import count_accepted_send
+        count_accepted_send(self._inspection_ctx, messages, schemas, round_idx=self._rounds_used, usage=self._episode_usage)
         record_context_view(self._inspection_ctx, messages, schemas)
         for receipt in self._tool_receipts:
             receipt["delivered"] = True
@@ -499,7 +501,9 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
         self._view_receipt = asdict(receipt)
         ref = self._store_source(f"view-{round_idx}", self._view_receipt)
         if receipt.status == "applied":
+            from ouroboros.transcript_prefix import sanction_rewrite
             messages[:] = candidate
+            sanction_rewrite(self._inspection_ctx, "compaction")  # the reviewer's own fold names its change
             self._view_changes += 1
         if receipt.status != "no_op":
             notice = {"role": "user", "content": json.dumps({"context_view_status": receipt.status,
@@ -1401,6 +1405,8 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
 
     def _verdict_result(self, force_extraction: bool = False) -> ReviewAttemptResult:
         text = self._raw_transcript or ""
+        if text.strip() and self.answer_observer:
+            self.answer_observer()
         canonical, method, extraction_usage = canonicalize_session_verdict(
             text,
             conformance_passed=False,  # no structured-output channel on this route

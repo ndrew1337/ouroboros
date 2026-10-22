@@ -263,6 +263,9 @@ class KnowledgeReadContext:
                     json.dumps(facts_receipt, ensure_ascii=False).encode("utf-8"), "json")
                 if applied.status in {"applied", "no_op"}:
                     before = candidate[:-len(rows)]  # the new completed batch is preserved verbatim
+                if applied.status == "applied":
+                    from ouroboros.transcript_prefix import sanction_rewrite
+                    sanction_rewrite(self.context, "compaction")  # the actor's own fold names its change
             for row in rows:
                 if row["fn_name"] == "compact_context":
                     row["result"] = json.dumps({"context_view": receipt}, ensure_ascii=False)
@@ -438,6 +441,9 @@ def _call_consolidation_llm(
             if knowledge:
                 # A wait may have re-prepared this same call with another route;
                 # pin its final canonical view before executing the returned tools.
+                from ouroboros.transcript_prefix import count_accepted_send
+                count_accepted_send(knowledge.context, prepared_values["messages"], prepared_values["tools"],
+                                    round_idx=len(usages), usage=retired_usage)
                 record_context_view(knowledge.context, prepared_values["messages"], prepared_values["tools"])
                 knowledge.accept_delivery()
             if isinstance(usage.get("claudexor"), dict):

@@ -116,7 +116,8 @@ def test_fresh_default_max_connects_with_real_gemini_envelope_and_allowance(tmp_
     _publish(root)
     messages, _ = context.build_llm_messages(env, memory, task, ctx=ctx,
         tool_schemas=tools.schemas(), route_resolver=turn.resolve_route)
-    assert ctx.context_fit_plan.preferred_mode == ctx.context_fit_plan.initial_mode == 'max'
+    assert ctx.context_fit_plan.preferred_mode == 'max'
+    assert ctx.context_fit_plan.initial_mode == 'nano'  # ordinary physical fallback before sending
     hub = LiveCallHub(turn.spec)
     with task_model_wait_scope(task=task, drive_root=root, event_queue=None, worker_slot_held=False) as owner:
         ctx.model_wait_context, owner.tool_context = owner, ctx

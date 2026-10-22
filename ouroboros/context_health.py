@@ -16,7 +16,7 @@ import json
 import pathlib
 import re
 from collections import Counter
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from ouroboros.context_budget import SCRATCHPAD_BLOAT_WARN_CHARS
 from ouroboros.utils import iter_jsonl_objects, read_json_dict, read_text
@@ -72,17 +72,14 @@ def _collect_log_analysis_checks(env: Any, checks: List[str]) -> None:
     except Exception:
         pass
 
-    try:
-        hit_rate = _compute_cache_hit_rate(env)
-        if hit_rate is not None:
-            if hit_rate < 0.30:
-                checks.append(f"WARNING: LOW CACHE HIT RATE — {hit_rate:.0%} cached. Context structure may be degrading prompt caching efficiency.")
-            elif hit_rate >= 0.50:
-                checks.append(f"OK: cache hit rate ({hit_rate:.0%})")
-            else:
-                checks.append(f"INFO: cache hit rate moderate ({hit_rate:.0%})")
+    try:  # who changed sent history under the running code; a provider's cache share is not a health verdict
+        from ouroboros.transcript_prefix import history_changes_line
+
+        line = history_changes_line(getattr(env, "budget_drive_root", None) or getattr(env, "drive_root", None))
+        if line:
+            checks.append(line)
     except Exception:
-        pass
+        log.debug("sent-history change fact unavailable", exc_info=True)
 
     try:
         events_path = env.drive_path("logs/events.jsonl")
@@ -614,35 +611,3 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
     if not checks:
         return ""
     return "## Health Invariants\n\n" + "\n".join(f"- {check}" for check in checks)
-
-
-def _compute_cache_hit_rate(env: Any) -> Optional[float]:
-    from ouroboros.event_token_totals import token_counter
-
-    total_prompt = total_cached = reported = 0
-    try:
-        for ev in _iter_recent_jsonl(env.drive_path("logs/events.jsonl")):
-            if ev.get("type") != "llm_round":
-                continue
-            # Per round (#1578): an absent, null (record v2) or malformed counter
-            # means the round measured nothing, and an unstamped/v1 zero may be an
-            # old writer's unknown-to-zero (record contract LEGACY_RULE), so such a
-            # round joins NEITHER side of the ratio and never voids the measured
-            # rounds beside it; a v2 zero is a real measured miss.
-            pt_state, pt = token_counter(ev, "prompt_tokens")
-            cached_state, cached = token_counter(ev, "cached_tokens")
-            if pt and pt_state == cached_state == "known":
-                total_prompt += pt
-                total_cached += cached
-                reported += 1
-    except Exception:
-        return None
-    # Nobody reporting a cache is not a cache that missed: without the key the
-    # share is UNKNOWN, and the arithmetic zero below would render that absence
-    # as an honest 0% and send the owner hunting a caching regression no round
-    # ever measured. The window is the REPORTING rounds for the same reason: on
-    # an install whose providers are mixed, charging a silent round's prompt to
-    # the denominator understates the share the measuring rounds actually saw.
-    if reported < 5 or total_prompt == 0:
-        return None
-    return total_cached / total_prompt

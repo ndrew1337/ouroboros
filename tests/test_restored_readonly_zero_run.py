@@ -1,7 +1,7 @@
 """Restored configured read-only actors retain only the typed zero-run receipt."""
 import pytest
 
-from tests._stub_delegate_engines import stub_delegate_engines  # noqa: F401
+from tests._stub_delegate_engines import stub_delegate_engines as stub_delegate_engines
 from tests.test_configured_session_restore import _known_custody, _restored_registry, _task
 
 pytestmark = pytest.mark.serial
@@ -20,6 +20,9 @@ def _restored_actor(tmp_path, monkeypatch, carrier):
     receipt = subagent_bootstrap.bootstrap_before_context(ctx, task, resolve_dispatch_axes(task))
     assert receipt and ctx._configured_actor_bootstrap["exact_start_pending"] is False
     assert ctx._configured_actor_bootstrap["physical_started"] is False
+    # The restored child of an owner task carries the owner work kind its root's admission minted;
+    # an unmarked context is consciousness work, which the Supervisor holds when no checker can run.
+    ctx.task_metadata = {**(ctx.task_metadata or {}), "work_kind": "owner"}
     return registry, task
 
 

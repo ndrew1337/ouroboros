@@ -715,6 +715,8 @@ def routing_option_label(option: Any) -> str:
 
 OUTCOME_PHASE_HEADLINE = {"working": "Working", "done": "Done", "warn": "Done with warnings",
                           "error": "Failed", "cancelled": "Stopped"}
+# A run that chose to finish without a message (catalog code task.headline.quiet).
+QUIET_RUN_HEADLINE = "Done · no message"
 
 # One sentence per typed cause, not status × reason. Host text keeps unknown codes;
 # details-bearing views pair a neutral sentence with the exact codes, never a guess.
@@ -777,6 +779,7 @@ TASK_CAUSE_PHRASES = {
     "finalization_grace": "The task hit a time limit and had to wrap up before it could finish cleanly",
     "deadline_local": "The task reached its deadline before it could finish cleanly",
     "context_overflow": "The task outgrew its context before it could finish cleanly",
+    "output_recovery_exhausted": "Empty length-limited replies exhausted recovery; saved work remains available",
     "children_unabsorbed": "Some sub-task results were never folded in, so the task had to wrap up",
     # The supervisor's timeout rails (queue_timeouts.TIMEOUT_TERMINAL_REASONS): the
     # reaper's task_done reason_code, spoken on its grace toast, its kill notice

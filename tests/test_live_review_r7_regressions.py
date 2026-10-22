@@ -174,7 +174,9 @@ def test_real_overview_producer_stays_whole_in_each_ordinary_mode(tmp_path, monk
     monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: RESERVE)
     for mode in ("max", "low", "nano"):
-        plan = _plan(_core(tmp_path, head=[overview]), RESERVE + 1, mode)
+        plan = _plan(_core(tmp_path, head=[overview]), 2_000_000, mode).reproject_for_route(
+            window_tokens=RESERVE + 1, known_window=True, ratio=1, output_reserve=RESERVE,
+            tool_schemas=[], start_mode=mode)
         assert overview.full_text in _text(plan, mode)
         assert "shared_understanding" not in {r["section_id"] for r in _host_facts(plan, mode)}
 

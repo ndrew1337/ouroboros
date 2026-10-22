@@ -5,9 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from ouroboros.skill_review import _skill_quorum_failure_outcome
-from ouroboros.skill_review_prompt import _SKILL_REVIEW_ITEMS
-from ouroboros.triad_review import parse_model_review_results
+from ouroboros.skill_review import SkillReviewOutcome
+from ouroboros.triad_review import parse_seat_answers
 from tests import test_skill_smoke_official as smoke
 from tests._skill_review_shared import _make_actor
 
@@ -32,16 +31,19 @@ def test_smoke_diagnostics_show_current_quorum_failure(tmp_path, monkeypatch,
     if provider_error:
         actor["verdict"] = "ERROR"
     result = {"results": [actor]}
-    parsed = parse_model_review_results(result, required_items=_SKILL_REVIEW_ITEMS)
+    parsed = parse_seat_answers(result, {"": ("skill",)})
     assert not parsed.responsive_models
-    outcome = _skill_quorum_failure_outcome(
-        SimpleNamespace(name=name), findings=parsed.findings,
-        models=[smoke._REVIEW_MODEL], content_hash="current-hash", required_quorum=1,
-        result_json_text=json.dumps(result), parsed_review=parsed, advisory_evidence={},
-        single_reviewer_no_diversity=True, drive_root=tmp_path, persist=True,
-    )
+    # The quorum failure as review_skill reads it off the wave: pending, nothing persisted for these bytes
+    # (an earlier verdict for other bytes stands), the seats' raw words kept on the record for the diagnostic.
+    outcome = SkillReviewOutcome(
+        skill_name=name, status="pending", findings=parsed.findings, reviewer_models=[], content_hash="current-hash",
+        error="no verdict was formed (QUORUM_FAILED: {'skill': 'unanswered'})", raw_result=json.dumps(result),
+        raw_actor_records=[record.to_dict() for record in parsed.actor_records], single_reviewer_no_diversity=True)
     assert outcome.status == "pending"
     assert (state / "review.json").exists() is prior_review
+    wave = {"record_id": "rl-current", "state": "settled", "aggregate": "QUORUM_FAILED", "content_hash": "current-hash",
+            "raw_actor_records": outcome.raw_actor_records}
+    monkeypatch.setattr(smoke, "_latest_wave", lambda _name: wave)
     diagnostic = smoke._review_diag(name, outcome.status, outcome.error,
                                    {"review_findings": outcome.findings})
     assert json.dumps(raw) in diagnostic, diagnostic
@@ -69,8 +71,7 @@ def test_smoke_diagnostics_keep_successful_review_actors(tmp_path, monkeypatch):
     ("not_dispatched", 2), ("deps_failed", 2), ("clean", 1),
 ])
 def test_smoke_retry_preserves_original_wave_and_requires_settlement(tmp_path, monkeypatch, case, calls):
-    from ouroboros.skill_review_history import append_history_once, review_history_path
-
+    """The retry policy over the recorded waves (the skill's review ledger records, newest last)."""
     name = "bounded-smoke"
     monkeypatch.setattr(smoke, "DATA_DIR", tmp_path)
     monkeypatch.setattr(smoke, "find_skill", lambda *_: SimpleNamespace(content_hash="current-hash"))
@@ -85,27 +86,25 @@ def test_smoke_retry_preserves_original_wave_and_requires_settlement(tmp_path, m
         records = [{}]
     elif case == "nested_pending":
         records = [{"raw_results": [{"operation_state": "in_flight"}]}]
-    path = review_history_path(tmp_path, name)
-    before, observed = None, []
+    waves, observed = [], []
+    monkeypatch.setattr(smoke, "_latest_wave", lambda _name: waves[-1] if waves else None)
 
     def flow(slug, skill):
-        nonlocal before
         observed.append((slug, skill))
         if len(observed) == 1:  # the first attempt records the original wave, as review_skill does
             if case != "missing_history":
-                assert append_history_once(tmp_path, name, {"job_id": "original-wave", "status": status,
-                    "content_hash": "old-hash" if case == "wrong_hash" else "current-hash",
-                    "raw_actor_records": records, "paid": True})
-            before = path.read_bytes() if path.exists() else None
+                waves.append({"record_id": "original-wave", "status": status,
+                              "content_hash": "old-hash" if case == "wrong_hash" else "current-hash",
+                              "raw_actor_records": records})
             return status, "" if status in {"clean", "blockers"} else "first failure", (
                 "failed" if case == "deps_failed" else "installed"), {}
-        assert (path.read_bytes() if path.exists() else None) == before  # the retry keeps the original wave
+        assert len(waves) == (0 if case == "missing_history" else 1)  # the retry keeps the original wave
         return "clean", "", "installed", {}
 
     monkeypatch.setattr(smoke, "_run_review_flow", flow)
     result = smoke._review_with_one_settled_retry("a2a", name)
     assert len(observed) == calls
-    assert (path.read_bytes() if path.exists() else None) == before
+    assert len(waves) == (0 if case == "missing_history" else 1)
     if calls == 1 and case != "clean":
         assert result[0] == status and "not retried:" in result[-1]
     else:

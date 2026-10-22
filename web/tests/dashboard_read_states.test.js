@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { initActivity } from '../modules/activity.js';
 import { initLogs } from '../modules/logs.js';
@@ -106,9 +105,9 @@ test('Activity keeps last-known data and actions on refresh failure, then reconc
 });
 
 const lifecycleSchedules = [
-    { id: 'active', name: 'Active schedule', enabled: true, status: 'active', trigger: { type: 'cron', expr: '* * * * *' } },
+    { id: 'active', name: 'Active schedule', enabled: true, status: 'active', task: { text: 'Inspect the results\nKeep the full instruction readable.' }, trigger: { type: 'cron', expr: '* * * * *' } },
     { id: 'disabled', name: 'Disabled schedule', enabled: false, status: 'disabled', trigger: { type: 'cron', expr: '* * * * *' } },
-    { id: 'suppressed', name: 'Suppressed skill', enabled: false, status: 'suppressed', retained: true, restorable: true, source: 'skill_manifest', manual_override: 'disabled', trigger: { type: 'cron', expr: '* * * * *' } },
+    { id: 'withdrawn', name: 'Withdrawn promise', enabled: false, status: 'delete_pending', withdrawal: { restorable: true, work_in_flight: false }, trigger: { type: 'cron', expr: '* * * * *' } },
     { id: 'consumed', name: 'Consumed once', enabled: false, status: 'consumed', consumed: true, retained: true, completed_at: '2026-09-21T00:00:00Z', trigger: { type: 'once', run_at: '2026-09-20T00:00:00Z' } },
 ];
 
@@ -131,10 +130,10 @@ test('Activity separates standing schedules from retained history and keeps Rest
     assert.equal(standing[1].querySelector('button').dataset.action, 'restore');
 
     assert.equal(history.hasAttribute('open'), false);
-    assert.match(history.querySelector('summary').textContent, /suppressed \(2\)/);
+    assert.match(history.querySelector('summary').textContent, /withdrawn \(2\)/);
     const retained = history.querySelectorAll('.activity-row');
     assert.equal(retained.length, 2);
-    assert.match(retained[0].textContent, /Suppressed skill[\s\S]*suppressed/);
+    assert.match(retained[0].textContent, /Withdrawn promise[\s\S]*withdrawn · restorable/);
     assert.equal(retained[0].querySelector('button').textContent, 'Restore');
     // A fired one-shot cannot be re-armed, so it offers no Enable — only Delete.
     assert.match(retained[1].textContent, /Consumed once[\s\S]*consumed/);
@@ -158,7 +157,7 @@ test('Activity lifecycle buttons name their action to the one audited endpoint',
     emptyActivity(routes);
     routes.set(schedulesUrl, response({ tasks: lifecycleSchedules }));
     const sent = [];
-    for (const id of ['active', 'suppressed']) {
+    for (const id of ['active', 'withdrawn']) {
         routes.set(`/api/schedules/${id}/action`, (url, init) => {
             sent.push({ url, body: JSON.parse(init.body) });
             return response({ ok: true, changed: true, status: 'updated', audit: 'recorded', running_or_queued: false });
@@ -168,10 +167,10 @@ test('Activity lifecycle buttons name their action to the one audited endpoint',
     const schedules = section(mount, 'schedules');
     const history = schedules.querySelector('[data-activity-history]');
     await mount.fire('click', { target: schedules.querySelector('[data-act="schedule-toggle"][data-id="active"]') });
-    await mount.fire('click', { target: history.querySelector('[data-act="schedule-toggle"][data-id="suppressed"]') });
+    await mount.fire('click', { target: history.querySelector('[data-act="schedule-toggle"][data-id="withdrawn"]') });
     assert.deepEqual(sent.map((entry) => [entry.url, entry.body.action]), [
         ['/api/schedules/active/action', 'disable'],
-        ['/api/schedules/suppressed/action', 'restore'],
+        ['/api/schedules/withdrawn/action', 'restore'],
     ]);
     // Every change carries a reason; nothing infers the command from that text.
     assert.ok(sent.every((entry) => typeof entry.body.reason === 'string' && entry.body.reason.length > 0));
@@ -245,41 +244,37 @@ test('Activity does not call a schedule action applied without a positive change
         'ok=false without changed=true must not disclose an applied mutation');
 });
 
-test('Activity distinguishes a recorded restore that is not ready from audit failure', async (t) => {
-    const { mount, routes, ws, toasts } = setup(t);
+test('Activity delete requires confirmation and reports the withdrawal receipt', async (t) => {
+    const { mount, routes, ws, document, toasts } = setup(t);
     emptyActivity(routes);
-    routes.set(schedulesUrl, response({ tasks: lifecycleSchedules }));
-    routes.set('/api/schedules/suppressed/action', () => response({
-        ok: false, changed: true, status: 'restored_not_ready', audit: 'recorded',
-        detail: 'skill_not_ready', running_or_queued: false,
-    }));
+    routes.set(schedulesUrl, response({ tasks: [{ ...lifecycleSchedules[0], source: 'skill_manifest', skill: 'demo' }] }));
+    const sent = [];
+    routes.set('/api/schedules/active/action', (_, init) => {
+        sent.push(JSON.parse(init.body));
+        return response({ ok: true, changed: true, status: 'withdrawn', audit: 'recorded', running_or_queued: false });
+    });
     await initActivity({ mount, ws }).refresh();
-    await mount.fire('click', { target: section(mount, 'schedules').querySelector(
-        '[data-act="schedule-toggle"][data-id="suppressed"]') });
-    assert.match(toasts().at(-1), /suppression lifted.*not ready to run: skill_not_ready/);
-    assert.doesNotMatch(toasts().at(-1), /audit.*incomplete/);
-});
-
-test('Activity delete reads its outcome through the same seam as the toggles', async () => {
-    // Delete opens a modal this fixture cannot drive, so the centralisation is
-    // pinned at the source: ONE request helper, which reports every outcome, and
-    // no branch that fires the action and ignores what came back.
-    const source = await readFile(new URL('../modules/activity.js', import.meta.url), 'utf8');
-    const requests = source.match(/fetchJson\(`\/api\/schedules\//g) || [];
-    assert.equal(requests.length, 1, 'every lifecycle button goes through one request helper');
-    const helper = source.split('async function scheduleAction(')[1].split('\n    }')[0];
-    assert.match(helper, /reportScheduleOutcome\(action, outcome\)/);
-    for (const branch of ["scheduleAction(id, 'delete'", 'scheduleAction(id, action']) {
-        assert.ok(source.includes(branch), branch);
+    for (const confirmed of [false, true]) {
+        const click = mount.fire('click', { target: mount.querySelector('[data-act="schedule-delete"]') });
+        const dialog = document.body.querySelector('[role="dialog"]');
+        assert.match(dialog.textContent, /stays restorable for a while/);
+        assert.equal(sent.length, 0, 'nothing is sent before confirmation');
+        await dialog.parentElement.fire('click', { target: dialog.querySelector(confirmed ? '[data-confirm-ok]' : '[data-confirm-cancel]') });
+        await click;
+        assert.equal(sent.length, confirmed ? 1 : 0);
     }
-    // No second, button-local reading of the response beside the shared one.
-    assert.equal((source.match(/outcome\.ok/g) || []).length, 1);
+    assert.deepEqual(sent, [{ action: 'delete', reason: 'owner deleted the schedule from Activity', expected_hold_id: '' }]);
+    assert.deepEqual(toasts(), ['Schedule withdrawn.']);
 });
 
 test('Activity keeps the retained-history disclosure and focus the owner left open', async (t) => {
-    const { mount, routes, ws } = setup(t);
+    const { mount, routes, ws, calls } = setup(t);
     emptyActivity(routes);
-    routes.set(schedulesUrl, response({ tasks: lifecycleSchedules }));
+    // A held withdrawal offers only its exact release; the unheld one offers Restore.
+    const tasks = [...lifecycleSchedules, { id: 'held', name: 'Held promise', enabled: false, status: 'delete_pending',
+        withdrawal: { restorable: false, work_in_flight: false }, trigger: { type: 'cron', expr: '* * * * *' },
+        relation: 'related', followup_hold: { hold_id: 'hold-1', reason: 'origin_stopped' }, hold_persisted: true }];
+    routes.set(schedulesUrl, response({ tasks }));
     const activity = initActivity({ mount, ws });
     await activity.refresh();
     const schedules = section(mount, 'schedules');
@@ -288,20 +283,36 @@ test('Activity keeps the retained-history disclosure and focus the owner left op
     // The owner opens the history and focuses a control inside it.
     const details = schedules.querySelector('[data-activity-history]');
     details.open = true;
-    const restore = details.querySelector('[data-act="schedule-toggle"][data-id="suppressed"]');
+    const restore = details.querySelectorAll('button').find((button) => button.textContent === 'Restore');
     restore.focus();
 
     // A poll rebuilds the markup; it must not re-collapse or drop the focus.
     await activity.refresh();
     const rebuilt = section(mount, 'schedules').querySelector('[data-activity-history]');
     assert.equal(rebuilt.hasAttribute('open'), true, 'a refresh must not close what the owner opened');
-    assert.equal(globalThis.document.activeElement.dataset.id, 'suppressed');
+    assert.equal(globalThis.document.activeElement.dataset.id, 'withdrawn');
     assert.equal(globalThis.document.activeElement.dataset.act, 'schedule-toggle');
+    assert.equal(globalThis.document.activeElement.textContent, 'Restore', 'withdrawal Restore must not become Restore hold');
+    rebuilt.querySelector('[data-hold-id]').focus();
+    await activity.refresh();
+    assert.equal(globalThis.document.activeElement.dataset.holdId, 'hold-1');
 
     // Collapsing it again is equally durable across the next refresh.
-    rebuilt.open = false;
+    schedules.querySelector('[data-activity-history]').open = false;
     await activity.refresh();
     assert.equal(section(mount, 'schedules').querySelector('[data-activity-history]').hasAttribute('open'), false);
+    const objective = schedules.querySelector('[data-schedule-text]');
+    objective.open = true;
+    objective.querySelector('summary').focus();
+    const reads = calls.length;
+    await mount.fire('click', { target: objective.querySelector('summary') });
+    assert.equal(calls.length, reads, 'expanding authored text does not trigger a lifecycle action or refresh');
+    await activity.refresh();
+    assert.equal(schedules.querySelector('[data-schedule-text]').hasAttribute('open'), true);
+    assert.equal(globalThis.document.activeElement.dataset.act, 'schedule-text');
+    schedules.querySelector('[data-schedule-text]').open = false;
+    await activity.refresh();
+    assert.equal(schedules.querySelector('[data-schedule-text]').hasAttribute('open'), false);
 });
 
 test('Activity preserves disclosure and current focus as of render, not request start', async (t) => {
@@ -316,7 +327,7 @@ test('Activity preserves disclosure and current focus as of render, not request 
     // restoring the state captured when the request began.
     const details = section(mount, 'schedules').querySelector('[data-activity-history]');
     details.open = false;
-    const oldControl = details.querySelector('[data-act="schedule-toggle"][data-id="suppressed"]');
+    const oldControl = details.querySelector('[data-act="schedule-toggle"][data-id="withdrawn"]');
     oldControl.focus();
     let finishSchedules;
     routes.set(schedulesUrl, () => new Promise((resolve) => { finishSchedules = resolve; }));
@@ -325,12 +336,14 @@ test('Activity preserves disclosure and current focus as of render, not request 
     globalThis.document.body.appendChild(moved);
     moved.focus();
     details.open = true;
+    section(mount, 'schedules').querySelector('[data-schedule-text]').open = true;
     finishSchedules(response({ tasks: lifecycleSchedules }));
     await pending;
 
     const rebuilt = section(mount, 'schedules').querySelector('[data-activity-history]');
     assert.equal(rebuilt.hasAttribute('open'), true,
         'a render must retain disclosure state changed while its request was pending');
+    assert.equal(section(mount, 'schedules').querySelector('[data-schedule-text]').hasAttribute('open'), true);
     assert.equal(globalThis.document.activeElement, moved,
         'a render must not steal focus the owner moved while its request was pending');
 });
@@ -608,41 +621,7 @@ test('Logs keeps the executor chip quiet and prints its detail sentence as text 
     assert.match(standalone.querySelector('.log-executor-detail').textContent, /^Dispatched to Claude Code/);
 });
 
-test('Activity names the typed no-change refusals and never calls a suppression "deleted"', async (t) => {
-    const { mount, routes, ws, toasts } = setup(t);
-    emptyActivity(routes);
-    routes.set(schedulesUrl, response({ tasks: lifecycleSchedules }));
-    const outcomes = [
-        { ok: false, changed: false, status: 'manifest_absent', audit: 'recorded',
-          detail: 'skill_absent: the skill no longer declares this schedule; suppression kept until it does' },
-        { ok: false, changed: false, status: 'lock_timeout', audit: 'not_written',
-          detail: 'Could not acquire schedule lock within 8s' },
-        { ok: false, changed: false, status: 'not_suppressed', audit: 'recorded',
-          detail: 'this skill schedule is not suppressed; it is disabled by skill readiness (skill_not_ready)' },
-        { ok: true, changed: true, status: 'suppressed', audit: 'recorded', running_or_queued: false },
-        { ok: true, changed: true, status: 'suppressed', audit: 'recorded', running_or_queued: null },
-    ];
-    let next = 0;
-    routes.set('/api/schedules/suppressed/action', () => response(outcomes[next++]));
-    await initActivity({ mount, ws }).refresh();
-    const restore = () => mount.fire('click', { target: section(mount, 'schedules').querySelector(
-        '[data-act="schedule-toggle"][data-id="suppressed"]') });
-    await restore();
-    assert.match(toasts().at(-1), /did not change anything: skill_absent: .*suppression kept/);
-    assert.doesNotMatch(toasts().at(-1), /suppression lifted/);
-    await restore();
-    assert.match(toasts().at(-1), /did not change anything: Could not acquire schedule lock/);
-    await restore();
-    assert.match(toasts().at(-1), /did not change anything: this skill schedule is not suppressed/);
-    // A suppression is reported as what it is, with and without an in-flight fact.
-    await restore();
-    assert.match(toasts().at(-1), /Schedule suppressed \(kept disabled until restored\)\./);
-    assert.doesNotMatch(toasts().at(-1), /deleted/);
-    await restore();
-    assert.match(toasts().at(-1), /Schedule suppressed \(kept disabled until restored\)\. Whether a task/);
-});
-
-test('Activity offers no Enable on a skill row held back by readiness alone', async (t) => {
+test('Activity treats skill provenance as an ordinary paused schedule', async (t) => {
     const { mount, routes, ws } = setup(t);
     emptyActivity(routes);
     routes.set(schedulesUrl, response({ tasks: [
@@ -651,10 +630,9 @@ test('Activity offers no Enable on a skill row held back by readiness alone', as
     ] }));
     await initActivity({ mount, ws }).refresh();
     const row = section(mount, 'schedules').querySelector('.activity-row');
-    assert.equal(row.querySelector('[data-act="schedule-toggle"]'), null);
-    assert.match(row.textContent, /disabled by skill readiness/);
-    // Delete stays (it suppresses) and is marked as a skill row for the dialog.
-    assert.equal(row.querySelector('[data-act="schedule-delete"]').dataset.managed, '1');
+    assert.equal(row.querySelector('[data-act="schedule-toggle"]').textContent, 'Enable');
+    assert.match(row.textContent, /from skill demo/);
+    assert.equal(row.querySelector('[data-act="schedule-delete"]').dataset.managed, undefined);
 });
 
 test('saved Pause with unreadable tree authority remains unknown in Activity and shared Restart', async (t) => {
@@ -675,6 +653,30 @@ test('saved Pause with unreadable tree authority remains unknown in Activity and
         openConfirmDialog: async (options) => { body = options.body; return false; } });
     assert.equal(result, 'cancelled');
     assert.match(body, /Pause status could not be read/);
+});
+
+test('Restart warns about a pausing child of a parked root, once, until it settles', async (t) => {
+    const { confirmAndSendRestart } = await import('../modules/chat_activity.js');
+    const { routes, ws } = setup(t);
+    const root = { activity_id: 'root', phase: 'budget_paused' };
+    const child = { activity: 'working', transition: 'pausing', confirmed: true };
+    const snapshot = (members, extra = {}) => ({ active_chat_activities: [root],
+        active_chat_activities_complete: true, works_complete: true,
+        works: [projectedWork('root', 'paused', { members: { states: members } })], ...extra });
+    const read = async (body) => {
+        routes.set(backgroundUrl, response(body));
+        let words;
+        assert.equal(await confirmAndSendRestart({ ws,
+            openConfirmDialog: async (options) => { words = options.body; return false; } }), 'cancelled');
+        return words;
+    };
+    assert.match(await read(snapshot({ child })), /1 task is still pausing/);
+    assert.match(await read(snapshot({ child }, { active_chat_activities: [root,
+        { activity_id: 'child', phase: 'budget_pausing' }] })), /1 task is still pausing/);
+    assert.match(await read(snapshot({ child, sibling: child })), /2 tasks are still pausing/);
+    assert.doesNotMatch(await read(snapshot({ child: { ...child, activity: 'paused', transition: 'none' } })), /still pausing/);
+    assert.match(await read(snapshot({ child: { ...child, confirmed: false } })), /Pause status could not be read/);
+    assert.match(await read(snapshot({}, { works_complete: false })), /Pause status could not be read/);
 });
 
 test('Activity Resume follows the root census while owner Pause is settling', async (t) => {
@@ -1315,26 +1317,33 @@ test('Storage tray says why a run did not start and stops a run on Stop', async 
     storage.destroy();
 });
 
-test('Activity says why a held Continue waits, keeps its Resume, and never calls it a budget pause (#1721)', async (t) => {
+test('Activity keeps a held Continue blocker readable without offering Pause or Resume (#1721)', async (t) => {
     const { mount, routes, ws } = setup(t);
     emptyActivity(routes);
     routes.set(queueUrl, response({ queue: { running: [], pending: [{ id: 'pred-1-s1', task: {
         id: 'pred-1-s1', root_task_id: 'pred-1-s1', title: 'Continue Friday report',
         _budget_pause_hold: { reason: 'continuation_writer_unsettled', selected: false, dispatchable: false,
             detail: "the interrupted task's own work is not proven settled; this Continue waits",
-            predecessor_task_id: 'pred-1', blockers: [{ kind: 'delegated_run', task_id: 'pred-1', run_id: 'run-leaf',
-                invocation_id: '', state: 'running', stop_outcome: '', source: 'delegated_subagent' }] } } }] } }));
+            predecessor_task_id: 'pred-1', blockers: [{ kind: 'delegated_run', task_id: 'pred-1', run_id: '',
+                invocation_id: 'unbound', state: 'stop_unknown', stop_outcome: 'pending_invocation_unbound',
+                source: 'delegated_subagent' }] } } }] } }));
     routes.set(backgroundUrl, response({ bg_consciousness_enabled: false, works: [projectedWork('pred-1-s1', 'waiting', {
         because: [{ code: 'earlier_work_unconfirmed', text: "Continue starts when the earlier attempt's work is confirmed finished" }],
-        controls: [{ action: 'resume', target: 'pred-1-s1' }] })] }));
+        controls: [{ action: 'stop', target: 'pred-1-s1' }] })] }));
     const activity = initActivity({ mount, ws });
     await activity.refresh();
     const row = section(mount, 'queue').querySelector('.activity-row');
     assert.match(row.querySelector('.activity-sub').textContent,
-        /^Waiting · Continue starts when the earlier attempt&#39;s work is confirmed finished$/);
+        /^Waiting · Continue starts when the earlier attempt&#39;s work is confirmed finished · a delegated start has an unknown outcome \(no run was recorded\)$/);
     assert.ok(row.classList.contains('activity-held'), 'its cause wraps instead of ending in an ellipsis');
     assert.doesNotMatch(row.textContent, /paused \(budget\)/);
     const control = row.querySelector('[data-act="task-control"]');
-    assert.equal(control.getAttribute('data-budget-paused'), '1', 'the existing Resume rechecks it');
+    assert.equal(control.getAttribute('data-resume'), null, 'the wait releases itself');
+    assert.equal(control.getAttribute('data-budget-paused'), null, 'a writer wait is not a Pause');
+    // An older queue reply cannot keep displaying a blocker after the work moved on.
+    routes.set(backgroundUrl, response({ bg_consciousness_enabled: false,
+        works: [projectedWork('pred-1-s1', 'queued')] }));
+    await activity.refresh();
+    assert.equal(section(mount, 'queue').querySelector('.activity-sub').textContent, 'Queued');
     activity.destroy();
 });

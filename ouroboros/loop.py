@@ -57,7 +57,8 @@ from ouroboros.loop_tool_execution import (
     reclaim_trace_refs,  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
 )
 from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY, TRANSPORT_DEATHS_KEY, call_llm_with_retry, emit_llm_usage_event, forced_response_is_incomplete, forced_response_parts, provider_no_call_source  # noqa: F401 -- the loop module keeps its historical import surface for the L-B leaves
-from ouroboros.transcript_prefix import observe_send as _observe_transcript_send
+from ouroboros.preflight_receipts import canonical_data_root
+from ouroboros.transcript_prefix import count_history_change, observe_send as _observe_transcript_send
 from ouroboros.transcript_prefix import retire_main_reasoning as _retire_main_reasoning  # noqa: F401 -- shared send boundary
 from ouroboros.delegate_hold import (
     close_hold as _delegate_hold_close,
@@ -378,22 +379,22 @@ def _record_transcript_prefix(ctx, messages, round_idx, accumulated_usage,
 
     This boundary captures canonical authored-view exposure; physical provider
     projections stay in request artifacts. Within one execution, whole-request
-    prefixes enable cache reuse (#906). Compaction sanctions its rewrite via
-    ``transcript_prefix.sanction_rewrite``; other prefix breaks (including actual
-    overflow reprojections) are recorded in ``prompt_prefix_breaks``, never gated.
+    prefixes enable cache reuse (#906). Every break, actual overflow reprojections
+    included, is counted in ``prompt_prefix_breaks``; a seam's
+    ``transcript_prefix.sanction_rewrite`` names its origin, never exempts it. Never gated.
     """
     from ouroboros.tools.compact_context import record_context_view
 
+    # Before the view replaces it: a restored slot's baseline is its context observation.
+    fact = _observe_transcript_send(ctx, messages, round_idx=round_idx, tools=tool_schemas, usage=accumulated_usage)
     record_context_view(ctx, messages, tool_schemas, physical_capture=getattr(ctx, "_usable_main_capture", None))
     from ouroboros.context_input_selection import capture_historical_inputs
 
     capture_historical_inputs(ctx)
-    fact = _observe_transcript_send(ctx, messages, round_idx=round_idx, tools=tool_schemas)
     if not fact:
         return
     _emit_checkpoint_event(event_queue, task_id, drive_logs, fact)
-    if not fact["sanctioned_by"]:
-        accumulated_usage["prompt_prefix_breaks"] = int(accumulated_usage.get("prompt_prefix_breaks") or 0) + 1
+    count_history_change(accumulated_usage, fact, drive_root=canonical_data_root(ctx), task_id=task_id)
 
 
 def _measure_tool_result_batch(ctx, messages, schemas, *, round_id):
@@ -694,7 +695,7 @@ def run_llm_loop(
                 # Configured routes before any wait; an active episode owns its own outcome.
                 # Fallbacks and an owner-wait resend are author calls too. Their
                 # physical sender retains any late answer after this wait leaves.
-                with receiver_abandonable():
+                with receiver_abandonable(), working_checkpoint.model_call_scope(limit_ctx):
                     (msg, active_model, active_use_local, context_fit_plan, active_context_mode,
                      transport_wait) = _recover_failed_round(
                         limit_ctx, tools, msg, transport_wait, context_fit_plan=context_fit_plan,
@@ -712,13 +713,11 @@ def run_llm_loop(
             limit_ctx.active_model = ctx.active_model = active_model
             limit_ctx.active_use_local = ctx.active_use_local = active_use_local
             ctx.context_fit_plan, ctx.active_context_mode = context_fit_plan, active_context_mode
-            if (msg is None and str(accumulated_usage.get("_last_llm_error_kind") or "") == "llm_output_exhausted"
-                    and not provider_no_call_source(accumulated_usage, False)[0]):
-                # Output exhaustion is no outage (primary or configured candidate): no wait, no provider
-                # terminal; one host fact, then the next round decides under the round, time and money
-                # limits. A round holding an unresolved attempt keeps the recovery below (provider_no_call_source).
-                _append_or_merge_user_message(
-                    messages, _output_exhausted_notice(accumulated_usage.get("_last_llm_output_exhausted")))
+            from ouroboros import loop_output_exhaustion as output_recovery
+            if msg is None and (output_step := output_recovery.next_step(accumulated_usage)):
+                if output_step == "finish":
+                    return output_recovery.finish(limit_ctx)
+                # The episode owner persisted the facts with its informed allowance.
                 pending_no_tool_budget = True  # an unfinished no-tool round keeps the same budget tail (#1223)
                 continue
             if msg is None and transport_wait is not None and _transport_wait_step(

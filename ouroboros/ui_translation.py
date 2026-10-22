@@ -113,7 +113,7 @@ def _core_catalogs() -> Dict[str, Tuple[Dict[str, str], str]]:
     from ouroboros import project_dialogue as pd
 
     return {
-        "task.headline": (pd.OUTCOME_PHASE_HEADLINE,
+        "task.headline": ({**pd.OUTCOME_PHASE_HEADLINE, "quiet": pd.QUIET_RUN_HEADLINE},
                           "the one-word status headline of a task card (Working, Done, Failed…)"),
         "task.cause": (pd.TASK_CAUSE_PHRASES,
                        "one sentence under a finished task explaining why its answer was or was not signed off"),

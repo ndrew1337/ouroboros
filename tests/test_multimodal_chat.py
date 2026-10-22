@@ -133,6 +133,35 @@ class TestImageEviction:
         assert live == [f"shot-{idx}" for idx in range(prior + incoming - MAX_LIVE_IMAGE_BLOCKS, prior + incoming)]
         assert sum("[image evicted:" in block.get("text", "") for block in blocks) == prior + incoming - len(live)
 
+    def test_eviction_names_its_change_of_sent_history_and_a_fit_names_none(self):
+        """The evicted bytes were already sent: the next observation says who changed them."""
+        from types import SimpleNamespace
+
+        from ouroboros.loop_messages import _append_or_merge_user_content
+        from ouroboros.transcript_prefix import SANCTION_ATTR
+
+        for prior, origin in ((LIVE_IMAGE_BLOCKS_HIGH_WATER, "image_eviction"), (1, None)):
+            slot = SimpleNamespace()
+            messages = [{"role": "user", "content": [_image_block(str(idx))]} for idx in range(prior)]
+            _append_or_merge_user_content(messages, [_image_block("new")], slot=slot)
+            assert getattr(slot, SANCTION_ATTR, None) == origin
+
+    def test_a_tool_image_names_its_eviction_on_the_live_slot(self, monkeypatch):
+        """view_image and the host's auto-attach run on a staged copy; the stamp belongs to the live slot."""
+        from types import SimpleNamespace
+
+        from ouroboros.tools import vision
+        from ouroboros.transcript_prefix import SANCTION_ATTR
+
+        live = SimpleNamespace(messages=[{"role": "user", "content": [_image_block(str(idx))]}
+                                         for idx in range(LIVE_IMAGE_BLOCKS_HIGH_WATER)])
+        monkeypatch.setattr(vision, "_load_local_image_payload", lambda _ctx, _path, retain_original=False: (
+            {"base64": "QUFB", "mime": "image/png", "source_path": "/tmp/shot.png"}, ""))
+        staged = SimpleNamespace(messages=live.messages)
+        ok, _note = vision.attach_local_image_to_context(staged, "shot.png", stamp=live)
+        assert ok and getattr(live, SANCTION_ATTR, None) == "image_eviction"
+        assert getattr(staged, SANCTION_ATTR, None) is None
+
     def test_placeholder_includes_reviewable_path(self):
         from ouroboros.loop_messages import _evict_stale_image_blocks
 

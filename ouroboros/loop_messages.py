@@ -125,6 +125,7 @@ def _evict_stale_image_blocks(messages: List[Dict[str, Any]], *, incoming: int =
     placeholder carrying the caption and re-view path: the dialogue HORIZON
     survives while the heavy payload drops (P1 — granularity varies, history
     never silently vanishes). ``incoming`` reserves room for imminent blocks.
+    True when blocks were evicted: the caller names that change of sent history.
     """
     from ouroboros.context_budget import MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER
 
@@ -138,7 +139,7 @@ def _evict_stale_image_blocks(messages: List[Dict[str, Any]], *, incoming: int =
                 image_refs.append((m_idx, b_idx))
     total = len(image_refs) + max(0, int(incoming))
     if total <= LIVE_IMAGE_BLOCKS_HIGH_WATER:
-        return
+        return False
     for m_idx, b_idx in image_refs[:total - MAX_LIVE_IMAGE_BLOCKS]:
         content = messages[m_idx]["content"]
         block = content[b_idx]
@@ -153,10 +154,11 @@ def _evict_stale_image_blocks(messages: List[Dict[str, Any]], *, incoming: int =
             placeholder += f"; re-view: view_image path={source_path}"
         placeholder += "]"
         content[b_idx] = {"type": "text", "text": placeholder}
+    return True
 
 
 def _append_or_merge_user_content(
-    messages: List[Dict[str, Any]], content: Any, *, slot: Any = None, kind: str = "",
+    messages: List[Dict[str, Any]], content: Any, *, slot: Any = None, kind: str = "", stamp: Any = None,
 ) -> None:
     """Append user content without flattening multipart blocks.
 
@@ -165,13 +167,14 @@ def _append_or_merge_user_content(
     proves the tail absent; an unknown or sent tail stays intact. ``kind`` types
     the row at delivery (``context_budget.OWNER_WORDS_KIND``): a typed row is its
     own row, and nothing merges into a typed tail, so provenance never has to be
-    recovered from text.
+    recovered from text. ``stamp`` (else ``slot``) receives the eviction's origin.
     """
-    from ouroboros.transcript_prefix import unsent_in_previous_send
+    from ouroboros.transcript_prefix import sanction_rewrite, unsent_in_previous_send
 
     if isinstance(content, list) and any(
             isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content):
-        _evict_stale_image_blocks([*messages, {"content": content}])
+        if _evict_stale_image_blocks([*messages, {"content": content}]) and (stamp or slot) is not None:
+            sanction_rewrite(stamp or slot, "image_eviction")
     if kind or not (messages and unsent_in_previous_send(slot, messages[-1])
                     and set(messages[-1]) <= {"role", "content"}):
         # Typed words, unknown or sent content and any typed tail stay intact (slot-less producers too).
@@ -670,7 +673,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     """
     from ouroboros.context_runtime_facts import round_clock_fact
     from ouroboros.nanny_pacing import nanny_burn_fact
-    from ouroboros.transcript_prefix import reasoning_retirement_fact
+    from ouroboros.transcript_prefix import previous_cache_fact, reasoning_retirement_fact
 
     usage = ctx.accumulated_usage
     tool_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
@@ -681,17 +684,18 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     # The task's own anchor outranks comparable same-model witnesses; its largest accepted input floors W.
     anchor, anchor_round = usage.get("_context_anchor_input_tokens"), usage.get("_context_anchor_round")
     accepted = usage.get("_context_accepted_input_tokens") if measured else None
-    reading = usage.get("_context_window_reading_tokens") if measured else None
     from ouroboros.context_anchor import refused_input
     refused = refused_input(usage, getattr(ctx, "context_fit_plan", None)) if measured else None
     parts = [_round_fact(ctx, tool_ctx), f"mode {ctx.active_context_mode}", f"model {ctx.active_model}"]
     notes = [note for note in (f"largest accepted input {int(accepted):,}" if accepted else "",
                                f"refused at ~{int(refused):,}" if refused else "") if note]
     largest = f" ({'; '.join(notes)})" if notes else ""
-    if capacity is None and reading is not None and accepted:
-        parts.append(f"window above {int(accepted):,}: this model accepted that input, the stated {int(reading):,} is below it")
-    else:
-        parts.append(("window unknown" if capacity is None else f"window {int(capacity):,}") + largest)
+    from ouroboros.context_view_facts import window_fact, wake_facts
+    source = window_fact(getattr(ctx, "context_fit_plan", None), usage.get("_context_response_reserve_tokens")) if measured else ""
+    parts.append((source or ("window unknown" if capacity is None else f"window {int(capacity):,}")) + largest)
+    wake = wake_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)
+    if wake:
+        parts.append(wake)
     if target is not None:
         parts.append(f"target {int(target):,}")
     if estimate is None:
@@ -705,12 +709,10 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
         floor = int(usage.get("_context_response_reserve_tokens") or reserve or 0)
         parts.append(f"input ~{int(estimate):,} before this line ({how}) + reply reservation {int(reserve or 0):,}")
         # Known-window admission acts on this prediction; a reservation is no provider observation.
-        bound = int(accepted or 0) - int(estimate) - floor  # the window holds what it accepted
         parts.append(f"predicted free ~{int(capacity) - int(estimate) - floor:,}"
                      + (f" (reply floor {floor:,})" if floor != int(reserve or 0) else "")
                      if capacity is not None and refused is None else
-                     f"free at least ~{bound:,} (below an input this model accepted)"
-                     if anchor is not None and bound > 0 else "free unknown")
+                     "free unknown (acceptance established no reply room)")
         if target is not None:
             excess = int(estimate) + floor - int(target)
             parts.append((f"over target {excess:,}" if excess > 0 else f"target room {-excess:,}")
@@ -722,16 +724,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
 
     # The mind's own folds stay countable to it (17.10.2026: after 42 folds it told the owner it never folded).
     parts.append(f"own notes in view {sum(1 for row in ctx.messages if (_capsule_metadata(row)[1] or {}).get('authorship') == 'actor')}")
-    previous = usage.get("_last_round_cache_usage") or {}
-    read, total = previous.get("cached_tokens"), previous.get("prompt_tokens")
-    share = (f"{int(read):,}/{int(total):,} tokens ({100 * read / total:.1f}%)"
-             if read is not None and total is not None and total > 0 else "unknown")
-    cache = f"previous usable input cache {share}"
-    if previous:
-        cache += f" [round {previous['round']}, {previous.get('provider') or 'provider unknown'}, {previous.get('model') or 'model unknown'}]"
-        written = previous.get("cache_write_tokens")
-        cache += f"; write {int(written):,} tokens" if written is not None else "; write unknown"
-    parts.append(cache)
+    parts.append(previous_cache_fact(usage))
     cost = usage.get("cost")
     parts.append((f"own recorded cost ${float(cost):.2f}" + (" (total not final)" if usage.get("cost_final") is False else ""))
                  if cost is not None else "own cost unknown")
@@ -862,6 +855,7 @@ def _context_components(ctx: Any, *, measured: bool) -> list:
     """Largest blocks, complete units and schemas, on the same calibrated basis."""
     from ouroboros.context_compaction import context_units
     from ouroboros.context_fit import estimate_context_prompt_tokens
+    from ouroboros.context_view_facts import block_label
 
     density = float(ctx.accumulated_usage.get("_context_measurement_density") or 1.0) if measured else 1.0
     units = context_units(ctx.messages, scope="dialogue", measurement_density=density)
@@ -873,7 +867,9 @@ def _context_components(ctx: Any, *, measured: bool) -> list:
         content = message.get("content")
         chunks = [{**message, "content": [block]} for block in content] if message.get("role") == "system" and isinstance(content, list) else [message]
         for j, chunk in enumerate(chunks):
-            sizes.append((f"{message.get('role', 'message')}[{i}:{j}]", int(estimate_context_prompt_tokens([chunk]) * density)))
+            block = chunk.get("content")
+            label = block_label(message, i, block[0] if isinstance(block, list) and block else block, ctx.context_fit_plan)
+            sizes.append((label, int(estimate_context_prompt_tokens([chunk]) * density)))
     sizes.append(("tool schemas", int(estimate_context_prompt_tokens([], ctx.tool_schemas) * density)))
     return sorted(sizes, key=lambda item: item[1], reverse=True)[:3]
 

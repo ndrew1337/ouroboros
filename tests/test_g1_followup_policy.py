@@ -33,7 +33,6 @@ def world(tmp_path, monkeypatch):
     pending = []
     queue.init_queue_refs(pending, {}, {'value': 0})
     monkeypatch.setenv('TOTAL_BUDGET', '1000')
-    monkeypatch.setattr(schedules, '_last_skill_schedule_sync', float('inf'))
     write_task_result(root, ORIGIN, 'running', root_task_id=ORIGIN,
                       billing_group=BINDING, deadline_at=DEADLINE)
     return ctx, root, pending
@@ -493,7 +492,7 @@ def test_followup_disable_is_an_ordinary_disable_and_restore_lifts_only_it(world
     registered = register(world)
     queue.mutate_scheduled_task('disable', registered['id'], reason='Independent owner disable', actor='owner:test', drive_root=root)
     current = row(root, registered['id'])
-    # Only skill-manifest rows keep a resync-proof suppression marker.
+    # Disabling changes future dispatch without adding a legacy skill marker.
     assert current['enabled'] is False and 'manual_override' not in current
     assert schedules.schedule_lifecycle_status(current) == 'disabled'
     queue.check_scheduled_tasks()
@@ -506,16 +505,17 @@ def test_followup_disable_is_an_ordinary_disable_and_restore_lifts_only_it(world
 
 
 def test_context_and_continue_expose_held_obligations_without_auto_release(world):
-    from ouroboros.context import _scheduled_tasks_digest
+    from supervisor.schedule_view import digest
+    from datetime import datetime, timezone
     from ouroboros.owner_continue import work_order_text
     _, root, _ = world
     registered = register(world)
     queue.check_scheduled_tasks()
     stop(root)
     queue.check_scheduled_tasks()
-    digest = _scheduled_tasks_digest(SimpleNamespace(drive_path=lambda rel: root / rel))
-    assert not digest['active'] and digest['held'][0]['id'] == registered['id']
-    assert digest['held'][0]['status'] == 'consumed' and digest['held'][0]['hold_persisted']
+    view = digest(schedules.load_schedule_store(root)['tasks'], datetime.now(timezone.utc))
+    assert not view['one_shots'] and view['attention'][0]['id'] == registered['id']
+    assert view['attention'][0]['status'] == 'consumed' and view['attention'][0]['hold_persisted']
     text = work_order_text(ORIGIN, 'owner_restart', {}, deadline_at=DEADLINE)
     assert 'manage_schedules' in text and 'does not release their holds' in text and DEADLINE in text
 
@@ -543,24 +543,15 @@ def test_exact_restore_replay_cannot_lift_separate_suppression(world, suppressio
         if not later:
             first = action(suppression)
             assert first['changed']
-            if suppression == 'delete':
-                # Never fired: Delete really removes it; nothing restorable remains.
-                assert first['status'] == 'deleted' and first['schedule'] is None
-                assert action('restore', expected_hold_id=held)['status'] == 'not_found'
-                return
         assert action('restore', expected_hold_id=held)['status'] == 'hold_released'
         if later:
             outcome = action(suppression)
             assert outcome['changed']
-            if suppression == 'delete':
-                assert outcome['status'] == 'deleted'
-                replay = action('restore', expected_hold_id=held)
-                assert replay['status'] == 'not_found' and not replay['changed']
-                return
         before = row(root, sid)
         replay = action('restore', expected_hold_id=held)
         assert not replay['changed'], replay
         assert row(root, sid) == before and not before['enabled']
+        assert bool(before.get('delete_requested_at')) is (suppression == 'delete')
         # The separate, explicitly generic Restore remains available.
         assert action('restore')['ok']
         assert row(root, sid)['enabled']

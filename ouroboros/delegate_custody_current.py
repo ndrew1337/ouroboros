@@ -54,7 +54,7 @@ def collection_pending(entry) -> bool:
     """Applicable technical duties on an observed terminal, independent of money or disposition alone."""
     if entry is None:
         return False
-    capture = bool(entry.execution_root or entry.resource_ref.get("workspace_kind") == "directory")
+    capture = entry.mode != "plan" and bool(entry.execution_root or entry.resource_ref.get("workspace_kind") == "directory")
     return bool(entry.terminal_source and (not entry.ledger_recorded or not entry.settled
         or not entry.output_source or not entry.output_complete
         or entry.output_terminal_sha != entry.terminal_source.get("sha256")
@@ -63,7 +63,7 @@ def collection_pending(entry) -> bool:
 
 def _held(entry) -> bool:
     return (not entry.settled or entry.project_owned or collection_pending(entry)
-            or ((entry.snapshot_id or (entry.resource_ref.get("workspace_kind") == "directory"
+            or (entry.mode != "plan" and (entry.snapshot_id or (entry.resource_ref.get("workspace_kind") == "directory"
                                       and entry.resource_ref.get("strategy") == "copy"))
                 and not entry.patch_disposed))
 

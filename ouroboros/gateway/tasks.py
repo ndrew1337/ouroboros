@@ -38,7 +38,7 @@ from ouroboros.gateway.task_pause import api_task_pause, owner_tree_control_rout
 from ouroboros.gateway.task_decision import api_decision_answer  # noqa: F401
 from ouroboros.gateway.task_archive import (
     chat_media_identity, directory_archives, plain_segments, serve_directory_archive, serve_task_file,
-    task_artifact_location, recorded_identity, serve_task_source,
+    task_artifact_location, recorded_identity, serve_task_source, serve_wrap_up_document,
 )
 from ouroboros.confined_files import root_spellings
 from ouroboros.task_custody import task_artifact_stores
@@ -917,6 +917,9 @@ def _task_get_response(request: Request) -> JSONResponse:
     if isinstance(payload.get("artifacts"), list):  # what ``?archive=<dir>`` would stream now, per top-level dir
         payload["artifact_archives"] = directory_archives(task_artifact_stores(drive_root, task_id),
                                                           payload["artifacts"], anchor=drive_root)
+    from ouroboros.owner_stop_receipt import wrap_up_document_view  # named only: written on ``?wrap_up=``
+    if document := wrap_up_document_view(data):
+        payload["wrap_up_document"] = document
     breakdown_view = _task_cost_breakdown_view(drive_root, data)
     if breakdown_view is not None:
         payload["cost_breakdown"] = breakdown_view
@@ -927,7 +930,8 @@ def api_task_artifact(request: Request):
     """Serve one task file read-only from its canonical or OWN child store (``task_archive``): a bare
     name selects only a top-level file (several nested matches: 409 ``artifact_name_ambiguous`` naming
     their ``relpaths``), ``?relpath=a/b/{name}`` is exact, ``?archive=<dir>`` with ``{name}`` =
-    ``<basename>.zip`` streams a recorded directory; bytes leave only through ``serve_task_file``."""
+    ``<basename>.zip`` streams a recorded directory, ``?wrap_up=<Stop request>`` writes the detail's
+    ``wrap_up_document`` on read; a file's bytes leave only through ``serve_task_file``."""
     try:
         task_id = validate_task_id(request.path_params.get("task_id"))
     except ValueError as exc:
@@ -942,9 +946,14 @@ def api_task_artifact(request: Request):
         return json_error("relpath must be store-relative plain segments ending in the name, without source",
                           400, reason_code="artifact_relpath_invalid", task_id=task_id, artifact=name)
     drive_root = request_drive_root(request)
-    if (archive := request.query_params.get("archive")) is not None:
-        return serve_directory_archive(drive_root, task_id, name, archive,
-                                       other_selectors=source is not None or relpath is not None)
+    # One selector per request: ``archive`` and ``wrap_up`` refuse each other and relpath/source.
+    archive, stop = request.query_params.get("archive"), request.query_params.get("wrap_up")
+    if archive is not None:
+        return serve_directory_archive(drive_root, task_id, name, archive, other_selectors=(
+            source is not None or relpath is not None or stop is not None))
+    if stop is not None:
+        return serve_wrap_up_document(drive_root, task_id, name, stop,
+                                      other_selectors=source is not None or relpath is not None)
     stores, spellings = task_artifact_stores(drive_root, task_id), root_spellings(drive_root)
     path = None if relpath is not None else artifact_store.resolve_chat_media_path(drive_root, task_id, name)
     if path is not None:  # content-addressed chat media: the canonical store, bytes that hash to the name
@@ -1376,7 +1385,7 @@ async def api_task_resume(request: Request) -> JSONResponse:
         # exact-continuation refusals (#1196): the task stays paused
         "budget_still_exhausted", "root_hard_cap_exhausted", "cancel_intent_active",
         "deadline_passed", "lifetime_exhausted", "root_still_paused", "resume_already_granted",
-        "restart_no_resume", "pause_record_missing", "pause_source_missing", "pause_source_unreadable",
+        "restart_no_resume", "update_in_progress", "pause_record_missing", "pause_source_missing", "pause_source_unreadable",
         "pause_record_unreadable", "grant_not_recorded", "snapshot_not_persisted",
         "monetary_authority_unavailable", "cancellation_authority_unavailable", "task_terminal",
         # holds and root-grant refusals (#1196, owner Q9): the row stays paused/held

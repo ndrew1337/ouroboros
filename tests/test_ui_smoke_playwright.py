@@ -2466,7 +2466,7 @@ def test_ui_smoke_live_cards_keep_usable_geometry_at_depth_and_in_project_panel(
         assert all(card["activityTitle"] is None for card in facts["cardFacts"]), facts
         deepest = page.locator('.chat-live-card[data-task-id="layout-child-10"]')
         assert deepest.locator(':scope > .chat-live-summary-button [data-live-title]').inner_text() == "pty-tests"
-        assert "Agent model: gemini-3.6-flash" in deepest.locator(
+        assert "gemini-3.6-flash" in deepest.locator(
             ':scope > .chat-live-foot [data-live-meta]').inner_text()
         deepest.locator(":scope > [data-live-summary-button] [data-live-disclosure]").click()
         line_toggle = deepest.locator(":scope > [data-live-timeline] .chat-live-line-toggle").last

@@ -216,6 +216,13 @@ def prepare_terminal_send_event(
     custody_notice = terminal_custody_notice_text(usage)
     if not presence and custody_notice:
         send_event["terminal_custody_notice"] = custody_notice
+    if not presence:  # Wrap up's receipt: its own row, one Stop identity on every carrier
+        from ouroboros.owner_stop_receipt import retained_work_fields
+
+        try:  # a receipt that cannot render never holds the answer
+            send_event.update(retained_work_fields(usage))
+        except Exception:
+            log.warning("Wrap up receipt row unavailable for %s", task.get("id"), exc_info=True)
     if origin not in _STAMPED_TERMINAL_ORIGINS:
         return send_event
     canonical_root = pathlib.Path(task.get("budget_drive_root") or env_drive_root)
@@ -691,9 +698,9 @@ def sealed_final_prompt_section(sealed_final: Dict[str, Any] | None) -> str:
     heading, presence_facts, internal_text = "Final result text (submitted for delivery):\n", "", ""
     presence = sealed_final.get("presence_delivery")
     if sealed_final.get("wake_silent") is True:
-        heading, final_text = "Final result text:\n", "(none: the wake finished silently; no model words were submitted)"
+        heading, final_text = "Final result text:\n", "(none: the run finished silently; no model words were submitted)"
         if raw := str(sealed_final.get("internal_terminal_text") or ""):
-            internal_text = "Internal wake result (retained, never sent to the owner):\n" + truncate_review_artifact(
+            internal_text = "Internal run result (retained, never sent to the owner):\n" + truncate_review_artifact(
                 raw, limit=_SEALED_FINAL_TEXT_PROMPT_CHARS) + "\n"
     if isinstance(presence, dict):
         introduction = (
@@ -863,6 +870,10 @@ def build_swarm_efficiency(env: Any, task: Dict[str, Any]) -> Dict[str, Any] | N
             return None
         facts = load_swarm_rollup(drive_root, task_id)
         child_ids = facts.get("child_ids", [])
+        from ouroboros.swarm_receipt import publish
+        if (not (task.get("parent_task_id") or metadata.get("parent_task_id"))
+                and str(task.get("root_task_id") or metadata.get("root_task_id") or task_id) == task_id):
+            publish(task.get("budget_drive_root") or drive_root, task_id, task=task)
         if not child_ids:
             if swarm_intent:
                 # Absence proves neither a planned count nor a plain-task intent.

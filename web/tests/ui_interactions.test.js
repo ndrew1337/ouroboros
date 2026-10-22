@@ -129,12 +129,42 @@ test('native activation has one owner; external select is silent and never steal
     assert.equal(controller.select('three'), true);
     assert.equal(doc.activeElement, tabs[0]);
     assert.deepEqual(changed, ['two']);
+    strip.setAttribute('inert', '');
+    assert.equal(controller.select('one'), true, 'programmatic route selection succeeds while drawer closes over inert page');
+    strip.emit('click', { target: tabs[2] });
+    assert.equal(tabs[0].getAttribute('aria-selected'), 'true', 'user clicks on an inert strip are ignored');
+    strip.removeAttribute('inert');
     assert.equal(controller.select('unknown'), false);
     controller.destroy();
     assert.equal(controller.select('one', { focus: true }), false);
     strip.emit('click', { target: tabs[0] });
     assert.equal(strip.listenerCount(), 0);
     assert.deepEqual(changed, ['two']);
+});
+
+test('external tab selection works under a hidden or inert page without activating or focusing it', () => {
+    for (const attribute of ['hidden', 'inert']) {
+        const { doc, node, strip, tabs, changed, controller } = tabFixture();
+        const page = node('main', { [attribute]: '' });
+        page.append(strip);
+        const before = doc.activeElement;
+        assert.equal(controller.select('two'), true);
+        assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
+        assert.equal(doc.activeElement, before);
+        assert.equal(controller.select('three', { focus: true }), false);
+        strip.emit('click', { target: tabs[2] });
+        strip.emit('keydown', { target: tabs[1], key: 'ArrowRight' });
+        assert.deepEqual(changed, []);
+        assert.equal(tabs[1].getAttribute('aria-selected'), 'true');
+        for (const attr of ['hidden', 'inert', 'aria-disabled']) {
+            tabs[2].setAttribute(attr, attr === 'aria-disabled' ? 'true' : '');
+            assert.equal(controller.select('three'), false);
+            tabs[2].removeAttribute(attr);
+        }
+        tabs[2].disabled = true;
+        assert.equal(controller.select('three'), false);
+        controller.destroy();
+    }
 });
 
 test('tab keys skip disabled/hidden choices, ignore nested strips and modifiers', () => {

@@ -1,39 +1,27 @@
 """Private checking copies for reviewer seats with configured technical rights (#1609).
 
-A reviewer whose configured access is ``workspace_write`` or ``full`` works in its
-OWN folder. A Git or skill subject is frozen ONCE per wave (``freeze_checking_source``),
-before any seat starts, so seats dispatched on either side of an author edit read the
-same input; an ordinary folder is read live (owner decision 2026-10-17, 1A), so its
-seats see an author edit made during their review:
+A ``workspace_write`` or ``full`` reviewer works in its OWN folder. Git and skill subjects
+freeze ONCE per wave (``freeze_checking_source``), before any seat starts. Ordinary folders
+stay live (owner decision 2026-10-17, 1A); those seats see concurrent author edits.
+Git ``index`` freezes the real staged index (the commit gate's subject); ``worktree`` freezes
+tracked/untracked files through a private index, over HEAD. Ignored ``.review-drive`` evidence
+is copied into a retained view at that moment. An ordinary ``workspace`` is read in place.
 
-- a Git root freezes a tree (``index``: the real staged index, the commit gate's
-  subject; ``worktree``: the live tracked/untracked tree through a private index)
-  over its HEAD, with the ignored evidence its sessions read (``.review-drive``)
-  copied at that moment into a retained view;
-- an ordinary folder is not copied: it is read in place (``workspace``).
+``prepare_seat_area`` keys a seat's copy by its physical operation: an independent Git clone
+(own refs, stash, config and hooks, source objects borrowed read-only), with HEAD at the subject's
+parent and index/worktree at the frozen tree; a skill's retained-view copy; or an empty working
+folder beside a workspace. The frozen tree object, original root and retained view stay readable.
+Rejoining an operation keeps its copy unchanged; remaking one uses the frozen evidence views.
 
-Each seat then gets a copy keyed by its physical operation
-(``prepare_seat_area``): an independent clone (its own refs, stash, config and
-hooks; the source's objects borrowed read-only) whose HEAD is the subject's
-parent and whose index and worktree hold the frozen tree, a copy of a skill
-payload's retained view, or an empty working folder beside a workspace. A frozen
-subject stays readable beside it: the frozen tree object, the original root and the
-retained view. A rejoin of the same operation reuses the
-copy as the reviewer left it, never re-frozen or replaced; a copy remade later
-gets the frozen evidence views, never the root's current evidence.
-
-Nothing a seat changes is applied anywhere. When its run is terminal,
-``capture_seat_evidence`` retains the copy's whole delta (a binary patch for Git;
-changed files, same-stat ones compared by content, and typed entry metadata for a
-skill copy; none for a workspace folder) and the reviewer's files under
-``.review-evidence/`` without a byte bound,
-writes the receipt, then deletes a one-shot copy, whatever process census the engine
-reports: a copy lives only as long as its review (owner decision 2026-10-12). A capture
-with named gaps still releases; one that could not list or read a path keeps the copy
-for ``prune_review_checkouts``. A thread's copy stays bound to its thread; a new turn
-first captures an unobserved previous turn. Git's inventory omits untracked special
-entries, ignored outputs outside ``.review-evidence/`` (listed, not retained) and frozen
-``.review-drive`` inputs. A full-access copy is not an OS sandbox.
+Nothing a seat changes is applied. At terminal, ``capture_seat_evidence`` retains the whole
+Git binary delta, or changed skill files (same-stat content compared) plus typed entry metadata;
+workspace folders have no delta. It also retains ``.review-evidence/`` without a byte bound,
+writes a receipt, then deletes a one-shot copy regardless of the engine's process census
+(owner decision 2026-10-12: copies live only as long as reviews). Named gaps still release;
+unlistable/unreadable paths keep the copy for ``prune_review_checkouts``. A thread's copy stays
+bound; its next turn first captures an unobserved prior turn. Git omits untracked special entries,
+ignored outputs outside ``.review-evidence/`` (listed, not retained) and frozen ``.review-drive``
+inputs. A full-access copy is not an OS sandbox.
 """
 
 from __future__ import annotations
@@ -50,15 +38,16 @@ import subprocess
 import uuid
 from typing import Any, Dict, List, Mapping, Optional
 
+from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME, scratch_fact
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
 log = logging.getLogger(__name__)
 
-EVIDENCE_DIRNAME = ".review-evidence"
 # Ignored views a reviewer session reads from its root (review_evidence).
 _IGNORED_EVIDENCE_DIRS = (".review-drive",)
 # The named-evidence bound an evidence-only investigation passes; a named gap keeps its
-# copy. Reviewer seats keep whole outputs: their copy goes only after its delta is kept.
+# copy. Reviewer seats and candidate runs keep whole outputs, streamed: a copy goes only
+# after what it named is kept.
 EVIDENCE_RETAIN_BYTES = 64 * 1024 * 1024
 SUBJECT_INDEX, SUBJECT_WORKTREE = "index", "worktree"
 # Capture statuses that are a receipt: the copy they describe may go.
@@ -390,8 +379,8 @@ def bound_directory_source(folder: Any, *, data_root: Any, expected_hash: str, c
     return {"kind": "directory", "root": str(folder), "view": str(view), "content_hash": str(expected_hash)}
 
 
-def checking_instructions(area: str, source: Mapping[str, Any], root: str = "") -> str:
-    """What a writable reviewer seat is told about its copy and the pristine subject."""
+def checking_instructions(area: str, source: Mapping[str, Any], root: str = "", scratch: str = "") -> str:
+    """What a writable reviewer seat is told about its copy, the pristine subject and its granted ``scratch``."""
     if source.get("kind") == "git_tree":
         pristine = (f"The frozen subject is tree {source.get('tree')} over parent "
                     f"{source.get('parent') or '(none)'}: your copy starts with HEAD at that parent and the "
@@ -414,8 +403,9 @@ def checking_instructions(area: str, source: Mapping[str, Any], root: str = "") 
         "to the reviewed candidate or creates an obligation to apply it, and your verdict is about the "
         f"subject, not about your edits. {pristine} Put any file worth keeping (logs, outputs, "
         f"reproductions) under {EVIDENCE_DIRNAME}/ in your {place}: the host retains {kept} as evidence "
-        f"before releasing or refreshing the {place}. Do not write the original root or any other "
-        "project; full access, where granted, is not an OS sandbox."
+        f"before releasing or refreshing the {place}. Disposable process state (test scratch, "
+        f"package-manager temporaries) goes outside every Git working tree ({scratch_fact(granted=scratch)}). Do not "
+        "write the original root or any other project; full access, where granted, is not an OS sandbox."
     )
 
 
@@ -439,15 +429,40 @@ def _retain_files(area: pathlib.Path, paths: List[str], files_dir: pathlib.Path,
     return kept
 
 
+def named_evidence_witness(area: pathlib.Path) -> str:
+    """Stat identity of the copy's evidence folder (paths, types, sizes, times); "" when it cannot be
+    listed. A retained summary is reused only while it is unchanged. Not a byte proof: it assumes the
+    run's processes stopped writing, so a same-size rewrite within one timestamp tick, or a write
+    after the final check, goes unseen."""
+    rows: List[str] = []
+    try:
+        declared = area / EVIDENCE_DIRNAME
+        seen = declared.lstat()
+        rows.append(f"{EVIDENCE_DIRNAME}\0{seen.st_mode}\0{seen.st_size}\0{seen.st_mtime_ns}\0{seen.st_ctime_ns}")
+        if declared.is_symlink() or not declared.is_dir():
+            return hashlib.sha256(rows[0].encode()).hexdigest()  # never walk a linked root
+        for current, dirs, files in os.walk(area / EVIDENCE_DIRNAME, onerror=_raise_walk_error, followlinks=False):
+            for name in sorted(dirs + files):
+                seen = (pathlib.Path(current) / name).lstat()
+                rows.append(f"{(pathlib.Path(current) / name).relative_to(area).as_posix()}\0{seen.st_mode}\0"
+                            f"{seen.st_size}\0{seen.st_mtime_ns}\0{seen.st_ctime_ns}")
+    except OSError:
+        return ""
+    return hashlib.sha256("\n".join(sorted(rows)).encode("utf-8", "surrogateescape")).hexdigest()
+
+
 def retain_named_evidence(area: pathlib.Path, files_dir: pathlib.Path, budget: List[float],
-                          gaps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                          gaps: List[Dict[str, Any]], *, product_paths=()) -> List[Dict[str, Any]]:
     """Retain declared checking outputs independently of product-patch filters.
 
     Links are not dereferenced: a linked output is a gap and keeps the working
     copy, not a receipt claiming its target's bytes were retained. So is an entry
     that is neither a file nor a folder; a folder that cannot be listed raises.
+    Baseline-owned ``product_paths`` belong to capture, including symlinks; never retain them here.
     """
     declared = area / EVIDENCE_DIRNAME
+    if EVIDENCE_DIRNAME in product_paths and (declared.is_symlink() or not declared.is_dir()):
+        return []
     if declared.is_symlink():
         gaps.append({"path": EVIDENCE_DIRNAME, "reason": "evidence_symlink"})
         return []
@@ -460,6 +475,8 @@ def retain_named_evidence(area: pathlib.Path, files_dir: pathlib.Path, budget: L
             for name in sorted(dirs + files):
                 path = pathlib.Path(current) / name
                 relative = path.relative_to(area).as_posix()
+                if relative in product_paths:
+                    continue
                 if path.is_symlink():
                     gaps.append({"path": relative, "reason": "evidence_symlink"})
                 elif path.is_file():
@@ -874,14 +891,15 @@ def bind_checking_thread(data_root: Any, task_id: str, seat: str, thread_id: str
 
 def session_checking(gateway: Any, *, custody_drive: Any, task_id: str, operation_id: str, root: str,
                      source: Optional[Mapping[str, Any]], shape: Any, thread_seat: str = "",
-                     thread_id: str = "") -> Dict[str, Any]:
+                     thread_id: str = "", route_id: str = "") -> Dict[str, Any]:
     """Execution binding, instructions and custody facts of ONE writable reviewer seat.
 
     Typed refusals happen before any paid stamp or POST: no frozen source, an
     engine that cannot bind a private execution root, or a copy that could not
     be made never fall back to running in the author's root or to read-only.
     ``thread_seat`` names a sticky thread's persistent clone instead (its turns
-    carry no execution root: the thread owns it).
+    carry no execution root: the thread owns it). A run seat on ``route_id`` gets the
+    scratch and download-cache folders its engine negotiates (``seat_service_directories``).
     """
     from ouroboros.delegate_registration_policy import INVESTIGATION_AUTHORITY
     from ouroboros.review_execution import ReviewRouteUnavailable
@@ -925,10 +943,15 @@ def session_checking(gateway: Any, *, custody_drive: Any, task_id: str, operatio
                                          code="review_checking_copy_unavailable") from exc
         if shape.access == "full":
             gateway.ensure_full_access(str(root))
+    from ouroboros.review_session_preparation import seat_environment_facts, seat_service_directories
+
+    service = seat_service_directories(gateway, route_id, shape, custody_drive, task_id, operation_id, area, thread_seat)
     execution = {"isolation": "live", "delegated": True, "workspaceRoot": area,
-                 **({"workspaceKind": "directory"} if source.get("kind") != "git_tree" else {})}
+                 **({"workspaceKind": "directory"} if source.get("kind") != "git_tree" else {}),
+                 **({"auxiliaryWritableRoots": list(service.roots)} if service.roots else {})}
     return {**thread_binding, "execution": execution,
-            "instructions": CHECKING_REVIEWER_INSTRUCTIONS + checking_instructions(area, source, str(root)),
+            "instructions": (CHECKING_REVIEWER_INSTRUCTIONS + checking_instructions(area, source, str(root), service.scratch)
+                             + seat_environment_facts(area, source, custody_drive, service)),
             "custody": {"authority_source": INVESTIGATION_AUTHORITY, "execution_root": area,
                         "target_root": str(root)}}
 

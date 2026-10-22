@@ -55,8 +55,8 @@ async def api_schedules_upsert(request: Request) -> JSONResponse:
                 return json_error(err, 400)
             trigger = {"type": "cron", "expr": expr}
         elif trigger_type == "once":
-            # One-shot records (schedule_followup) round-trip through this upsert
-            # when the owner toggles/edits them from the Schedules surface.
+            # One-shot definitions use the same timestamp parser as task-authored
+            # follow-ups; lifecycle controls use the dedicated action endpoint.
             from ouroboros.deadline_utils import parse_deadline_ts
 
             instant = parse_deadline_ts(str(trigger.get("run_at") or "").strip())
@@ -95,10 +95,10 @@ async def api_schedules_upsert(request: Request) -> JSONResponse:
         enabled = _enabled_value(body)
         if isinstance(enabled, str):
             return json_error(enabled, 400)
-        # Only the fields the owner authors here. Provenance, run history, the
-        # consumed receipt and a skill row's suppression marker belong to the
-        # runtime and are merged from the CURRENT row inside the write lock —
-        # reading them here would merge a snapshot that is already stale.
+        # Only the fields the owner authors here. Provenance, run history and the
+        # consumed receipt belong to the runtime and are merged from the CURRENT
+        # row inside the write lock — reading them here would merge a snapshot
+        # that is already stale.
         record = {
             "id": str(body.get("id") or "").strip(),
             "name": str(body.get("name") or body.get("id") or "scheduled-task").strip(),

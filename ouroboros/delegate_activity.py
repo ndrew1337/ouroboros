@@ -16,10 +16,11 @@ snapshots that no reader could reconcile. This module keeps the facts typed inst
   them it discloses possibly repeated text/counts with the retained source. Equal
   texts or timestamps are never merged, and a range
   is never counted as if every seq in it were an event.
-* **Retained originals.** The redacted lines exactly as served are stored as a task source
-  handle (``artifacts.store_actor_source_bytes``, category ``delegated_activity``, in the
-  canonical custody store) and the record names that ref; the task-file route serves it
-  by its content address (``gateway.task_archive.serve_task_source``).
+* **Retained originals.** The redacted lines exactly as served, one LF-ended JSONL record
+  each, are stored as a task source handle (``artifacts.store_actor_source_bytes``,
+  category ``delegated_activity``, in the canonical custody store) and the record names
+  that ref; the task-file route serves it by its content address
+  (``gateway.task_archive.serve_task_source``).
 * **Commit after emission.** The per-run cursor moves only when the caller reports the
   frame emitted. A process that lost it resumes at the last retained range, re-reading
   that range once; a reader's seq identity keeps it shown once.
@@ -398,7 +399,10 @@ def retained_observations(ctx: Any, run_id: str):
         if last <= after or first > after + 1:
             continue  # Missing ranges stay unshown, never an invented cursor advance.
         raw = read_actor_source_bytes(custody_root(ctx), task_id, ref)
-        events = [json.loads(line) for line in raw.decode("utf-8").splitlines()]
+        # ``_persist`` ends each served line with LF, the one record separator: U+0085,
+        # U+2028 and U+2029, where ``str.splitlines`` also cuts, are text in a JSON line.
+        text = raw.decode("utf-8")
+        events = [json.loads(line) for line in text.removesuffix("\n").split("\n")] if text else []
         if not events or any(not isinstance(row, dict) or not isinstance(row.get("seq"), int)
                              or row.get("run_id") != run_id for row in events):
             continue

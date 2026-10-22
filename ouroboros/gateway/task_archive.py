@@ -25,7 +25,8 @@ own-store directory, with no failed/missing capture. One relpath is one member
 (canonical store first), named relative to the directory's parent. It
 spools in 1 MiB chunks through one anonymous temporary file (bounded memory, exact
 ``Content-Length``, status settled before the first byte); a member that records a
-digest must match it while read, or the answer is a typed refusal.
+digest must match it while read, or the answer is a typed refusal. Wrap up's saved-work
+document (``?wrap_up=``) is written on read into such a spool the same way.
 
 Without a supported confined backend, ordinary files, archives and delegated
 journals return typed HTTP 503, never an unconfined fallback. Published result and
@@ -36,6 +37,7 @@ from __future__ import annotations
 
 import errno
 import hashlib
+import logging
 import mimetypes
 import os
 import pathlib
@@ -58,6 +60,7 @@ from ouroboros.gateway._helpers import json_error
 from ouroboros.task_custody import task_artifact_stores
 from ouroboros.task_status import load_effective_task_result
 
+log = logging.getLogger(__name__)
 ARCHIVE_SUFFIX = ".zip"
 _CHUNK = 1024 * 1024
 # A recorded status that still offers bytes: ``ready`` or none (legacy and unmeasured
@@ -250,7 +253,7 @@ def serve_directory_archive(drive_root: Any, task_id: str, name: str, directory:
     became a link or failed its capture while read), 503 ``artifact_archive_unavailable`` (no
     confinement on this platform, or the spool or a read failed)."""
     parts = plain_segments(directory)
-    refusal = ("archive must name a store-relative directory in plain segments, without relpath or source"
+    refusal = ("archive must name a store-relative directory in plain segments, without relpath, source or wrap_up"
                if other_selectors or not parts else
                f"archive name must be the directory's basename plus {ARCHIVE_SUFFIX}"
                if name != parts[-1] + ARCHIVE_SUFFIX else "")
@@ -296,6 +299,42 @@ def serve_directory_archive(drive_root: Any, task_id: str, name: str, directory:
     disposition = f"attachment; filename*=utf-8''{quoted}" if quoted != name else f'attachment; filename="{name}"'
     return StreamingResponse(_drain(spool), media_type="application/zip",
                              headers={"Content-Length": str(size), "Content-Disposition": disposition})
+
+
+def serve_wrap_up_document(drive_root: Any, task_id: str, name: str, request_id: str, *,
+                           other_selectors: bool) -> Response:
+    """``GET /api/tasks/{task_id}/artifacts/{name}?wrap_up=<Stop request id>``: Wrap up's
+    saved-work document named by the task detail's ``wrap_up_document``, written on read from
+    the stored receipt and the exact sources it names (``owner_stop_receipt.write_wrap_up_document``)
+    into one anonymous spool, then served like a task file (ranges, HEAD, ``unmeasured``: no
+    identity was recorded). Nothing is stored. Typed refusals: 400 ``wrap_up_document_invalid``
+    (relpath or source; with ``archive`` its own 400 answers first), 404 ``task not found`` /
+    ``wrap_up_document_unavailable`` (no such receipt, name and Stop), 503
+    ``wrap_up_document_unavailable`` (the spool or the receipt is unwritable)."""
+    from ouroboros.owner_stop_receipt import wrap_up_document_view, write_wrap_up_document
+
+    refusal = {"reason_code": "wrap_up_document_unavailable", "task_id": task_id, "artifact": name}
+    if other_selectors:
+        return json_error("wrap_up takes no relpath, source or archive", 400,
+                          **{**refusal, "reason_code": "wrap_up_document_invalid"})
+    result = load_effective_task_result(drive_root, task_id, materialize_artifacts=False) or {}
+    if not result:
+        return json_error("task not found", 404)
+    if wrap_up_document_view(result) != {"name": name, "request_id": request_id}:
+        return json_error("this task keeps no Wrap up saved work by that name and Stop", 404, **refusal)
+    try:
+        spool = tempfile.TemporaryFile()
+    except OSError:
+        return json_error("saved work could not be written", 503, **refusal)
+    try:
+        write_wrap_up_document(drive_root, result, spool)
+        spool.flush()
+        observed = os.fstat(spool.fileno())
+    except Exception:
+        spool.close()
+        log.warning("Wrap up saved work could not be written for %s", task_id, exc_info=True)
+        return json_error("saved work could not be written", 503, **refusal)
+    return DescriptorResponse(spool, name, observed, media_type="text/markdown")
 
 
 def chat_media_identity(name: str) -> Dict[str, Any]:

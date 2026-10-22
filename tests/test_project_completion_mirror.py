@@ -41,6 +41,8 @@ def test_model_final_answer_is_mirrored_whole_for_every_terminal_phase(phase):
     (_result(terminal_origin="host_salvage"), "error"),   # preserved bytes are not a final answer
     (_result(terminal_origin="host_notice"), "error"),    # the host's own notice is not his voice
     (_result(terminal_origin=""), "done"),                # unknown authorship is never assumed
+    (_result(wake_silent=True), "done"),                  # retained internal words are not speech
+    (_result(wake_silent=True, terminal_host_notice="A host notice."), "warn"),
     (_result(result="   "), "done"),                      # nothing to say
     (_result(result={"answer": "x"}), "done"),            # a malformed result is never repr()-ed into his voice
     (_result(), "working"),                               # the outbox freezes the first send

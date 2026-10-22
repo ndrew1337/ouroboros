@@ -109,7 +109,7 @@ def _service(name="runtime", size=100_000):
 @pytest.mark.parametrize("preferred", ["max", "low", "nano"])
 @pytest.mark.parametrize("window", [0, 2_000_000])
 def test_unselected_projections_are_byte_identical_and_write_nothing(tmp_path, preferred, window):
-    core = _core(tmp_path, [_service(size=15_000), "protected dynamic text"], [_service("execution_reflections", 5_000)],
+    core = _core(tmp_path, [_service(size=2_000), "protected dynamic text"], [_service("execution_reflections", 1_000)],
                  syn.snapshot(story=syn.pages(2, 4_000)))
     legacy = dataclasses.replace(core, dynamic_sections=(), dynamic_head_sections=())
     selected, baseline = _plan(core, window, preferred), _plan(legacy, window, preferred)
@@ -120,14 +120,15 @@ def test_unselected_projections_are_byte_identical_and_write_nothing(tmp_path, p
     assert not (tmp_path / "task_results/artifacts").exists()
 
 
-def test_target_and_working_margin_alone_do_not_address_host_sections(tmp_path):
+def test_host_sections_share_the_start_target_and_working_margin(tmp_path):
     core = _core(tmp_path, [_service(size=12_000)], snapshot=syn.snapshot(story=syn.pages(2, 5_000)))
     full = _plan(core, 0, "nano")
     tokens = full.nano_projection.estimated_tokens
     assert tokens + RESERVE > 40_000  # the owner Nano target is smaller than this request
     exact = _plan(core, tokens + RESERVE, "nano")
-    assert not _host_facts(exact, "nano")
-    assert core.dynamic_text in _text(exact, "nano")
+    assert _host_facts(exact, "nano")
+    assert core.dynamic_text not in _text(exact, "nano")
+    assert exact.nano_projection.memory_facts["floor"]["steps"] == {}
     pressured = _plan(core, tokens + RESERVE - 1, "nano")
     assert _host_facts(pressured, "nano")
 
@@ -136,7 +137,10 @@ def test_target_and_working_margin_alone_do_not_address_host_sections(tmp_path):
 def test_protected_sections_never_shrink_even_with_an_operative_view(tmp_path, section_id):
     protected = HostSection(section_id, f"## {section_id}\n" + "whole core " * 2_000, "forbidden replacement")
     core = _core(tmp_path, [protected, _service(size=3_000)])
-    plan = _plan(core, RESERVE + 1)
+    with pytest.raises(fit.MinimumViewUnfit):
+        _plan(core, RESERVE + 1)
+    plan = _plan(core, 2_000_000).reproject_for_route(window_tokens=RESERVE + 1, known_window=True,
+        ratio=1, output_reserve=RESERVE, tool_schemas=[])
     assert protected.full_text in _text(plan)
     assert "forbidden replacement" not in _text(plan)
     assert plan.messages_for("max")[1]["content"] == "WORDS THAT STARTED THE WORK"
@@ -150,7 +154,8 @@ def test_protected_sections_never_shrink_even_with_an_operative_view(tmp_path, s
 @pytest.mark.parametrize("short", ["the same tiny section", "longer than the tiny section " * 50])
 def test_an_address_must_be_shorter_than_the_section(tmp_path, short):
     section = HostSection("runtime", "the same tiny section", short)
-    plan = _plan(_core(tmp_path, [section]), RESERVE + 1)
+    plan = _plan(_core(tmp_path, [section]), 2_000_000).reproject_for_route(
+        window_tokens=RESERVE + 1, known_window=True, ratio=1, output_reserve=RESERVE, tool_schemas=[])
     assert section.full_text in _text(plan)
     assert not _host_facts(plan)
     assert not (tmp_path / "task_results/artifacts").exists()
@@ -201,7 +206,7 @@ def test_physical_mode_lowering_carries_host_addresses_from_the_shown_view(tmp_p
     monkeypatch.setattr(fit, "main_output_reserve_tokens", lambda **_kw: 65_536)
     core = _core(tmp_path, [_service("runtime", 12_000)], snapshot=syn.snapshot())
     initial = _plan(core, 100_000, "low")
-    assert _host_facts(initial, "low") and not _host_facts(initial, "nano")
+    assert _host_facts(initial, "low") == _host_facts(initial, "nano")  # one selected view across book forms
     lowered = initial.reproject_for_route(window_tokens=60_000, known_window=True, ratio=1.0,
         output_reserve=65_536, tool_schemas=[], start_mode="low", current_messages=initial.messages_for("low"))
     assert lowered.initial_mode == "nano"
@@ -214,7 +219,7 @@ def test_tool_schema_cost_and_route_density_both_count_toward_physical_pressure(
     tokens = _plan(core, 0).max_projection.estimated_tokens
     schemas = [{"type": "function", "function": {"name": "read_file", "description": "schema detail " * 3_000,
                                                 "parameters": {"type": "object", "properties": {}}}}]
-    window = tokens + RESERVE + 1
+    window = (tokens + RESERVE) * 4 // 3 + 10  # root starts leave two eighths for work
     assert not _host_facts(_plan(core, window))
     with_tools = fit.build_context_fit_plan(SimpleNamespace(drive_root=tmp_path), core, {"id": "task-1"},
         preferred_mode="max", tool_schemas=schemas,
@@ -283,7 +288,8 @@ def test_host_sections_then_index_precede_memory_and_people_step_last(tmp_path):
     middle = _plan(core, 20_000)
     assert "F5" in middle.max_projection.memory_facts["floor"]["steps"]
     assert "F7" not in middle.max_projection.memory_facts["floor"]["steps"]
-    smallest = _plan(core, RESERVE + 1)
+    smallest = middle.reproject_for_route(window_tokens=RESERVE + 1, known_window=True, ratio=1,
+        output_reserve=RESERVE, tool_schemas=[])
     steps = smallest.max_projection.memory_facts["floor"]["steps"]
     assert steps["F5"] == 3 and steps["F2"] == 1 and steps["F7"] == 1
 
@@ -327,7 +333,7 @@ def test_retained_host_source_is_exact_immutable_and_readable(tmp_path, monkeypa
     repo, root = tmp_path / "repo", tmp_path / "data"
     repo.mkdir()
     section = _service(size=400)
-    plan = _plan(_core(root, [section]), RESERVE + 800)
+    plan = _plan(_core(root, [section]), 12_000)
     row = _host_facts(plan)[0]
     ref = row["source_ref"]
     assert read_actor_source_bytes(root, "task-1", ref).decode() == section.full_text
@@ -339,10 +345,10 @@ def test_retained_host_source_is_exact_immutable_and_readable(tmp_path, monkeypa
     result = registry.execute_result("read_file", {"root": "artifact_store", "path": ref["path"], "max_lines": 1000})
     assert result.status == "ok", result.text
     assert section.full_text.splitlines()[-1] in result.text
-    again = _plan(plan.core, RESERVE + 800)
+    again = _plan(plan.core, 12_000)
     assert _host_facts(again)[0]["source_ref"] == ref and path.stat().st_mtime_ns == stamp
     changed = dataclasses.replace(section, full_text=section.full_text + "\nA new capture.")
-    later = _host_facts(_plan(_core(root, [changed]), RESERVE + 800))[0]
+    later = _host_facts(_plan(_core(root, [changed]), 12_000))[0]
     assert later["source_ref"]["path"] != ref["path"]
     assert path.read_text(encoding="utf-8") == section.full_text
 
@@ -352,7 +358,8 @@ def test_failed_retention_keeps_the_whole_section(tmp_path, monkeypatch):
         raise OSError("synthetic unavailable store")
     monkeypatch.setattr(memory_floor, "retain_section", unavailable)
     section = _service(size=400)
-    plan = _plan(_core(tmp_path, [section]), RESERVE + 1)
+    plan = _plan(_core(tmp_path, [section]), 2_000_000).reproject_for_route(
+        window_tokens=RESERVE + 1, known_window=True, ratio=1, output_reserve=RESERVE, tool_schemas=[])
     assert section.full_text in _text(plan) and not _host_facts(plan)
 
 
@@ -375,7 +382,8 @@ def test_declared_inputs_use_the_same_book_map_floor_without_loading_shared_memo
     assert core.section_root == str(env.drive_root) and core.section_task_id == task["id"]
     unknown = _plan(core, 0, "nano")
     assert not _host_facts(unknown)
-    small = _plan(core, RESERVE + 1, "nano")
+    small = unknown.reproject_for_route(window_tokens=RESERVE + 1, known_window=True, ratio=1,
+        output_reserve=RESERVE, tool_schemas=[], start_mode="nano")
     assert _host_facts(small)
     assert {row["section_id"] for row in _host_facts(small)} <= {"architecture_map", "development_map"}
     assert core.dynamic_text in _text(small) and "Exact assignment" in core.user_content_json
@@ -391,3 +399,19 @@ def test_the_shared_understanding_overview_is_never_addressed_while_steppable_se
     # The window pressure relocates the steppable producer, never the owner's whole orientation.
     assert "execution_reflections" in addressed and "shared_understanding" not in addressed
     assert "orientation orientation" in _text(narrowed, "max")
+
+
+def test_authored_memory_selection_keeps_host_addresses_and_nano_register_pointer(tmp_path):
+    snapshot = syn.snapshot(story=syn.pages(3, 8_000))
+    pattern = HostSection("pattern_register", "## Patterns\n" + "pattern " * 1000, "pattern reader")
+    core = dataclasses.replace(_core(tmp_path, [_service(size=15_000)], [pattern], snapshot),
+                               pattern_register_text=pattern.full_text)
+    plan = _plan(core, 30_000, "nano")
+    receipts = _host_facts(plan)
+    assert receipts
+    address = next(f"{step}:{ident}" for step, ident, *_ in memory_floor.floor_elements(snapshot) if step == "F5")
+    selected = memory_floor.select_view(plan, "nano", [address])
+    assert _host_facts(selected) == receipts
+    assert core.dynamic_text not in _text(selected)
+    assert pattern.full_text not in _text(selected)
+    assert section_floor.PATTERN_REGISTER_POINTER in _text(selected)

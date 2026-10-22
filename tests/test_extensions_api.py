@@ -373,7 +373,6 @@ def test_extensions_index_collision_row_skips_lifecycle_projections(
     import ouroboros.marketplace.provenance as marketplace_provenance
     import ouroboros.skill_review_runner as skill_review_runner
     import ouroboros.tools.github as github_tools
-    import supervisor.queue as supervisor_queue
     from ouroboros.contracts.skill_manifest import SkillManifest
     from ouroboros.skill_loader import LoadedSkill
 
@@ -408,12 +407,6 @@ def test_extensions_index_collision_row_skips_lifecycle_projections(
     monkeypatch.setattr(extension_health, "read_extension_health", _unexpected)
     monkeypatch.setattr(skill_review_runner, "skill_review_ui_projection", _unexpected)
     monkeypatch.setattr(marketplace_provenance, "read_provenance", _unexpected)
-    schedule_inputs = []
-    monkeypatch.setattr(
-        supervisor_queue,
-        "sync_skill_schedules",
-        lambda skills, **_kwargs: schedule_inputs.append(list(skills)),
-    )
     monkeypatch.setattr(github_tools, "github_token_from_env_or_settings", _unexpected)
 
     payload = extensions_api._build_extensions_index(drive_root, repo_path="")
@@ -437,9 +430,6 @@ def test_extensions_index_collision_row_skips_lifecycle_projections(
         "state": "hard_block",
         "reason": "",
     }
-    # The list read syncs no schedules: the scheduler tick and the lifecycle
-    # actions own that duty.
-    assert schedule_inputs == []
     assert not (drive_root / "state").exists()
 
 
@@ -2111,18 +2101,15 @@ def test_api_extensions_index_returns_while_queue_lock_is_held(tmp_path, monkeyp
         _stop_patches(patches)
 
 
-def test_skills_list_reads_call_no_heal_or_schedule_sync_while_toggle_still_syncs(tmp_path, monkeypatch):
-    """GET /api/extensions and GET /api/skills/lifecycle-queue call neither
-    ``reconcile_stale_review_jobs`` nor ``sync_skill_schedules``; a lifecycle
-    action (the toggle) still mirrors the schedule table."""
+def test_skills_list_and_toggle_do_not_heal_review_jobs(tmp_path, monkeypatch):
+    """List reads and toggle leave review recovery to its existing owner."""
     import ouroboros.skill_review_runner as review_runner
-    import supervisor.queue as supervisor_queue
 
     skills_root = tmp_path / "skills"
     _write_ext(skills_root, "ext_passive", permissions=["tool"], plugin="def register(api):\n    pass\n")
     monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(skills_root))
     client, drive_root, patches = _make_client(tmp_path, monkeypatch)
-    calls = {"reconcile_stale_review_jobs": 0, "sync_skill_schedules": 0}
+    calls = {"reconcile_stale_review_jobs": 0}
 
     def _count(module, attr):
         original = getattr(module, attr)
@@ -2135,15 +2122,13 @@ def test_skills_list_reads_call_no_heal_or_schedule_sync_while_toggle_still_sync
 
     # Armed after the app is built (see tests/test_gateway_widgets.py).
     _count(review_runner, "reconcile_stale_review_jobs")
-    _count(supervisor_queue, "sync_skill_schedules")
     try:
         assert client.get("/api/extensions").status_code == 200
         assert client.get("/api/skills/lifecycle-queue").status_code == 200
-        assert calls == {"reconcile_stale_review_jobs": 0, "sync_skill_schedules": 0}
+        assert calls == {"reconcile_stale_review_jobs": 0}
 
         resp = client.post("/api/skills/ext_passive/toggle", json={"enabled": False})
         assert resp.status_code == 200, resp.text
-        assert calls["sync_skill_schedules"] == 1
         assert calls["reconcile_stale_review_jobs"] == 0
     finally:
         _stop_patches(patches)

@@ -44,11 +44,12 @@ class MainFitMeasurement:
     anchor_input_tokens: Optional[int] = None
     anchor_round: Optional[int] = None
     anchor_rewritten: bool = False
-    # Acceptance invalidates a smaller ordinary text window, but is evidence only for
-    # a declared conversation window: the retained-conversation bound stays independent.
+    # Accepted input is a lower bound; a measured retention limit remains independent.
     accepted_input_tokens: Optional[int] = None
     window_reading_tokens: Optional[int] = None
     view_kind: str = ""
+    window_witness_bound: bool = False
+    window_observation_fp: str = ""
 
 
 @dataclass(frozen=True)
@@ -91,10 +92,10 @@ def measure_main_fit(
     """Measure one sealed Main candidate against owner target T and route W.
 
     The estimate is this conversation's own: ``anchor`` (``context_anchor.main_input_anchor``) scales the raw
-    estimate by the last accepted request of this model. Without one, a fresh same-model witness
+    estimate by the last accepted request on this route. Without one, a fresh exact-route witness
     of comparable input size calibrates it; absent that, it stays cold. Estimator windows
-    always use the raw estimate. Acceptance invalidates a smaller ordinary text window,
-    never a declared conversation window. The deficits,
+    always use the raw estimate. Acceptance raises a disproved stated limit,
+    never a measured retention limit. The deficits,
     the reclaim goal (deficit + ``reclaim_low_water_margin``) and the reply allowance are facts for
     the round and recovery. A known window with no tool-result room starts the same refusal
     passes before sending (owner revision, 20 October 2026); an unknown window never does.
@@ -121,12 +122,14 @@ def measure_main_fit(
     total = estimated_input + reserve
     target = (OWNER_NANO_TARGET_TOKENS if profile == "owner_nano"
               else OWNER_LOW_TARGET_TOKENS if profile == "owner_low" else None)
-    from ouroboros.context_anchor import floored_window
+    from ouroboros.context_window import resolve_window
 
     reading = int(plan.window_tokens or 0) if is_known(plan, require_fresh=True) else None
-    floored, known = ((reading, reading is not None) if plan.window_basis else
-                     floored_window(reading, reading is not None, accepted_input_tokens))
-    capacity = floored if known else None
+    current = resolve_window(plan, reserve, bound=plan.window_witness_bound,
+                             accepted_input_tokens=accepted_input_tokens)
+    capacity = current.total_equivalent if current.usable is not None else None
+    if capacity is None:
+        reading = None
     target_deficit = max(0, total - target) if target is not None else None
     capacity_deficit = max(0, total - capacity) if capacity is not None else None
     deficit = max(
@@ -160,6 +163,8 @@ def measure_main_fit(
         anchor_rewritten=bool(anchor is not None and anchor.rewritten),
         accepted_input_tokens=accepted_input_tokens,
         window_reading_tokens=reading,
+        window_witness_bound=plan.window_witness_bound,
+        window_observation_fp=current.route_fp,
     )
     action: Literal["send", "send_target_miss"] = (
         "send_target_miss" if target_deficit and target_deficit > 0 else "send")

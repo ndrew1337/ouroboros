@@ -37,7 +37,6 @@ from ouroboros.config import (
 from ouroboros.consciousness_authority import apply_consciousness_authority, is_consciousness_origin
 from ouroboros.contracts.task_contract import attach_task_contract, build_task_contract, normalize_allowed_resources  # noqa: F401
 from ouroboros.schedule_contract import RESERVED_TEMPLATE_FIELDS, schedule_slug  # noqa: F401
-from ouroboros.skill_loader import skill_identity_collision_names  # noqa: F401
 from ouroboros.outcomes import terminal_outcome_axes
 from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso  # noqa: F401
 from supervisor.evolution_lifecycle import (  # noqa: F401 -- public queue API and lazy scheduler dependencies
@@ -925,8 +924,6 @@ def get_evolution_status_snapshot(*, budget_projection: Optional[Dict[str, Any]]
 # v7next F1 (D08): moved spans live in their owner leaves; re-exported here
 # so this facade stays the single import surface for callers and tests.
 from supervisor.queue_schedules import (  # noqa: E402, F401 -- intentional public re-exports
-    _SKILL_SCHEDULE_SYNC_INTERVAL_SEC,
-    _last_skill_schedule_sync,
     _schedule_running_or_queued,
     _scheduled_tasks_path,
     _task_from_schedule,
@@ -938,16 +935,14 @@ from supervisor.queue_schedules import (  # noqa: E402, F401 -- intentional publ
     check_scheduled_tasks,
     list_scheduled_tasks,
     load_schedule_store,
-    resync_skill_schedules,
     schedule_activity_projection,
     schedule_tool_projection,
     schedule_lifecycle_status,
     schedule_transaction,
-    sync_skill_schedules,
 )
 from supervisor.schedule_lifecycle import (  # noqa: E402, F401 -- intentional public re-exports
     mutate_scheduled_task,
-    remove_scheduled_task,
+    patch_scheduled_task,
     upsert_scheduled_task,
 )
 from supervisor.queue_snapshot import (  # noqa: E402, F401 -- intentional public re-exports

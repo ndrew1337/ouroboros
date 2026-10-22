@@ -586,7 +586,7 @@ def _dialogue_cutover(root: pathlib.Path) -> None:
 
     BOOT.step_started("dialogue_cutover")
     try:
-        cutover(root)
+        cutover(root, initialize_journal=True)  # the boot alone chooses an existing file's journal
     except Exception as exc:
         log.warning("Dialogue cutover did not complete; the first stored row repeats it", exc_info=True)
         BOOT.step_ended("dialogue_cutover", error=f"{type(exc).__name__}: {exc}")
@@ -940,11 +940,13 @@ def _wait_for_supervisor_update_finalize() -> bool:
 def _boot_managed_update_tasks() -> None:
     """Finalize a pending update, restart after rollback, then refresh its feed."""
     try:
+        from ouroboros.gateway.update_progress import observe_boot
         from supervisor.git_ops import compute_managed_update_status
         from supervisor.update_merge import active_update_tx, finalize_managed_update_on_boot
 
         ready = _wait_for_supervisor_update_finalize()
-        result = finalize_managed_update_on_boot(supervisor_ready=ready)
+        # Observation only: the finalizer's result and every decision below stay its own.
+        result = observe_boot(finalize_managed_update_on_boot, ready=ready, bootstrap_ok=_bootstrap_ok is True)
         # A failed bootstrap (dependency sync or the import test of this tree) is not a
         # ready generation even when the supervisor thread survived it: the adoption
         # of a tree that does not import is returned, not finalized.
@@ -1189,7 +1191,7 @@ async def lifespan(app):
         if not live:
             return
         try:
-            usage_store.migrate_from_journal(lifespan_drive_root)
+            usage_store.migrate_from_journal(lifespan_drive_root, initialize_journal=True)
         except Exception:
             log.critical("Usage store import failed at startup; money reads report it unavailable "
                          "until it succeeds", exc_info=True)
@@ -1233,7 +1235,7 @@ async def lifespan(app):
         ("review_jobs", lambda: live and server_boot.reconcile_review_jobs(lifespan_drive_root)),
         ("extensions", _extensions),
         ("ui_translation", lambda: live and _start_ui_translation(lifespan_drive_root, _supervisor_stop)),  # after the skills registered their tables
-        ("mcp", lambda: server_boot.mcp_startup(settings)),
+        ("mcp", server_boot.mcp_startup),
         ("extension_reconcile", lambda: live and server_boot.on_loop(_event_loop, _start_extension_reconcile())),
         ("store", lambda: live and server_boot.wait_store_published(lifespan_drive_root, body_stop)),
         ("supervisor", lambda: server_boot.wait_supervisor_outcome(_supervisor_ready, lambda: _supervisor_error, body_stop)),

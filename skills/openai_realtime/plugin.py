@@ -21,7 +21,7 @@ CATALOG = ProviderCatalog(
     privacy="Call audio and the frames you show go to OpenAI.",
     models=(CatalogModel(
         "gpt-realtime-2.1", "gpt-realtime-2.1 \u2014 OpenAI\u2019s realtime voice model",
-        RouteFacts(conversation_window_tokens=133_554, accepted_input_tokens=133_554, working_reserve_tokens=10_000,
+        RouteFacts(conversation_window_tokens=133_554, accepted_input_tokens=133_554, acceptance_can_raise=True, working_reserve_tokens=10_000,
                    basis="provider", source="accepted and answered at 133,554 input tokens (text probe 20.10.2026; "
                    "documented context 128,000); spoken retention not yet measured",
                    observed="2026-10-20"),

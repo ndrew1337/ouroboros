@@ -77,7 +77,7 @@ def test_each_rewrite_updates_the_same_task_row_and_retains_the_sanction(tmp_pat
     assert "2 history changes (3 turns)" in progress[1][0]
     assert all("blocks" not in text for text, _ in progress)
     assert usage["reasoning_retired"] == 2
-    assert usage.get("prompt_prefix_breaks", 0) == (0 if sanctioned else 2)
+    assert usage["prompt_prefix_breaks"] == 2  # a sanction names the change, it never exempts it
     assert all(row["sanctioned_by"] == ("compaction" if sanctioned else None) for row in _events(tmp_path))
 
 
@@ -164,3 +164,50 @@ def test_cache_observer_sees_images_blocks_and_schemas_but_not_cache_markers(cha
     else:
         assert fact["index"] == (0 if change == "tools" else 1)
         assert fact["kind"] == ("tools_changed" if change == "tools" else "tail_replaced")
+
+
+@pytest.mark.parametrize("signed_reasoning", [True, False])
+def test_a_helper_send_counts_its_change_once_signed_or_not(tmp_path, signed_reasoning):
+    """Native review and consolidation count a change as Main does: retirement and the
+    send observer share one identity, and a model without signed reasoning still counts."""
+    messages = history()
+    if not signed_reasoning:
+        for message in messages:
+            message.pop("reasoning_details", None)
+    slot = answered(messages)
+    slot.task_id, slot.drive_root, usage = "helper-task", tmp_path, {}
+    transcript_prefix.sanction_rewrite(slot, "compaction")
+    messages[3]["content"] = "folded tool result"
+    transcript_prefix.prepare_reasoning_for_send(slot, messages, TOOLS, round_idx=2, usage=usage)
+    transcript_prefix.count_accepted_send(slot, messages, TOOLS, round_idx=2, usage=usage)
+    assert usage["prompt_prefix_breaks"] == 1 and len(_events(tmp_path)) == 1
+    assert [(b["round"], b["index"], b["sanctioned_by"]) for b in usage["_recent_prefix_breaks"]] == [(2, 3, "compaction")]
+    record = json.loads(transcript_prefix.history_changes_path(tmp_path).read_text())
+    assert record["origins"]["compaction"]["count"] == 1
+    transcript_prefix.count_accepted_send(slot, [*messages, {"role": "user", "content": "more"}], TOOLS, round_idx=3, usage=usage)
+    assert usage["prompt_prefix_breaks"] == 1  # an append is no change
+
+
+def test_a_restored_slot_counts_its_first_send_against_the_observation(tmp_path):
+    """A cold continuation keeps its context observation, not the send digests: the first
+    send after the restore still compares with what was sent before it."""
+    from ouroboros import owner_wait
+    from ouroboros.context_budget import LIVE_IMAGE_BLOCKS_HIGH_WATER
+    from ouroboros.loop_messages import _append_or_merge_user_content
+    from ouroboros.tools.compact_context import record_context_view
+
+    image = {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}
+    sent = [{"role": "system", "content": "system"},
+            {"role": "user", "content": [copy.deepcopy(image) for _ in range(LIVE_IMAGE_BLOCKS_HIGH_WATER)]}]
+    previous = SimpleNamespace(task_id="cold-image", drive_root=tmp_path)
+    record_context_view(previous, sent, [])
+    transcript_prefix.observe_send(previous, sent, tools=[], round_idx=1)
+    state = json.loads(json.dumps(owner_wait.continuation_state(previous, sent, {}, {}, 1, [], set())))
+    for evict in (False, True):
+        slot, messages, usage = SimpleNamespace(task_id="cold-image", drive_root=tmp_path), [], {}
+        owner_wait.restore_continuation_state(SimpleNamespace(_ctx=slot), state, messages, {}, usage, set())
+        _append_or_merge_user_content(messages, [copy.deepcopy(image)] if evict else "continue", slot=slot)
+        assert transcript_prefix.prepare_reasoning_for_send(slot, messages, [], round_idx=2, usage=usage) is None
+        loop._record_transcript_prefix(slot, messages, 2, usage, None, slot.task_id, tmp_path / "logs", [])
+        assert usage.get("prompt_prefix_breaks", 0) == (1 if evict else 0)
+        assert [b["sanctioned_by"] for b in usage.get("_recent_prefix_breaks", [])] == (["image_eviction"] if evict else [])

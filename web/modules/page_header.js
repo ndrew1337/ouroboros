@@ -263,8 +263,11 @@ export function bindTabStrip(strip, { dataAttr, activeClass = 'active', onChange
     const disposeFade = bindScrollFade(strip, { axis: 'x' });
     const tabs = () => Array.from(strip.querySelectorAll(`[role="tab"][${dataAttr}]`))
         .filter((tab) => tab.closest('[role="tablist"]') === strip);
-    const enabled = (tab) => !tab.disabled && tab.getAttribute('aria-disabled') !== 'true'
-        && !tab.closest('[hidden], [inert]');
+    // External navigation may select a tab before its page becomes interactive.
+    // A disabled/hidden choice itself stays unavailable on either path.
+    const selectable = (tab) => !tab.disabled && tab.getAttribute('aria-disabled') !== 'true'
+        && !tab.matches('[hidden], [inert]');
+    const enabled = (tab) => selectable(tab) && !tab.closest('[hidden], [inert]');
     let selected = null;
     function revealSelected() {
         if (disposed || !strip.clientWidth) return;
@@ -285,7 +288,8 @@ export function bindTabStrip(strip, { dataAttr, activeClass = 'active', onChange
     function select(value, { focus = false } = {}) {
         if (disposed) return false;
         const all = tabs();
-        const next = all.find((tab) => tab.getAttribute(dataAttr) === String(value) && enabled(tab));
+        const allowed = focus ? enabled : selectable;
+        const next = all.find((tab) => tab.getAttribute(dataAttr) === String(value) && allowed(tab));
         if (!next) return false;
         selected = next.getAttribute(dataAttr);
         all.forEach((tab) => {
@@ -332,8 +336,8 @@ export function bindTabStrip(strip, { dataAttr, activeClass = 'active', onChange
     const Observer = strip.ownerDocument?.defaultView?.ResizeObserver;
     const observer = Observer ? new Observer(revealSelected) : null;
     observer?.observe(strip);
-    const initial = tabs().find((tab) => enabled(tab) && tab.getAttribute('aria-selected') === 'true')
-        || tabs().find(enabled);
+    const initial = tabs().find((tab) => selectable(tab) && tab.getAttribute('aria-selected') === 'true')
+        || tabs().find(selectable);
     if (initial) select(initial.getAttribute(dataAttr));
     return {
         select,

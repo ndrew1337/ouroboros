@@ -390,7 +390,7 @@ def test_unacknowledged_delegate_wake_replays_before_successor_poll(tmp_path):
     ).text)
     successor = _child_attempt(tmp_path, 2)
     assert supervision.acknowledge_pending_wake(successor) is False
-    assert supervision.supervision_checkpoint(successor)["pending_wake"]
+    assert supervision.supervision_checkpoint(successor)["runs"]["run-1"]["pending_wake"]
     replay = json.loads(supervision.supervised_wait(
         successor, "run-1",
         wait_once=lambda *_a, **_k: (_ for _ in ()).throw(
@@ -399,6 +399,40 @@ def test_unacknowledged_delegate_wake_replays_before_successor_poll(tmp_path):
     ).text)
     assert replay["supervision_wake_id"] == first["supervision_wake_id"]
     assert replay["wake_events"][0]["text"] == "pending exact"
+
+
+def test_failed_direct_wake_ack_records_no_exposure(tmp_path, monkeypatch):
+    import ouroboros.delegate_supervision as supervision
+    from ouroboros.owner_mailbox import write_owner_message
+
+    assert write_owner_message(tmp_path, "held owner words", "child1", msg_id="owner-held")
+    ctx = _child_attempt(tmp_path, 1)
+    wake = json.loads(supervision.supervised_wait(
+        ctx, "run-1",
+        wait_once=lambda *_a, **_k: json.dumps({
+            "status": "no_progress", "run_id": "run-1", "last_seq": 0,
+        }),
+    ).text)
+    save = supervision._save_state
+
+    def refuse_ack_save(actual_ctx, state):
+        if state.get("last_acknowledged_wake") and not state.get("pending_wake"):
+            raise OSError(28, "No space left on device")
+        return save(actual_ctx, state)
+
+    monkeypatch.setattr(supervision, "_save_state", refuse_ack_save)
+    with pytest.raises(OSError):
+        supervision.acknowledge_pending_wake(ctx, wake)
+    # The UNKNOWN hold drops this receipt (#2142): a checkpoint saved now must not mark its mail seen.
+    assert not getattr(ctx, "_loop_mailbox_seen_ids", None)
+    restored = _child_attempt(tmp_path, 2)
+    restored._loop_mailbox_seen_ids = set(getattr(ctx, "_loop_mailbox_seen_ids", None) or ())
+    replay = supervision._addressed_wakes(restored, supervision.supervision_checkpoint(restored))
+    assert [(row["msg_id"], row["text"]) for row in replay] == [("owner-held", "held owner words")]
+
+    monkeypatch.setattr(supervision, "_save_state", save)
+    assert supervision.acknowledge_pending_wake(ctx, wake)
+    assert ctx._loop_mailbox_seen_ids == {"owner-held"}
 
 
 @pytest.mark.parametrize("control_kind", ["finalize_now", "hurry"])
@@ -446,7 +480,7 @@ def test_sleeping_control_wakes_then_loop_routes_without_supervision_ack(tmp_pat
         }),
     ).text)
     assert wake["wake_events"][0]["kind"] == kind
-    assert supervision.supervision_checkpoint(ctx)["pending_wake"]["mailbox_ids"] == []
+    assert supervision.supervision_checkpoint(ctx)["runs"]["run-1"]["pending_wake"]["mailbox_ids"] == []
     assert supervision.acknowledge_pending_wake(ctx, wake)
     assert acknowledged_task_message_ids(tmp_path, "child1") == set()
     assert supervision._addressed_wakes(

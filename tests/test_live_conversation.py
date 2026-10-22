@@ -385,7 +385,7 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     host.response_done('density', usage={'text_input_tokens': estimate * 2,
         'audio_input_tokens': 99999, 'image_input_tokens': 88888, 'video_input_tokens': 77777},
         raw_usage={'input_tokens_details': {'text_tokens': estimate * 2, 'audio_tokens': 99999}}, status='completed')
-    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model, view_kind=host.plan.view_kind)[0] == 2
     _, warm, _ = session_candidate(host, host_world.provider['session'], options)
     assert warm.physical_context.measurement_density == 2
     assert warm.prompt_tokens_estimate == warm.prompt_tokens_bounded_estimate * 2
@@ -399,7 +399,7 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     host.model = replace(host.model, facts=replace(host.model.facts, basis='provider'))
     host.response_started('audio-only')
     host.response_done('audio-only', usage={'audio_input_tokens': estimate * 4}, raw_usage={}, status='completed')
-    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model)[0] == 2
+    assert resolve_main_token_density(host.ctx.drive_root, host.plan.route_fp, host.turn.model, view_kind=host.plan.view_kind)[0] == 2
 
 
 def test_instructions_and_provider_language_sentence_are_inside_fit(host_world):
@@ -575,3 +575,20 @@ def test_selected_text_estimator_excludes_media():
     assert estimate([text, {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,' + 'eA==' * 5000}},
                      {'type': 'input_audio', 'input_audio': {'data': 'eA==' * 5000}}]) == baseline
     assert estimate([{'type': 'text', 'text': 'More selected text ' * 100}]) > baseline
+
+
+def test_call_observations_are_bound_to_the_granted_account(host_world):
+    from ouroboros.context_window import record_observation
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+
+    host = host_world.host
+    first = host.plan.route_fp
+    record_observation(host.ctx.drive_root, first, refused=50_000)
+    _, request, _ = session_candidate(host, host_world.provider["session"], LiveOptions())
+    assert request.physical_context.capacity_total_tokens == 50_000
+    host_world.settings["TEST_CREDENTIAL"] = "another-test-credential"
+    _, request, _ = session_candidate(host, host_world.provider["session"], LiveOptions())
+    assert host.plan.route_fp != first
+    assert request.physical_context.window_observation_fp == host.plan.route_fp
+    assert request.physical_context.capacity_total_tokens == host.model.facts.conversation_window_tokens

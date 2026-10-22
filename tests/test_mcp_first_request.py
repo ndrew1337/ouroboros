@@ -1,11 +1,7 @@
-"""A task's schema read never waits for an MCP listing (the first-request path).
+"""First task schema reads adopt published MCP catalogs without waiting or listing.
 
-A fresh process (a pooled worker) configures its manager from the saved settings on its first
-schema read. That read — a live call's initial view or a text turn's initial schemas alike —
-starts the background listing and answers with the rows listed so far, a server not listed yet
-being an omission that says so; once listed, ``enable_tools`` and the next ``schemas()`` carry
-its tools. A refresh someone asks for on purpose (Settings' Refresh, the settings-save refresh)
-still lists every server as before. Counters, not clocks: the fake listing waits for the test.
+The server owns background listing; once it publishes, both ordinary Nano calls and
+text turns can discover and enable the same tools. Explicit refresh remains effective.
 """
 from __future__ import annotations
 
@@ -62,6 +58,7 @@ def cold_worker(tmp_path, monkeypatch):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(config_mod, "SETTINGS_PATH", settings_path)
+    monkeypatch.setattr(config_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(config_mod, "load_settings", _settings)
     mcp_client.reset_manager_for_tests()
     listing = _Listing()
@@ -84,22 +81,26 @@ def _mcp_names(schemas) -> list:
     return [schema["function"]["name"] for schema in schemas if schema["function"]["name"].startswith("mcp_")]
 
 
-def test_first_schema_reads_start_one_background_listing_and_wait_for_none(cold_worker):
+def test_first_schema_reads_adopt_catalogs_without_starting_or_waiting_for_listing(cold_worker):
     registry, listing, on_caller = cold_worker
     nano_view = initial_tool_schemas(registry, context_mode="nano")  # a call's ordinary first view
     text_turn = initial_tool_schemas(registry, context_mode="max")
 
     assert listing.finished == [] and True not in on_caller  # neither read listed anything itself
-    assert len(_refresh_threads()) == 1  # one listing started; the second read found it running
+    assert _refresh_threads() == [] and on_caller == []
     assert _mcp_names(nano_view) == [] and _mcp_names(text_turn) == []
-    assert {"surface": "mcp", "reason": "server_no_tools",
-            "servers": [{"id": "svc", "last_error": "not listed yet"}]} in registry.capability_omissions()
+    assert any(row["reason"] == "catalog_provenance" and "not listed yet" in row["error"]
+               for row in registry.capability_omissions())
 
 
 def test_tools_listed_in_the_background_reach_the_next_read_and_enable_tools(cold_worker):
     registry, listing, on_caller = cold_worker
     resident = list(initial_tool_schemas(registry, context_mode="nano"))
     assert listing.finished == []
+    publisher = mcp_client.MCPManager()
+    publisher.reconfigure(_settings())
+    publisher._async_list_tools = listing.list_tools
+    publisher.refresh_all_background(reason="server-boot")
     listing.release.set()
     _join_listings()
 
@@ -114,10 +115,13 @@ def test_tools_listed_in_the_background_reach_the_next_read_and_enable_tools(col
 def test_a_refresh_asked_for_on_purpose_still_lists_every_server(cold_worker):
     registry, listing, on_caller = cold_worker
     registry.schemas()
-    assert listing.finished == [] and len(_refresh_threads()) == 1
+    assert listing.finished == [] and _refresh_threads() == []
+    manager = mcp_client.MCPManager()
+    manager.reconfigure(_settings())
+    manager._async_list_tools = listing.list_tools
+    manager.refresh_all_background(reason="server-boot")
     listing.release.set()
     _join_listings()
-    manager = mcp_client.get_manager()
 
     outcome = manager.refresh_server("svc")  # Settings' Refresh of one server (POST /api/mcp/refresh)
     assert outcome["ok"] and outcome["tool_count"] == 1 and listing.finished == ["svc", "svc"]

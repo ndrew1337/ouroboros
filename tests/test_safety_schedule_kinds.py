@@ -62,15 +62,17 @@ def test_schedule_lifecycle_edit_changes_writer(q):
     assert stored["writer_kind"] == "owner"
 
 
-def test_manifest_edit_replaces_writer_but_readiness_does_not():
-    from ouroboros.consciousness_authority import stamp_manifest_schedule
-    previous = {"writer_kind": "owner", "task": {"text": "old"}, "skill_content_hash": "one"}
-    resync = {**previous, "enabled": False}
-    stamp_manifest_schedule(previous, resync)
-    assert resync["writer_kind"] == "owner"
-    changed = {**previous, "skill_content_hash": "two"}
-    stamp_manifest_schedule(previous, changed)
-    assert changed["writer_kind"] == "consciousness"
+def test_in_place_update_changes_writer(q):
+    q.queue.upsert_scheduled_task(row(), drive_root=q.root, writer_kind="owner", actor="owner:gateway")
+    outcome = q.queue.patch_scheduled_task("schedule", {"objective": "Do other work"}, reason="new scope",
+                                           actor="agent", drive_root=q.root, writer_kind="consciousness")
+    assert outcome["status"] == "updated"
+    [stored] = q.queue.list_scheduled_tasks(q.root)["tasks"]
+    assert stored["writer_kind"] == "consciousness"
+    q.queue.patch_scheduled_task("schedule", {"objective": "Do the owner's work"}, reason="owner asked",
+                                 actor="agent", drive_root=q.root, writer_kind="owner")
+    [stored] = q.queue.list_scheduled_tasks(q.root)["tasks"]
+    assert stored["writer_kind"] == "owner"
 
 
 def test_legacy_owner_origin_at_admission_is_positive_provenance(q):

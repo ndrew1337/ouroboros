@@ -236,7 +236,7 @@ def test_the_owner_governs_a_note_like_any_schedule(host):
     assert len(_chat_rows(host.root)) == 1
     _note(host.queue, "note-2", trigger={"type": "once", "run_at": "2999-01-01T00:00:00+00:00"})
     outcome = host.queue.mutate_scheduled_task("delete", "note-2", **common)
-    assert outcome["status"] == "deleted" and outcome["changed"] is True, "a note owes no task: removed outright"
+    assert outcome["status"] == "withdrawn" and outcome["changed"] is True
 
 
 def test_history_shows_the_row_and_only_live_frames_ring(host):

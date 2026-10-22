@@ -981,7 +981,9 @@ def effective_task_result(
                 audit = result.get("delegate_terminal_reconciliation")
                 published = [dict(row) for row in ((audit.get("terminal_runs") if isinstance(audit, dict)
                                                     else None) or [])
-                             if isinstance(row, dict) and isinstance(row.get("staged_output"), dict)]
+                             if isinstance(row, dict) and any(
+                                 row.get(k) for k in ("staged_output", "other_staged_outputs",
+                                                      "terminal_observation", "other_terminal_observations"))]
                 lineage.insert(0, {
                     "task_id": task_id,
                     "status": result.get("status"),
@@ -993,6 +995,8 @@ def effective_task_result(
                 merged_retry["retry_lineage"] = lineage
                 merged_retry.setdefault("original_task_id", task_id)
                 merged_retry.setdefault("supersedes_task_id", task_id)
+                if result.get("cancel_receipt") and "cancel_receipt" not in merged_retry:
+                    merged_retry["cancel_receipt"] = result["cancel_receipt"]
                 # The retry answer does not erase the original's unknown effects.
                 # Invocation IDs and their original task/attempt attribution stay
                 # factual disclosure only, never authority to repeat an operation.
@@ -1205,6 +1209,7 @@ def wait_for_effective_tasks(
     mode: str = "all_terminal",
     poll_interval_sec: float = 0.5,
     on_poll: Optional[Callable[[Dict[str, Any], Dict[str, bool]], Any]] = None,
+    terminal_probe: Optional[Callable[[Dict[str, Any]], Dict[str, bool]]] = None,
 ) -> Dict[str, Any]:
     """Poll effective task results until the wait ``mode`` is satisfied.
 
@@ -1240,7 +1245,8 @@ def wait_for_effective_tasks(
             )
             for tid in ids
         }
-        terminal = {tid: str(data.get("status") or "").strip().lower() in SETTLED_STATUSES for tid, data in results.items()}
+        terminal = (terminal_probe(results) if terminal_probe is not None else
+                    {tid: str(data.get("status") or "").strip().lower() in SETTLED_STATUSES for tid, data in results.items()})
         # Sliced wait hook: a child->parent attention beacon (including review_requested)
         # gets one preflight even when the child already terminalized, so a beacon
         # written before this wait is not hidden by the terminal fast path.
@@ -1268,7 +1274,8 @@ def wait_for_effective_tasks(
         "timeout_sec": float(timeout_sec or 0),
         "elapsed_sec": max(0.0, time.monotonic() - start),
         "timed_out": timed_out,
-        "all_terminal": all(str(data.get("status") or "").strip().lower() in SETTLED_STATUSES for data in results.values()) if ids else True,
+        "all_terminal": (all(terminal_probe(results).values()) if terminal_probe is not None else
+                         all(str(data.get("status") or "").strip().lower() in SETTLED_STATUSES for data in results.values())) if ids else True,
         "tasks": results,
     }
     if early is not None:

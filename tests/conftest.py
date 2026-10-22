@@ -656,8 +656,15 @@ def pytest_runtest_protocol(item, nextitem):  # noqa: ARG001
         item.stash[_PHASE_EVENT_LOOPS] = loops
         yield
     finally:
+        # The call and teardown hooks close their loops and fail that phase if a close raises;
+        # this pass only guarantees the close. A loop whose close already raised is left half
+        # closed (on Windows a proactor without its self-pipe), and raising again here, after
+        # the reports, would end the whole session as an INTERNALERROR.
         for loop in loops:
-            loop.close()
+            try:
+                loop.close()
+            except Exception:  # noqa: BLE001
+                pass
         asyncio.set_event_loop(None)
         if _PHASE_EVENT_LOOPS in item.stash:
             del item.stash[_PHASE_EVENT_LOOPS]

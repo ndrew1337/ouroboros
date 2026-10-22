@@ -221,6 +221,15 @@ export function taskArtifactArchiveUrl(taskId, directory) {
     return `/api/tasks/${encodeURIComponent(taskId)}/artifacts/${encodeSegment(name)}?archive=${encodeURIComponent(directory)}`;
 }
 
+/**
+ * Address of Wrap up's saved-work document, which the task-file route writes on read: the
+ * detail's `wrap_up_document` name with `?wrap_up={request_id}`; '' when the host named none.
+ */
+export function taskWrapUpDocumentUrl(taskId, wrapUp) {
+    const url = typeof wrapUp?.request_id === 'string' ? taskArtifactDownloadUrl(taskId, wrapUp.name) : '';
+    return url && `${url}?wrap_up=${encodeURIComponent(wrapUp.request_id)}`;
+}
+
 /** URL for one published immutable source handle (a delegated run's journal range included). */
 export function taskSourceDownloadUrl(taskId, ref) {
     const path = typeof ref?.path === 'string' ? ref.path : '';

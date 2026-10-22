@@ -498,7 +498,7 @@ def _reconcile_delegated_runs(running_task_ids: Any, *, stop_event: Any = None) 
     try:
         from ouroboros.claudexor_daemon import ensure_owned_gateway, read_owned_gateway
         from ouroboros.delegate_custody import reconcile_orphaned_runs
-        from ouroboros.delegate_recovery import recoverable_task_ids
+        from ouroboros.delegate_recovery import recoverable_handles, continuation_handles
         from ouroboros.owner_wait import restore_owner_wait_allowed
         from supervisor.queue import PENDING, _queue_lock
 
@@ -515,7 +515,7 @@ def _reconcile_delegated_runs(running_task_ids: Any, *, stop_event: Any = None) 
             DATA_DIR, running_task_ids=running_task_ids,
             gateway_factory=lambda: (read_owned_gateway() if _stop_requested(stop_event)
                                      else ensure_owned_gateway(admission_wait_sec=0)),
-            recoverable_task_ids=recoverable_task_ids(DATA_DIR) | continued,
+            recoverable_handles=recoverable_handles(DATA_DIR) | continuation_handles(DATA_DIR, continued),
             replay_pending=lambda: not _stop_requested(stop_event),
         )
         if outcomes:

@@ -13,7 +13,7 @@ import pytest
 
 from ouroboros import server_restart
 from ouroboros.task_results import write_task_result
-from supervisor import queue, queue_schedules, schedule_occurrence, worker_assignment, workers
+from supervisor import queue, schedule_occurrence, worker_assignment, workers
 from supervisor import workspace_preparation as prep
 from tests.test_g1_followup_policy import BINDING, DEADLINE, ORIGIN
 from tests.test_launch_outside_q import hold_after
@@ -118,7 +118,6 @@ def retiring_worker(env, monkeypatch):
 def scheduled_followup(env, monkeypatch, relation):
     from ouroboros.tools.followup import _handle_schedule_followup
 
-    monkeypatch.setattr(queue_schedules, "resync_skill_schedules", lambda *_a: {})
     monkeypatch.setattr("ouroboros.config.get_bg_wakeup_min_sec", lambda: 0)
     write_task_result(env.data, ORIGIN, "completed", root_task_id=ORIGIN, billing_group=BINDING, deadline_at=DEADLINE)
     ctx = _ctx(env.data.parent)

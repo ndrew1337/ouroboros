@@ -966,6 +966,10 @@ def _call_forced_model_once(
             configured_api_child=is_configured_api_child(owner_ctx),  # a forced call is still that actor's call
         )
     ctx.accumulated_usage["_forced_response_meta"] = response_meta
+    if owner_ctx is not None and final_msg is not None:  # an answered forced final, outside the round observer
+        from ouroboros.transcript_prefix import count_accepted_send
+        count_accepted_send(owner_ctx, ctx.messages, getattr(ctx, "tool_schemas", None),
+                            round_idx=ctx.round_idx, usage=ctx.accumulated_usage)
     return str((final_msg or {}).get("content") or "").strip()
 
 
@@ -1322,6 +1326,9 @@ def _forced_final_answer(
         )
     if TIMEOUT_REPEAT_KEY in ctx.accumulated_usage:  # owed or spent: no summary is bought for it
         return _timeout_repeat_final(ctx, llm_trace, fallback_text, reason_code, provider_terminal)
+    from ouroboros.loop_output_exhaustion import no_recap, finish
+    if no_recap(ctx.accumulated_usage):
+        return finish(ctx, reason=reason_code)
     tools_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
     _loop()._retire_main_reasoning(ctx)
     _loop()._append_or_merge_user_message(ctx.messages, prompt)

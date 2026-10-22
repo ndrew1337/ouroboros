@@ -91,8 +91,8 @@ class RouteFacts:
     ``conversation_window_tokens`` is the window the ordinary fitter uses for this
     route: the largest input under which the model still held the conversation,
     measured or documented (``source``). ``accepted_input_tokens`` is evidence only:
-    an input the endpoint once accepted. A larger accepted input never raises the
-    conversation window. A window whose ``source`` names a retention measurement
+    an input the endpoint once accepted. A larger accepted input raises the
+    conversation window only when ``acceptance_can_raise`` explicitly says so. A window whose ``source`` names a retention measurement
     (spoken turns held under it) is bound by retention, below what the endpoint
     accepts; a route whose retention is not yet measured states its largest accepted
     and answered input as the window (a successful request is a lower bound, never a
@@ -112,7 +112,11 @@ class RouteFacts:
     source: str = ""
     observed: str = ""  # ISO date of the measurement or the documentation read
 
+    acceptance_can_raise: bool = False  # retention and estimator windows are independent of accepted input
+
     def __post_init__(self):
+        if type(self.acceptance_can_raise) is not bool or (self.acceptance_can_raise and self.basis == "estimator"):
+            raise RealtimeSetupError("catalog", "only provider-token limits can be raised by accepted input")
         for name in ("conversation_window_tokens", "accepted_input_tokens", "working_reserve_tokens"):
             _count(name, getattr(self, name))
         if self.basis not in {"provider", "estimator"}:

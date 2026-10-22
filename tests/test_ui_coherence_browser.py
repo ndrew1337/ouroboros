@@ -157,7 +157,7 @@ def test_photo_menu_escapes_gallery_crop_downloads_and_cleans_up(subscription_ui
                 active:document.activeElement?.outerHTML.slice(0,100),time:performance.now()}),true);
     }""")
     trigger.click()
-    menu = page.locator('body > .chat-photo-menu[role="menu"]')
+    menu = page.locator('body > .chat-photo-menu[role="menu"]:not([inert])')
     setup_browser.capture(page, f"shell-photo-open-{height}")
     assert menu.is_visible(), json.dumps(page.evaluate("shellPhotoEvents"))
     assert menu.evaluate("el=>el.closest('.chat-gallery-item')===null")
@@ -174,7 +174,7 @@ def test_photo_menu_escapes_gallery_crop_downloads_and_cleans_up(subscription_ui
     assert trigger.evaluate("el=>document.activeElement===el")
     trigger.click()
     with page.expect_download() as download:
-        page.locator('body > .chat-photo-menu [data-photo-action="download"]').click()
+        menu.locator('[data-photo-action="download"]').click()
     assert download.value.suggested_filename == "image.png"
     assert download.value.failure() is None
     assert not menu.count()
@@ -187,6 +187,8 @@ def test_photo_menu_escapes_gallery_crop_downloads_and_cleans_up(subscription_ui
     assert menu.is_visible()
     page.evaluate("shellPhoto.media.destroy()")
     assert not menu.count() and page.locator(".chat-gallery-item").count() == 0
+    # A leaving menu's inert picture must also leave the DOM once its fade ends.
+    page.wait_for_function("!document.querySelector('body > .chat-photo-menu')", timeout=5_000)
 
 
 def test_settings_footer_controls_are_reachable_at_content_breakpoints(subscription_ui):
@@ -946,13 +948,18 @@ def test_shared_dialog_head_wraps_a_long_title_and_keeps_close_inside(subscripti
 
 
 def test_quiz_dot_and_evolution_facts_keep_their_shape_in_narrow_columns(subscription_ui):
-    """The quiz status dot stays round in a 320px column; a long Evolution fact wraps inside its card."""
+    """The quiz status dot stays round in a 320px column; long Evolution campaign facts wrap inside their card."""
     page = subscription_ui['page']
     page.set_viewport_size({'width': 390, 'height': 844})
+    objective = 'Keep the Evolution history fast: ' + 'measure-every-tagged-commit-once-' * 6
     page.route('**/api/state', lambda route: route.fulfill(json={
         'supervisor_ready': True, 'active_chat_activities': [], 'projects': [], 'runtime_mode': 'advanced',
-        'bg_consciousness_enabled': True, 'bg_consciousness_state': {'status': 'sleeping', 'spent_24h_usd': 1.25,
-                                                                     'daily_usd': 10, 'unknown_unmetered': 1, 'integrity_degraded': True}}))
+        'evolution_enabled': True, 'evolution_state': {'status': 'running', 'enabled': True, 'cycle': 12,
+                                                       'detail': 'Evolution task is running now.',
+                                                       'campaign': {'objective': objective, 'cycles_done': 3}},
+        'bg_consciousness_enabled': True, 'bg_consciousness_state': {
+            'status': 'wake_paused', 'spent_24h_usd': 1.25, 'daily_usd': 10, 'unknown_unmetered': 1, 'integrity_degraded': True,
+            'detail': 'The last wake-up returned while paused; its task card shows the current state. Next wake check at 18:00.'}}))
     open_app(subscription_ui)
     page.evaluate("""async () => {
         const { createChatDecision } = await import('/static/modules/chat_decision.js');
@@ -972,15 +979,17 @@ def test_quiz_dot_and_evolution_facts_keep_their_shape_in_narrow_columns(subscri
     page.locator('#page-chat [data-mobile-nav-toggle]').click()  # a phone keeps navigation behind its menu
     page.click('[data-nav-page="dashboard"]')
     page.locator('[data-dashboard-tab="evolution"]').click()
-    chip = page.locator('.evo-runtime-chip', has_text='ledger integrity degraded')
-    chip.wait_for()
-    metrics = page.locator('#evo-chart-content').evaluate("""box => {
-        const card = box.querySelector('.evo-runtime-card').getBoundingClientRect();
+    fact = page.locator('.evo-campaign-lines p', has_text='measure-every-tagged-commit-once')
+    fact.wait_for()
+    page.locator('#evo-consciousness-allowance', has_text='≥ $1.25 / $10.00 (ledger integrity degraded)').wait_for()
+    metrics = page.locator('#page-evolution .costs-scroll').evaluate("""box => {
+        const card = box.querySelector('.evo-campaign').getBoundingClientRect();
         return {scroll: box.scrollWidth - box.clientWidth,
-            outside: [...box.querySelectorAll('.evo-runtime-chip')].filter(c => c.getBoundingClientRect().right > card.right + 0.5).length};
+            outside: [...box.querySelectorAll('.evo-campaign p, .evo-campaign .btn')]
+                .filter(c => c.getBoundingClientRect().right > card.right + 0.5).length};
     }""")
     assert metrics == {'scroll': 0, 'outside': 0}, metrics
-    chip.scroll_into_view_if_needed()
+    fact.scroll_into_view_if_needed()
     setup_browser.capture(page, 'evolution-facts-390')
 
 
@@ -991,6 +1000,7 @@ def test_evolution_start_says_a_refused_send_and_returns_focus(subscription_ui):
     page.route('**/api/command', lambda route: held.append(route))
     open_app(subscription_ui, '/#dashboard')
     page.locator('[data-dashboard-tab="evolution"]').click()
+    page.wait_for_function('() => !document.getElementById("evo-start").disabled')  # Start waits for a current state
     page.locator('#evo-start').focus()
     page.keyboard.press('Enter')
     page.locator('.confirm-dialog [data-confirm-ok]').click()

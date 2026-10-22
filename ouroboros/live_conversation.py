@@ -572,7 +572,7 @@ class ConversationHost:
                 and type(text) is int and text > 0):
             record_token_density(self.ctx.drive_root, normalize_model_identity(self.turn.model),
                 prompt_chars=estimate * 4, prompt_tokens=text, source="live_text_usage",
-                route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS)
+                route_fp=self.plan.route_fp, basis=MAIN_DENSITY_BASIS, view_kind=self.plan.view_kind)
 
     def _context_changed(self):
         self._history_version += 1

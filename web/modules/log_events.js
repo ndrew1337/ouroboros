@@ -4,7 +4,7 @@ import { TASK_CAUSE_PHRASES, taskReasonPhrase, describedCause, reasonCodesNote }
 export { taskReasonPhrase, reasonCodesNote } from './task_reason_words.js';
 import { taskCheckpointLabel, taskCheckpointIdentity, checkpointHasProgressRow } from './task_checkpoints.js';
 export { taskCheckpointLabel } from './task_checkpoints.js';
-import { harnessPresentation } from './harness_presentation.js';
+import { coordinatorRouteClause, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { acceptanceIncidentClauses } from './acceptance_incident_presentation.js';
 import { fmt, tr } from './i18n.js';
 import { historyRetentionView } from './history_retention.js';
@@ -139,10 +139,11 @@ const SUBSTRATE_NOTE = {
 // chip says Working, or every settled run ok — is the bare name: it names the
 // selected helper and never proves its session computes now. `title` is the
 // detail sentence (counts, model and its source, spend, substrate, access);
-// executorIdentityMarkup also prints it as text on the expanded card, because a
-// hover title alone is invisible on touch, to AT and in copies. `hasEvidence`,
+// the expanded card prints it in its Executor details row, because a hover
+// title alone is invisible on touch, to AT and in copies. `hasEvidence`,
 // `observation`, `sourceTs` and the revision feed keepStickyExecutorChip.
 export function executorChip(evt) {
+    const coordinatorProvenance = formatCoordinatorProvenance(evt);
     const raw = evt?.executor_observation;
     const observation = raw && raw.task_id === String(evt?.subagent_task_id || evt?.task_id || '')
         && raw.run_id && raw.attempt_id && raw.harness_id && Number.isInteger(raw.revision)
@@ -161,6 +162,7 @@ export function executorChip(evt) {
             sourceTs: Date.parse(evt?.ts || evt?.timestamp || '') || 0,
             label: `${name} · last update`,
             title: `Latest observed activity: ${name}, ${model ? `model ${model} (${observation.model_source})` : 'model unconfirmed'}, run ${observation.run_id}, attempt ${observation.attempt_id}, revision ${observation.revision}. This is progress, not a terminal execution receipt.`,
+            ...(coordinatorProvenance ? { coordinatorProvenance } : {}),
         };
     }
     const route = String(evt?.executor_route || '').trim();
@@ -170,7 +172,10 @@ export function executorChip(evt) {
     const harness = route.split('=')[0].trim().toLowerCase();
     if (!harness) return null;
     const name = harnessPresentation(harness).label;
-    const base = { harness, label: name, sourceTs: Date.parse(evt?.ts || evt?.timestamp || '') || 0 };
+    const base = {
+        harness, label: name, sourceTs: Date.parse(evt?.ts || evt?.timestamp || '') || 0,
+        ...(coordinatorProvenance ? { coordinatorProvenance } : {}),
+    };
     const chip = (hasEvidence, phrase, title) => ({ ...base, hasEvidence, label: phrase ? `${name} · ${phrase}` : name, title });
     // LAYERED TRUTH: identity (mark + product name) comes from the
     // harness_presentation SSOT; the route is a DISPATCH decision; whether a
@@ -200,7 +205,7 @@ export function executorChip(evt) {
         // either way, and under the pre-start charter the leaf usually IS running
         // by now: an evidence-grade negative ("no run yet") would be false for most
         // of the live phase. The bare name states the assignment the frame carries.
-        return chip(false, '', `Dispatched to ${name} — run evidence arrives with the terminal receipt; this subagent itself runs on the API`);
+        return chip(false, '', `Dispatched to ${name} — run evidence arrives with the terminal receipt; ${coordinatorRouteClause(evt)}`);
     }
     const started = Number(evidence.delegated_runs_started || 0);
     const settled = Number(evidence.delegated_runs_settled || 0);
@@ -639,7 +644,7 @@ export function taskDoneIsTerminal(evt) {
 // One factual phase -> presentation vocabulary for task chips and terminal
 // headlines. Technical outcome and terminality truth stay in their existing
 // reducers; this translator never inspects event payloads or infers completion.
-export function taskPresentation(phase = 'working') {
+export function taskPresentation(phase = 'working', quietEffective = false) {
     const normalizedPhase = typeof phase === 'string' && phase.trim() ? phase.trim() : 'working';
     const word = normalizedPhase === 'done' ? 'done'
         : normalizedPhase === 'warn' ? 'warn'
@@ -648,7 +653,8 @@ export function taskPresentation(phase = 'working') {
                     : 'working';
     const english = { done: 'Done', warn: 'Done with warnings', cancelled: 'Stopped', error: 'Failed', working: 'Working' }[word];
     // The English twin of project_dialogue.OUTCOME_PHASE_HEADLINE; an install language reads it by code.
-    return { phase: normalizedPhase, headline: tr(`task.headline.${word}`, english) };
+    return { phase: normalizedPhase, headline: quietEffective === true
+        ? tr('task.headline.quiet', 'Done · no message') : tr(`task.headline.${word}`, english) };
 }
 
 function taskOutcomeMeta(evt) {
@@ -880,7 +886,7 @@ export function summarizeLogEvent(evt) {
     if (t === 'task_done') {
         const terminal = taskDoneIsTerminal(evt);
         const outcome = taskTerminalPhase(evt);
-        const presentation = taskPresentation(terminal || outcome === 'error' ? outcome : 'working');
+        const presentation = taskPresentation(terminal || outcome === 'error' ? outcome : 'working', terminal && evt.quiet_effective === true);
         const reasonCode = evt.reason_code ? String(evt.reason_code) : '';
         const artifactStatus = evt.artifact_bundle?.status || evt.artifact_status || '';
         const reviewDetails = formatReviewProjection(evt.review_projection);
@@ -1077,10 +1083,11 @@ export function taskTerminalSummary(evt = {}) {
     const record = normalizeTaskTerminalRecord(evt);
     const knownStatus = String(record?.status || record?.outcome_axes?.lifecycle?.status || '').toLowerCase();
     const observedOutcome = OBSERVED_OUTCOME_STATUSES.has(knownStatus) ? outcome : '';
-    const presentation = taskPresentation(terminal ? outcome : 'working');
-    const body = [taskStoppedWithSummary(evt) ? OWNER_STOP_DETAIL_MARKER : '', taskReasonDetail(evt),
+    const quiet = terminal && evt.quiet_effective === true;
+    const presentation = taskPresentation(terminal ? outcome : 'working', quiet);
+    const body = quiet ? '' : [taskStoppedWithSummary(evt) ? OWNER_STOP_DETAIL_MARKER : '', taskReasonDetail(evt),
         reasonCodesNote(taskReasonCodes(evt)), terminal ? savedTerminalRowNote(evt) : ''].filter(Boolean).join('\n');
-    const cause = terminal ? taskReasonDetail(evt) : '';
+    const cause = terminal && !quiet ? taskReasonDetail(evt) : '';
     return {
         ...chatView({
             phase: presentation.phase, headline: presentation.headline, body,
@@ -1090,6 +1097,7 @@ export function taskTerminalSummary(evt = {}) {
             ...(cause ? { activityPreview: cause } : {}),
         }),
         ...(observedOutcome ? { observedOutcome } : {}),
+        ...(typeof evt.quiet_effective === 'boolean' ? { quietEffective: evt.quiet_effective } : {}),
         ...(evt.model_execution && typeof evt.model_execution === 'object'
             ? { modelExecution: evt.model_execution } : {}),
         ...(Number.isInteger(evt.tool_calls) ? { toolCalls: evt.tool_calls } : {}),
@@ -1098,11 +1106,14 @@ export function taskTerminalSummary(evt = {}) {
 }
 
 // Requested route, usable solve route and provider-reported name are distinct.
-export function modelExecutionLabel(fact) {
-    if (!fact || typeof fact !== 'object') return '';
+// `model` is set only when a usable solve response observed it; an unobserved
+// execution keeps its sentence and names no model as the one that ran.
+export function modelExecutionView(fact) {
+    if (!fact || typeof fact !== 'object') return null;
     const requested = compactModel(fact.requested_model || '');
     if (fact.source !== 'usable_solve_response') {
-        return requested ? `Requested ${requested} · execution not observed` : 'Execution not observed';
+        return { observed: false, model: '', label: '',
+            value: requested ? `Requested ${requested} · execution not observed` : 'Execution not observed' };
     }
     const used = String(fact.used_model || '');
     const reported = String(fact.reported_model || '');
@@ -1110,10 +1121,15 @@ export function modelExecutionLabel(fact) {
         || fact.requested_use_local !== fact.used_local;
     const initial = requested && requestDiffers
         ? ` (initial request: ${requested}${fact.requested_use_local ? ' · local' : ''})` : '';
-    return [`Last solve response: ${compactModel(reported || used)}${initial}`,
-        fact.used_local === true ? 'local' : '', fact.provider || '',
-        reported && reported !== used ? `route: ${used}` : ''].filter(Boolean).join(' · ');
+    const model = compactModel(reported || used);
+    return { observed: true, model, label: 'Last solve response',
+        value: [`${model}${initial}`, fact.used_local === true ? 'local' : '', fact.provider || '',
+            reported && reported !== used ? `route: ${used}` : ''].filter(Boolean).join(' · ') };
+}
 
+export function modelExecutionLabel(fact) {
+    const view = modelExecutionView(fact);
+    return !view ? '' : view.label ? `${view.label}: ${view.value}` : view.value;
 }
 
 // The turn's origin label rides every projected frame of the turn (progress,

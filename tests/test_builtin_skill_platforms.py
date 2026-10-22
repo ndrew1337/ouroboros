@@ -193,7 +193,6 @@ def test_a_legacy_unix_remote_choice_on_windows_survives_off_reseed_and_on(data,
         assert calls[-1][1] == registry["connections"]["bench"]
         assert calls[-1][2] == (["bash", "-lc", "printf remote-ok"] if backend == "osworld_http" else "printf remote-ok")
 
-    monkeypatch.setattr(skill_lifecycle_actions, "_sync_schedules", lambda *args, **kwargs: None)
     clean_extension_runtime_state()
     try:
         exercise_remote()
@@ -336,7 +335,6 @@ def windows_installed(data, monkeypatch):
     from ouroboros import skill_lifecycle_actions
 
     monkeypatch.setattr(skill_lifecycle_actions, "_reconcile", lambda *args, **kwargs: {"action": "extension_loaded"})
-    monkeypatch.setattr(skill_lifecycle_actions, "_sync_schedules", lambda *args, **kwargs: None)
     return data, installs, reconciles
 
 
@@ -598,7 +596,6 @@ def _stub_lifecycle_effects(monkeypatch):
     monkeypatch.setattr("ouroboros.extension_loader.reconcile_extension",
                         lambda name, *args, **kwargs: reconciles.append(name) or {"action": "extension_loaded"})
     monkeypatch.setattr(skill_lifecycle_actions, "_reconcile", lambda *args, **kwargs: {"action": "extension_loaded"})
-    monkeypatch.setattr(skill_lifecycle_actions, "_sync_schedules", lambda *args, **kwargs: None)
     return reconciles
 
 
@@ -897,7 +894,7 @@ def test_unticking_everything_at_onboarding_stands_after_an_update(data, monkeyp
 # Real upgrade receipts: no helper unlinks them between boots.
 @pytest.fixture
 def instruction_upgrade(seed_repo, monkeypatch):
-    from ouroboros import skill_lifecycle_actions, skill_review
+    from ouroboros import skill_review
 
     repo, drive = seed_repo
     _starter(drive, "upgrade")
@@ -910,7 +907,6 @@ def instruction_upgrade(seed_repo, monkeypatch):
     _git(repo, "add", ".")
     _git(repo, "commit", "-qm", "add default instruction")
     monkeypatch.setattr(skill_builtin, "threading", SimpleNamespace(Thread=_SyncThread))
-    monkeypatch.setattr(skill_lifecycle_actions, "_sync_schedules", lambda *a, **k: None)
 
     def forbidden(*args, **kwargs):
         pytest.fail("an instruction turn-on must not review or load an extension")

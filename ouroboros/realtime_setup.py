@@ -95,6 +95,7 @@ def session_candidate(host, factory, options):
     from dataclasses import asdict, replace
     from ouroboros.capability_evidence import is_known, resolve_main_token_density
     from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
+    from ouroboros.context_window import WindowLimit, WindowRecord, resolve_window
     from ouroboros.llm_attempt import main_context_fit_refusal
     from ouroboros.loop_model_call import _main_context_profile, _physical_context_for_fit
     from ouroboros.usage_accounting import AttemptRequest
@@ -105,14 +106,21 @@ def session_candidate(host, factory, options):
     # The plan keeps its reply allowance; the route's working room travels beside it
     # and the ordinary ladder honours both. The physical guard below checks the larger.
     reserve = facts.working_reserve_tokens or plan.output_reserve_tokens
-    plan = replace(plan, window_tokens=window, status="confirmed" if known else "unprobeable", stale=False,
+    limit = WindowLimit(window, "total", facts.source, facts.observed, facts.acceptance_can_raise) if known else None
+    scope = host.turn.observation_fingerprint()
+    record = WindowRecord(scope, total=limit, reserve=reserve,
+                          declared=(limit,) if limit else ())
+    plan = replace(plan, route_fp=scope, window_witness_bound=bool(scope), window_record=record, window_tokens=window, status="confirmed" if known else "unprobeable", stale=False,
                    working_reserve_tokens=facts.working_reserve_tokens, window_basis=facts.basis)
+    record = resolve_window(plan, reserve, root=host.ctx.drive_root, bound=plan.window_witness_bound)
+    window, known = record.total_equivalent, record.usable is not None
+    plan = replace(plan, window_record=record, window_tokens=window)
     extra = [{"role": "system", "content": options.instructions}] if options.instructions else []
     rows = [*host.messages, *extra]
     raw = estimate_context_prompt_tokens(rows, host.schemas)
     def density(estimate):
         return (resolve_main_token_density(host.ctx.drive_root, plan.route_fp, plan.model,
-                                           estimate_tokens=estimate)
+                                           estimate_tokens=estimate, view_kind=plan.view_kind)
                 if facts.basis == "provider" else (1.0, "cold_estimate"))
     ratio, basis = density(raw)
     deficit, previous = 0, None
@@ -146,9 +154,11 @@ def session_candidate(host, factory, options):
         ratio, basis = density(raw)
         measured = math.ceil(raw * ratio)
         working = max(reserve, bound or 0)
+        physical_window = resolve_window(plan, working, root=host.ctx.drive_root, bound=plan.window_witness_bound)
         measurement = replace(fit.measurement, estimated_input_tokens=measured, raw_input_tokens=raw,
             measurement_density=ratio, measurement_basis=basis,
-            response_reserve_tokens=working, capacity_total_tokens=window if is_known(plan) else None)
+            response_reserve_tokens=working,
+            capacity_total_tokens=physical_window.total_equivalent if is_known(plan) else None)
         fit = replace(fit, measurement=measurement)
         request = AttemptRequest(model=host.turn.model, provider=host.turn.route.accounting_provider,
             drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, source="agent.live_conversation",

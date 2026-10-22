@@ -1073,7 +1073,9 @@ def _make_outbound(api, cue: TypingCue | None = None):
 
             # Progress telemetry and a root's own card rows → dropped by default (a child's row waits above,
             # then goes as before); the typing indicator already signals "working". Opt in via the toggle.
-            if (event.get("is_progress") or (event.get("card_row") and event.get("delegation_role") != "subagent")) and not _mirror_progress_enabled(local_settings):
+            # A row the host types as a terminal receipt (Wrap up's saved work) is no progress: it goes.
+            if (event.get("is_progress") or (event.get("card_row") and event.get("delegation_role") != "subagent"
+                                             and event.get("terminal_receipt") != "retained_work")) and not _mirror_progress_enabled(local_settings):
                 return
 
             # Routing receipts are typed annotations (suppress_bubble, no text). A landed act stays silent except for a

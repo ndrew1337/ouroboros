@@ -67,7 +67,8 @@ def project_chat(request):
                   "last_line": "Comparing the reviewer verdicts across the last three runs.",
                   "last_line_at": "2026-10-08T14:05:00Z", "tool_calls": 41, "cancelable": True},
                  {"activity_id": "transfer", "project_id": "beta", "chat_id": 8, "kind": "managed_task",
-                  "phase": "budget_paused", "pause_cause": "owner", "started_at": 1791467880},
+                  "phase": "budget_paused", "pause_cause": "owner", "started_at": 1791467880,
+                  "stop": {"cause": "pause", "scope": "tree", "release": "resume"}},
              ]}
     conversions, details, requests, continues = {}, {}, [], {}
     history = {"messages": rows, "progress": [], "has_more": False, "page_cursor": "work-cards",
@@ -622,3 +623,30 @@ def test_an_already_failed_portal_follows_a_later_fast_continue(project_chat, jo
     expect(episodes.nth(1)).to_have_text(_episode(2, "14:10–14:12"))
     assert page.locator('#chat-messages [data-continue-task]:visible').count() == 0, "no Continue stands as its action"
     card.screenshot(path=_evidence(tmp_path, project_chat, f"later-continue-{journey}"), animations="disabled")
+
+
+def test_empty_output_recovery_preserves_failed_card_and_continue(project_chat, tmp_path):
+    """The new terminal cause uses the real card/replay/Continue consumers, not a new UI."""
+    from ouroboros.owner_continue import continuation_eligibility
+    from ouroboros.project_dialogue import TASK_CAUSE_PHRASES
+    page, expect, state = project_chat["page"], project_chat["expect"], project_chat["state"]
+    reason = "output_recovery_exhausted"
+    record = _interrupted(reason_code=reason, root_task_id="creation",
+        outcome_axes={"execution": {"status": "infra_failed"}, "objective": {"status": "not_evaluated"}})
+    record["continuation_offer"] = continuation_eligibility(record, "creation")
+    assert record["continuation_offer"]["eligible"]
+    project_chat["details"]["creation"] = record
+    state["active_chat_activities"] = [r for r in state["active_chat_activities"] if r["activity_id"] != "creation"]
+    for replay in (False, True):
+        if replay:
+            page.reload()
+            page.wait_for_function("() => window.chat && document.querySelector('#chat-messages .chat-bubble')")
+        page.evaluate("s => chat.hydrateStateSnapshot(s)", with_work_fields(state))
+        card = _card(page, "creation")
+        expect(card.locator('.chat-live-phase').first).to_have_text("Failed", timeout=15000)
+        expect(card.locator('[data-continue-task]')).to_have_text("Continue")
+        expect(card).to_contain_text(TASK_CAUSE_PHRASES[reason])
+    card.screenshot(path=_evidence(tmp_path, project_chat, "output-recovery"), animations="disabled")
+    project_chat["continues"]["creation"] = {"ok": True, "successor_task_id": SUCCESSOR, "status": "scheduled"}
+    card.locator('[data-continue-task]').click()
+    expect(card.locator('[data-continue-task]')).to_have_text("Continued")

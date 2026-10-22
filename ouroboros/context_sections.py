@@ -175,10 +175,13 @@ def _registry_row(source_id: str, fields: dict) -> str:
     return f"| {source_id} | {path} | {updated} | {gaps} |"
 
 
-def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
-    try:
+def _build_installed_skills_section(env: Any, *, max_lines: int = 100, skills: Optional[List[Any]] = None) -> str:
+    try:  # ``skills``: the context build's own discovery, so this catalog and its always-on block agree
+        from ouroboros.skill_catalogue import always_in_context_skills, discover_context_skills
         from ouroboros.skill_loader import summarize_skills
-        summary = summarize_skills(pathlib.Path(env.drive_root))
+        skills = discover_context_skills(env.drive_root) if skills is None else skills
+        summary = summarize_skills(pathlib.Path(env.drive_root), skills)
+        always_on = {skill.name for skill in always_in_context_skills(skills)}
     except Exception:
         log.debug("Failed to build installed skills section", exc_info=True)
         return ""
@@ -197,12 +200,7 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
     operative = list(lines)
     count = 0
     for skill in summary.get("skills") or []:
-        if not isinstance(skill, dict):
-            continue
-        if (
-            not skill.get("enabled")
-            or not bool(skill.get("executable_review"))
-        ):
+        if not isinstance(skill, dict) or not skill.get("enabled") or not skill.get("executable_review"):
             continue
         name = _field(skill.get("name"), 80)
         if not name:
@@ -212,11 +210,8 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
         review_status = _field(skill.get("review_status"), 40)
         description = _field(skill.get("description"), 260)
         when = _field(skill.get("when_to_use"), 260)
-        surfaces = [
-            _field(item.get("name"), 100)
-            for item in (skill.get("tool_surfaces") or [])
-            if isinstance(item, dict) and item.get("name")
-        ]
+        surfaces = [_field(item.get("name"), 100) for item in (skill.get("tool_surfaces") or [])
+                    if isinstance(item, dict) and item.get("name")]
         meta = f"{kind}{', v' + version if version else ''}{', ' + review_status if review_status else ''}"
         lines.append(f"- {name} ({meta}): {description or 'No description.'}")
         operative.append(f"- {name} ({meta}); enabled; executable review")
@@ -225,6 +220,20 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
             operative.append(lines[-1])
         if when:
             lines.append(f"  Trigger: {when}")
+        if skill.get("name") in always_on:
+            lines.append("  Context: always; its text is in the Always-in-context skills section.")
+            operative.append(lines[-1])
+        suggestions = skill.get("suggested_schedules") or []
+        for suggestion in suggestions:
+            lines.append(f"  Suggests schedule {_field(suggestion.get('name'), 96)}: "
+                         f"cron {_field(suggestion.get('cron'), 160)} "
+                         f"({_field(suggestion.get('timezone') or 'local', 80)}) — "
+                         f"{_field(suggestion.get('description'), 260)}. Not scheduled unless adopted.")
+        if suggestions:
+            omitted = skill.get("suggested_schedules_omitted_count", 0)
+            lines.append(f"  Schedule source: list_skills(name={name!r}) supplies manifest.read"
+                         + (f"; {omitted} more suggestions omitted." if omitted else "."))
+            operative.append(lines[-1])
         # CPL-7 Model Experience: bounded prose; absent section renders nothing.
         experience = skill.get("model_experience")
         if isinstance(experience, dict):

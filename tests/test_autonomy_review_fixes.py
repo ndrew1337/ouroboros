@@ -39,7 +39,7 @@ def test_project_followup_consumes_only_a_permanent_refusal(tmp_path, monkeypatc
     from ouroboros.projects_registry import create_project, begin_project_deletion, complete_project_deletion
     from ouroboros.tools.followup import _handle_schedule_followup
     from ouroboros.tools.registry import ToolContext
-    from supervisor import queue, queue_schedules
+    from supervisor import queue
 
     root = tmp_path / "data"
     monkeypatch.setattr(queue, "DRIVE_ROOT", root)
@@ -48,7 +48,6 @@ def test_project_followup_consumes_only_a_permanent_refusal(tmp_path, monkeypatc
                         "QUEUE_SEQ_COUNTER_REF": {"value": 0}}.items():
         monkeypatch.setattr(queue, name, value)
     monkeypatch.setattr(queue, "persist_queue_snapshot", lambda **_: None)
-    monkeypatch.setattr(queue_schedules, "resync_skill_schedules", lambda *_: {})
     project = create_project(root, "project-a", name="Project A")
     ctx = ToolContext(repo_dir=tmp_path, drive_root=root, task_id="source-task",
                       project_id=project["id"], current_chat_id=project["chat_id"])

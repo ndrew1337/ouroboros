@@ -28,7 +28,7 @@ from contextlib import ExitStack, contextmanager
 STOP_SOURCES = frozenset({"http_single", "http_cascade", "http_graceful",
                           "owner", "owner_stop", "agent_tool", "owner_restart"})
 HOST_FIELDS = ("followup_origin", "followup_relation", "followup_hold",
-               "followup_released", "followup_restart_seen", "followup_wait")
+               "followup_released", "followup_wait")
 _CONTROL_DEPTH = threading.local()
 
 
@@ -534,9 +534,7 @@ def record_restart(root, *, new=False):
     with store.schedule_transaction(root):
         data = store.load_schedule_store(root)
         # Each boot retry while the marker exists may tighten the generation.
-        # No release is allowed during that interval. Reusing a pending bit
-        # could confuse a previous crash with a later manual Restart.
-        control = {"control_id": uuid.uuid4().hex, "pending": True, "scope": "interrupted_work"}
+        control = {"control_id": uuid.uuid4().hex}
         audit = dict(drive_root=pathlib.Path(root), operation_id=control["control_id"], actor="owner:restart",
                      task_id="", action="record_restart", schedule_id="*", reason="manual_restart")
         if not store._audit_schedule_mutation(phase="intent", result="intended", **audit):

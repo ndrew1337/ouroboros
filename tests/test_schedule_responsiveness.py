@@ -154,6 +154,7 @@ def test_held_store_defers_the_pass_while_unrelated_queue_consumers_finish(q, mo
     assert ids.count(admitted["id"]) == 1 and len(ids) == 3
     rows = _rows(q)
     assert rows["due"]["occurrence"]["phase"] == "admitted" and not rows["due"].get("hold")
+    assert rows["due"]["last_outcome"]["task_id"] == "old-0"
     assert not any(row.get("hold") for row in rows.values())
 
 
@@ -468,7 +469,7 @@ def test_the_offloop_duty_never_holds_the_tick_and_runs_single_flight(q, monkeyp
     assert passes == [True], "a closed generation starts no pass"
 
 
-def test_discovery_collision_and_billing_reads_never_hold_q(q, monkeypatch):
+def test_billing_reads_never_hold_q(q, monkeypatch):
     from supervisor import queue as queue_module, queue_schedules
 
     observed = []
@@ -479,11 +480,6 @@ def test_discovery_collision_and_billing_reads_never_hold_q(q, monkeypatch):
         return real_billing(task)
 
     monkeypatch.setattr(queue_module, "prepare_root_billing", billing)
-    monkeypatch.setattr(queue_schedules, "resync_skill_schedules",
-                        lambda *_a: observed.append(("discovery", queue_module._queue_lock._is_owned())) or {})
-    monkeypatch.setattr(queue_schedules, "_last_skill_schedule_sync", 0.0)
-    monkeypatch.setattr(queue_schedules, "skill_identity_collision_names",
-                        lambda _root: observed.append(("collisions", queue_module._queue_lock._is_owned())) or frozenset())
     _row(q, "s1", intent={"kind": "system_repo"})
     data = q.queue.load_schedule_store(q.root)
     data["tasks"].append({"id": "skill-row", "enabled": True, "source": "skill_manifest", "skill": "demo",
@@ -493,7 +489,7 @@ def test_discovery_collision_and_billing_reads_never_hold_q(q, monkeypatch):
     queue_schedules._write_scheduled_tasks(data, q.root)
     automatic_pass()
     kinds = {kind for kind, _ in observed}
-    assert {"billing", "discovery", "collisions"} <= kinds and not any(held for _, held in observed), observed
+    assert {"billing"} == kinds and not any(held for _, held in observed), observed
 
 
 @pytest.mark.parametrize("change", ["disable", "edit", "delete"])

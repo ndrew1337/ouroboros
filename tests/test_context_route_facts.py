@@ -1,6 +1,5 @@
 """Route units and working room enter the ordinary fitter before memory selection."""
 from dataclasses import asdict, replace
-import hashlib
 import json
 import math
 from types import SimpleNamespace
@@ -50,7 +49,7 @@ def addressed(built, mode="nano"):
 def test_working_reserve_is_independent_of_reply_allowance_at_initial_fit(tmp_path, mode):
     captured = core(tmp_path)
     raw = plan(captured, 0, mode=mode).projection(mode).estimated_tokens
-    window = raw + 24_000 - 1
+    window = (raw + 16_384) * 4 // 3 + 10  # root start room participates once
     ordinary = plan(captured, window, mode=mode)
     route = plan(captured, window, mode=mode, facts=RouteFacts(
         conversation_window_tokens=window, accepted_input_tokens=window * 2, working_reserve_tokens=24_000))
@@ -62,7 +61,7 @@ def test_working_reserve_is_independent_of_reply_allowance_at_initial_fit(tmp_pa
 
 
 def test_working_reserve_reaches_the_memory_floor_without_host_sections(tmp_path):
-    snapshot = syn.snapshot(story=syn.pages(3, 40_000))
+    snapshot = syn.snapshot(story=syn.pages(3, 55_000))
     captured = replace(core(tmp_path), dynamic_text="", dynamic_sections=(),
                        memory_view_json=memory_view.snapshot_json(snapshot))
     ordinary = plan(captured, 70_000)
@@ -154,8 +153,8 @@ def test_measurement_keeps_conversation_capacity_and_uses_its_counter(
     assert result.predicted_capacity_miss == (basis == "provider")
 
 
-@pytest.mark.parametrize("accepted,capacity", [(20_000, 50_000), (100_000, None)])
-def test_ordinary_measurement_keeps_its_previous_reserve_density_and_acceptance_rule(
+@pytest.mark.parametrize("accepted,capacity", [(20_000, 50_000), (100_000, 108_192)])
+def test_ordinary_measurement_keeps_reserve_and_density_with_accepted_input_lower_bound(
         tmp_path, monkeypatch, accepted, capacity):
     built = plan(core(tmp_path), 50_000)
     monkeypatch.setattr(fit, "estimate_context_prompt_tokens", lambda *_a, **_kw: 20_000)
@@ -169,24 +168,33 @@ def test_ordinary_measurement_keeps_its_previous_reserve_density_and_acceptance_
 
 @pytest.mark.parametrize("mode", ["max", "low", "nano"])
 @pytest.mark.parametrize("window", [0, 50_000, 2_000_000])
-def test_ordinary_projection_bytes_match_before_route_facts(tmp_path, monkeypatch, mode, window):
+def test_ordinary_projection_matches_equivalent_declared_route(tmp_path, monkeypatch, mode, window):
+    """The same units and reserve use one ladder; an impossible core names the same failure."""
     monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.5)
     captured = replace(core(tmp_path, memory=True), section_root="", dynamic_sections=())
-    built = plan(captured, window, mode=mode)
-    value = json.dumps({"initial": built.initial_mode, "views": {
-        mode: {"messages": built.messages_for(mode), "facts": built.projection(mode).memory_facts}
-        for mode in ("max", "low", "nano")}}, ensure_ascii=False, sort_keys=True)
-    digest = hashlib.sha256(value.encode()).hexdigest()
-    # Exact messages and view facts captured on 34662a93e, including the old cold/density pass.
-    expected = {
-        ('max', 0): '089a5899dddedd0fab4bc4fca4702d884cf0316fc7ad9468ef0904aa9682dd3d',
-        ('low', 0): 'c5d19d762b1460285d30f3c32c90ad9904451ee2144eb4fd30cc13459e843692',
-        ('nano', 0): 'b8354d1dfc05fbc56645dd484ad85c474804bd2147a413be01d32ad86a46c2f7',
-        ('max', 50000): '4e5f888693c182ead40478e84a9d6f46aebf33822184b6953d354c75e8a85c82',
-        ('low', 50000): 'e9c25fee59ca1aa957a701b9aa27f71e7ea1449ac4c8e943be2b584f22cc81d4',
-        ('nano', 50000): 'acffdbf6c77d68e8a3e90d0c88621cf9c6a92557db3fcfeb6ef5f2193897c414',
-        ('max', 2000000): '3406b4a079f8347de5c31d65f214f6d7d461abeb00ca2e0ae638c4105040b745',
-        ('low', 2000000): '54178a81e2c58c2082e111e4b965a0ef3c535088f73887def7df9a83be76d000',
-        ('nano', 2000000): 'e089de80190b9ce850bdeb540ff635df947becc913b8e50b074fb8f2809c89aa',
-    }
-    assert digest == expected.get((mode, window)), (mode, window, digest)
+    facts = RouteFacts(conversation_window_tokens=window or None, acceptance_can_raise=True)
+    if window == 50_000:
+        for route_facts in (None, facts):
+            with pytest.raises(fit.MinimumViewUnfit):
+                plan(captured, window, mode=mode, facts=route_facts)
+        return
+    ordinary = plan(captured, window, mode=mode)
+    declared = plan(captured, window, mode=mode, facts=facts)
+    assert ordinary.initial_mode == declared.initial_mode
+    for selected in ("max", "low", "nano"):
+        assert ordinary.messages_for(selected) == declared.messages_for(selected)
+        assert ordinary.projection(selected).memory_facts == declared.projection(selected).memory_facts
+
+
+def test_reprojection_keeps_accepted_input_evidence_when_mode_reserve_changes(tmp_path, monkeypatch):
+    from ouroboros import capability_evidence as ce
+    from ouroboros.context_window import record_observation
+
+    monkeypatch.setattr(ce, "canonical_evidence_root", lambda: tmp_path)
+    built = plan(core(tmp_path), 133_554, mode="max", facts=RouteFacts(
+        133_554, 133_554, 10_000, source="accepted lower bound", acceptance_can_raise=True))
+    record_observation(tmp_path, built.window_record.route_fp, accepted=150_000)
+    refit = built.reproject_for_route(window_tokens=built.window_tokens, known_window=True,
+        ratio=1, output_reserve=16_384, tool_schemas=[], start_mode="nano")
+    assert refit.window_record.input.tokens == refit.window_record.usable == 150_000
+    assert refit.window_tokens == 160_000 and refit.working_reserve_tokens == 10_000
