@@ -370,7 +370,7 @@ ouroboros/ — agent core and shared runtime (§6)
   realtime_session.py — Joined native socket teardown and JSON transport mechanics
   call_peers.py, call_protocol.py — Media peers, PCM mixing and the companion codec (§12)
   presence_call.py, presence_events.py — Presence call admission and shared event identity (§12)
-  realtime_turn.py, realtime_setup.py — call route evidence and host-selected provider input (§13)
+  realtime_turn.py, realtime_setup.py, realtime_credentials.py — call route evidence, host-selected provider input and the one credential capture a session prepares and opens with (§13)
   skill_token.py — Opaque Host Service token minting/validation (§12)
   skill_sources.py, skill_source_git.py, skill_source_catalog.py, skill_source_install.py, skill_starter.py — Sources, git caches, catalogs, install lifecycle, starter (§13)
   marketplace/ — ClawHub and install substrate (§13)
