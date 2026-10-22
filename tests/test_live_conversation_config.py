@@ -158,3 +158,16 @@ def test_unset_thinking_uses_the_selected_catalog_lowest_level_without_changing_
     host = SimpleNamespace(config=config, model=model, state={})
     assert config.thinking == ('' if saved is None else saved)
     assert session_options(host).thinking == (saved or ('minimal' if engine == 'openai' else 'low'))
+
+
+def test_the_untouched_beta_switch_is_never_written_so_a_later_default_reaches_this_install(config_api, tmp_path):
+    api, _, _, _ = config_api
+    path = tmp_path / 'feature' / 'conversation.json'
+    choice = {'provider': 'fixture-engine:voice', 'model': 'fixture-model'}
+    status, _ = request(api, {**choice, 'enabled': False})
+    assert status == 200 and 'enabled' not in json.loads(path.read_text(encoding='utf-8'))
+    status, view = request(api, {**choice, 'enabled': True})
+    assert status == 200 and view['enabled'] is True and json.loads(path.read_text(encoding='utf-8'))['enabled'] is True
+    status, view = request(api, {**choice, 'enabled': False})
+    # Once flipped, the owner's own choice stays written, default or not.
+    assert status == 200 and view['enabled'] is False and json.loads(path.read_text(encoding='utf-8'))['enabled'] is False

@@ -72,6 +72,10 @@ def register(api):
         # Ordinary extension settings route; never derives beta enablement from keys.
         if request.method == "POST":
             try:
+                try:
+                    stored = json.loads(path.read_text(encoding="utf-8"))
+                except (FileNotFoundError, ValueError):
+                    stored = {}  # an unreadable file never blocks the owner's own switch
                 config = validate(await request.json())
                 if not config.provider:
                     raise RealtimeSetupError("configuration", "Choose an engine.")
@@ -84,7 +88,12 @@ def register(api):
                         raise RealtimeSetupError("voice_unavailable", "Choose a voice from the selected model's catalog.")
                     if "thinking" in model.honours and config.thinking and config.thinking not in model.thinking_levels:
                         raise RealtimeSetupError("configuration", "Choose a thinking level from the selected model's catalog.")
-                atomic_write_json(path, asdict(config))
+                record = asdict(config)
+                # The beta default belongs to the product, not to this install: a switch the owner
+                # never flipped is not written, so a later change of the default still reaches them.
+                if "enabled" not in (stored if isinstance(stored, dict) else {}) and config.enabled == DEFAULTS["enabled"]:
+                    record.pop("enabled")
+                atomic_write_json(path, record)
                 if not config.enabled: end_feature_calls("live_conversation:call")
             except (ValueError, RealtimeSetupError) as exc:
                 return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -94,7 +103,8 @@ def register(api):
     api.register_route("config", settings, methods=["GET", "POST"])
     api.register_settings_section("conversation", title="Calls (beta)", schema={"components": [
         {"type": "markdown", "text": "The call skills are on by default. To talk, turn on Calls (beta), choose an engine "
-         "and add its API key in Settings → Accounts."},
+         "and add its API key in Settings → Secrets, under the keys the skills request. Gemini and OpenAI do not "
+         "serve Russia or Belarus."},
         {"type": "form", "route": "config", "method": "POST", "fields": [
             {"name": "enabled", "type": "checkbox", "label": "Calls (beta)", "default": False},
             {"name": "provider", "type": "select", "label": "Engine", "default": DEFAULTS["provider"], "options": []},

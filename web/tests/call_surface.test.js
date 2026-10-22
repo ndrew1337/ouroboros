@@ -69,7 +69,7 @@ test('each ending says what happened and offers its one next step', () => {
     assert.deepEqual(show(ended('peers_left')), ['Everyone left the call', [], '']);
     assert.deepEqual(show(ended('budget_exceeded')), ['The spending limit is reached', ['Open Settings'], 'error']);
     for (const code of ['missing_credential', 'missing_credential_google'])
-        assert.deepEqual(show(ended(code)), ['Calls need a selected engine’s API key — add it in Settings', ['Open Settings'], 'error'], code);
+        assert.deepEqual(show(ended(code)), ['Calls need the selected engine’s API key — add it in Settings → Secrets', ['Open Settings'], 'error'], code);
     assert.deepEqual(show(ended('authentication')), ['The voice service refused the key', ['Open Settings'], 'error']);
     assert.deepEqual(show(ended('rate_limit', { detail: 'Slow down, please.' })), ['The voice service says: “Slow down, please.”', ['Try again'], 'error']);
     assert.deepEqual(show(ended('rate_limit')), ['The voice service asked to slow down', ['Try again'], 'error']);
@@ -93,10 +93,10 @@ test('each ending says what happened and offers its one next step', () => {
     // The server's own action wins over the page's table; an action this page does not know offers nothing.
     assert.deepEqual(show(ended('engine_unavailable', { action: 'settings' })), ['Can’t reach the selected voice service', ['Open Settings'], 'error']);
     assert.deepEqual(show(ended('provider_closed', { action: 'other_engine' })), ['The voice service closed the call', [], 'error']);
-    // Settings opens where the step is: the key in Accounts → Google, the model in Models → Live calls.
+    // Settings opens where the step is: the key among the skill-requested Secrets, the model in the extension settings.
     const target = (code) => callPresentation(ended(code)).actions.map(a => [a.tab, a.focus]);
-    assert.deepEqual(target('missing_credential'), [['providers', '']]);
-    assert.deepEqual(target('authentication'), [['providers', '']]);
+    assert.deepEqual(target('missing_credential'), [['secrets', 'skill-requested-secrets']]);
+    assert.deepEqual(target('authentication'), [['secrets', 'skill-requested-secrets']]);
     assert.deepEqual(target('engine_refused'), [['advanced', 'extension-settings-sections']]);
     assert.deepEqual(target('budget_exceeded'), [['behavior', '']]);
     // Nothing about another engine is left in the words.
@@ -142,7 +142,7 @@ test('what this page finds itself, and surfaces that cannot hold a call, get wor
         ['No live model is set for this engine in Settings (Models, Live calls).', [['settings', 'advanced', 'extension-settings-sections']]]);
     const noKey = failed('missing_credential_google', { words: 'Calls need a selected engine’s API key — add it in Settings' });
     assert.deepEqual([noKey.title, noKey.actions.map(a => [a.kind, a.focus])],
-        ['Calls need a selected engine’s API key — add it in Settings', [['settings', '']]]);
+        ['Calls need a selected engine’s API key — add it in Settings', [['settings', 'skill-requested-secrets']]]);
     assert.deepEqual(failed('repo_writer_gate_closed', { words: 'Ouroboros is applying an update; try the call again in a moment.' })
         .actions.map(a => a.kind), ['retry']);
 });

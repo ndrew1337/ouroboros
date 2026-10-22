@@ -19,7 +19,8 @@ contributes:
 ---
 
 Calls are a beta, off by default. The call skills are on by default. To talk,
-turn on Calls (beta), choose an engine and add its API key in Settings → Accounts.
+turn on Calls (beta), choose an engine and add its API key in Settings → Secrets,
+under the keys the skills request.
 Gemini, Grok and OpenAI supply the engine, model and voice choices from their
 loaded catalogs. The owner's skill auto-grant setting still applies; with it off,
 requested permissions await approval in Skills.
