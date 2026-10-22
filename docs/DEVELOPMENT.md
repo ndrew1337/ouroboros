@@ -1,6 +1,6 @@
 # DEVELOPMENT.md — Development Principles & Module Guide
 
-This is Ouroboros's engineering handbook: imperative rules for changing the body, grouped by change class, each naming the surface that enforces it — a test, a gate, a CI lane — or stating honestly that none does. The first chapter fixes this book's authority beside the constitution, the architecture map, the design semantics and the reviewer checklists; the rest are the rules themselves, from naming and size discipline through the governance-artifact contract, the commit protocol, the per-change-class rules, and the build and CI topology. Read the chapter for the class of change in hand: this book is not a changelog, and a change replaces the description of the node it touched. On the official line a change also leaves each reference book no larger than it found it, so room for new text comes from the same book ("Documentation contract").
+Rules by change class name their enforcement (or its absence). The first chapter fixes authority beside BIBLE, ARCHITECTURE, DESIGN and CHECKLISTS. Update the affected node, not a changelog. On the official line, leave each reference book no larger ("Documentation contract").
 
 ## Chapters
 
@@ -18,3 +18,5 @@ This is Ouroboros's engineering handbook: imperative rules for changing the body
 - [MCP Client Integration](development/12-mcp-client-integration.md)
 - [Gateway Boundary Pattern](development/13-gateway-boundary-pattern.md)
 - [Build & CI](development/14-build-and-ci.md)
+
+`python devtools/context_fit_report.py --data ROOT --room ID --window TOKENS --reserve TOKENS` measures the ordinary projection at density 1.0: block/host/memory/tool costs, mode, ladder and margin. Options: `--mode max|low|nano`, `--json`. SQLite uses `mode=ro&immutable=1`; ROOT writes are forbidden. Live PID/lock or WAL requires `--snapshot` (private clonefile/copy, WAL recovery there). Changing inputs, stale indexes and external local skill sources are refused. No providers or live process scans; this estimates a fit, not provider acceptance.
