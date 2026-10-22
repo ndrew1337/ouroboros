@@ -47,6 +47,7 @@ VALID_SKILL_PERMISSIONS = frozenset(
         # sentence shown in the owner's chat as a System row signed with the
         # skill's name; never a model turn. Narrower than inject_chat, granted separately.
         "notify_owner",
+        "page_module",  # Trusted same-origin JavaScript in the owner's page.
         "context_snapshot",
     }
 )
@@ -56,6 +57,9 @@ _EVENT_TOPIC_RE = re.compile(r"^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$")
 # to the model's context and what that costs in tokens. Prose by design — the
 # section is rendered verbatim (bounded) on model-visible surfaces, not parsed.
 MODEL_EXPERIENCE_KEYS = ("what_model_sees", "token_effect")
+# An ``always_in_context`` body rides in every task's context, so it stays a
+# compact core; detail belongs in references the body names.
+MAX_ALWAYS_IN_CONTEXT_BODY_BYTES = 16384
 
 # ``os`` names platforms by ``sys.platform`` (the vocabulary install specs use);
 # the marketplace adapter and authors also write these spellings.
@@ -123,6 +127,7 @@ class SkillManifest:
     companion_processes: List[Dict[str, Any]] = field(default_factory=list)
     scheduled_tasks: List[Dict[str, Any]] = field(default_factory=list)
     ui_tab: Optional[Dict[str, Any]] = None
+    contributes: List[Dict[str, Any]] = field(default_factory=list)
     # ABI-1 (PluginAPI 2.0): optional declared generation, normalized to
     # {"version": "M.m", "capabilities": [...]}. Absent (None) means the
     # payload binds against the LEGACY generation by construction.
@@ -133,6 +138,9 @@ class SkillManifest:
     model_experience: Optional[Dict[str, str]] = None
     # Reviewed local-file declaration; never an executable prompt callback.
     context_snapshot: Optional[Dict[str, str]] = None
+    # Instruction skills only: the reviewed body is placed in every task's context
+    # instead of being read on demand (bounded by MAX_ALWAYS_IN_CONTEXT_BODY_BYTES).
+    always_in_context: bool = False
     # Human-readable body after SKILL.md frontmatter.
     body: str = ""
     # Unknown fields preserved for forward compatibility.
@@ -196,8 +204,6 @@ class SkillManifest:
             )
         if self.timeout_sec <= 0:
             warnings.append("timeout_sec must be positive")
-        if self.scheduled_tasks and "supervised_task" not in self.permissions:
-            warnings.append("scheduled_tasks require the supervised_task permission")
         if self.context_snapshot and "context_snapshot" not in self.permissions:
             warnings.append("context_snapshot requires its hash-bound owner permission")
         if self.plugin_api is not None:
@@ -321,6 +327,36 @@ def _parse_model_experience(raw: Any) -> Optional[Dict[str, str]]:
             "'what_model_sees' / 'token_effect' string fields"
         ),
     )
+
+
+def _parse_always_in_context(data: Dict[str, Any], body: str) -> bool:
+    """Opt an instruction body into every task's context; refusals teach."""
+    if "always_in_context" not in data or data["always_in_context"] is False:
+        return False
+    if data["always_in_context"] is not True:  # a present null is a malformed declaration, not an opt-out
+        raise SkillManifestError(
+            "'always_in_context' must be true or false",
+            fix_hint="write always_in_context: true, or omit the field (the body is then read on demand)",
+        )
+    if str(data.get("type") or "instruction").strip().lower() != "instruction":
+        raise SkillManifestError(
+            "'always_in_context' applies to instruction skills only",
+            fix_hint=("set type: instruction, or drop the field; an extension publishes "
+                      "changing facts through context_snapshot"),
+        )
+    if not body.strip():
+        raise SkillManifestError(
+            "'always_in_context' needs a non-empty SKILL.md body",
+            fix_hint="write the guidance below the frontmatter, or drop the field",
+        )
+    size = len(body.encode("utf-8"))
+    if size > MAX_ALWAYS_IN_CONTEXT_BODY_BYTES:
+        raise SkillManifestError(
+            f"the always_in_context body is {size} bytes; every task's context takes "
+            f"at most {MAX_ALWAYS_IN_CONTEXT_BODY_BYTES}",
+            fix_hint="keep the always-loaded body a compact core and move detail into reference files it names",
+        )
+    return True
 
 
 def _parse_companion_processes(companion_raw: Any) -> List[Dict[str, Any]]:
@@ -457,6 +493,26 @@ def _parse_scheduled_tasks(scheduled_raw: Any) -> List[Dict[str, Any]]:
     return scheduled_tasks
 
 
+def _parse_contributions(raw: Any) -> List[Dict[str, Any]]:
+    """Shape only; the UI catalog drops individual semantic mistakes later."""
+    hint = "use at most 32 mappings with unique lowercase ids and exactly one of placement or provides"
+    if not isinstance(raw, list) or len(raw) > 32:
+        raise SkillManifestError("'contributes' must be a list of at most 32 entries", fix_hint=hint)
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            raise SkillManifestError("each 'contributes' entry must be a mapping", fix_hint=hint)
+        ident = item.get("id")
+        if not isinstance(ident, str) or not re.fullmatch(r"[a-z0-9_]{1,40}", ident):
+            raise SkillManifestError("contributes.id must match [a-z0-9_]{1,40}", fix_hint=hint)
+        if ident in seen:
+            raise SkillManifestError(f"duplicate contributes.id {ident!r}", fix_hint=hint)
+        seen.add(ident)
+        if ("placement" in item) == ("provides" in item):
+            raise SkillManifestError(f"contributes.{ident} needs exactly one of placement/provides", fix_hint=hint)
+    return [dict(item) for item in raw]
+
+
 def _manifest_from_mapping(data: Dict[str, Any], *, body: str) -> SkillManifest:
     known = {
         "name",
@@ -477,9 +533,11 @@ def _manifest_from_mapping(data: Dict[str, Any], *, body: str) -> SkillManifest:
         "companion_processes",
         "scheduled_tasks",
         "ui_tab",
+        "contributes",
         "plugin_api",
         "model_experience",
         "context_snapshot",
+        "always_in_context",
         "schema_version",
     }
     extras: Dict[str, Any] = {
@@ -563,6 +621,7 @@ def _manifest_from_mapping(data: Dict[str, Any], *, body: str) -> SkillManifest:
                 or ":" in path or path.endswith("/")):
             raise SkillManifestError("context_snapshot.path must name a file beneath the skill state directory")
         context_snapshot = {"path": path}
+    always_in_context = _parse_always_in_context(data, body)
 
     companion_processes = _parse_companion_processes(data.get("companion_processes", []))
 
@@ -624,9 +683,11 @@ def _manifest_from_mapping(data: Dict[str, Any], *, body: str) -> SkillManifest:
         companion_processes=companion_processes,
         scheduled_tasks=scheduled_tasks,
         ui_tab=ui_tab,
+        contributes=_parse_contributions(data.get("contributes", [])),
         plugin_api=plugin_api,
         model_experience=model_experience,
         context_snapshot=context_snapshot,
+        always_in_context=always_in_context,
         body=body,
         raw_extra=extras,
         schema_version=schema_version_int,
@@ -655,6 +716,7 @@ __all__ = [
     "SKILL_MANIFEST_SCHEMA_VERSION",
     "MAX_SKILL_CONFLICTS",
     "MAX_SKILL_NAME_LENGTH",
+    "MAX_ALWAYS_IN_CONTEXT_BODY_BYTES",
     "MODEL_EXPERIENCE_KEYS",
     "VALID_SKILL_TYPES",
     "VALID_SKILL_RUNTIMES",

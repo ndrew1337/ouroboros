@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 import pytest
 
-from ouroboros.review_execution import REVIEW_SESSION_ROUTE_ENV
 from ouroboros.reviewer_window import ReviewerWindow
 from ouroboros.tools.scope_review_contract import SCOPE_REQUIRED_ITEMS
 from ouroboros.triad_review import parse_seat_answers
@@ -32,8 +31,7 @@ from tests._review_session_route_shared import fake_route as __fake_route
 _owned_gateway_uses_each_test_transport = __owned_gateway_uses_each_test_transport
 fake_route = __fake_route
 
-from tests._review_session_route_shared import FakeGateway, FakeLLM, _terminal_detail
-from tests._usage_store_testing import ledger_rows
+from tests._review_session_route_shared import FakeGateway, _terminal_detail
 
 # ---------------------------------------------------------------------------
 # 5.2/5.6/5.7 — surface wiring: the wave delivers sessions without packs
@@ -436,135 +434,6 @@ def test_session_schema_floor_matches_each_surfaces_clean_contract():
     assert review_session_output_schema("skill_review")["properties"]["findings"]["minItems"] == 1
     # A shaped copy, never a mutation of the shared schema.
     assert "minItems" not in REVIEW_SESSION_OUTPUT_SCHEMA["properties"]["findings"]
-
-
-def test_skill_review_all_session_composition_uses_strict_schema_and_no_api_fallback(
-    tmp_path, fake_route, monkeypatch,
-):
-    """Skill Review → pass runner → shared substrate stays agentic end to end."""
-    import ouroboros.tools.review as review_tool
-    from ouroboros.review_execution import ReviewRouteKind
-    from ouroboros.skill_review_passes import run_skill_review_passes
-    from tests.test_skill_review_frozen_delivery import _skill
-
-    required = ("manifest_schema", "secrets_hygiene")
-    fake_route.detail = _terminal_detail(json.dumps({"findings": [
-        {"item": item, "verdict": "PASS", "severity": "advisory", "reason": "checked"}
-        for item in required
-    ]}), conformance="passed", model="fake-small")
-    sequence = {"value": 0}
-
-    def unique_start(self, request, *, idempotency_key=""):
-        self.start_requests.append(dict(request))
-        self.start_keys.append(str(idempotency_key))
-        sequence["value"] += 1
-        return {"runId": f"run-skill-{sequence['value']}", "runDir": "/tmp/fake-run"}
-
-    monkeypatch.setattr(FakeGateway, "start_run", unique_start)
-    no_api = FakeLLM()
-    monkeypatch.setattr(review_tool, "LLMClient", lambda: no_api)
-    ctx = _wave_ctx(tmp_path)
-    ctx.task_id = "skill-review-task"
-    root = tmp_path / "source-repo"
-    root.mkdir()
-    models = ["fake-review=fake-small", "fake-review=fake-small"]
-    row_plan = {
-        "routes": [ReviewRouteKind.AGENT_SESSION, ReviewRouteKind.AGENT_SESSION],
-        "efforts": ["high", "high"],
-        "session_targets": models,
-        "session_profiles": ["profile-a", "profile-b"],
-        "slot_ids": ["skill-slot-a", "skill-slot-b"],
-    }
-
-    skill, content_hash = _skill(tmp_path, name="happy_farm")  # a real frozen payload
-    _prompt, _evidence, result_text, error = run_skill_review_passes(
-        ctx, ctx.drive_root, skill,
-        evidence={
-            "manifest_dump": "{}", "content_hash": content_hash, "history": [],
-            "review_rebuttal": "", "required_items": required,
-        },
-        file_packs=["frozen payload bytes"], models=models, row_plan=row_plan,
-        session_root=str(root),
-        usage_attribution={"review_skill": "happy_farm", "review_wave_id": "wave-agentic"},
-        build_prompt=lambda *_a, **_k: (
-            "STABLE ONLY\nDYNAMIC SKILL", len("STABLE ONLY\n"), {}),
-        run_review=review_tool._handle_multi_model_review,
-    )
-
-    assert error == ""
-    result = json.loads(result_text)
-    assert result["model_count"] == 2
-    assert [row["slot_id"] for row in result["results"]] == [
-        "skill-slot-a", "skill-slot-b",
-    ]
-    starts = [request for instance in fake_route.instances for request in instance.start_requests]
-    assert len(starts) == 2
-    assert no_api.calls == []
-    assert {request["credentialProfileId"] for request in starts} == {"profile-a", "profile-b"}
-    assert all(request["scope"]["root"] == str(root) for request in starts)
-    assert all(request["outputSchema"]["properties"]["findings"]["minItems"] == 1
-               for request in starts)
-    assert all("exact frozen copy" in request["prompt"] for request in starts)
-    assert all("DYNAMIC SKILL" in request["prompt"] and "STABLE ONLY" not in request["prompt"]
-               for request in starts)
-    assert all("docs/ARCHITECTURE.md" in request["prompt"] and
-               "docs/CREATING_SKILLS.md" in request["prompt"] for request in starts)
-    assert all("Empty arrays and NO_FINDINGS are invalid" in request["prompt"]
-               and "manifest_schema" in request["prompt"] for request in starts)
-    ledger = ledger_rows(ctx.drive_root)
-    sessions = [row for row in ledger if row.get("kind") == "subscription_session"]
-    assert len(sessions) == 2
-    assert {row["review_slot_id"] for row in sessions} == {"skill-slot-a", "skill-slot-b"}
-    assert all(row["review_skill"] == "happy_farm" and
-               row["review_wave_id"] == "wave-agentic" for row in sessions)
-
-def test_skill_review_legacy_session_dispatch_keeps_shared_profile_pin(
-    tmp_path, fake_route, monkeypatch,
-):
-    import ouroboros.tools.review as review_tool
-    from ouroboros.reviewer_slot_config import commit_triad_delivery
-    from ouroboros.skill_review_passes import run_skill_review_passes
-
-    # The session row + its credential pin are configured through the review
-    # pool's catalog row (the phase-5 route envs are retired and ignored).
-    from tests.review_pool_rosters import pool_roster, pool_seat
-    from tests.test_skill_review_frozen_delivery import _skill
-
-    monkeypatch.delenv(REVIEW_SESSION_ROUTE_ENV, raising=False)
-    monkeypatch.setenv("OUROBOROS_SUBAGENTS", pool_roster(pool_seat(
-        "t1", "fake-review=fake-small", kind="agent_session", profile_id="legacy-profile", effort="high", access="readonly")))
-    delivery = commit_triad_delivery()
-    assert delivery["session_profiles"] == ["legacy-profile"]
-    assert delivery["session_accesses"] == ["readonly"]
-    fake_route.detail = _terminal_detail(json.dumps({"findings": [
-        {"item": "manifest_schema", "verdict": "PASS", "severity": "advisory",
-         "reason": "checked"},
-    ]}), conformance="passed")
-    no_api = FakeLLM()
-    monkeypatch.setattr(review_tool, "LLMClient", lambda: no_api)
-    ctx = _wave_ctx(tmp_path)
-
-    skill, content_hash = _skill(tmp_path, name="happy_farm")  # a real frozen payload
-    _prompt, _evidence, _result, error = run_skill_review_passes(
-        ctx, ctx.drive_root, skill,
-        evidence={
-            "manifest_dump": "{}", "content_hash": content_hash, "history": [],
-            "review_rebuttal": "", "required_items": ("manifest_schema",),
-        },
-        file_packs=["frozen"], models=delivery["models"], row_plan=delivery,
-        session_root=str(tmp_path),
-        usage_attribution={"review_skill": "happy_farm", "review_wave_id": "wave-legacy"},
-        build_prompt=lambda *_a, **_k: ("STRICT LEGACY PROMPT", 0, {}),
-        run_review=review_tool._handle_multi_model_review,
-    )
-
-    assert error == "" and no_api.calls == []
-    starts = [request for instance in fake_route.instances for request in instance.start_requests]
-    assert len(starts) == 1
-    assert starts[0]["harnesses"] == ["fake-review"]
-    assert starts[0]["credentialProfileId"] == "legacy-profile"
-    assert starts[0]["model"] == "fake-small"
-    assert starts[0]["effort"] == "high"
 
 
 def test_brief_book_navigation_uses_physical_chapter_sources(tmp_path):

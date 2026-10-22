@@ -3,7 +3,7 @@
 On synthetic actors of the sizes measured on the owner's copy (Main, a Project room, consciousness, a child
 whose parent is in a Project or in Main, a nanny) every cell of eight windows by three
 preferred modes the capacity-sizing utility identifies a fitting view. Main keeps current
-Max books even when that estimate misses: only actual refusal recovery selects another
+Max books at startup: known-window pressure or actual refusal recovery selects another
 document mode. Memory granularity still fits; unknown capacity supplies no window step.
 An owner-selected Low or Nano target is a second boundary for its own steps
 only; task-local Low and a mode the window lowered have none (only the owner's own choice
@@ -27,7 +27,7 @@ RESERVE = {"max": 65_536, "low": 65_536, "nano": cb.NANO_MIN_HEADROOM_TOKENS}
 
 
 def _start(name, window, preferred, *, ratio=1.0, known=True, snapshot=None):
-    """A capacity-sized view, independent of Main's actual-refusal-only Max book selection."""
+    """A capacity-sized view, independent of Main's Max book selection at startup."""
     snapshot = snapshot or syn.actor(name)
     fixed = syn.FIXED[name]
     minimal = mf.minimal_view_tokens(snapshot, window_tokens=window)
@@ -221,7 +221,7 @@ def _built(tmp_path, monkeypatch, *, books=80_000, ratio=None):
     core = context._capture_context_core(env, memory, dict(_TASK), None, None)
     core = dataclasses.replace(core, architecture_md=core.architecture_md + "\n\n" + "word " * (books // 5))
     if ratio is not None:
-        monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a: ratio)
+        monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_a, **_kw: ratio)
 
     def plan(window, *, status="asserted", preferred="max", tool_schemas=None):
         evidence = SimpleNamespace(route_fp="r", status=status, stale=status != "asserted", window_tokens=window)
@@ -292,7 +292,7 @@ def test_calibration_changes_measurement_without_selecting_different_max_books(t
     border = _needs(core, plan)["max"] - 50
     full = plan(10_000_000).messages_for("max")[0]["content"][0]
     for ratio in (0.98, 1.0, 1.02):
-        monkeypatch.setattr("ouroboros.context_fit._route_calibration_ratio", lambda *_a, _r=ratio: _r)
+        monkeypatch.setattr("ouroboros.context_fit._route_calibration_ratio", lambda *_a, _r=ratio, **_kw: _r)
         built = plan(border)
         assert built.initial_mode == "max"
         assert built.projection("max").calibration_ratio == ratio
@@ -330,7 +330,7 @@ def test_the_loop_does_not_report_predicted_max_as_a_lowered_start(tmp_path, mon
             return "test-model"
 
     monkeypatch.setattr(loop, "call_llm_with_retry", lambda *_a, **_kw: ({"role": "assistant", "content": "done"}, 0.0))
-    monkeypatch.setattr(loop, "_run_task_acceptance_review_once", lambda **_kw: False)
+    monkeypatch.setattr("ouroboros.tools.review_result.result_review_at_delivery", lambda *_a, **_kw: False)
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     core, plan = _built(tmp_path / "w", monkeypatch)
     for name, window in (("tight", 1), ("roomy", 10_000_000)):
@@ -529,10 +529,11 @@ def test_explicit_post_refusal_low_projection_remains_available(tmp_path, monkey
     tool_ctx = SimpleNamespace(memory_view_facts=shown, _execution_trace={VIEW_TRACE_KEY: dict(shown)})
     ctx = SimpleNamespace(active_context_mode="max", context_fit_plan=built, messages=messages, tool_schemas=[],
                           tools=SimpleNamespace(_ctx=tool_ctx), task_id="t", round_idx=1,
-                          event_queue=None, drive_logs=tmp_path, accumulated_usage={})
+                          event_queue=None, drive_logs=tmp_path, accumulated_usage={},
+                          active_model=built.model, active_effort="")
     events = []
     monkeypatch.setattr(loop, "_emit_checkpoint_event", lambda *_a, **_kw: events.append(_a[-1]))
-    # This helper is entered by the typed-refusal caller, not by a prediction.
+    # Both a known-window prediction and a typed refusal enter this recovery helper.
     _reproject_actual_overflow_low(ctx)
     assert ctx.active_context_mode == tool_ctx.active_context_mode == "low"
     assert ctx.messages[0] == built.projection("low").system_message()

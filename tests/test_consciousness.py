@@ -72,7 +72,8 @@ def clock(monkeypatch, tmp_path):
 
     monkeypatch.setattr(workers, "handle_wake_direct", handle_wake_direct)
     monkeypatch.setattr(clock_module, "allowance_window", lambda root, now=None, **_display_read: dict(AVAILABLE))
-    monkeypatch.setattr(BackgroundConsciousness, "_running_roots", staticmethod(lambda: 1))
+    monkeypatch.setattr("supervisor.queue.live_consciousness_roots", lambda: [
+        {"task_id": "root", "title": "Root", "consciousness_cause": "started"}])
     get_direct_activity_registry().clear()
     clock = BackgroundConsciousness(tmp_path, tmp_path / "repo", lambda: store.get("owner_chat_id"), now=T0)
     yield SimpleNamespace(clock=clock, store=store, launches=launches, receipt=receipt, root=tmp_path)
@@ -86,7 +87,7 @@ def _events(root):
 
 def _register(task_id, *, initiator=""):
     actor = SimpleNamespace(_busy=True, _current_task_id=task_id, _accepting_owner_messages=True,
-                            _current_task_metadata={"initiator": initiator} if initiator else {},
+                            _current_task_metadata={"initiator": initiator, "wake_cause": "own_clock"} if initiator else {},
                             _current_chat_id=7, _current_task_text="x", _task_started_ts=T0)
     return get_direct_activity_registry().register(task_id, 7, actor=actor)
 
@@ -241,10 +242,12 @@ def test_inventory_source_failure_never_advances_accepted_boundary(clock, monkey
 
 
 @pytest.mark.parametrize('version', [1, 2])
-def test_inline_inventory_migrates_and_retains_closed_task_late_review(clock, version):
+def test_inline_inventory_migrates_to_the_source_bound_transitions(clock, version):
+    """A v1 inline inventory migrates to the v2 source-bound record (a late-review wake of a
+    closed task left with the acceptance machine; the migration stays)."""
     from ouroboros import consciousness_wake as wake
     from ouroboros.consciousness import OBSERVATION_STATE_KEY
-    from tests.test_consciousness_wake import _late_panel, _write
+    from tests.test_consciousness_wake import _write
 
     _write(clock.root, 'old', status='completed', ts=_iso(T0 - 86400))
     prior = wake.observe_wake(clock.root, boundary=None, since=T0 - 10, now=T0).boundary
@@ -255,13 +258,6 @@ def test_inline_inventory_migrates_and_retains_closed_task_late_review(clock, ve
     assert ('task old completed' in clock.launches[-1]['text']) is (version == 1)
     accepted = clock.store[OBSERVATION_STATE_KEY]['transitions']
     assert set(accepted) == {'version', 'source_ref'} and accepted['version'] == 2
-    projection, _ref = _late_panel(clock.root, 'old', settled_at=T0 - 70000)
-    _write(clock.root, 'old', review_projection=projection)
-    for index in (2, 3):
-        clock.receipt['task_id'] = f'wake000{index}'
-        clock.clock._next_wake_at = T0 + index * FLOOR
-        assert clock.clock.tick(T0 + index * FLOOR) == 'launched'
-        assert ('late review settled for task old' in clock.launches[-1]['text']) is (index == 2)
 
 
 @pytest.mark.parametrize('failure', ['write', 'readback', 'bootstrap_write'])
@@ -431,7 +427,7 @@ def test_launch_starts_an_ordinary_main_turn_with_the_wake_envelope(clock):
     assert meta["root_cost_ceiling_usd"] == 17.5
     assert "root_limit_usd" not in meta
     text = launch["text"]
-    assert text.startswith("[Wake-up · heartbeat]") and "level=act" in text and "spent=2.50/20.00" in text
+    assert text.startswith("[Wake-up · heartbeat]") and "level=Acts" in text and "spent=2.50/20.00" in text
     assert "running=1/2" in text and "interval=1200" in text and "toggle_evolution" in text
     assert "no wake since this process started" in text
     assert launch["on_finished"] == clock.clock._wake_finished
@@ -582,24 +578,20 @@ def _launched(clock, now=T0 + FLOOR + 1):
     return clock.launches[-1]["on_finished"]
 
 
-def test_finish_schedules_the_chosen_interval_clamped(clock, monkeypatch):
+@pytest.mark.parametrize(("interval", "expected"), [(100, FLOOR), (10 ** 6, CEILING), (None, DEFAULT)])
+def test_finish_schedules_the_chosen_interval_clamped(clock, monkeypatch, interval, expected):
     from ouroboros.task_results import write_task_result
     write_task_result(clock.root, "wake0001", "completed", result="Finished")
     finished = _launched(clock)
     monkeypatch.setattr(clock_module.time, "time", lambda: T0 + 5000)
-    clock.store[INTERVAL_STATE_KEY] = 100  # below the floor
+    if interval is not None:
+        clock.store[INTERVAL_STATE_KEY] = interval
     finished("wake0001", True)
-    assert clock.clock.next_wake_at == T0 + 5000 + FLOOR
+    assert clock.clock.next_wake_at == T0 + 5000 + expected
     assert clock.store[LAST_WAKE_STATE_KEY] == T0 + 5000
     snapshot = clock.clock.status_snapshot()
     assert snapshot["last_wake_outcome"] == "done" and snapshot["last_error"] == ""
     assert snapshot["last_wake_at"].startswith("2027-")
-    clock.store[INTERVAL_STATE_KEY] = 10 ** 6  # above the ceiling
-    finished("wake0001", True)
-    assert clock.clock.next_wake_at == T0 + 5000 + CEILING
-    del clock.store[INTERVAL_STATE_KEY]  # no choice → the default
-    finished("wake0001", True)
-    assert clock.clock.next_wake_at == T0 + 5000 + DEFAULT
 
 
 def test_events_during_a_wake_never_shorten_the_next_interval(clock, monkeypatch):
@@ -618,12 +610,12 @@ def test_runner_failure_backs_off_by_doubling_until_a_wake_succeeds(clock, monke
     assert clock.clock.next_wake_at == T0 + 5000 + DEFAULT * 2
     snapshot = clock.clock.status_snapshot()
     assert snapshot["last_wake_outcome"] == "failed" and "wake0001" in snapshot["last_error"]
-    finished("wake0001", False)
-    assert clock.clock.next_wake_at == T0 + 5000 + DEFAULT * 4
-    finished("wake0001", False)
-    assert clock.clock.next_wake_at == T0 + 5000 + CEILING  # 3300 * 8 > 14400
-    finished("wake0001", True)
-    assert clock.clock.next_wake_at == T0 + 5000 + DEFAULT
+    # Each failure belongs to a distinct admitted wake; duplicate callbacks do nothing.
+    for index, ok, delay in [(2, False, DEFAULT * 4), (3, False, CEILING), (4, True, DEFAULT)]:
+        clock.receipt["task_id"] = f"wake000{index}"
+        finished = _launched(clock, now=clock.clock.next_wake_at)
+        finished(clock.receipt["task_id"], ok)
+        assert clock.clock.next_wake_at == T0 + 5000 + delay
 
 
 # --- events never move the wake (#1603) --------------------------------------------
@@ -697,6 +689,7 @@ def test_status_snapshot_carries_the_alarm_facts(clock):
         "enabled", "level", "next_wake_at", "last_wake_at", "last_wake_task_id",
         "last_wake_outcome", "last_error", "spent_24h_usd", "daily_usd", "allowance_resets_at",
         "tasks_running", "max_tasks", "live_wake_task_id", "unknown_unmetered", "integrity_degraded",
+        "spend_by_cause", "counted_roots", "places_brief",
     }
     assert snapshot["enabled"] is True and snapshot["level"] == "act"
     assert snapshot["unknown_unmetered"] == 0 and snapshot["integrity_degraded"] is False
@@ -736,6 +729,7 @@ def test_finish_parked_wake_keeps_slot_and_runner_backoff(clock, monkeypatch, pa
     from ouroboros.task_results import write_task_result
     write_task_result(clock.root, "wake0001", "scheduled",
                       budget_pause={"state": pause_state, "reason": "budget"})
+    _launched(clock)
     clock.clock._backoff = 8
     clock.clock._wake_finished("wake0001", True)
     snapshot = clock.clock.status_snapshot()
@@ -746,6 +740,7 @@ def test_finish_parked_wake_keeps_slot_and_runner_backoff(clock, monkeypatch, pa
 
 def test_finish_unreadable_wake_never_reports_done(clock, monkeypatch):
     import ouroboros.task_results as results
+    _launched(clock)
     monkeypatch.setattr(results, "load_task_result", lambda *a, **k: (_ for _ in ()).throw(OSError("read failed")))
     clock.clock._wake_finished("wake0001", True)
     assert clock.clock.status_snapshot()["last_wake_outcome"] == "unknown"
@@ -756,6 +751,7 @@ def test_finish_before_dispatch_budget_pause_is_not_done(clock):
     from ouroboros.task_results import write_task_result
     write_task_result(clock.root, "wake0001", "scheduled", reason_code="budget_exhausted",
                       resource_limit={"replay_safe": True, "physical_calls": 0})
+    _launched(clock)
     clock.clock._wake_finished("wake0001", True)
     assert clock.clock.status_snapshot()["last_wake_outcome"] == "paused"
     assert clock.clock._backoff == 1

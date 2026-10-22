@@ -34,18 +34,16 @@ from typing import Any, Dict
 
 import pytest
 
-from ouroboros import config
 from ouroboros.config import DATA_DIR
 from ouroboros.contracts.skill_manifest import parse_skill_manifest_text
 from ouroboros.extension_isolated_deps import isolated_site_dirs_scope
-from ouroboros.marketplace.install import _run_skill_review
 from ouroboros.marketplace.install_specs import install_specs_hash
 from ouroboros.marketplace.isolated_deps import (
     install_isolated_dependencies,
     python_runtime_binary,
     read_deps_state,
 )
-from ouroboros.review_records import review_slot_awaiting, review_slot_unresolved
+from ouroboros.settings_defaults import SETTINGS_DEFAULTS
 from ouroboros.skill_dependencies import auto_install_specs_for_skill
 from ouroboros.skill_loader import (
     _sanitize_skill_name,
@@ -55,12 +53,8 @@ from ouroboros.skill_loader import (
     save_enabled,
 )
 from ouroboros.skill_readiness import skill_readiness_for_execution
-from ouroboros.skill_review_cycles import SUBSTANTIVE_SKILL_REVIEW_STATUSES
-from ouroboros.skill_review_history import load_history
-from ouroboros.skill_review_status import normalize_skill_review_status
 from ouroboros.tools.registry import ToolContext
 from ouroboros.tools.skill_preflight import _handle_skill_preflight
-from tests.review_pool_rosters import pool_roster, pool_seat, set_review_pool
 
 pytestmark = pytest.mark.skill_smoke
 
@@ -537,18 +531,13 @@ def test_backlog_manager_summary_offline(install_skill, tmp_path):
 # Tier 6 as two separate pytest invocations and only the Tier 6 step carries
 # the secret. Missing key = hard red, not a skip (owner directive).
 #
-# Review call follows the production ordering (review first, dependency
-# install only after an executable review; auto-grant runs inside
-# review_skill). Enforcement is pinned to `blocking` so auto-grant can only
-# happen on a clean/warnings verdict — under the production default
-# `advisory` even a `blockers` verdict is executable and would auto-grant
-# before this test rejects it. Enablement here is "enable persistence
-# prerequisites" (review gate + grants + deps + enabled.json +
-# skill_readiness_for_execution), NOT live extension loading —
-# reconcile_extension is server runtime, consistent with the Tier 5 posture.
-#
-# Cost (measured 2026-07-17, flash x1 low effort): ~$0.29/skill ≈ $1.15 per
-# CI run for the 4-skill subset on one OS; a verdict retry doubles at most.
+# One ordinary author task owns the INITIAL public skill_review and (only on
+# evidence-grounded disagreement) ONE review_rebuttal. Its two paid-cycle cap
+# counts infrastructure failures too: these may leave RED without reassessment.
+# The independent persisted gate decides, never the author's final prose.
+# Fresh HOME/state, disabled payload, no turn-on intent, env-only provider key;
+# the server tree stops before enable-persistence checks below.
+# Author kickoff/completion add paid calls even when the initial review is clean.
 # ---------------------------------------------------------------------------
 
 # Owner-picked subset: a2a (mandated) + duckduckgo (core keyless search;
@@ -558,7 +547,13 @@ def test_backlog_manager_summary_offline(install_skill, tmp_path):
 # from the official catalog; no remaining official skill requests a protected
 # token, so that tier is unexercised here.
 REVIEW_SKILLS = ("a2a", "duckduckgo", "perplexity")
-_REVIEW_MODEL = "google/gemini-3.5-flash"
+_REVIEW_MODEL = "deepseek/deepseek-v4.1-flash"
+# Shipped reviewer transport window; the ordinary task covers two windows
+# plus author reasoning. Infrastructure errors stay RED without a new task.
+_REVIEW_WINDOW_SEC = float(SETTINGS_DEFAULTS["OUROBOROS_LLM_TRANSPORT_READ_TIMEOUT_SEC"])
+_REVIEW_WAVES = 2
+_REVIEW_AUTHOR_TIMEOUT_SEC = int(_REVIEW_WAVES * _REVIEW_WINDOW_SEC + 600)
+_REVIEW_TEST_TIMEOUT_SEC = int((_REVIEW_WAVES + 1) * _REVIEW_WINDOW_SEC + 900)
 # Expected auto-granted settings keys per skill (grants are request-keyed,
 # not value-keyed; empty values grant fine and only bite at runtime).
 _REVIEW_EXPECTED_KEYS = {
@@ -581,125 +576,35 @@ def review_secret():
     )
 
 
-@pytest.fixture()
-def review_env(monkeypatch, tmp_path):
-    # Cheap + fast verdicts: one reviewer (the production-supported
-    # single_reviewer_no_diversity degraded mode) at low reasoning effort. Since
-    # the review pool (#1639) a reviewer is a marked row of the subagent catalog,
-    # and the retired OUROBOROS_REVIEW_MODELS / OUROBOROS_EFFORT_REVIEW are not
-    # read from the environment (docs/architecture/11-frozen-contracts-v1.md);
-    # native is the delivery the lane-era slot ran.
-    set_review_pool(monkeypatch, pool_roster(pool_seat(
-        "skill-smoke-reviewer", _REVIEW_MODEL, delivery="native", effort="low")))
-    monkeypatch.setenv("OUROBOROS_REVIEW_ENFORCEMENT", "blocking")
-    monkeypatch.setenv("OUROBOROS_REVIEW_MODEL_TIMEOUT_SEC", "300")
-    monkeypatch.setenv("OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS", "true")
-    # get_auto_grant_enabled reads the settings FILE first; point the module
-    # at a missing path so the env value above is authoritative (the pattern
-    # tests/test_skill_review.py uses).
-    monkeypatch.setattr(config, "SETTINGS_PATH", tmp_path / "missing-settings.json")
-
-
-def _skill_state_dir(name: str) -> pathlib.Path:
-    return DATA_DIR / "state" / "skills" / name
-
-
-def _run_review_flow(slug: str, name: str) -> tuple[str, str, str, Dict[str, Any]]:
-    """Review first, dependencies only after an executable review (the production ordering)."""
-    from ouroboros.skill_loader import review_status_allows_execution
-    from ouroboros.skill_review_runner import _reconcile_deps_after_pass_review
-
-    status, findings, error = _run_skill_review(DATA_DIR, REPO_ROOT, name)
-    payload: Dict[str, Any] = {"review_status": status, "review_findings": findings, "review_error": error}
-    deps_status = "not_required"
-    if review_status_allows_execution(status) and not error:
-        deps_status, deps_error = _reconcile_deps_after_pass_review(DATA_DIR, name)
-        payload.update({"deps_status": deps_status, "deps_error": deps_error})
-    return str(status), str(error or ""), str(deps_status), payload
-
-
-def _review_diag(name: str, status: str, error: str, payload: Dict[str, Any]) -> str:
-    """Full findings + raw actor records — reviewer output is never truncated."""
-    parts = [f"status={status!r} error={error!r}"]
-    parts.append(f"review_findings={json.dumps(payload.get('review_findings'), ensure_ascii=False)}")
-    review_path = _skill_state_dir(name) / "review.json"
-    if review_path.exists():
-        review = json.loads(review_path.read_text(encoding="utf-8"))
-        parts.append(f"reviewer_models={review.get('reviewer_models')}")
-        parts.append(
-            "raw_actor_records="
-            + json.dumps(review.get("raw_actor_records"), ensure_ascii=False)
-        )
-    # Quorum failures return before review.json is saved. Their actors live in
-    # history, including provider errors that look like malformed verdicts at
-    # this boundary. Include the latest attempt even if an older review exists.
-    history = load_history(DATA_DIR, name, limit=1)
-    if history:
-        parts.append("latest_review_history=" + json.dumps(history[-1], ensure_ascii=False))
-    return "\n".join(parts)
-
-
 def _actor_reported_valuation_usd(review: Dict[str, Any]) -> float:
     """Non-authoritative reviewer telemetry, kept only for live-smoke diagnostics."""
     return sum(float(rec.get("cost_usd") or 0.0) for rec in review.get("raw_actor_records") or [])
 
 
-def _smoke_retry_refusal(name: str, status: str) -> str:
-    """Retry only settled work, retaining production replay/cycle and custody facts."""
-    if status not in ("clean", "warnings") and normalize_skill_review_status(status) in SUBSTANTIVE_SKILL_REVIEW_STATUSES:
-        return f"recorded {status!r} verdict is final for identical material"
-    skill, history = find_skill(DATA_DIR, name), load_history(DATA_DIR, name, limit=1)
-    if skill is None or not history or history[-1].get("content_hash") != skill.content_hash:
-        return "no recorded wave for the current content"
-    records = history[-1].get("raw_actor_records")
-    if not isinstance(records, list) or not records:
-        return "the recorded wave has no reviewer records"
-    stack = list(records)
-    while stack:
-        row = stack.pop()
-        if not isinstance(row, dict):
-            return "reviewer settlement is unknown"
-        if review_slot_awaiting(row) or review_slot_unresolved(row) or row.get("late_result_pending"):
-            return "reviewer work is still unsettled in the original wave"
-        children = row.get("raw_results")
-        if isinstance(children, list) and children:
-            stack.extend(children)
-        elif row.get("operation_state") not in {"settled", "late_settled", "not_dispatched"}:
-            return "reviewer settlement is unknown"
-    return ""
-
-
-def _review_with_one_settled_retry(slug: str, name: str):
-    status, error, deps_status, payload = _run_review_flow(slug, name)
-    failed = status not in ("clean", "warnings") or error or (slug in DEPS_SKILLS and deps_status != "installed")
-    if not failed:
-        return status, error, deps_status, payload, ""
-    refusal = _smoke_retry_refusal(name, status)
-    note = f" (not retried: {refusal})" if refusal else " after one settled retry"
-    print(f"{slug}: first attempt not OK; original state kept{note}\n"
-          + _review_diag(name, status, error, payload))
-    if refusal:
-        return status, error, deps_status, payload, note
-    return (*_run_review_flow(slug, name), note)
-
-
-# 2100s: review (300s model timeout + pack build), at most one settled retry,
-# and cold a2a venv+pip. The unchanged production path owns free verdict replay
-# and the paid-cycle cap. Pending work stays red; its state is never erased.
-@pytest.mark.timeout(2100)
+@pytest.mark.timeout(_REVIEW_TEST_TIMEOUT_SEC)
 # review_secret (session) is listed before install_skill (session): among
 # same-scope fixtures signature order wins, so a fork without the secret reds
 # on one crisp message before the live catalog fetch.
 @pytest.mark.parametrize("slug", REVIEW_SKILLS)
-def test_review_grants_and_enable(slug, review_secret, install_skill, review_env):
+def test_review_grants_and_enable(slug, review_secret, install_skill, tmp_path):
     install_skill(slug)
     name = _sanitize_skill_name(slug)
     started = time.time()
 
-    status, error, deps_status, payload, note = _review_with_one_settled_retry(slug, name)
-    assert status in ("clean", "warnings") and not error, (
-        f"{slug}: review not OK{note}\n" + _review_diag(name, status, error, payload)
-    )
+    from tests.candidate_checkout import candidate_checkout
+    from tests.skill_smoke_author import run_author_review
+    from ouroboros.marketplace.isolated_deps import read_deps_state
+
+    with candidate_checkout(REPO_ROOT, tmp_path / "repo") as candidate:
+        evidence = run_author_review(
+            candidate=candidate, source_data=DATA_DIR, root=tmp_path / "author",
+            name=name, model=_REVIEW_MODEL, timeout_sec=_REVIEW_AUTHOR_TIMEOUT_SEC,
+            credential=("OPENROUTER_API_KEY", os.environ["OPENROUTER_API_KEY"]))
+    data = evidence["data_root"]
+    review = evidence["review"]
+    status = review["status"]
+    loaded = find_skill(data, name)
+    deps_status = read_deps_state(data, name, loaded.skill_dir).get("status", "not_required")
 
     # Production ordering: dependencies reconcile only AFTER the executable
     # review, inside the same gateway wrapper.
@@ -710,16 +615,16 @@ def test_review_grants_and_enable(slug, review_secret, install_skill, review_env
 
     # Persisted review binds to the reloaded payload (fresh find_skill, not
     # the pre-review in-memory object).
-    loaded = find_skill(DATA_DIR, name)
+    loaded = find_skill(data, name)
     assert loaded is not None and not loaded.load_error
-    review = json.loads((_skill_state_dir(name) / "review.json").read_text(encoding="utf-8"))
+    review = evidence["review"]
     assert review.get("content_hash") == loaded.content_hash
     models = list(review.get("reviewer_models") or [])
     assert len(models) == 1, models
     # Reviewer identity may carry the stable slot attribution suffix introduced
     # by the shared review substrate, while the model id remains the contract.
     model_id = models[0].split(" [", 1)[0].rsplit("#", 1)[0]
-    assert model_id == _REVIEW_MODEL, models
+    assert model_id == _REVIEW_MODEL.replace("::", "/"), models
     # The official_hub reduced-noise profile is retired: Official is the trusted
     # source row's install basis now, so an explicit review is an ordinary one.
     assert review.get("review_profile") in (None, ""), review.get("review_profile")
@@ -727,7 +632,7 @@ def test_review_grants_and_enable(slug, review_secret, install_skill, review_env
     # Auto-grant ran inside review_skill (blocking enforcement ⇒ only on
     # clean/warnings). Grants are request-keyed: a requested key grants with an
     # empty settings value.
-    grants = grant_status_for_skill(DATA_DIR, loaded)
+    grants = grant_status_for_skill(data, loaded)
     assert grants.get("all_granted") is True, grants
     expected_keys = _REVIEW_EXPECTED_KEYS[slug]
     granted_keys = set(grants.get("granted_keys") or [])
@@ -735,13 +640,13 @@ def test_review_grants_and_enable(slug, review_secret, install_skill, review_env
         f"{slug}: granted_keys={sorted(granted_keys)} expected={sorted(expected_keys)}"
     )
     # Enable persistence prerequisites: the production toggle-gate facts plus
-    # the top static readiness gate. Nothing runtime starts here (no server,
-    # temp DATA_DIR) — enabling a2a cannot poll or spawn.
-    save_enabled(DATA_DIR, name, True)
-    assert load_enabled(DATA_DIR, name) is True
-    reloaded = find_skill(DATA_DIR, name)
+    # the top static readiness gate. The key-bearing server is already stopped;
+    # enabling a2a here cannot poll, import its plugin or spawn a companion.
+    save_enabled(data, name, True)
+    assert load_enabled(data, name) is True
+    reloaded = find_skill(data, name)
     assert reloaded is not None, f"{slug}: skill vanished from discovery after enable"
-    readiness = skill_readiness_for_execution(DATA_DIR, reloaded)
+    readiness = skill_readiness_for_execution(data, reloaded)
     assert readiness.ready, (
         f"{slug}: readiness not ready — blockers={readiness.blockers} "
         f"agent_fixable={readiness.agent_fixable_blockers} "

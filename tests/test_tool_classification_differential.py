@@ -362,6 +362,21 @@ def _golden() -> dict[str, dict]:
 # unavailable. Keep the historical corpus intact and assert the new observed
 # outcome explicitly rather than manufacture old evidence (04-AGENCY S1/S3).
 CURRENT_PRODUCER_CONTRACTS = {
+    # Q: the bare warning is legacy ok; the native error keeps a sent write unknown and says do not resend.
+    "GH_WRITE_UNKNOWN": (False, "ok"),
+    "native:TOOL_ERROR:GH_WRITE_UNKNOWN": (True, "error"),
+    # Q: the bare warning is legacy ok; the native error attests GitHub refused the write with no effect.
+    "GH_WRITE_NOT_APPLIED": (False, "ok"),
+    "native:TOOL_ERROR:GH_WRITE_NOT_APPLIED": (True, "error"),
+    # Q: a failed precondition is an error in both forms; the native refusal attests no write was sent.
+    "GH_EXPECTATION_FAILED": (True, "error"),
+    "native:TOOL_ERROR:GH_EXPECTATION_FAILED": (True, "error"),
+    # Q: the bare warning is legacy ok; the native argument refusal redirects the mutation to github_write.
+    "GH_API_READ_ONLY": (False, "ok"),
+    "native:TOOL_ARG_ERROR:GH_API_READ_ONLY": (True, "argument_error"),
+    # Q: readback differs after a confirmed write; keep completed/ok with its warning so no retry duplicates the effect.
+    "GH_WRITE_READBACK_MISMATCH": (False, "ok"),
+    "native:OK:GH_WRITE_READBACK_MISMATCH": (False, "ok"),
     # #1657: only missing logs are unavailable; status/stop retain warnings.
     "SERVICE_NOT_FOUND": (False, "ok"),
     "native:LEGACY_UNAVAILABLE:SERVICE_NOT_FOUND": (True, "unavailable"),
@@ -414,6 +429,12 @@ CURRENT_PRODUCER_CONTRACTS = {
     # tools/vision.py `_no_image_route`: no configured model could take the image at all,
     # told apart from VLM_NO_VISION_MODEL (every candidate confirmed unable); same VLM family answer.
     "VLM_NO_MODEL": (True, "vlm_error"),
+    # Foreign-install refusals (copied data folder, owner Q3): a parent escalation keeps its
+    # approved plain delta and a forward names the foreign mailbox; both publish ACCESS_BLOCKED.
+    "ESCALATE_UNWRITTEN": (True, "error"),
+    "native:ACCESS_BLOCKED:ESCALATE_UNWRITTEN": (True, "blocked"),
+    "TASK_FOREIGN_INSTALL": (False, "ok"),
+    "native:ACCESS_BLOCKED:TASK_FOREIGN_INSTALL": (True, "blocked"),
     # imagegen.py adds its typed markers after the retired golden source.
     # Same contract shape as the VLM family: rate limit is a soft window
     # (text lane unaffected), unknown outcome and provider failure are errors.
@@ -442,6 +463,9 @@ CURRENT_PRODUCER_CONTRACTS = {
     # #1969: an apply that had to prepare the capture returns it for inspection;
     # nothing is applied, recorded or released, so it is its peers' answer.
     "INTEGRATE_DELEGATED_INSPECT_CAPTURE": (True, "integration_blocked"),
+    # #2070: named evidence that could not all be retained keeps its surviving copy;
+    # apply and reject record nothing and change nothing, so it is its peers' answer.
+    "INTEGRATE_DELEGATED_EVIDENCE_UNRETAINED": (True, "integration_blocked"),
     # A reject request cannot undo direct effects already in the folder.
     # The refusal belongs to this disposition, not to the earlier write.
     "INTEGRATE_DIRECTORY_ALREADY_APPLIED": (True, "integration_blocked"),

@@ -148,13 +148,13 @@ def _change_review_items() -> dict:
 
 
 def test_checklist_item_numbers_cited_outside_the_checklist_name_the_current_items():
-    """The change-review checklist was renumbered (core 1-9, body layer 10-27).
+    """The change-review checklist was renumbered (core 1-9, body layer 10-28).
     Every place that cites an item BY NUMBER AND NAME — the engineering chapters,
     the architecture book, runtime comments, test docstrings — must agree with the
     live table; a number that names the wrong item sends a reviewer to the wrong
     rule. The standing archive keeps its historical numbers by its own note."""
     items = _change_review_items()
-    assert items[7] == "capability_regression" and items[11] == "development_compliance" and len(items) == 27
+    assert items[7] == "capability_regression" and items[11] == "development_compliance" and len(items) == 28
     names = "|".join(sorted(items.values(), key=len, reverse=True))
     forms = (
         # "item 17 (`subagent_isolation`)", "item 21 `source_completeness`", "item 15 (self_consistency)", "item 27, `gateway_parity`"
@@ -264,11 +264,13 @@ def test_prompt_tool_names_resolve_to_registered_tools(tmp_path):
     registry = ToolRegistry(repo_dir=tmp_path / "repo", drive_root=tmp_path / "data")
     registered = {schema["function"]["name"] for schema in registry.schemas()}
     universe = registered | PROMPT_NON_TOOL_IDENTIFIERS
+    from ouroboros.presence_context import PLACEHOLDERS as FOCUS_PLACEHOLDERS
     wake_universe = universe | set(PLACEHOLDERS)
     for rel, allowed in (
         ("prompts/SYSTEM.md", universe),
         ("prompts/SAFETY.md", universe),
         ("prompts/CONSCIOUSNESS.md", wake_universe),
+        ("prompts/FOCUS.md", universe | set(FOCUS_PLACEHOLDERS)),
     ):
         text = (root / rel).read_text(encoding="utf-8")
         unresolved = _prompt_backticked_identifiers(text) - allowed

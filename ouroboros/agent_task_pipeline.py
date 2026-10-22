@@ -396,6 +396,7 @@ def recover_pending_root_post_task_synthesis(
     from ouroboros.post_task_synthesis import end_saved_late_phase_pause
     from ouroboros.post_task_checkpoint import post_task_synthesis_in_flight
     from ouroboros.obligations import DutyRest, result_rows
+    from ouroboros.install_identity import StoreForeign, require_task_roots, rest_foreign_member
     from ouroboros.terminal_projection import delivery_registry_stamp, rest_deferral, terminal_projection_owed
 
     root = pathlib.Path(drive_root).resolve(strict=False)
@@ -412,6 +413,7 @@ def recover_pending_root_post_task_synthesis(
         try:
             task = {**stored, "id": task_id, "root_task_id": str(stored.get("root_task_id") or task_id)}
             task.setdefault("budget_drive_root", str(root))
+            require_task_roots(task)
             env = SimpleNamespace(repo_dir=pathlib.Path(repo_dir or task.get("repo_dir") or root.parent),
                                   drive_root=root, drive_path=lambda rel, _root=root: _root / rel)
             governing_root = _root_checkpoint_roots(env, task)[0]
@@ -468,6 +470,8 @@ def recover_pending_root_post_task_synthesis(
                 stop_requested=stop_requested, event_queue=event_queue)
             fresh = load_task_result(governing_root, task_id, strict=True) or {}
             recovered += int((fresh.get("root_phase_checkpoint") or {}).get("post_task_synthesis") != phase)
+        except StoreForeign as exc:
+            rest_foreign_member(rest, task_id, stored, exc)
         except PostTaskCheckpointChanged:
             continue  # A newer Pause, completed result or task attempt owns the phase.
         except Exception:
@@ -555,19 +559,24 @@ def _derive_host_bound_loop_outcome(
     """Derive once from the current durable mutation-evidence binding."""
     _attach_host_mutation_projection(env, task, llm_trace)
     loop_outcome = apply_skill_publish_receipt_veto(derive_loop_outcome(text or "", usage, llm_trace), task, llm_trace)
-    return _apply_terminal_custody_outcome(env, task, loop_outcome)
+    return _apply_terminal_custody_outcome(env, task, loop_outcome, usage=usage)
 
 
 def _apply_terminal_custody_outcome(
     env: Any, task: Dict[str, Any], loop_outcome: Dict[str, Any],
+    *, usage: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
-    """Make the terminal custody audit authoritative for result and event axes."""
+    """Use the delivery snapshot, or a legacy caller's stored audit, for custody axes."""
 
     drive_root = task.get("budget_drive_root") or getattr(env, "drive_root", None)
     if drive_root is None:
         return loop_outcome
-    existing = load_task_result(drive_root, str(task.get("id") or "")) or {}
-    unreconciled = existing.get("delegated_runs_unreconciled")
+    audit = (usage or {}).get("delegate_terminal_reconciliation")
+    if isinstance(audit, dict):
+        unreconciled = audit.get("unreconciled")
+    else:
+        existing = load_task_result(drive_root, str(task.get("id") or "")) or {}
+        unreconciled = existing.get("delegated_runs_unreconciled")
     if not isinstance(unreconciled, list) or not unreconciled:
         return loop_outcome
     overlaid = {
@@ -635,10 +644,10 @@ def _stamp_presence_terminal_facts(
 
 
 def _wake_outcome_notice(text: str, loop_outcome: Dict[str, Any]) -> str:
-    """The host notice a silent wake's non-clean outcome publishes; ``""`` when it ran clean.
+    """The host notice a silent run's non-clean outcome publishes; ``""`` when it ran clean.
 
     Errors, forced or degraded outcomes and open delegated custody are not hidden behind
-    silence, yet the words the wake selected as internal are never published for it: they
+    silence, yet the words the run selected as internal are never published for it: they
     stay the row's ``result`` beside this notice (``terminal_host_notice``).
     """
     execution = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")}).get("execution") or {}
@@ -646,7 +655,7 @@ def _wake_outcome_notice(text: str, loop_outcome: Dict[str, Any]) -> str:
     if status == EXECUTION_OK and reason != "delegated_custody_unreconciled":
         return ""
     kept = " Its internal result stays in the task details." if str(text or "").strip() else ""
-    return f"⚠️ This wake chose to finish without a message, but it ended {status or 'unknown'} ({reason or 'unspecified'}).{kept}"
+    return f"⚠️ This run chose to finish without a message, but it ended {status or 'unknown'} ({reason or 'unspecified'}).{kept}"
 
 
 def _task_cost_fields(env: Any, task: Dict[str, Any]) -> Dict[str, Any]:
@@ -844,8 +853,15 @@ def emit_task_results(
     """
     from ouroboros.subagent_bootstrap import actor_first_terminal_projection
     actor_fact, usage, llm_trace = actor_first_terminal_projection(ctx, task, usage, llm_trace, task.get("budget_drive_root") or getattr(env, "drive_root", None))
+    from ouroboros.delegate_terminal import terminal_custody_disclosure, record_terminal_reconciliation
+
+    custody_root = task.get("budget_drive_root") or env.drive_root
+    with timed_phase("custody_audit", timing=usage.get("_finalization_timing") or {}):
+        custody_audit = terminal_custody_disclosure(custody_root, str(task.get("id") or ""),
+                                                   usage.get("delegate_terminal_reconciliation"))
+    usage["delegate_terminal_reconciliation"] = custody_audit
     loop_outcome = _derive_host_bound_loop_outcome(env, task, text, usage, llm_trace)
-    # A silent wake's words stay internal. Clean, it publishes nothing (no chat row, owed outbox
+    # A silent run's words stay internal. Clean, it publishes nothing (no chat row, owed outbox
     # row, live send or delivery subject); otherwise only a host notice of its outcome.
     notice = _wake_outcome_notice(text, loop_outcome) if usage.get("wake_silent") is True else ""
     if notice:
@@ -893,13 +909,14 @@ def emit_task_results(
         # Final frames carry their own durable identity; replay must not depend
         # on a nearby progress row that may age out independently.
         send_event["progress_meta"] = dict(_message_meta)
-    send_event = prepare_terminal_send_event(env.drive_root, task, published, usage, send_event, presence=_presence)
+    send_event = prepare_terminal_send_event(env.drive_root, task, published, usage, send_event,
+                                             presence=_presence, custody_audit=custody_audit)
     if notice:  # the host's words, never the model's: a System row with its own delivery identity
         from supervisor.terminal_delivery import project_terminal_result_event
 
         send_event = project_terminal_result_event(env.drive_root, task, str(task.get("id") or ""), result_text=notice,
                                                    terminal_origin=TERMINAL_ORIGIN_HOST_NOTICE, base_event=send_event)
-    if not quiet:
+    if not quiet or _presence:
         pending_events.append(build_presence_result_event(
             task, text, ctx, terminal_origin=str(usage.get("terminal_origin") or ""),
             retain_scheduled_handoff=failed_or_forced,
@@ -919,6 +936,12 @@ def emit_task_results(
     # Answer first (owner 1A(1)): the owner's answer is on the live bus before
     # the heavy tail below (cost ledger, evidence capture, the result store).
     _live_delivered = _root_outbox and not quiet and _deliver_answer_first(env, task, event_queue, pending_events, register=_presence)
+    # A failed live put keeps its owed/buffered answer and skips optional annotation.
+    # Children and silent runs retain their existing buffered/no-chat lifecycle.
+    if _live_delivered or not _root_outbox or quiet:
+        with timed_phase("custody_annotation", timing=usage.get("_finalization_timing") or {}):
+            record_terminal_reconciliation(custody_root, str(task.get("id") or ""), custody_audit,
+                                           addressed=True, emit_evidence=True)
     duration_sec = round(time.time() - start_time, 3)
     task_cost_fields = _task_cost_fields(env, task)
     try:
@@ -954,8 +977,7 @@ def emit_task_results(
     # outbox row registered above is the crash insurance for this window.
     with timed_phase("result_store", timing=usage.get("_finalization_timing") or {}):
         _store_task_result(env, task, text, usage, llm_trace, review_evidence=review_evidence,
-                           loop_outcome=loop_outcome, cost_fields=task_cost_fields,
-                           final_delivery=None if quiet else send_event)
+                           loop_outcome=loop_outcome, cost_fields=task_cost_fields)
     if _live_delivered:
         # The live copy's timing snapshot was frozen at its enqueue; the store span
         # completed after it and is journaled as its own correlated row.
@@ -1085,7 +1107,7 @@ def _dispatch_root_post_task(
         task, split_drive=split_drive, project_scoped=project_scoped, project_task=project_task,
         parent_env=parent_env, parent_task=parent_task,
     )
-    # A silent wake owes no final; the fallback scan would ship a deferred mid-turn send instead.
+    # A silent run owes no final; the fallback scan would ship a deferred mid-turn send instead.
     if blocking and event_queue is not None and not live_delivered and not wake_silent:
         # The CANONICAL data root — what the supervisor's boot/tick outbox
         # replay reads (§8-A2): the parent/budget root for split children, the
@@ -1139,8 +1161,7 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
                        usage: Dict[str, Any], llm_trace: Dict[str, Any],
                        review_evidence: Dict[str, Any] | None = None,
                        loop_outcome: Dict[str, Any] | None = None,
-                       cost_fields: Dict[str, Any] | None = None,
-                       final_delivery: Dict[str, Any] | None = None) -> None:
+                       cost_fields: Dict[str, Any] | None = None) -> None:
     """Store task result for parent task retrieval.
 
     ``loop_outcome``, when supplied by ``emit_task_results``, is the SINGLE already-
@@ -1149,10 +1170,6 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
     do not derive/flag a second time. It is only re-derived here when called without one.
     """
     try:
-        from ouroboros.review_projection import publish_acceptance_checkpoint
-
-        publish_acceptance_checkpoint(env, llm_trace, task_id=str(task.get("id") or ""),
-                                      drive_root=env.drive_root, chat_id=task.get("chat_id"))
         trace_summary = build_trace_summary(llm_trace)
         from ouroboros.cost_projection import with_cost_aliases
 
@@ -1174,7 +1191,7 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
                 expected_output=str(task.get("expected_output") or ""),
                 receipts=task_verification_receipts(None, env.drive_root, task),
             )
-        loop_outcome = _apply_terminal_custody_outcome(env, task, loop_outcome)
+        loop_outcome = _apply_terminal_custody_outcome(env, task, loop_outcome, usage=usage)
         outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
         execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
         reason_code = str(loop_outcome.get("reason_code") or "")
@@ -1203,11 +1220,7 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
         artifact_record = verification_refs.get("artifact")
         if artifact_record and artifact_record not in artifacts:
             artifacts.append(artifact_record)
-        # An eligible forced/launch-skip answer must not re-hash artifact bodies
-        # on its urgent terminal path. Existing registrations and copyback own them.
-        collected_artifacts = collect_task_artifact_records(
-            env.drive_root, str(task.get("id") or ""), measure="acceptance_history_seed" not in llm_trace,
-        )
+        collected_artifacts = collect_task_artifact_records(env.drive_root, str(task.get("id") or ""))
         artifacts = merge_artifact_records(artifacts, collected_artifacts)
         provisional = {
             **existing,
@@ -1261,20 +1274,11 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
                 root_phase_checkpoint = dict(incoming_checkpoint)
             elif isinstance(existing_checkpoint, dict):
                 root_phase_checkpoint = dict(existing_checkpoint)
-            else:
-                root_phase_checkpoint = {
-                    "phase": "task_acceptance",
-                    "status": "not_required",
-                    "pass_index": 0,
-                }
+            # A pre-fold row may also carry the task-acceptance phase fields (``phase``,
+            # ``status``, ``pass_index``); nothing reads them and new rows carry none.
             root_phase_checkpoint.setdefault("post_task_synthesis", "pending_once")
         review_projection = _compact_review_projection(llm_trace, task, env.drive_root)
         model_execution = model_execution_projection(usage)
-        from ouroboros.acceptance_history import retain_acceptance_history
-        history_fields = retain_acceptance_history(
-            env.drive_root, task, text, llm_trace, review_evidence or {},
-            observations, artifacts, final_delivery, usage=usage,
-        )
         write_task_result(
             env.drive_root,
             str(task.get("id") or ""),
@@ -1331,7 +1335,7 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
             parent_cognitive_route=task.get("parent_cognitive_route"),
             subagent_availability=task.get("subagent_availability"),
             metadata=task.get("metadata") if isinstance(task.get("metadata"), dict) else {},
-            result=text or "", **terminal_result_fields(usage),
+            result=text or "", **terminal_result_fields(usage, existing=existing),
             final_answer=str(loop_outcome.get("final_answer") or ""),
             trace_summary=trace_summary,
             trace_refs=loop_outcome.get("trace_refs") or {},
@@ -1343,7 +1347,6 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
             verification_ledger=verification_refs.get("inline"),
             artifact_bundle=artifact_bundle,
             artifacts=artifacts,
-            **history_fields,
             **({"root_phase_checkpoint": root_phase_checkpoint} if root_phase_checkpoint else {}),
             **({"swarm_efficiency": swarm_efficiency} if swarm_efficiency else {}),
             ts=utc_now_iso(),

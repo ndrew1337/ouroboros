@@ -113,13 +113,13 @@ def test_a_rewrite_since_the_anchor_is_named():
     assert main_input_anchor(usage, plan, rewrite_epoch=rewrite_epoch(slot))[0].rewritten is True
 
 
-def test_measurement_uses_this_conversation_never_another_tasks_witness(monkeypatch, tmp_path):
-    """The incident's numbers: raw 795,458 x foreign 0.7987 = 635,350 shown, 874,829 real."""
+def test_measurement_uses_this_conversations_anchor_before_other_witnesses(monkeypatch, tmp_path):
+    """Without a usable witness the estimate stays cold; a task anchor always wins."""
     from ouroboros import capability_evidence
     from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
 
     monkeypatch.setattr(capability_evidence, "resolve_main_token_density",
-                        lambda *_a, **_kw: (0.7987, "fresh_model_usage"))  # another task's witness
+                        lambda *_a, **_kw: (1.0, "cold_estimate"))
     plan = _plan(window=1_000_000)
     messages = plan.messages_for("max")
     raw = estimate_context_prompt_tokens(messages, [], provider=plan.provider)
@@ -164,5 +164,5 @@ def test_the_facts_line_states_where_the_size_comes_from():
     assert "free ~54,464" in context_facts_line(ctx, money={})
     usage.update(_context_anchor_input_tokens=None, _context_anchor_round=None)
     cold = context_facts_line(ctx, money={})
-    assert "cold chars/4 estimate" in cold and "free unknown" in cold  # no free room on a cold estimate
+    assert "cold chars/4 estimate" in cold and "predicted free ~54,464" in cold
     assert ACCEPTED_INPUTS_KEY not in usage  # the line reads facts; it records nothing

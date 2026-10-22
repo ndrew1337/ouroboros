@@ -5,19 +5,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createChatReplies } from '../modules/chat_reply.js';
+import { createMessageActions } from '../modules/message_actions.js';
 import { createChatReadingPosition } from '../modules/chat_reading_position.js';
 import { installDomDouble } from './dom_double.js';
 
-function fixture() {
+function fixture({ actions = undefined } = {}) {
     const env = installDomDouble();
     const { doc, el } = env;
     const feed = el('div', { className: 'chat-messages' });
     const input = el('textarea', { attrs: { id: 'chat-input' } });
     const textRow = el('div', { className: 'chat-text-row' }, input);
-    const wrap = el('div', { className: 'chat-input-wrap' }, textRow);
+    // The composer's markup: the field holds the text row, and a staged strip becomes its first line.
+    const field = el('div', { className: 'chat-field' }, textRow);
+    const wrap = el('div', { className: 'chat-input-wrap' }, field);
     doc.body.append(feed, wrap);
     const positions = [];
-    const replies = createChatReplies({ chatId: 1, feed, input, key: 'ouro_chat_reply',
+    const replies = createChatReplies({ chatId: 1, feed, input, key: 'ouro_chat_reply', actions,
         reading: () => ({ cancel() { positions.push('cancel'); }, scroll() { positions.push('scroll'); }, remember() {}, stick: true }) });
     const bubble = (role, text, { address = '', taskId = '' } = {}) => {
         const node = el('div', { className: `chat-bubble ${role}`, dataset: { ...(taskId ? { taskId } : {}) } },
@@ -28,8 +31,11 @@ function fixture() {
         return node;
     };
     const quote = (node) => node.children.find((child) => child.classList.contains('chat-quote')) || null;
-    const strip = () => wrap.children.find((child) => child.classList.contains('chat-quote--composer')) || null;
-    return { ...env, feed, input, textRow, wrap, replies, bubble, quote, strip, positions,
+    // The strip the owner sees; one that is closing (shut) has already left and goes once its motion has run.
+    const strips = () => field.children.filter((child) => child.classList.contains('chat-quote--composer'));
+    const strip = () => strips().find((child) => child.dataset.motion !== 'shut') || null;
+    const leaving = () => strips().filter((child) => child.dataset.motion === 'shut');
+    return { ...env, feed, input, textRow, field, wrap, replies, bubble, quote, strip, leaving, positions,
         close() { replies.destroy(); env.restore(); } };
 }
 
@@ -187,7 +193,7 @@ test('a saved row gets Reply beside Copy; a row without an address (an unsaved e
     } finally { f.close(); }
 });
 
-test('Reply stages the strip and the next frame carries only the address; Esc or × cancels; a send clears it', () => {
+test('Reply stages the strip and the next frame carries only the address; Esc or × cancels; a send clears it', async () => {
     const f = fixture();
     try {
         const saved = f.bubble('assistant', 'The audit found three stale projects.');
@@ -195,15 +201,18 @@ test('Reply stages the strip and the next frame carries only the address; Esc or
         f.replies.decorate(saved, { row_address: 'row:1@b#2', role: 'assistant' });
         saved.querySelector('.chat-message-reply').click();
         const strip = f.strip();
-        assert.ok(strip, 'the strip stands above the field');
-        assert.equal(f.wrap.children.indexOf(strip) < f.wrap.children.indexOf(f.textRow), true);
+        assert.ok(strip, 'the strip is staged');
+        assert.equal(f.field.children.indexOf(strip), 0, 'the field\'s first line, inside the field');
+        assert.equal(f.field.children.indexOf(f.textRow), 1, 'right before its text row');
         assert.equal(f.doc.activeElement, f.input, 'the field takes focus');
         assert.match(f.input.getAttribute('aria-describedby'), /reply$/);
         assert.deepEqual(f.replies.frameField(), { reply_to: 'row:1@b#2' }, 'the host makes the snippet');
         assert.equal(f.replies.echoRow().reply_to.address, 'row:1@b#2', 'the local echo draws the same quote');
         assert.equal(JSON.parse(f.storage.get('ouro_chat_reply')).address, 'row:1@b#2', 'kept for a reload');
+        assert.equal(strip.dataset.motion, 'open', 'it opens from no height (style.css runs it like the fold)');
         f.textRow.emit('keydown', { key: 'Escape' });
         assert.equal(f.strip(), null, 'Esc cancels');
+        assert.deepEqual(f.leaving().map((node) => node.inert), [true], 'it closes before it goes, taking no press');
         assert.deepEqual(f.replies.frameField(), {});
         assert.equal(f.storage.has('ouro_chat_reply'), false);
         saved.querySelector('.chat-message-reply').click();
@@ -213,7 +222,34 @@ test('Reply stages the strip and the next frame carries only the address; Esc or
         f.replies.clear();
         assert.equal(f.strip(), null, 'a send clears it');
         assert.equal(f.replies.echoRow(), null);
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        assert.equal(f.leaving().length, 0, 'a closed strip goes once its motion has run');
     } finally { f.close(); }
+});
+
+test('a staged strip is held shut through the first frame after staging and opens from the next', async () => {
+    const frames = [], prior = globalThis.requestAnimationFrame;
+    globalThis.requestAnimationFrame = (callback) => frames.push(callback);
+    const f = fixture();
+    try {
+        const saved = f.bubble('assistant', 'The audit found three stale projects.');
+        f.feed.append(saved);
+        f.replies.decorate(saved, { row_address: 'row:1@b#2', role: 'assistant' });
+        saved.querySelector('.chat-message-reply').click();
+        const strip = f.strip();
+        assert.deepEqual([strip.dataset.motion, 'hold' in strip.dataset], ['open', true],
+            'staging focuses the field and lays it out: the strip waits that frame out shut');
+        frames.splice(0).forEach((callback) => callback());
+        await Promise.resolve();
+        assert.deepEqual([strip.dataset.motion, 'hold' in strip.dataset], ['open', true],
+            'the first frame lays the focused field out (the long one): still held');
+        frames.splice(0).forEach((callback) => callback());
+        await Promise.resolve();  // the frame's callback settles before that frame's style is worked out
+        assert.deepEqual([strip.dataset.motion, 'hold' in strip.dataset], ['open', false], 'then it opens');
+    } finally {
+        f.close();
+        globalThis.requestAnimationFrame = prior;
+    }
 });
 
 test('a reply to a still-open question card answers in the card\'s own field, never a second path', () => {
@@ -364,4 +400,32 @@ test('a work card draws no Reply of its own; its row menu quotes the work by its
         assert.equal(f.replies.cardRef(record), null, 'not a root work card any more: no Reply');
         assert.equal(root.dataset.rowAddress, 'task:t-9', 'a quote of it still finds it');
     } finally { f.close(); }
+});
+
+test('the registered message actions stand between Reply and Copy on the rows they apply to, until the room goes', () => {
+    const actions = createMessageActions();
+    actions.register({ key: 'read_aloud', label: 'Read aloud', icon: 'volume', applies: (row) => row.role === 'assistant',
+        run() {} });
+    const f = fixture({ actions });
+    try {
+        const answer = f.bubble('assistant', 'The audit found three stale projects.');
+        answer.append(f.el('button', { className: 'chat-message-copy' }));
+        const mine = f.bubble('user', 'please check the logs');
+        mine.append(f.el('button', { className: 'chat-message-copy' }));
+        f.feed.append(answer, mine);
+        f.replies.decorate(answer, { row_address: 'row:1@b#2', role: 'assistant' });
+        f.replies.decorate(mine, owner('row:1@a#1'));
+        const row = (node) => node.children.find((child) => child.classList.contains('chat-message-actions'))
+            .children.map((child) => child.className.split(' ')[0]);
+        assert.deepEqual(row(answer), ['chat-message-reply', 'chat-message-action', 'chat-message-copy'],
+            'Copy keeps the corner; the registered action stands beside Reply');
+        assert.deepEqual(row(mine), ['chat-message-reply', 'chat-message-copy'], 'an action draws only where it applies');
+        const off = actions.register({ key: 'save', label: 'Save', applies: () => true, run() {} });
+        assert.deepEqual(row(mine), ['chat-message-reply', 'chat-message-action', 'chat-message-copy'],
+            'a later registration reaches the rows already drawn');
+        off();
+        f.replies.destroy();
+        actions.register({ key: 'late', label: 'Late', applies: () => true, run() {} });
+        assert.deepEqual(row(mine), ['chat-message-reply', 'chat-message-copy'], 'a destroyed room draws nothing more');
+    } finally { f.restore(); }
 });

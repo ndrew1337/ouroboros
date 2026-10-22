@@ -150,17 +150,9 @@ def _fail_nonterminal_artifact_bundle(bundle: Dict[str, Any], message: str) -> D
 
 
 def _child_drive_candidates(result: Dict[str, Any]) -> List[pathlib.Path]:
-    paths: List[pathlib.Path] = []
-    metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
-    for source in (result, metadata):
-        for key in ("child_drive_root", "headless_child_drive_root", "drive_root"):
-            text = str(source.get(key) or "").strip()
-            if not text:
-                continue
-            path = pathlib.Path(text)
-            if path not in paths:
-                paths.append(path)
-    return paths
+    from ouroboros.task_custody import child_drive_candidates  # the one child-root vocabulary
+
+    return child_drive_candidates(result)
 
 
 # Legacy mirrored disposition/sha fields stripped from every effective read; the
@@ -989,7 +981,9 @@ def effective_task_result(
                 audit = result.get("delegate_terminal_reconciliation")
                 published = [dict(row) for row in ((audit.get("terminal_runs") if isinstance(audit, dict)
                                                     else None) or [])
-                             if isinstance(row, dict) and isinstance(row.get("staged_output"), dict)]
+                             if isinstance(row, dict) and any(
+                                 row.get(k) for k in ("staged_output", "other_staged_outputs",
+                                                      "terminal_observation", "other_terminal_observations"))]
                 lineage.insert(0, {
                     "task_id": task_id,
                     "status": result.get("status"),
@@ -1001,6 +995,8 @@ def effective_task_result(
                 merged_retry["retry_lineage"] = lineage
                 merged_retry.setdefault("original_task_id", task_id)
                 merged_retry.setdefault("supersedes_task_id", task_id)
+                if result.get("cancel_receipt") and "cancel_receipt" not in merged_retry:
+                    merged_retry["cancel_receipt"] = result["cancel_receipt"]
                 # The retry answer does not erase the original's unknown effects.
                 # Invocation IDs and their original task/attempt attribution stay
                 # factual disclosure only, never authority to repeat an operation.
@@ -1034,8 +1030,13 @@ def effective_task_result(
     child_result: Dict[str, Any] = {}
     child_text = ""
     if not cancellation_blocks_child_result(result):
+        from ouroboros.install_identity import StoreForeign
+
         for child_drive in _child_drive_candidates(result):
-            child_result = load(child_drive, task_id) or {}
+            try:
+                child_result = load(child_drive, task_id) or {}
+            except StoreForeign:  # another install's drive: this install keeps only its own row
+                child_result = {}
             if child_result:
                 child_text = str(child_drive)
                 break
@@ -1182,11 +1183,11 @@ def effective_task_result(
         from ouroboros.outcomes import artifact_bundle_from_result
         from ouroboros.task_custody import own_child_drives, store_artifact_view
 
-        # A pure view (TZ-1 A): recorded rows, the task's OWN child stores' recorded rows
-        # (their identity survives a suppressed cancelled child result) and stat-only
-        # listings; nothing is copied, hashed or registered here.
+        # In this artifact view, canonical admission/copy-back facts authorize child store
+        # reads, never scratch existence. Keep child claims even after cancellation; the
+        # view copies, hashes and registers nothing.
         child_rows = {}
-        for drive in own_child_drives(drive_root, task_id):
+        for drive in own_child_drives(drive_root, task_id, store_row=result):
             rows = (load_task_result(drive, task_id) or {}).get("artifacts")
             child_rows[drive / "task_results" / "artifacts" / task_id] = rows if isinstance(rows, list) else []
         recorded = [item for item in (merged.get("artifacts") or []) if isinstance(item, dict)]

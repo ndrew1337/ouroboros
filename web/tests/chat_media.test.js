@@ -17,6 +17,26 @@ test('safeHttpUrl accepts only absolute HTTP(S) URLs', () => {
     assert.equal(safeHttpUrl('data:text/plain,no'), '');
 });
 
+test('a framed question joins its Project to the voice and ends on its time alone', () => {
+    const fx = fixture({ formatMsgTime: () => ({ short: '15:18', full: '19 Oct 2026, 15:18' }) });
+    try {
+        const part = (className) => { const node = document.createElement('span'); node.className = className; return node; };
+        const card = part('chat-quiz-card');
+        const reference = part('chat-quiz-project');
+        const msg = { role: 'assistant', ts: '2026-10-19T15:18:00Z' };
+        const bubble = fx.controller.bubbleFrameNode(msg, card, { voice: [reference] });
+        const classes = (node) => node.children.map((child) => child.className);
+        assert.deepEqual(classes(bubble), ['chat-bubble-voice', 'chat-quiz-card', 'msg-time']);
+        assert.deepEqual(classes(bubble.children[0]), ['sender', 'chat-quiz-project']);
+        // Without parts the frame is the one every other delivery gets.
+        const plain = fx.controller.bubbleFrameNode(msg, part('chat-quiz-card'));
+        assert.deepEqual(classes(plain), ['sender', 'chat-quiz-card', 'msg-time']);
+    } finally {
+        fx.controller.destroy();
+        fx.restore();
+    }
+});
+
 test('photo grouping is keyed by role and task without cross-task merging', () => {
     const fx = fixture();
     try {
@@ -118,14 +138,12 @@ test('live media and quiz-state writes use the injected content boundary', () =>
     const handlers = new Map();
     const seen = new Set();
     let mutations = 0;
-    let unread = 0;
     try {
         fx.controller.wireDeliveries({
             onWs(type, handler) { handlers.set(type, handler); },
             isMyThread: () => true,
             hideTypingIndicatorOnly() {},
             syncChatStatus() {},
-            incrementUnreadIfNeeded() { unread += 1; },
             seenMessageKeys: seen,
             rememberMessageKey(key) { seen.add(key); },
             chatMediaMessageKey: (msg) => `media:${msg.task_id}:${msg.ts}`,
@@ -146,7 +164,6 @@ test('live media and quiz-state writes use the injected content boundary', () =>
         handlers.get('quiz_state')({ quiz_id: 'q1', changed: false });
         handlers.get('quiz_state')({ quiz_id: 'q1', changed: true });
         assert.equal(mutations, 4);
-        assert.equal(unread, 2);
         assert.equal(fx.inserted.length, 1);
         assert.equal(fx.inserted[0].querySelectorAll('.chat-gallery-item').length, 2);
     } finally {
@@ -207,7 +224,7 @@ test('media and document builders render upgraded DOM shapes with type-anchored 
             file_base64: 'aGVsbG8=', size_bytes: 5,
         });
         assert.match(document.innerHTML, /class="chat-file-grid"/);
-        assert.match(document.innerHTML, /class="chat-file-card"/);
+        assert.ok(document.querySelector('.chat-file-card'));
         assert.match(document.innerHTML, /PDF · 5 B/);
         const actions = Array.from({ length: 13 }, (_value, index) => ({
             label: `Link ${index}`,
@@ -474,7 +491,7 @@ test('live gallery items adopt separate history identities and older photos do n
         const seen = new Set();
         const delivery = fx.controller.wireDeliveries({
             onWs() {}, isMyThread: () => true, hideTypingIndicatorOnly() {}, syncChatStatus() {},
-            incrementUnreadIfNeeded() {}, seenMessageKeys: seen,
+            seenMessageKeys: seen,
             rememberMessageKey: (key) => seen.add(key),
             chatMediaMessageKey: (msg) => `photo:${msg.task_id}:${msg.ts}`,
             documentMessageKey: (msg) => `file:${msg.task_id}:${msg.ts}`,

@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -255,7 +257,9 @@ def test_a_folder_vanishing_mid_walk_counts_as_empty(tmp_path, monkeypatch, walk
     assert (row["logical_bytes"], row["files"], row["unreadable"]) == (3, 1, 0)
 
 
-def test_a_folder_swapped_for_a_link_mid_walk_is_never_listed_through_it(tmp_path, monkeypatch, walk):
+def _swap_mid_walk(tmp_path, monkeypatch, listing=lambda info: info):
+    """Count ``task_results`` while its folder ``victim`` turns into a link to an outside folder just
+    after the walk read its listing entry; LISTING shapes what that entry reports."""
     data, outside = tmp_path / "data", tmp_path / "outside"
     _write(outside / "secret.bin", 100)
     victim = data / "task_results" / "victim"
@@ -268,11 +272,32 @@ def test_a_folder_swapped_for_a_link_mid_walk_is_never_listed_through_it(tmp_pat
         if entry.name == "victim" and not victim.is_symlink():
             victim.rmdir()
             victim.symlink_to(outside, target_is_directory=True)
-        return info
+        return listing(info)
 
     monkeypatch.setattr(storage, "_listing_stat", swap_after_stat)
-    row = _row(_count(data), "task_results")
+    return _row(_count(data), "task_results")
+
+
+def test_a_folder_swapped_for_a_link_mid_walk_is_never_listed_through_it(tmp_path, monkeypatch, walk):
+    row = _swap_mid_walk(tmp_path, monkeypatch)
     assert (row["logical_bytes"], row["unreadable"]) == (3, 1)
+
+
+def _windows_listing(info):
+    """A Windows listing entry (``os.DirEntry.stat``): type, size and attributes, but no inode,
+    device, link count or blocks, so the walk asks the entry itself for those."""
+    return SimpleNamespace(st_mode=info.st_mode, st_size=info.st_size, st_ino=0, st_dev=0, st_nlink=0,
+                           st_file_attributes=getattr(info, "st_file_attributes", 0))
+
+
+def test_a_windows_listing_counts_a_folder_turned_link_unreadable_and_still_walks_the_rest(tmp_path, monkeypatch):
+    """A listing without identity sends the by-path walk to each folder itself; a folder that became
+    a link since its listing entry is unreadable, as at the recheck before a listing, never a quietly
+    skipped link, and an untouched folder beside it is still walked."""
+    monkeypatch.setattr(storage, "_RELATIVE", False, raising=False)
+    _write(tmp_path / "data" / "task_results" / "kept" / "inner.bin", 5)
+    row = _swap_mid_walk(tmp_path, monkeypatch, listing=_windows_listing)
+    assert (row["logical_bytes"], row["unreadable"]) == (8, 1)
 
 
 # ----------------------------------------------------- A7, A8, A9: the file
@@ -419,20 +444,65 @@ def _join(counter: StorageCounter):
         assert not thread.is_alive()
 
 
+def _observed(monkeypatch, data: Path, operation):
+    """OPERATION's own effect on DATA: (its result, what ``os.scandir`` listed while it ran, the data
+    folder's entries with their mtimes before and after). The recorder sees OPERATION alone: on some
+    Pythons pathlib's own walk lists through ``os.scandir``, so both snapshots are taken without it."""
+    def entries():
+        return sorted((str(path), path.stat().st_mtime_ns) for path in data.rglob("*"))
+
+    before, listings, real = entries(), [], os.scandir
+    with monkeypatch.context() as observing:
+        observing.setattr(os, "scandir", lambda path=".": listings.append(path) or real(path))
+        result = operation()
+    return result, listings, before, entries()
+
+
 def test_get_projection_is_passive_and_fresh_free_space_is_read_each_time(tmp_path, monkeypatch):
     data = tmp_path / "data"
     _write(data / "observability" / "a.bin", 10)
     counter = StorageCounter()
-    listings = []
-    real = os.scandir
-    monkeypatch.setattr(os, "scandir", lambda path: listings.append(path) or real(path))
-    before = sorted((str(path), path.stat().st_mtime_ns) for path in data.rglob("*"))
-    projection = counter.projection(data)
-    assert projection == {"counting": None, "error": None, "volume": projection["volume"], "retention_days": projection["retention_days"],
-                          "count": None, "free": projection["free"]}
-    assert projection["free"]["state"] == "idle"
-    assert isinstance(projection["volume"]["free_bytes"], int) and isinstance(projection["retention_days"], int)
-    assert listings == [] and sorted((str(path), path.stat().st_mtime_ns) for path in data.rglob("*")) == before
+    volumes = []
+
+    def disk_usage(path):  # a volume whose free space falls between two reads
+        volumes.append(path)
+        return SimpleNamespace(total=4_000, free=4_000 - 100 * len(volumes))
+
+    monkeypatch.setattr(shutil, "disk_usage", disk_usage)
+    projections, listings, before, after = _observed(
+        monkeypatch, data, lambda: [counter.projection(data) for _ in range(2)])
+    for projection in projections:
+        assert projection == {"counting": None, "error": None, "volume": projection["volume"], "retention_days": projection["retention_days"],
+                              "count": None, "free": projection["free"]}
+        assert projection["free"]["state"] == "idle"
+        assert isinstance(projection["volume"]["free_bytes"], int) and isinstance(projection["retention_days"], int)
+    assert [projection["volume"]["free_bytes"] for projection in projections] == [3_900, 3_800]
+    assert volumes == [str(data)] * 2
+    assert listings == [] and after == before
+
+
+@pytest.mark.parametrize("intrusion", ["walk", "write"])
+def test_the_passive_read_observer_sees_a_real_walk_and_a_persistent_write(tmp_path, monkeypatch, intrusion):
+    """The observer above is live whichever Python runs it: a projection followed by the storage walker
+    over the data folder is seen listing it, one followed by a new file under the data folder changes
+    its entries, and each intrusion leaves the other half of the oracle quiet."""
+    data = tmp_path / "data"
+    _write(data / "observability" / "a.bin", 10)
+    counter = StorageCounter()
+
+    def intruding():
+        projection = counter.projection(data)
+        if intrusion == "walk":
+            measure(data, places=[_place("data", data)], sleep=lambda _s: None)
+        else:
+            _write(data / "state" / "written.json", 2)
+        return projection
+
+    _, listings, before, after = _observed(monkeypatch, data, intruding)
+    if intrusion == "walk":
+        assert listings and after == before
+    else:
+        assert listings == [] and after != before
 
 
 def test_sixteen_concurrent_starts_spawn_one_child_and_the_finished_count_is_read_back(tmp_path, monkeypatch):

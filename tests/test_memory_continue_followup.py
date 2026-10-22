@@ -54,6 +54,7 @@ def offline_main(monkeypatch, provider_catalog_offline):
     monkeypatch.setenv("OUROBOROS_CONTEXT_MODE", "max")
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     monkeypatch.setenv("MCP_ENABLED", "false")
 
 

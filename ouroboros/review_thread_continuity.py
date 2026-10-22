@@ -184,15 +184,20 @@ def profile_continuity_receipt(
 
 def review_thread_receipt(
     gateway: Any, thread_id: str, run_id: str, turn_id: str, *,
-    expected_profile: str = "", applied_profile: str = "",
+    expected_profile: str = "", applied_profile: str = "", run_names: Any = (),
 ) -> dict:
-    """Require the completed run's exact turn/session/continuity binding."""
+    """Require the completed run's exact turn/session/continuity binding.
+
+    ``run_names`` are the run's names from its detail (``custody.held_run_names``): a turn
+    answered before its run bound hands back only the job id, and the turn records the run id.
+    """
     detail = gateway.get_thread(thread_id)
     turns = [row for row in (detail.get("turns") or []) if isinstance(row, dict)]
+    names = {run_id, *run_names}
     turn = next(
         (row for row in reversed(turns)
          if (
-             str(row.get("runId") or "") == run_id
+             str(row.get("runId") or "") in names
              and (not turn_id or str(row.get("id") or "") == turn_id)
          )),
         None,

@@ -193,7 +193,7 @@ def _resume_outstanding(current: Dict[str, Any], fence: Dict[str, Any]) -> bool:
 
 def install_fence(root_drive: Any, root_task_id: str, *, request_id: str,
                   late_work: bool = False, requested_by: str = "owner",
-                  actor_id: str = "") -> Tuple[Dict[str, Any], bool]:
+                  actor_id: str = "", by: Optional[dict] = None) -> Tuple[Dict[str, Any], bool]:
     """Close the root's fence durably; ``(fence, created)``.
 
     Idempotent by ``request_id`` across Resume and later Pause generations;
@@ -206,7 +206,9 @@ def install_fence(root_drive: Any, root_task_id: str, *, request_id: str,
     terminal root refuses: a finished tree has nothing to pause — unless its
     answered task still owns late work: an open post-task checkpoint read
     under this lock (the Pause ends that upkeep at once), or a live review
-    operation the caller attests (``late_work``). Raises
+    operation or live descendants the caller attests (``late_work``). ``by`` is the author a press
+    declared (``control_actor.pause_author``): the fence keeps its first one,
+    and a press that declared nobody claims none. Raises
     ``OwnerPauseRefused`` without any write on refusal; any write failure
     propagates, so the caller never acknowledges an undurable Pause.
     """
@@ -217,8 +219,9 @@ def install_fence(root_drive: Any, root_task_id: str, *, request_id: str,
     from ouroboros.task_store import patch_document
     from ouroboros.utils import utc_now_iso
 
-    from ouroboros.control_actor import control_actor
-    attribution = control_actor()
+    from ouroboros.control_actor import control_actor, pause_author
+    author = {**control_actor(), **(by or {})}
+    attribution = {"by": author} if author else {}
     outcome: Dict[str, Any] = {}
 
     def update(current: dict) -> Optional[dict]:
@@ -243,13 +246,13 @@ def install_fence(root_drive: Any, root_task_id: str, *, request_id: str,
             raise OwnerPauseRefused("task_terminal")
         if fence_closed(old) and not _resume_outstanding(actor_current if actor_current is not None else current, old):
             requests[request_id] = {**attribution, "fence_id": old["fence_id"], "generation": old.get("generation")}
-            fence = {**old, "requests": requests}
+            fence = {**old, **({} if pause_author(old)["actor"] else attribution), "requests": requests}
             outcome.update(fence=fence, created=False)
             return stamp_task_result_schema({**current, "owner_pause": fence})
         fence = {
             **attribution, "fence_id": uuid.uuid4().hex, "request_id": str(request_id or ""),
-            # ``owner`` for the owner's own press; a stop door names itself
-            # (``server_shutdown``, ``owner_restart``): the next start reads it.
+            # ``owner``: this owner Pause control, whoever pressed it (``by`` is who declared the press);
+            # a stop door names itself (``server_shutdown``, ``owner_restart``): the next start reads it.
             "state": FENCE_REQUESTED, "requested_by": str(requested_by or "owner"), "requested_at": utc_now_iso(),
             "requested_at_ts": time.time(), "root_task_id": str(root_task_id),
             "generation": int(old.get("generation") or 0) + 1,
@@ -315,7 +318,7 @@ def set_fence_state(root_drive: Any, root_task_id: str, *, fence_id: str, state:
         fence = {**old, **fields, "state": state, f"{state}_at": utc_now_iso()}
         written.update(fence)
         from ouroboros.pause_notices import notice_fields
-        notice = (notice_fields(current, root_drive, root_task_id, fence_id, "owner")
+        notice = (notice_fields(current, root_drive, root_task_id, fence_id, "owner", fence=fence)
                   if state == FENCE_PAUSED and old.get("state") != FENCE_PAUSED else {})
         return stamp_task_result_schema({**current, **notice, "owner_pause": fence})
 
@@ -356,11 +359,6 @@ def reopen_for_resume(root_drive: Any, root_task_id: str, task_id: str, *,
             if not fence_closed(current) or current.get("supersedes_fence_id") != fence_id:
                 raise ValueError("owner_pause_fence_changed")
         elif root_actor(root_drive, root_task_id, task_id):
-            if fence_closed(current):
-                # One root Resume restores every saved unsent owner before opening
-                # their shared fence, including acceptance beside post-task work.
-                from ouroboros.acceptance_late import resume_paused_acceptance_preparations
-                resume_paused_acceptance_preparations(root_drive, root_task_id, current)
             try:
                 release_fence(root_drive, root_task_id, reason="owner_resume_consumed")
             except StoreBusy as exc:
@@ -373,9 +371,9 @@ def reopen_for_resume(root_drive: Any, root_task_id: str, task_id: str, *,
 
 def _finish_resume_publication(root_drive: Any, root_task_id: str, task_id: str, fence_id: str, grant_id: str,
                                error: StoreBusy | LaunchBusy) -> None:
-    """Retry only the root fence write after preparation handoff, outside its lock.
+    """Retry only the root fence write, outside its lock.
 
-    The preparation is already owned and must never restart here. Each try
+    Nothing the Resume already started restarts here. Each try
     rechecks the physical actor's grant under its logical root lock; unknown
     rollback or the existing STORE_WAIT_SEC physical acquisition bound leaves
     the caller's hold intact; no task/review lifetime is extended.
@@ -556,7 +554,7 @@ def admit_delegated_start(drive_root: Any, payload: Dict[str, Any]) -> bool:
     from ouroboros._usage_wait import retry_presend
     from ouroboros.delegate_custody import emit, START_REQUESTED
     from ouroboros.model_wait import current_model_wait
-    from ouroboros.usage_admission import effective_billing_fields, task_billing_fields
+    from ouroboros.usage_admission import task_billing_fields
     from ouroboros.utils import utc_now_iso
 
     source = SimpleNamespace(drive_root=drive_root, task_id=str(payload.get("task_id") or ""),
@@ -572,8 +570,7 @@ def admit_delegated_start(drive_root: Any, payload: Dict[str, Any]) -> bool:
     elif bound is not None and bound.non_task_operation is True and str(bound.root_task_id or "") == source.root_task_id:
         binding = {"billing_group_id": source.root_task_id, "billing_group_limit_usd": None}
     else:
-        binding = effective_billing_fields(drive_root, source.root_task_id,
-            task_billing_fields({"id": source.task_id}, source.root_task_id, None, drive_root))
+        binding = task_billing_fields({"id": source.task_id}, source.root_task_id, None, drive_root)
     payload = {"ts": utc_now_iso(), "event_id": uuid.uuid4().hex, **payload}
     payload["billing_group"] = {k: v for k, v in binding.items() if k.startswith("billing_group_")}
     retrying = False
@@ -606,6 +603,14 @@ def _member_coordinates(source: Any) -> Tuple[str, str, str]:
     return str(root_drive or ""), root_task_id, task_id
 
 
+def awaits_tree_selection(fence: dict, task_id: str, root_task_id: str) -> bool:
+    """An explicitly resumed terminal tree selects each child, including retained warm stacks."""
+    grant = fence.get("resume_grant") or {}
+    return bool(fence.get("state") == FENCE_RELEASED and grant.get("tree_only")
+                and not grant.get("revoked_at") and task_id != root_task_id
+                and task_id in (fence.get("warm_members") or ()) and task_id not in (fence.get("selected_members") or {}))
+
+
 def member_fence(source: Any, *, _observations=None) -> Dict[str, Any]:
     """Read the shared fence strictly: unreadable authority refuses new effects."""
     root_drive, root_task_id, _task_id = _member_coordinates(source)
@@ -635,6 +640,8 @@ def member_fence(source: Any, *, _observations=None) -> Dict[str, Any]:
         return {}  # One consumed owner Resume, bound to this fence generation.
     if fence_closed(fence) and _episode_dispatched_before(fence, root_task_id):
         return {}  # The already-started review episode finishes its own check.
+    if awaits_tree_selection(fence, _task_id, root_task_id):
+        return {**fence, "state": FENCE_PAUSED, "awaiting_selection": True}
     return fence if fence_closed(fence) else {}
 
 

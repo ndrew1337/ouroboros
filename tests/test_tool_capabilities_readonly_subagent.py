@@ -49,7 +49,6 @@ def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkey
         "update_identity",
         "commit_reviewed",
         "preflight_review",
-        "task_acceptance_review",
         "skill_review",
         "request_restart",
         "enable_tools",
@@ -69,6 +68,8 @@ def test_local_readonly_subagent_allows_enabled_extension_tool(tmp_path, monkeyp
     from tests._shared import clean_extension_runtime_state
     from tests.test_extension_loader import _mark_isolated_deps_installed, _prepare_extension
 
+    # Read-only children of either work kind may use an enabled, checked extension.
+    monkeypatch.setattr("ouroboros.safety.check_safety", lambda *a, **k: (True, ""))
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     clean_extension_runtime_state()
     plugin = (

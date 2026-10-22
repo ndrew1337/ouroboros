@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Mapping, O
 
 if TYPE_CHECKING:
     from ouroboros.context_anchor import InputAnchor
+    from ouroboros.physical_attempt_context import PhysicalAttemptContext
 
 from ouroboros.context_layout import reference_doc_sections
 from ouroboros.reference_books import ReferenceBook
@@ -101,7 +102,7 @@ class MainFitMeasurement:
     # the send finalizer computes the sent value on the sealed candidate with the same rule.
     reply_allowance_tokens: int = 0
     # Provenance of the estimate (``InputAnchor``): the provider-reported input of the last request this
-    # model accepted in this conversation and its round, or None for a cold chars/4 estimate.
+    # model accepted in this conversation and its round, or None before this task has an anchor.
     anchor_input_tokens: Optional[int] = None
     anchor_round: Optional[int] = None
     anchor_rewritten: bool = False
@@ -109,6 +110,7 @@ class MainFitMeasurement:
     # (``capacity_total_tokens`` is then None and ``window_reading_tokens`` keeps the stated number).
     accepted_input_tokens: Optional[int] = None
     window_reading_tokens: Optional[int] = None
+    view_kind: str = ""
 
 
 @dataclass(frozen=True)
@@ -150,6 +152,7 @@ class ContextFitPlan:
     evidence_source: str = ""
     nano_projection: Optional[ContextFitProjection] = None
     core: Optional["ContextCore"] = None  # the capture a new route re-renders the memory view from
+    view_kind: str = ""
 
     def reproject_for_route(self, *, window_tokens: int, known_window: bool, ratio: float, output_reserve: int,
                             tool_schemas: Optional[List[Dict[str, Any]]], start_mode: Optional[str] = None,
@@ -161,10 +164,10 @@ class ContextFitPlan:
         ``preferred_mode``). While that mode's request with its reply reserve fits a known fresh window -- a
         smaller one included -- or the window is unknown, every view keeps its bytes: a larger window or a
         shorter tail unfolds nothing (owner decision 2026-10-11, 2A). A request the window cannot hold, or
-        ``refused_tokens`` (an actual size refusal's calibrated deficit, at least 1), narrows each view from the
+        ``refused_tokens`` (size recovery's calibrated deficit, at least 1), narrows each view from the
         level it shows against the window alone (``memory_floor.render_view_for_mode``), from
-        ``core.memory_view_json`` (chronicle and chat not read again). Current Max books stay full until actual
-        refusal recovery selects another mode (``select_mode``: rendered from the level ``start_mode`` shows, never
+        ``core.memory_view_json`` (chronicle and chat not read again). Current Max books stay full until
+        size recovery selects another mode (``select_mode``: rendered from the level ``start_mode`` shows, never
         its own unsent one); lower starts keep their mode. Only the owner's mode carries a target.
         """
         from dataclasses import replace
@@ -360,99 +363,63 @@ def _system_blocks(core: ContextCore, governance: Tuple[str, ...], story: str = 
     ]
 
 
-def seal_task_transcript(
-    messages: List[Dict[str, Any]],
-    keep_active: int = 5,
-    min_prefix_tokens: int = 2048,
-) -> None:
+def seal_task_transcript(messages: List[Dict[str, Any]], min_prefix_tokens: int = 2048) -> None:
     """Mark ONE stable message-side boundary for provider prompt caching.
 
-    Until enough tool results exist to seal a rolling boundary among them, the
-    boundary is the task message itself: without it everything after the
-    SYSTEM markers -- the mutable context block and the task contract -- is
-    re-sent uncached every round, which is exactly the short-lived nanny and
-    leaf shape. The marker MIGRATES to the rolling tool seal in the same call
-    that first qualifies. Anthropic permits four breakpoints: A', optional D,
-    B and this one. The finalizer marks schemas only if a slot remains; keeping
-    both message boundaries could exceed the cap and lose the rolling seal.
+    The boundary is the newest user or tool row with text, so no tool result
+    waits outside it (#596) and a tool-free stretch advances it too (#1186).
+    Assistant turns, replayed native content included, never carry it; an
+    empty or opaque tool result is skipped (``logical_tool_result_text``). The
+    loop normally seals before fresh facts, clock and answer; a recovery
+    reseal can include existing facts. Until that prefix is worth a breakpoint the
+    task message is the anchor: without it everything after the SYSTEM markers
+    -- the mutable context block and the task contract -- is re-sent uncached
+    every round, the short-lived nanny and leaf shape. A message without text
+    is never marked: Anthropic rejects a marker on an empty text block.
+
+    The mark is host-only, a message-level ``cache_control``: the send copies
+    of marker-carrying routes render it on the row's last non-empty text block
+    and every other copy drops it, so canonical content, host-row bindings and
+    a marker-free route's bytes never change. Anthropic permits four
+    breakpoints: A', optional D, B and this one; the finalizer marks schemas
+    only if a slot remains. The old in-place seal is undone without another
+    shape change: a text-only tool list flattens to its exact text, as every
+    seal has done, and a block-list task message only loses its markers.
     """
     from ouroboros.tool_result_record import logical_tool_result_text
 
     for msg in messages:
-        if msg.get("role") != "tool":
-            continue
+        msg.pop("cache_control", None)  # this function's previous boundary
         content = msg.get("content")
-        if isinstance(content, list) and (plain := logical_tool_result_text(content)) is not None:
-            # Flatten the old sealed boundary before choosing a new one.
+        if msg.get("role") == "tool" and isinstance(content, list) and (
+                plain := logical_tool_result_text(content)) is not None:
             msg["content"] = plain
     first_user = next((m for m in messages if m.get("role") == "user"), None)
     if isinstance(first_user, dict) and isinstance(first_user.get("content"), list):
-        # Drop this function's own previous task-message marker, so exactly one
-        # message-side breakpoint survives whichever branch runs below.
         for block in first_user["content"]:
             if isinstance(block, dict):
                 block.pop("cache_control", None)
 
-    tool_indices = [
-        i for i, m in enumerate(messages)
-        if m.get("role") == "tool"
-    ]
-    if len(tool_indices) <= keep_active:
-        _mark_task_message(first_user)
-        return
+    def has_text(message: Optional[Dict[str, Any]]) -> bool:
+        if not isinstance(message, dict) or message.get("role") not in {"user", "tool"}:
+            return False
+        content = message.get("content")
+        if message["role"] == "tool":
+            return bool((logical_tool_result_text(content) or "").strip())
+        if isinstance(content, str):
+            return bool(content.strip())
+        return isinstance(content, list) and any(
+            isinstance(block, dict) and block.get("type") == "text" and str(block.get("text") or "").strip()
+            for block in content)
 
-    seal_candidate_idx = next((i for i in reversed(tool_indices[:len(tool_indices) - keep_active])
-                               if (logical_tool_result_text(messages[i].get("content")) or "").strip()), None)
-    if seal_candidate_idx is None:
-        _mark_task_message(first_user)
-        return
-
-    prefix_text_len = sum(
-        len(extract_plain_text_from_content(m.get("content", "")))
-        for m in messages[: seal_candidate_idx + 1]
-    )
-    prefix_tokens = prefix_text_len // 4  # rough 4-chars-per-token estimate
-
-    if prefix_tokens < min_prefix_tokens:
-        # Not yet a worthwhile rolling boundary: the task message stays the anchor.
-        _mark_task_message(first_user)
-        return
-
-    candidate = messages[seal_candidate_idx]
-    # An empty output remains exact; provider-only padding belongs to the send copy.
-    plain_text = logical_tool_result_text(candidate.get("content"))
-    candidate["content"] = [
-        {
-            "type": "text",
-            "text": plain_text,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
-def _mark_task_message(message: Optional[Dict[str, Any]]) -> None:
-    """Anchor the prefix on the task message's last non-empty text block.
-
-    Anthropic rejects a marker on an empty text block, so a task message with
-    no text at all is left unmarked rather than padded: the same rule the
-    rolling tool seal enforces on empty tool output."""
-    if not isinstance(message, dict):
-        return
-    content = message.get("content")
-    if isinstance(content, str):
-        if not content.strip():
-            return
-        content = [{"type": "text", "text": content}]
-        message["content"] = content
-    if not isinstance(content, list):
-        return
-    for block in reversed(content):
-        if (
-            isinstance(block, dict)
-            and block.get("type") == "text"
-            and str(block.get("text") or "").strip()
-        ):
-            block["cache_control"] = {"type": "ephemeral"}
-            return
+    index = next((i for i in range(len(messages) - 1, -1, -1) if has_text(messages[i])), None)
+    boundary = messages[index] if index is not None else None
+    if boundary is not None and boundary is not first_user and sum(
+            len(extract_plain_text_from_content(m.get("content", ""))) for m in messages[:index + 1]
+    ) // 4 < min_prefix_tokens:  # rough 4-chars-per-token estimate
+        boundary = first_user  # not yet a worthwhile rolling boundary: the task message anchors
+    if has_text(boundary):
+        boundary["cache_control"] = {"type": "ephemeral"}
 
 
 def tool_schema_tokens(tools: Optional[List[Dict[str, Any]]]) -> int:
@@ -563,8 +530,10 @@ def _route_calibration_ratio(
     drive_root: Optional[pathlib.Path],
     route_fp: str,
     model: str,
+    estimate_tokens: Optional[int] = None,
+    *, view_kind: str = "",
 ) -> float:
-    """Fresh exact-route/model witness, never an event-tail or orphan maximum.
+    """Fresh comparable-input exact-route/model witness, never an orphan maximum.
 
     ``None`` reads the canonical host evidence root (one observation store).
     """
@@ -574,7 +543,8 @@ def _route_calibration_ratio(
         )
 
         root = drive_root if drive_root is not None else canonical_evidence_root()
-        return float(resolve_main_token_density(root, route_fp, model)[0])
+        return float(resolve_main_token_density(root, route_fp, model, estimate_tokens=estimate_tokens,
+                                               view_kind=view_kind)[0])
     except Exception:
         log.debug("Fresh route token calibration unavailable", exc_info=True)
         return 1.0
@@ -612,21 +582,24 @@ def measure_main_fit(
     """Measure one sealed Main candidate against owner target T and route W.
 
     The estimate is this conversation's own: ``anchor`` (``context_anchor.main_input_anchor``) scales the raw
-    estimate by the last accepted request of this model, and without one it is the cold raw
-    estimate. A stated window below ``accepted_input_tokens`` is no window (unknown). The deficits,
+    estimate by the last accepted request of this model. Without one, a fresh same-model witness
+    of comparable input size calibrates it; absent that, it stays cold. A stated window below
+    ``accepted_input_tokens`` is no window (unknown). The deficits,
     the reclaim goal (deficit + ``reclaim_low_water_margin``) and the reply allowance are facts for
-    the round and for refusal recovery; a prediction never starts a pass by itself (owner 7A).
+    the round and recovery. A known window with no tool-result room starts the same refusal
+    passes before sending (owner revision, 20 October 2026); an unknown window never does.
     Both deficits count the reply floor the fit leaves (Nano: ``min(8192, C)``); the reply the
     candidate will actually get is ``reply_allowance_tokens``.
     """
-    from ouroboros.capability_evidence import is_known
+    from ouroboros.capability_evidence import canonical_evidence_root, is_known, resolve_main_token_density
     from ouroboros.context_budget import (
         OWNER_LOW_TARGET_TOKENS, OWNER_NANO_TARGET_TOKENS, NANO_MIN_HEADROOM_TOKENS, reply_allowance_tokens,
     )
 
-    density = float(anchor.density) if anchor is not None else 1.0
-    basis: MeasurementBasis = "fresh_route_usage" if anchor is not None else "cold_estimate"
     raw_input = int(estimate_context_prompt_tokens(messages, tools, provider=plan.provider, reasoning_effort=reasoning_effort))
+    density, basis = ((float(anchor.density), "fresh_route_usage") if anchor is not None else
+                      resolve_main_token_density(canonical_evidence_root(), plan.route_fp, plan.model,
+                                                 estimate_tokens=raw_input, view_kind=plan.view_kind))
     estimated_input = int(math.ceil(raw_input * density))
     ceiling = int(plan.output_reserve_tokens or 0)
     nano = profile.endswith("_nano")
@@ -648,6 +621,7 @@ def measure_main_fit(
     margin = reclaim_low_water_margin(target, capacity) if deficit > 0 else 0
     goal = deficit + margin
     measurement = MainFitMeasurement(
+        view_kind=plan.view_kind,
         route_fp=str(plan.route_fp or ""),
         round_id=str(round_id or ""),
         profile=profile,
@@ -859,24 +833,36 @@ def build_context_fit_plan(
     # duplicating its output reservation.  The lazy import avoids coupling the
     # data-only fit representation to the high-level model loop.
     from ouroboros.capability_evidence import is_known
+    from ouroboros.tool_policy import select_tool_schemas
 
     output_reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local")), evidence=evidence)
-    # One observation store: witnesses are written at settlement into the
-    # canonical host root, so a child task's own drive must not be consulted.
+    known_window = is_known(evidence, require_fresh=True)
+    view_args = dict(
+        preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
+        known_window=known_window, output_reserve=output_reserve)
+    governance = {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}
+    from ouroboros.memory_view import view_role
+
+    role = view_role({**task, "metadata": task.get("metadata") or meta})
+    view_kind = {"consciousness": "own_wake", "presence": "focus", "integrator": "owner_turn"}.get(role, role)
+    # Size the cold starting view before selecting a witness, just as round one does.
+    contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=1.0)
     ratio = _route_calibration_ratio(
-        None,
+        None,  # canonical host evidence, never a child task's own drive
         str(evidence.route_fp or ""),
         str(route["model"] or ""),
+        estimate_context_prompt_tokens(
+            [{"role": "system", "content": contents[initial_mode][0]},
+             {"role": "user", "content": user_content}, *json.loads(core.supplementary_messages_json)],
+            list(select_tool_schemas(tool_schemas or [], context_mode=initial_mode).schemas),
+            provider=str(route.get("provider") or "")),
+        view_kind=view_kind,
     )
-    known_window = is_known(evidence, require_fresh=True)
+    if ratio != 1.0:
+        contents, initial_mode = _view_projections(core, governance, core.user_content_json, **view_args, ratio=ratio)
     input_source = None
-    contents, initial_mode = _view_projections(
-        core, {form: _governance_blocks(env, core, mode=form) for form in ("max", "low")}, core.user_content_json,
-        preferred=preferred, tool_schemas=tool_schemas, window_tokens=int(evidence.window_tokens or 0),
-        known_window=known_window, output_reserve=output_reserve, ratio=ratio)
 
     from ouroboros.context_budget import context_mode_limits
-    from ouroboros.tool_policy import select_tool_schemas
 
     # The task-input pointer is decided on the calibrated Nano request: the schemas it sends and its reply floor.
     nano_sent_tokens = tool_schema_tokens(list(select_tool_schemas(tool_schemas or [], context_mode="nano").schemas))
@@ -935,7 +921,7 @@ def build_context_fit_plan(
     low_projection = _projection("low")
     nano_projection = _projection("nano")
     # Prediction fits memory granularity but never removes current Max books, even when
-    # the shortest estimated view misses the window. Actual refusal recovery selects Low;
+    # the shortest estimated view misses the window. Pre-send or provider size recovery selects Low;
     # owner Low/Nano and already-lowered starts retain their existing sizing behavior.
 
     core_payload = json.dumps(
@@ -961,6 +947,7 @@ def build_context_fit_plan(
         sort_keys=True,
     )
     return ContextFitPlan(
+        view_kind=view_kind,
         core_sha256=hashlib.sha256(core_payload.encode("utf-8")).hexdigest(),
         preferred_mode=preferred,
         initial_mode=initial_mode,
@@ -984,4 +971,23 @@ def build_context_fit_plan(
         } if route["provider"] == "claudexor" else {},
         evidence_source=str(getattr(evidence, "source", "") or ""),
         core=core,
+    )
+
+
+def _physical_context_for_fit(disposition: Any) -> PhysicalAttemptContext:
+    from ouroboros.usage_accounting import PhysicalAttemptContext
+
+    measurement = disposition.measurement
+    return PhysicalAttemptContext(
+        view_kind=measurement.view_kind,
+        profile=measurement.profile,
+        rendered_mode=measurement.rendered_mode,
+        measurement_basis=measurement.measurement_basis,
+        route_fp=measurement.route_fp,
+        round_id=measurement.round_id,
+        target_total_tokens=measurement.target_total_tokens,
+        capacity_total_tokens=measurement.capacity_total_tokens,
+        context_target_miss=disposition.action == "send_target_miss",
+        automatic_pass_used=disposition.automatic_pass_used,
+        measurement_density=measurement.measurement_density,
     )

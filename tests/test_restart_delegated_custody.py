@@ -110,7 +110,16 @@ def test_saved_parent_boot_retains_then_settles_original_run(tmp_path, monkeypat
         cancels = oracle.events(custody.CANCEL_OUTCOME)
         if owner_stop:
             assert len(controls) == len(cancels) == 1 and cancels[0]["outcome"] == "confirmed"
-            assert oracle.events(custody.RECONCILED)[-1]["action"] == "cancelled"
+            # Stop retains its verified read-back; the next sweep collects it
+            # without another cancellation, generation or accounting receipt.
+            after_stop = oracle.events(custody.RECONCILED)[len(reconciled):]
+            assert [row["action"] for row in after_stop] == ["cancelled", "settle_attempted"]
+            assert after_stop[0]["outcome"] == "confirmed"
+            assert after_stop[1]["settled"] is True
+            assert after_stop[1]["collection"]["status"] == "collected"
+            assert stored.terminal_source and stored.output_source and stored.output_complete
+            assert stored.output_terminal_sha == stored.terminal_source["sha256"]
+            assert not stored.output_consumed
         else:
             assert not controls and not cancels
             assert oracle.events(custody.RECONCILED)[-1]["settled"] is True

@@ -502,6 +502,8 @@ def pytest_cmdline_main(config):
 @pytest.hookimpl(tryfirst=True)
 def pytest_configure(config):
     config.addinivalue_line("markers", "scale: storage operation-count acceptance measurements")
+    config.addinivalue_line("markers", "starter_skills: the test runs the real starter-skill installer "
+                                       "(conftest `_starter_skills_stay_off`); its skill sources are local fixtures")
     evidence = os.environ.get("OUROBOROS_TEST_EVIDENCE_ROOT")
     if evidence and _PYTEST_ROOT is not None and not getattr(config.option, "ci_evidence_dir", None):
         config.option.ci_evidence_dir = str(pathlib.Path(evidence) / ("pytest-" + _PYTEST_ROOT.name))
@@ -654,8 +656,15 @@ def pytest_runtest_protocol(item, nextitem):  # noqa: ARG001
         item.stash[_PHASE_EVENT_LOOPS] = loops
         yield
     finally:
+        # The call and teardown hooks close their loops and fail that phase if a close raises;
+        # this pass only guarantees the close. A loop whose close already raised is left half
+        # closed (on Windows a proactor without its self-pipe), and raising again here, after
+        # the reports, would end the whole session as an INTERNALERROR.
         for loop in loops:
-            loop.close()
+            try:
+                loop.close()
+            except Exception:  # noqa: BLE001
+                pass
         asyncio.set_event_loop(None)
         if _PHASE_EVENT_LOOPS in item.stash:
             del item.stash[_PHASE_EVENT_LOOPS]
@@ -695,14 +704,27 @@ def _rebind_runtime_roots_between_tests():
 
 
 @pytest.fixture(autouse=True)
+def _launcher_no_real_network(request):
+    from tests.launcher_network_guard import deny_real_network, launcher_unit_module
+
+    if not launcher_unit_module(request.node.path.name):
+        yield
+        return
+    with deny_real_network() as attempts:
+        yield
+    assert not attempts, f"Launcher test tried real network I/O, even if caught: {attempts}"
+
+
+@pytest.fixture(autouse=True)
 def _isolate_restart_generation(monkeypatch):
     """Panic and parent observation belong to one process generation, not later tests;
     so do a returning stop's named queue and the launch/schedule process memory."""
-    from ouroboros import delegate_recovery, server_control
+    from ouroboros import delegate_recovery, launcher_bootstrap, server_control
     from supervisor import queue, schedule_occurrence, worker_assignment
 
     monkeypatch.setattr(server_control, "_restart_successors", [])
     monkeypatch.setattr(server_control, "_restart_stop_requested", False)
+    monkeypatch.setattr(launcher_bootstrap, "source_handoff", launcher_bootstrap._SourceHandoff())
     monkeypatch.setattr(delegate_recovery, "_restart_parent", None)
     monkeypatch.setattr(queue, "RETURNS_NAMED", {})
     monkeypatch.setattr(schedule_occurrence, "_DEFERRED", {})
@@ -770,6 +792,38 @@ def _restore_the_live_log_sink_between_tests(monkeypatch):
     from ouroboros import utils
 
     monkeypatch.setattr(utils, "_log_sink", None)
+
+
+_HOST_LAUNCHING_MARKERS = ("ui_browser", "browser", "ui_browser_docker")
+
+
+@pytest.fixture(autouse=True)
+def _act_as_the_installs_a_browser_or_e2e_test_launched(request, monkeypatch, tmp_path_factory):
+    """Browser and system-E2E tests boot real hosts on roots under this session's temporary tree, then seed
+    and read those hosts' stores from this process. A root a host booted carries its own install identity,
+    which every other install refuses (install_identity.py, the copied-folder rule), so here the test acts
+    as the install it launched, as ``install_identity.acting_as`` lets tooling do: only for a root that
+    already carries an identity, and never minting one. The rule's own tests run in the default lane."""
+    node = request.node
+    path = pathlib.Path(node.path)
+    if not (any(node.get_closest_marker(name) for name in _HOST_LAUNCHING_MARKERS)
+            or "system_e2e" in path.parts or path.name == "test_e2e_cancellation_scenarios.py"):
+        yield
+        return
+    from ouroboros import install_identity
+
+    base = pathlib.Path(tmp_path_factory.getbasetemp()).resolve()
+    ownership = install_identity._ownership
+
+    def as_its_launcher(target, *, initialize=True):
+        root = install_identity.layout_root(target)
+        if base in root.parents and (root / install_identity.IDENTITY_PATH).is_file():
+            with install_identity.acting_as(root):
+                return ownership(target, initialize=False)
+        return ownership(target, initialize=initialize)
+
+    monkeypatch.setattr(install_identity, "_ownership", as_its_launcher)
+    yield
 
 
 @pytest.fixture(autouse=True)
@@ -1077,6 +1131,32 @@ def _hide_bundled_skills(monkeypatch):
             "ouroboros.skill_loader._resolve_data_skills_dir",
             _hermetic_resolver,
         )
+
+
+@pytest.fixture(autouse=True)
+def _starter_skills_stay_off(request, monkeypatch):
+    """No ordinary test starts the starter-skill installer; a test of the installer opts in.
+
+    ``skill_starter.schedule_starter`` is the door of every background starter run: the boot of
+    a fresh data root with a ready provider and no onboarding stamp (#1995), a retry of a pending
+    run, every onboarding completion. That run clones the configured skill sources (by default
+    the Official hub on GitHub) and installs skills while the test goes on, so outside tests
+    marked ``starter_skills`` the door starts nothing. A server a test runs in its own
+    interpreter does not load this file: its harness closes the door itself (tests/_cost_driver.py
+    stubs it; the real-server shutdown tests configure no starter skills).
+    """
+    if request.node.get_closest_marker("starter_skills"):
+        yield
+        return
+    from ouroboros import skill_starter
+
+    def schedule_starter(drive_root, ids, *, origin, repo_dir=None):
+        thread = threading.Thread(target=lambda: None, name="starter-skills-off", daemon=True)
+        thread.start()
+        return thread
+
+    monkeypatch.setattr(skill_starter, "schedule_starter", schedule_starter)
+    yield
 
 
 @pytest.fixture(autouse=True)

@@ -6,8 +6,10 @@
 // three-dot loop moves.
 import { escapeHtmlAttr as escapeHtml } from './ui_primitives.js';
 import { strokeIcon } from './page_icons.js';
+import * as pageIcons from './page_icons.js';
 import { formatCompactNumber, safeExternalUrl } from './utils.js';
 import { openExternalViaHostBridge } from './ui_helpers.js';
+import { statusMarkHtml } from './status_mark.js';
 
 const OFFICIAL_PATH = '<path d="M3.85 8.62a4 4 0 0 1 4.78-4.77 4 4 0 0 1 6.74 0 4 4 0 0 1 4.78 4.78 4 4 0 0 1 0 6.74 4 4 0 0 1-4.77 4.78 4 4 0 0 1-6.75 0 4 4 0 0 1-4.78-4.77 4 4 0 0 1 0-6.76Z"/><path d="m9 12 2 2 4-4"/>';
 const WARNING_PATH = '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>';
@@ -91,18 +93,18 @@ export function skipReviewButtonHtml(attrs = '', label = 'Skip review') {
     return `<button type="button" class="btn btn-default btn-sm skills-skip-btn"${attrs ? ` ${attrs}` : ''}><span class="skills-skip-glyph" aria-hidden="true">${WARNING_GLYPH}</span>${escapeHtml(label)}</button>`;
 }
 
-export function dotsHtml() {
-    return '<span class="chat-live-typing skills-dots" aria-hidden="true"><span></span><span></span><span></span></span>';
-}
+// A job that runs now is the shared moving mark (web/modules/status_mark.js) in its chip's or sentence's ink; a job
+// goes on by itself, so its chip and sentence are neutral and amber stays for the owner's move.
+const workMarkHtml = () => statusMarkHtml('', { shape: 'moving', hue: 'ink' });
 
 /** A status chip: the chip IS the status (flat tint, never standing). */
 export function chipHtml(label, tone = 'neutral', { work = false, attrs = '' } = {}) {
-    return `<span class="ui-chip skills-chip" data-tone="${escapeHtml(tone)}"${attrs ? ` ${attrs}` : ''}>${work ? dotsHtml() : ''}${escapeHtml(label)}</span>`;
+    return `<span class="ui-chip skills-chip" data-tone="${escapeHtml(tone)}"${attrs ? ` ${attrs}` : ''}>${work ? workMarkHtml() : ''}${escapeHtml(label)}</span>`;
 }
 
-/** A status sentence (dot + words); live work replaces the dot with the three-dot loop. */
+/** A status sentence (dot + words); live work replaces the dot with the moving mark. */
 export function statusHtml(textHtml, tone = 'muted', { work = false } = {}) {
-    return `<span class="ui-status skills-status" data-tone="${escapeHtml(tone)}"${work ? ' data-work' : ''}>${work ? dotsHtml() : ''}<span class="skills-status-text">${textHtml}</span></span>`;
+    return `<span class="ui-status skills-status" data-tone="${escapeHtml(tone)}"${work ? ' data-work' : ''}>${work ? workMarkHtml() : ''}<span class="skills-status-text">${textHtml}</span></span>`;
 }
 
 /** One attention tray: one sentence (and an optional quiet note) with its actions, visible on touch. */
@@ -175,7 +177,7 @@ export const PERMISSION_WORDS = Object.freeze({
     read_settings: 'Reads the keys you allow',
     subscribe_event: 'Sees app events',
     inject_chat: 'Writes into your chat — with your permission',
-    presence: 'Talks with other people for you — with your permission',
+    presence: 'Lives in a place for you: hears, speaks and acts there, with your permission',
     notify_owner: 'Sends you short notices — with your permission',
 });
 
@@ -191,7 +193,7 @@ export function permissionWords(permissions = []) {
 
 // Grantable host permissions as the request a skill makes («Wants your permission to …»).
 const GRANT_PHRASES = Object.freeze({
-    presence: 'talk with other people for you',
+    presence: 'live in a place for you: hear, speak and act there',
     inject_chat: 'write into your chat',
     notify_owner: 'send you short notices',
     subscribe_event: 'see chat events',
@@ -267,4 +269,36 @@ export function sourceAboutText(source = {}) {
 /** The trust value of a source row: a setting, not a status. */
 export function trustValueText(source = {}) {
     return source.trust === 'trusted' ? 'Installs without review' : 'Reviews each skill';
+}
+
+/**
+ * A skill's or connector's icon (`{name?, svg?}` from the host's projection) drawn in the house stroke style by
+ * `renderSkillIcon` (page_icons.js, the host keeps only the geometry, currentColor); without it, the house glyph
+ * for a named control or for a skill. The label beside it always says what it is.
+ */
+export function skillIconHtml(icon, size = 18) {
+    const render = pageIcons.renderSkillIcon;
+    if (typeof render === 'function') {
+        try { return render(icon || {}, size); } catch { /* the house glyph below */ }
+    }
+    return pageIcons.controlIcon(icon?.name || '', size);
+}
+
+/** The services a connector connects: the host's `connects` fact, a list of names derived from its place declaration. */
+export function connectsServices(item) {
+    const value = item?.connects;
+    return Array.isArray(value) ? value.map((name) => String(name || '').trim()).filter(Boolean) : [];
+}
+
+/** «Connects Slack» for a connector, else ''. */
+export function connectsText(item) {
+    const services = connectsServices(item);
+    return services.length ? `Connects ${services.join(', ')}` : '';
+}
+
+/** A skill that writes into the owner's chat without a place of its own: what arrives from it is the owner's. */
+export function countsAsYoursText(item) {
+    const permissions = Array.isArray(item?.permissions) ? item.permissions : [];
+    const injects = permissions.some((permission) => String(permission || '').split(':')[0] === 'inject_chat');
+    return injects && !connectsServices(item).length ? 'Messages from here count as yours' : '';
 }

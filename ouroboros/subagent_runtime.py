@@ -13,7 +13,6 @@ import contextvars
 import json
 import os
 from dataclasses import dataclass, replace as dataclass_replace
-from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Mapping, Optional
 
 from ouroboros.configured_subagents import (
@@ -200,7 +199,7 @@ _REVIEW_SURFACES = {
                      "cyber_pro": "panel, self-check or no review; the skill may run"},
     "plan_review": "opening is optional; first own-code ask: Blocking adds missing ticked reviewers, Advisory requires a ticked reviewer and a reason when narrowed, Cyber Pro is free; later asks name rows; only a counted participant's objection holds, only under Blocking",
     "advisers": "enabled unticked rows may be named in every mode: heard, not counted, never holding",
-    "task_acceptance": {"root": "every pool row", "child": "≤1 from the pool; with several, name one as reviewer"},
+    "result": "review_change(subject=result): named ticked rows in every mode, a narrowed panel records a missing reason; omitted means the whole pool",
     "preflight": "one enabled catalog row you name: commit_reviewed(preflight_reviewer=…); none → recorded as not performed",
     "system_review": "/review: one enabled catalog row, default Main",
 }
@@ -210,30 +209,24 @@ SESSION_SEAT_COST_HINT = "uses a session seat and time"
 COST_UNKNOWN_HINT = "cost unknown"
 
 
-def review_call_cost_text(usd: Optional[float], *, reading: bool) -> str:
-    """An api row's price in words: one full call (``review_helpers.review_row_call_usd``).
-    Settings → Agents prints the same words (``subagents_settings.js`` ``reviewCostText``),
-    the dollars rounded as JavaScript's ``toFixed`` does."""
-    if usd is None:
-        return COST_UNKNOWN_HINT
-    if not usd:
-        return "no API cost per review"
-    places = Decimal("0.0001") if usd < 0.01 else Decimal("0.01")
-    text = f"≈${Decimal(usd).quantize(places, rounding=ROUND_HALF_UP)} per full call (route tariff)"
-    return text + ("; a reading reviewer makes several" if reading else "")
+LOCAL_ROUTE_COST_HINT = "no API cost per review"
 
 
 def _api_review_cost_hint(slot: Any) -> str:
-    """One api seat's price (:func:`review_call_cost_text`), from the tariff and the window
-    already held in this process — context assembly never waits on a provider catalog. A
-    model call through a subscription uses a seat, as Settings → Agents says."""
-    from ouroboros.provider_models import provider_for_model
-    from ouroboros.tools.review_helpers import review_row_call_usd
+    """One api seat's price: what one review by its row actually cost (``review_price``, read from
+    this process's table, so context assembly never waits on the ledger). A model call through a
+    subscription uses a seat and a local route costs no API money, as Settings → Agents says."""
+    from ouroboros.config import resolve_data_dir
+    from ouroboros.provider_models import provider_for_model, review_model_uses_local
+    from ouroboros.review_price import review_price, review_price_text
 
-    if provider_for_model(str(getattr(slot, "model", "") or "")) == "claudexor":
+    model = str(getattr(slot, "model", "") or "")
+    if provider_for_model(model) == "claudexor":
         return SESSION_SEAT_COST_HINT
-    return review_call_cost_text(review_row_call_usd(slot, allow_live_fetch=False),
-                                 reading=bool(getattr(slot, "native_retrieval", False)))
+    if review_model_uses_local(model):
+        return LOCAL_ROUTE_COST_HINT
+    row_id = str(getattr(slot, "subagent_id", "") or getattr(slot, "slot_id", "") or "")
+    return review_price_text(review_price(resolve_data_dir(), row_id, model))
 
 
 # The wizard's summary prints the same sentence (``subagents_settings.js`` ``PACKET_ONLY_POOL_WARNING``).
@@ -760,6 +753,10 @@ def resolve_configured_actor_dispatch(
             availability=availability, effort_fact=fact,
         )
 
+    from ouroboros.owner_wait import governing_continuation
+
+    saved_supervision = bool(governing_continuation(task))
+    unavailable, reset_at = "", ""
     parsed = parse_subagent_harness(route_target)
     if parsed is None:
         unavailable, reset_at = "configured_session_route_invalid", ""
@@ -770,32 +767,33 @@ def resolve_configured_actor_dispatch(
             parsed, effort=derived_effort,
             profile_id=str(route_spec.get("credential_profile_id") or ""),
         )
-        from ouroboros.contracts.task_constraint import normalize_task_constraint
-        from ouroboros.tool_access import predicted_subagent_profile
+        if not saved_supervision:
+            from ouroboros.contracts.task_constraint import normalize_task_constraint
+            from ouroboros.tool_access import predicted_subagent_profile
 
-        normalized = normalize_task_constraint(task.get("task_constraint"))
-        surface = str(getattr(normalized, "surface", "") or "")
-        shape = delegated_run_shape(
-            predicted_subagent_profile(write_surface=surface) == "acting_subagent",
-            snapshot.get("access", "workspace_write"),
-        )
-        gateway = None
-        try:
-            from ouroboros.claudexor_daemon import ensure_owned_gateway
+            normalized = normalize_task_constraint(task.get("task_constraint"))
+            surface = str(getattr(normalized, "surface", "") or "")
+            shape = delegated_run_shape(
+                predicted_subagent_profile(write_surface=surface) == "acting_subagent",
+                snapshot.get("access", "workspace_write"),
+            )
+            gateway = None
+            try:
+                from ouroboros.claudexor_daemon import ensure_owned_gateway
 
-            gateway = ensure_owned_gateway()
-            unavailable, reset_at = route_health(
-                gateway, exact_route.route_id, shape, route_model=exact_route.model,
-                pinned_profile=exact_route.profile_id,
-            )
-        except Exception as exc:
-            unavailable, reset_at = (
-                str(getattr(exc, "code", "") or type(exc).__name__),
-                str(getattr(exc, "reset_at", "") or ""),
-            )
-        finally:
-            if gateway is not None:
-                gateway.close()
+                gateway = ensure_owned_gateway()
+                unavailable, reset_at = route_health(
+                    gateway, exact_route.route_id, shape, route_model=exact_route.model,
+                    pinned_profile=exact_route.profile_id,
+                )
+            except Exception as exc:
+                unavailable, reset_at = (
+                    str(getattr(exc, "code", "") or type(exc).__name__),
+                    str(getattr(exc, "reset_at", "") or ""),
+                )
+            finally:
+                if gateway is not None:
+                    gateway.close()
 
     cognitive = task.get("parent_cognitive_route") if isinstance(task.get("parent_cognitive_route"), dict) else {}
     nanny_model = str(cognitive.get("model") or "").strip()
@@ -811,9 +809,16 @@ def resolve_configured_actor_dispatch(
     executor = "blocked" if unavailable else "harness"
     availability = {
         "observed_at": observed_at,
-        "status": "unavailable" if unavailable else "ready",
+        "status": "unavailable" if unavailable else "unobserved" if saved_supervision else "ready",
         "reason": unavailable, "reset_at": reset_at, "route_kind": route_kind,
     }
+    if saved_supervision:
+        previous = task.get("subagent_availability")
+        previous = previous if isinstance(previous, dict) else {}
+        if previous.get("status") == "unobserved":
+            previous = previous.get("previous_observation") or {}
+        if previous.get("observed_at"):
+            availability["previous_observation"] = dict(previous)
     reasons = []
     if unavailable:
         reasons.append(unavailable)
@@ -826,7 +831,7 @@ def resolve_configured_actor_dispatch(
     )
     resolution = SubagentExecutorResolution(
         "harness", executor, exact_route if exact_route.route_id else None,
-        unavailable or "harness_ready", reset_at,
+        unavailable or ("saved_supervision_unobserved" if saved_supervision else "harness_ready"), reset_at,
     )
     return SubagentDispatch(
         lane=lane, effort=nanny_effort, executor=executor,
@@ -1080,6 +1085,11 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
                 subagent_id=selected_id,
             )
         if selected_snapshot is not None:
+            if access is None and str(options.get("continue_from") or "").strip():
+                # Omitted access keeps the continued run's own; only a chosen widening is refused.
+                from ouroboros.delegate_continuation import inherited_access
+
+                access = inherited_access(ctx, options["continue_from"])
             selected_snapshot = validate_subagent_snapshot(selected_snapshot, access=access)
         effort_choice = _leaf_effort_choice(ctx, selected_snapshot, effort_request, effort_choice, retry_token)
     except SubagentSelectionError as exc:
@@ -1125,6 +1135,8 @@ def exact_start(ctx: Any, prompt: str, spec: Optional[dict[str, Any]] = None) ->
             )
         if isinstance(work_order_source_request, dict):
             payload["work_order_source_request"] = dict(work_order_source_request)
+        if retry_token and coordination_context:
+            payload["coordination_text"] = "not sent: retry_of replays the recorded request unchanged"
         return _replace_tool_result(
             result, text=json.dumps(payload, ensure_ascii=False, indent=2))
     except SubagentSelectionError as exc:
@@ -1218,10 +1230,12 @@ def _names_bound_actor(selector: str, bootstrap: Mapping[str, Any]) -> bool:
         return False
 
 
-def delegate_start_entry(ctx: Any, prompt: str, _resolved_binding: Any = None, **params: Any) -> "ToolResult":
+def delegate_start_entry(ctx: Any, prompt: str = "", _resolved_binding: Any = None, **params: Any) -> "ToolResult":
     # Actor-first configured sessions bind every fresh start to the immutable
     # snapshot captured before the episode. The model supplies only an advisory
-    # coordination appendix; the canonical work order remains host-owned.
+    # coordination appendix; the canonical work order remains host-owned. An
+    # omitted prompt is the empty one: a direct fresh start still refuses it, and
+    # with retry_of it replays the recorded request (#1614).
     bootstrap = getattr(ctx, "_configured_actor_bootstrap", None)
     retry_of = str(params.get("retry_of") or "").strip()
     from ouroboros.delegate_shared import _fail
@@ -1292,27 +1306,13 @@ def delegate_start_entry(ctx: Any, prompt: str, _resolved_binding: Any = None, *
             bound["_resolved_binding"] = _resolved_binding
         return exact_start(ctx, canonical_work_order, bound)
     if retry_of and isinstance(bootstrap, dict):
-        # Retry replays the stored canonical request byte-for-byte.
-        from ouroboros import delegate_custody as custody
-
-        invocation = custody.invocation_record(custody.custody_root(ctx), retry_of) or {}
-        request = invocation.get("request") if isinstance(invocation.get("request"), dict) else {}
-        canonical_work_order = str(request.get("prompt") or "")
-        if not canonical_work_order:
-            _blocked("configured_work_order_unavailable")
-            return _fail(
-                "delegate_start", "configured_work_order_unavailable",
-                "The retry has no recorded work order; the coordination prompt "
-                "cannot replace the original assignment.",
-                work_order_fingerprint=str(bootstrap.get("work_order_fingerprint") or ""),
-                work_order_chars=int(bootstrap.get("work_order_chars") or 0),
-                host_fallback=False,
-            )
-        retry_spec = {
-            "retry_of": retry_of,
-            "_resolved_binding": _resolved_binding,
-        }
-        return exact_start(ctx, canonical_work_order, retry_spec)
+        # Retry replays the stored canonical request byte-for-byte once the shared
+        # validator owns it. Every request argument meets the same retry checks as a
+        # direct call (only the bound actor's own id is redundant); the advisory text
+        # is disclosed as not sent, never asserted against or added to the replay.
+        retry_spec = {key: value for key, value in params.items() if key != "subagent_id"}
+        retry_spec.update(_resolved_binding=_resolved_binding, _coordination_context=str(prompt or ""))
+        return exact_start(ctx, "", retry_spec)
     return exact_start(ctx, prompt, {**params, "_resolved_binding": _resolved_binding})
 
 

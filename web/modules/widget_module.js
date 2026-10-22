@@ -5,7 +5,7 @@
    widgets.js keeps the page host, the mountTab dispatcher, the card registry and the
    declarative renderer; every mount here returns its disposer to that dispatcher. */
 
-import { apiFetch, extensionRoutePath, extensionRoutePrefix } from './api_client.js';
+import { apiClient, apiFetch, extensionRoutePath, extensionRoutePrefix } from './api_client.js';
 import { escapeHtmlAttr as escapeHtml } from './utils.js';
 import { bridgeChunkBuffer, moduleBridgeScript, moduleResizeScript } from './widget_frame.js';
 import { boundedNumber, WIDGET_DISPOSE_ACK_TIMEOUT_MS, WIDGET_REQUEST_TIMEOUT_MS } from './widget_job.js';
@@ -16,6 +16,11 @@ import { downloadViaHostBridge, downloadBlobViaHostBridge, openExternalViaHostBr
 export const WIDGET_FRAME_DEFAULT_HEIGHT = 320;
 export const WIDGET_FRAME_MAX_HEIGHT = 8192;
 export const WIDGET_FRAME_BORDER_RESERVE = 2;
+// Faults one mount sends to the host log (POST /api/widgets/fault); the frame's own cap is not a bound, since the
+// widget's code can read the nonce and post directly. The kinds and clips are the frame's (widget_frame.js).
+export const WIDGET_FAULT_REPORTS_PER_MOUNT = 10;
+const FAULT_KINDS = ['error', 'rejection', 'csp'];
+const faultText = (value, max) => (typeof value === 'string' ? value.slice(0, max) : '');
 
 // One capability set for both framed mounts (route iframe and module srcdoc):
 // scripts, pointer lock and downloads; autoplay, fullscreen and clipboard
@@ -89,8 +94,11 @@ export function mountRouteIframeWidget(mount, tab, render) {
 }
 
 // `messageHandlers` is the page's Set of WebSocket message handlers (fanned from
-// `ctx.ws.on('message')`); the frame's event subscription registers into it.
-export async function mountModuleWidget(mount, tab, render, mountSignal = null, messageHandlers = null) {
+// `ctx.ws.on('message')`); the frame's event subscription registers into it. `inline` is a
+// frame shown in a message instead (a living card, card_frames.js): `{fit(contentHeight),
+// fault(text)}` — the message's size policy replaces the board's floor and declared height,
+// and a fault is the card's to show.
+export async function mountModuleWidget(mount, tab, render, mountSignal = null, messageHandlers = null, inline = null) {
     // Reviewed JS runs in an opaque iframe; the parent bridge is its only
     // scriptable I/O path and only reaches this skill's extension route prefix
     // and this skill's namespaced WebSocket events, preserving route IO without
@@ -160,7 +168,22 @@ export async function mountModuleWidget(mount, tab, render, mountSignal = null, 
     iframe.srcdoc = srcdoc;
     mount.replaceChildren(iframe);
     let appliedHeight = frameHeight(render);
-    setFrameHeight(iframe, appliedHeight);
+    if (inline) inline.fit(autoHeight ? 0 : appliedHeight);
+    else setFrameHeight(iframe, appliedHeight);
+    // The fault a card shows also reaches the host's event log once per kind+message, under this mount's own
+    // identity (captured now, never the frame's words). Best effort: no retry, and a failed report changes nothing.
+    const faultIdentity = { skill: String(tab.skill || ''), tab_id: String(tab.tab_id || ''),
+        revision: String(tab.revision ?? ''), where: inline ? 'message' : 'board' };
+    const reportedFaults = new Set();
+    const reportFault = (msg) => {
+        const message = faultText(msg.message, 500);
+        const key = `${msg.kind}\u0000${message}`;
+        if (!FAULT_KINDS.includes(msg.kind) || reportedFaults.has(key) || reportedFaults.size >= WIDGET_FAULT_REPORTS_PER_MOUNT) return;
+        reportedFaults.add(key);
+        const line = Number.isInteger(msg.line) && msg.line >= 0 && msg.line <= 1e7 ? msg.line : 0;
+        const payload = { ...faultIdentity, kind: msg.kind, message, source: faultText(msg.source, 200), line };
+        Promise.resolve().then(() => apiClient.reportWidgetFault(payload)).catch(() => {});
+    };
     const pendingRequests = new Map();
     let disposed = false;
     let disposing = null;
@@ -311,6 +334,7 @@ export async function mountModuleWidget(mount, tab, render, mountSignal = null, 
             if (!autoHeight) return;
             const measured = Number(msg.height);
             if (!Number.isFinite(measured) || measured <= 0) return;
+            if (inline) { inline.fit(measured + WIDGET_FRAME_BORDER_RESERVE); return; }
             const nextHeight = Math.min(maxHeight, Math.max(WIDGET_FRAME_DEFAULT_HEIGHT, measured + WIDGET_FRAME_BORDER_RESERVE));
             // Stamped before the early return: that return fires exactly when the
             // frame is pinned at max_height, which is the one case these two
@@ -325,7 +349,9 @@ export async function mountModuleWidget(mount, tab, render, mountSignal = null, 
         if (msg.type === 'ouro-widget-error') {
             const label = msg.kind === 'csp' ? 'Widget blocked by frame policy' : 'Widget script error';
             const detail = msg.kind === 'csp' ? (msg.source || msg.message) : msg.message;
-            setWidgetCardFault(mount.closest('[data-widget-key]'), `${label}: ${detail || 'unknown'}`);
+            if (inline) inline.fault(`${label}: ${detail || 'unknown'}`);
+            else setWidgetCardFault(mount.closest('[data-widget-key]'), `${label}: ${detail || 'unknown'}`);
+            reportFault(msg);
             return;
         }
         if (msg.type === 'ouro-widget-theme') {

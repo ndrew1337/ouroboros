@@ -1,10 +1,15 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readdirSync, readFileSync } from 'node:fs';
+import { buildTimelineItemHtml } from '../modules/chat_activity.js';
+import { installDom, restoreDom } from './chat_dom_fixture.js';
 
 import {
-    taskDoneIsTerminal, taskPresentation, taskReasonDetail, taskReasonPhrase, taskTerminalPhase, summarizeChatLiveEvent,
+    reasonCodesNote, taskDoneIsTerminal, taskPresentation, taskReasonCodes, taskReasonDetail, taskReasonPhrase, taskTerminalPhase,
+    summarizeChatLiveEvent,
 } from '../modules/log_events.js';
+
+const UNDESCRIBED = 'The recorded reason has no description yet.';
 
 // A degraded delivery used to name one generic cause on every card. The record
 // keeps the machine code; the card says what actually happened.
@@ -22,9 +27,66 @@ test('a typed cause is stated in the owner\'s words', () => {
     );
 });
 
-test('an unknown cause stays raw rather than becoming a wrong sentence', () => {
-    assert.equal(taskReasonDetail({ reason_code: 'some_future_code' }), 'some_future_code');
+test('a typed cause with no sentence yet says so; its exact code is the details\' (owner 21.10, 2A)', () => {
+    assert.equal(taskReasonDetail({ reason_code: 'some_future_code' }), UNDESCRIBED);
+    assert.deepEqual(taskReasonCodes({ reason_code: 'some_future_code' }), ['some_future_code']);
+    assert.equal(reasonCodesNote(['some_future_code']), 'Recorded reason: some_future_code');
+    assert.equal(reasonCodesNote([]), '');
+    // The bare lookup (the Continue note, the host-text twin) still never borrows a sentence: it stays raw.
     assert.equal(taskReasonPhrase('some_future_code'), 'some_future_code');
+    // A real producer's cause has its words and leaves nothing for the details.
+    const crashed = { status: 'failed', reason_code: 'worker_crash_signal' };
+    assert.equal(taskReasonDetail(crashed), 'The worker process running the task crashed');
+    assert.deepEqual(taskReasonCodes(crashed), []);
+    // Two undescribed codes are one neutral clause and both codes, in order.
+    const two = { status: 'completed', reason_code: 'first_future_code', outcome_axes: {
+        execution: { status: 'degraded', reason_code: 'first_future_code' },
+        review: { acceptance_decision: { status: 'finalized_unaccepted', reason: 'second_future_code' } } } };
+    assert.equal(taskReasonDetail(two), UNDESCRIBED);
+    assert.deepEqual(taskReasonCodes(two), ['first_future_code', 'second_future_code']);
+    assert.equal(reasonCodesNote(taskReasonCodes(two)), 'Recorded reasons: first_future_code, second_future_code');
+    // Authored words are never censored: the author's own stop reason stays beside the neutral clause.
+    const stop = { status: 'completed', reason_code: 'final_message', outcome_axes: {
+        execution: { status: 'ok', task_completion: { action: 'stop', rationale: 'The export still fails on empty input.' } },
+        objective: { status: 'fail', source: 'task_completion', reason: 'author_stop', warnings: ['partial coverage'] } } };
+    assert.equal(taskReasonDetail(stop), 'Ouroboros stopped with unfinished work; no review approval was granted'
+        + ' · partial coverage · The export still fails on empty input.');
+    assert.deepEqual(taskReasonCodes(stop), [], 'a legacy warning may be authored prose, not a typed reason code');
+    // The card's collapsed line says the sentence; its details name the code.
+    const summary = summarizeChatLiveEvent({ type: 'task_done', task_id: 't', status: 'failed', reason_code: 'example_new_reason' });
+    assert.equal(summary.activityPreview, UNDESCRIBED);
+    assert.equal(summary.body, `${UNDESCRIBED}\nRecorded reason: example_new_reason`);
+});
+
+test('a foreign install keeps its preserved explanation despite the old terminal outcome', (t) => {
+    const { prior } = installDom();
+    t.after(() => restoreDom(prior));
+    const detail = '/installs/<install_A>/task_drives/t belongs to another Ouroboros install at /installs/<install_A>; move it explicitly to work on it here';
+    for (const prior of [
+        { status: 'completed' },
+        { status: 'failed' },
+        { status: 'cancelled', cancel_origin: { actor: 'owner', reason: 'old stop' } },
+        { status: 'failed', outcome_axes: { objective: { status: 'fail', source: 'plan_review_gate', reason: 'plan_review_advisory' } } },
+    ]) {
+        const record = { ...prior, reason_code: 'foreign_install_root', reason_detail: detail };
+        assert.equal(taskReasonDetail(record), detail + (prior.status === 'cancelled' ? '.' : ''));
+    }
+    const summary = summarizeChatLiveEvent({ type: 'task_done', task_id: 't', status: 'failed',
+        reason_code: 'foreign_install_root', reason_detail: detail });
+    assert.equal(summary.body, detail);
+    assert.equal(summary.activityPreview, detail);
+    const html = buildTimelineItemHtml({ ...summary, lineKey: 'foreign' }, { expandedLineKeys: new Set() });
+    assert.ok(html.includes('/installs/&lt;install_A&gt;/task_drives/t'));
+    assert.ok(html.includes('move it explicitly to work on it here'));
+    assert.ok(!html.includes('<install_A>'));
+});
+
+test('ordinary reasons ignore foreign detail and an absent detail stays explicit', () => {
+    const reason_detail = 'This is not the reason for an ordinary task.';
+    assert.equal(taskReasonDetail({ reason_code: 'final_message', reason_detail }), '');
+    assert.equal(taskReasonDetail({ reason_code: 'some_future_code', reason_detail }), UNDESCRIBED);
+    assert.equal(taskReasonDetail({ reason_code: 'foreign_install_root' }), UNDESCRIBED);
+    assert.deepEqual(taskReasonCodes({ reason_code: 'foreign_install_root' }), ['foreign_install_root']);
 });
 
 test('no cause and an owner-requested stop both render nothing', () => {
@@ -78,38 +140,28 @@ test('an accepted decision with a sentence still states its cause', () => {
     assert.equal(accepted(''), '');
 });
 
-test('every acceptance reason the host can record has a sentence', () => {
-    // The second half of the same gate. Acceptance reasons are written as
-    // `"reason": "<code>"` inside the four acceptance/finalization/settlement
-    // leaves; the bypass family is a dict of literals in outcomes.py, four more
-    // arrive through named constants there and the settlement leaf names its
-    // own reason as a constant, so all three shapes are read explicitly.
-    const pkg = new URL('../../ouroboros/', import.meta.url);
-    const read = (name) => readFileSync(new URL(name, pkg), 'utf8');
-    const decisions = [
-        'loop_acceptance_review.py', 'loop_acceptance.py', 'loop_delivery.py', 'loop_forced_finalization.py',
-        'acceptance_settlement.py',
-    ].map(read).join('\n');
-    const outcomes = read('outcomes.py');
-    const acceptance = new Set([
-        ...[...decisions.matchAll(/"reason":\s*(?:\n\s*)?"([a-z_]+)"/g)].map((m) => m[1]),
-        ...[...outcomes.matchAll(/"(acceptance_bypassed_[a-z_]+)"/g)].map((m) => m[1]),
-        ...[...outcomes.matchAll(
-            /^REASON_(?:REVIEW_CYCLES_EXHAUSTED|IDENTICAL_ACCEPTANCE_REFUSED|ACCEPTANCE_REVIEW_SKIPPED_DEADLINE_RESERVE|ACCEPTANCE_SKIPPED_OWNER_HURRY) = "([a-z_]+)"$/gm,
-        )].map((m) => m[1]),
-        ...[...read('acceptance_settlement.py').matchAll(/^REASON_[A-Z_]+ = "([a-z_]+)"$/gm)].map((m) => m[1]),
-    ]);
-    assert.ok(acceptance.has('previous_revision_accepted'), 'the settlement leaf is scanned');
-    // A CLEAN accepted decision renders no clause, the owner stop carries its
-    // own marker instead, and queue_inspection_failed is a `{status, reason}`
-    // probe shape rather than an acceptance reason.
-    const exempt = new Set([
-        'clean_pass', 'clean_pass_obligations_closed', 'queue_inspection_failed',
-        'acceptance_bypassed_owner_requested_finalization',
-    ]);
-    assert.ok(acceptance.size >= 20, `expected the acceptance vocabulary, saw ${acceptance.size}`);
-    for (const code of acceptance) {
-        if (exempt.has(code)) continue;
+test('every acceptance reason a stored record can carry has a sentence', () => {
+    // The second half of the same gate. The separate acceptance machine is gone (one
+    // review mechanism, owner 2026-10-17 Q2-A), but its records stay on disk and still
+    // render: this is the vocabulary it could write, frozen when its writers were
+    // deleted, so no old task card falls back to a raw code.
+    const historical = [
+        'acceptance_bypassed_budget_exhausted', 'acceptance_bypassed_children_unabsorbed',
+        'acceptance_bypassed_context_overflow', 'acceptance_bypassed_deadline',
+        'acceptance_bypassed_provider_unavailable', 'acceptance_bypassed_round_limit',
+        'admission_close_unconfirmed', 'delivery_binding_superseded', 'evidence_refresh',
+        'fence_reopen_failed', 'identical_acceptance_refused', 'improvement_capsule', 'open_obligations',
+        'owner_followup', 'owner_hurry', 'previous_revision_accepted', 'review_cycles_exhausted',
+        'review_degraded', 'review_outcome_received', 'review_skipped_deadline_reserve',
+        'reviewer_fail_no_capsule',
+    ];
+    // What the host still writes for a result review: an informed author finish, or a
+    // blocking install that could buy no review of the result (outcomes._review_axis).
+    const outcomes = readFileSync(new URL('../../ouroboros/outcomes.py', import.meta.url), 'utf8');
+    const current = [...outcomes.matchAll(/"reason":\s*"(author_finish)"/g)].map((m) => m[1]);
+    assert.ok(current.includes('author_finish'), 'the result review decision is scanned');
+    assert.match(outcomes, /^REASON_REVIEW_CYCLES_EXHAUSTED = "review_cycles_exhausted"$/m);
+    for (const code of new Set([...historical, ...current])) {
         assert.notEqual(
             taskReasonPhrase(code), code,
             `no owner-facing sentence for acceptance reason "${code}" — add one to TASK_CAUSE_PHRASES`,
@@ -125,14 +177,17 @@ test('one status-word family: the card phase matches the host over the shared fi
         readFileSync(new URL('./fixtures/outcome_phase_parity.json', import.meta.url), 'utf8'),
     );
     assert.ok(fixture.cases.length >= 10);
-    for (const { name, record, phase, headline, acceptance_clause: clause } of fixture.cases) {
+    for (const { name, record, phase, headline, acceptance_clause: clause, described_clause: described,
+        undescribed = [] } of fixture.cases) {
         const resolved = taskDoneIsTerminal(record) ? taskTerminalPhase(record) : 'working';
         assert.deepEqual(taskPresentation(resolved), { phase, headline }, name);
         if (clause !== undefined) {
-            // The host composes the same sentence for its durable prose rows and
-            // terminates it there; the card line adds no punctuation of its own.
+            // The host composes the same sentence for its durable prose rows and terminates it there; the card line adds
+            // no punctuation of its own. The card has details, so an undescribed code reads neutrally here (owner 2A).
+            const expected = described ?? clause;
             const detail = taskReasonDetail(record);
-            assert.ok(clause === detail || clause === `${detail}.`, `${name}: ${detail} vs ${clause}`);
+            assert.ok(expected === detail || expected === `${detail}.`, `${name}: ${detail} vs ${expected}`);
+            assert.deepEqual(taskReasonCodes(record), undescribed, name);
         }
     }
 });
@@ -177,7 +232,7 @@ test('an accepted decision omits neutral final_message and preserves substantive
         },
     };
     assert.equal(taskReasonDetail(accepted), '');
-    assert.equal(taskReasonDetail({ ...accepted, reason_code: 'custom_reason' }), 'custom_reason');
+    assert.equal(taskReasonDetail({ ...accepted, reason_code: 'custom_reason' }), UNDESCRIBED);
 });
 
 test('a decision carrying no typed reason states no cause at all', () => {

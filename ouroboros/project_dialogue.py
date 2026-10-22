@@ -10,6 +10,8 @@ exception.
 
 from __future__ import annotations
 
+from ouroboros.room_membership import room_membership  # noqa: F401 — public compatibility surface
+
 import hashlib
 import json
 import logging
@@ -18,7 +20,6 @@ import pathlib
 import uuid
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
-from ouroboros.acceptance_preparation import incident_cause_clauses
 from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
 from ouroboros.review_records import recorded_author_stop
 from ouroboros.task_finalization import TERMINAL_ORIGIN_HOST_SALVAGE
@@ -66,6 +67,7 @@ QUESTION_STATUS = {
     "expired_terminal": "Unanswered · task finished",
     "answered": "You answered",
     "answer_pending": "Answer recorded · delivery pending",
+    "answer_saved": "Answer saved · the task reads it when it continues",
     "answer_unknown": "Answer recorded · delivery unknown",
     "closure_pending": "Question closed · update pending",
     "superseded": "Replaced by a newer question",
@@ -134,8 +136,10 @@ def project_question_pointer(row: Dict[str, Any], block: Any, project: Any,
     delivery = question_delivery_projection(block)
     if known and state in {"answered", "closed"} and delivery.get("state") == "owed":
         # An accepted late answer whose dispatch witness ended with its process: no retry knows more.
+        reason = delivery.get("reason_code")
         lead = QUESTION_STATUS["closure_pending" if state == "closed" else "answer_unknown"
-                               if delivery.get("reason_code") == "late_answer_delivery_unknown" else "answer_pending"]
+                               if reason == "late_answer_delivery_unknown" else "answer_saved"
+                               if reason == "awaiting_recipient_read" else "answer_pending"]
     options = next((value for value in (quiz.get("options"), block.get("options")) if isinstance(value, list)), [])
     labels = [str(option.get("label") if isinstance(option, dict) else option or "") for option in options]
     # Aligned details from the row's option objects or the block's own list (a legacy ask has none).
@@ -187,13 +191,7 @@ def _text_sha256(value: Any) -> str:
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
-def build_owner_message_ref(
-    *,
-    chat_id: int,
-    client_message_id: str,
-    ts: str,
-    text: str,
-) -> Dict[str, Any]:
+def build_owner_message_ref(*, chat_id: int, client_message_id: str, ts: str, text: str) -> Dict[str, Any]:
     """The canonical owner-row identity, built AT INGRESS from host-known facts.
 
     Identity is captured where the host writes the canonical row and passed by
@@ -286,44 +284,6 @@ def bound_room_chat(rooms: Callable[..., int], row: Dict[str, Any]) -> int:
     carries only its task id resolves through the task's own recorded lineage."""
     return int(rooms(row.get("task_id"), row.get("parent_task_id"), row.get("root_task_id")) or 0)
 
-
-def room_membership(chat_id: int, project_chat_ids: set, source_refs: list,
-                    rooms: Callable[..., int]):
-    """Canonical room membership shared by history and evidence readers.
-
-    ``rooms`` is the room rule (``projects_registry.RoomResolver``), the same one
-    the live bus addresses by, so a task's rows replay in the room its frames went
-    to. ``gateway.history_paging.room_lens`` addresses the Project admissions
-    below in the dialogue store (its candidate superset); change both together.
-
-    Presentation-only hiding and cross-room question pointers belong to the UI
-    caller. A room source retains the actual cognitive result as well.
-    """
-    from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
-
-    def matches(entry_chat: int, entry: Optional[dict] = None) -> bool:
-        row = entry if isinstance(entry, dict) else {}
-        if is_a2a_chat_id(entry_chat):
-            return False
-        # A routing refusal belongs to the issuing chat, even when the target
-        # is bound to another Project. Its lineage must not move the notice.
-        bound = 0 if row.get("type") in ORIGIN_ADDRESSED_NOTICE_TYPES else bound_room_chat(rooms, row)
-        lifecycle = row.get("type") in MAIN_PINNED_ROW_TYPES
-        if chat_id in project_chat_ids:
-            # A task's resolved room is authoritative over the address its row was
-            # written with: a later conversion moves the subtree's earlier rows too,
-            # out of the old room (live delivery already went to the new one).
-            return not lifecycle and ((bound == chat_id if bound else entry_chat == chat_id)
-                                      or entry_matches_source_ref(row, source_refs))
-        if chat_id != 1:
-            return entry_chat == chat_id and not bound
-        if entry_chat == HIDDEN_CHAT_ID:
-            return False
-        if lifecycle:
-            return entry_chat not in project_chat_ids
-        return entry_chat not in project_chat_ids and not bound
-
-    return matches
 
 
 def _source_ref_identity(ref: Dict[str, Any]) -> Optional[tuple]:
@@ -426,9 +386,7 @@ def latest_chat_annotations(drive_root: Any) -> Dict[str, Dict[str, Any]]:
     return _latest_annotations(path)
 
 
-def chat_annotation_receipt(
-    drive_root: Any, client_message_id: str, routing_token: str,
-) -> Dict[str, Any]:
+def chat_annotation_receipt(drive_root: Any, client_message_id: str, routing_token: str) -> Dict[str, Any]:
     """The latest annotation written for one routing attempt, read BY TOKEN.
 
     A later act under the same owner message no longer hides an earlier act's
@@ -645,7 +603,7 @@ ROUTING_REFUSAL_CAUSES: Dict[str, str] = {
     "skill_repair_payload_unreadable": "the skill's files could not be read",
     "skill_repair_admission_unwritable": "the skill repair request could not be recorded",
     "repair_promotion_failed": "the skill repair request could not be started",
-    "task_acceptance_fence": "the task tree is already being accepted",
+    "task_acceptance_fence": "the task tree is closing after its author stopped it",
     "invalid_task_depth": "the task depth was invalid",
     "promotion_persistence_failed": "the task record could not be saved",
     "routing_receipt_persist_failed": "the receipt could not be saved",
@@ -680,12 +638,11 @@ MAIN_NOTICE_TYPE = "main_notice"
 # send handler and room_membership replay read this one set.
 MAIN_PINNED_ROW_TYPES = frozenset({"project_started", "project_handoff", "project_completion_summary", MAIN_NOTICE_TYPE})
 # Rows whose address is the producer's, never their task's room: Main pins, the
-# origin-addressed refusals, the late-acceptance supplement (its retained chat is
-# the send handler's decision) and the Main question pointer. The bus write seam
+# origin-addressed refusals and the Main question pointer. The bus write seam
 # (``message_bus.send_with_budget``) reads this one set; the readers above keep
 # each component's own reading.
 ROOM_FIXED_ROW_TYPES = MAIN_PINNED_ROW_TYPES | ORIGIN_ADDRESSED_NOTICE_TYPES | frozenset({
-    "acceptance_late_settlement", "project_question_pointer", "relay_reply"})
+    "project_question_pointer", "relay_reply"})
 
 # Statuses of an act that LANDED (or is still in flight): no cause sentence.
 _LANDED_ROUTING_STATUSES = frozenset({"scheduled", "delivered", "read", "pending", "dispatch_pending", "accepted"})
@@ -758,16 +715,15 @@ def routing_option_label(option: Any) -> str:
 
 OUTCOME_PHASE_HEADLINE = {"working": "Working", "done": "Done", "warn": "Done with warnings",
                           "error": "Failed", "cancelled": "Stopped"}
+# A run that chose to finish without a message (catalog code task.headline.quiet).
+QUIET_RUN_HEADLINE = "Done · no message"
 
-# One owner sentence per typed cause, for BOTH lifecycle writers and the card.
-# Keyed on the CODE only — never on (status × reason): the status word already
-# speaks, and a product of the two would be a matrix nobody maintains. A code
-# with no sentence stays raw (docs/DESIGN.md "Status and chips"), and the raw
-# code stays typed on the row. web/modules/log_events.js carries the twin;
-# web/tests/fixtures/outcome_phase_parity.json pins both.
+# One sentence per typed cause, not status × reason. Host text keeps unknown codes;
+# details-bearing views pair a neutral sentence with the exact codes, never a guess.
+# Browser twin: task_reason_words.TASK_CAUSE_PHRASES; outcome_phase_parity.json pins both.
 TASK_CAUSE_PHRASES = {
-    # Acceptance-decision reasons. A clean accepted decision renders no clause (clean_pass and
-    # clean_pass_obligations_closed carry no sentence); an accepted decision with a sentence states its cause.
+    # Reasons of a task-acceptance decision stored before the result review. A clean accepted decision renders no
+    # clause (clean_pass, clean_pass_obligations_closed carry no sentence); one with a sentence states its cause.
     "previous_revision_accepted": "The reviewers approved an earlier version of this answer; the current version was not re-reviewed.",
     "admission_close_unconfirmed": "Reviewers approved this answer; the supervisor did not confirm that task admission was closed.",
     "author_stop": "Ouroboros stopped with unfinished work; no review approval was granted.",
@@ -854,6 +810,19 @@ TASK_CAUSE_PHRASES = {
     "artifacts_unavailable": "Some result files are missing or could not be preserved.",
     "partial_result": "The result is partial; remaining work is described in task details.",
     "task_exception": "The task stopped on an internal error",
+    # Continue's technical endings: worker/reaper/recovery and model-call failures.
+    "llm_api_error": "A model call ended in an error, so the task could not finish",
+    "provider_rejected_tool_dialect": "The model provider rejected the tool format of this task's requests, so the task could not finish",
+    "execution_deadline": "The task's execution time limit ran out",
+    "reaper_wedged_worker_alive": "The task timed out and its worker could not be confirmed stopped",
+    "workers_unavailable": "The worker pool was unavailable, so the task was not scheduled",
+    "worker_pool_unavailable": "No worker was available to run the task",
+    "worker_crash_signal": "The worker process running the task crashed",
+    "worker_crash_retry_exhausted": "The worker process running the task kept crashing until its retries ran out",
+    "worker_crash_owner_wait": "The worker process died while the task was waiting; completed actions were not retried",
+    "worker_crash_budget_pausing": "The worker process died while a continuation was being saved; no exact continuation was available",
+    "orphaned_running_after_worker_restart": "The workers restarted while the task was running, and it recorded no ending",
+    "interrupted_retry_lost": "The task was interrupted, and its retry was lost when the workers restarted",
     # Recovery finalized a dead attempt from its already registered answer instead of a retry
     # (working_checkpoint.adopt_registered_answer): the answer stands, the packaging does not.
     "finalization_incomplete": "The answer was authored, but the task's finalization did not complete, so its review evidence, artifacts and cost accounting are incomplete.",
@@ -861,7 +830,17 @@ TASK_CAUSE_PHRASES = {
     # row-level warning keys of a delivery the host could not confirm; terminal_delivery_clause adds the copy pointer.
     "terminal_delivery_exhausted": "Sending the final answer was not confirmed after the delivery attempts ran out",
     "terminal_delivery_unknown": "Delivery of the final answer could not be confirmed because the delivery registry could not be read; the result is in task details.",
+    # Presentation only, not a producer's reason code; the exact code remains in details.
+    "reason_undescribed": "The recorded reason has no description yet.",
 }
+
+def _cause_phrase(code: str, undescribed: Optional[List[str]] = None) -> str:
+    """Raw host text, or a neutral sentence with exact codes collected for accessible details."""
+    if not code or code in TASK_CAUSE_PHRASES or undescribed is None:
+        return TASK_CAUSE_PHRASES.get(code, code)
+    if code not in undescribed:
+        undescribed.append(code)
+    return TASK_CAUSE_PHRASES["reason_undescribed"]
 
 
 def terminal_delivery_clause(state: str, preserved_path: str = "") -> str:
@@ -923,11 +902,22 @@ def completion_status_label(result: Dict[str, Any], event: Dict[str, Any]) -> st
     return OUTCOME_PHASE_HEADLINE[outcome_phase(result, event)]
 
 
-def append_canonical_task_summary(drive_root: Any, row: Dict[str, Any]) -> bool:
-    """Append one task-summary row to the dialogue store (the one chat writer seam)."""
+def append_canonical_task_summary(drive_root: Any, row: Dict[str, Any], *, retained: bool = False) -> bool:
+    """Append one task-summary row (the one chat writer seam). A root's projection row answers False
+    on a busy store and its readiness appends it again (content dedup); a ``retained`` row (a child's
+    terminal row, host task facts) has no such owner, so a busy store keeps it in the retry buffer."""
+    from ouroboros._usage_wait import ACQUISITION_SLICE_SEC
+    from ouroboros.store import StoreError, acquisition_budget
+
     if not str(row.get("summary_id") or "").strip():
         return False
-    return dialogue_store.append_quietly(pathlib.Path(drive_root), "chat", dict(row)) is not None
+    if retained:
+        return dialogue_store.append_quietly(pathlib.Path(drive_root), "chat", dict(row)) is not None
+    try:
+        with acquisition_budget(ACQUISITION_SLICE_SEC):
+            return dialogue_store.append(pathlib.Path(drive_root), "chat", dict(row), idempotent=True) is not None
+    except (StoreError, OSError, ValueError):
+        return False
 
 
 def canonical_task_summary_receipt(result: Dict[str, Any]) -> Dict[str, Any]:
@@ -950,10 +940,11 @@ def canonical_task_summary_receipt(result: Dict[str, Any]) -> Dict[str, Any]:
 def canonical_task_summary_reached_chat(result: Dict[str, Any], chat_id: Any) -> bool:
     """Did this task's own terminal row already reach THAT chat?
 
-    Every settled task gets a receipt, so "a receipt exists" answers nothing: it
-    is true of every completed, failed and cancelled child alike. The question a
-    second writer actually has is whether the reader it is about to address has
-    already been told, and only the row's own chat answers that. A receipt
+    A settled task whose row landed inline gets a receipt, so "a receipt exists" answers
+    nothing: it is true of every completed, failed and cancelled child alike. A child's row
+    the retry buffer lands later carries no receipt, so a composer may name that child once
+    more. The question a second writer actually has is whether the reader it is about to
+    address has already been told, and only the row's own chat answers that. A receipt
     written before the chat was recorded says nothing either, so it never
     silences anybody.
     """
@@ -1203,20 +1194,20 @@ def _join_cause_clauses(clauses: List[str]) -> str:
     A clause that is not last drops its own full stop so the line reads as one
     statement rather than a row of stubs. The browser twin is joinCauseClauses.
     """
-    kept: List[str] = []
-    for clause in clauses:
-        if clause and clause not in kept:
-            kept.append(clause)
+    kept = list(dict.fromkeys(clause for clause in clauses if clause))
     return " · ".join(c[:-1] if index < len(kept) - 1 and c.endswith(".") else c
                       for index, c in enumerate(kept))
 
 
-def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, include_review_details: bool = True) -> str:
+def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, include_review_details: bool = True,
+                        undescribed: Optional[List[str]] = None) -> str:
     """Every simultaneous cause this record holds, as ONE terminated host clause.
 
     Functional causes precede independent review caveats; neither replaces the other.
     The compact phone view leaves pure provenance in details, never rewriting axes.
-    Unknown review obligations remain visible. Python twin of ``taskReasonDetail``.
+    Unknown review obligations remain visible. ``undescribed`` is a details-bearing
+    surface's list (``_cause_phrase``); authored prose is never touched. Python twin
+    of ``taskReasonDetail`` and ``taskReasonCodes``.
     """
     from ouroboros.outcomes import (
         ACCEPTANCE_ACCEPTED, ACCEPTANCE_BYPASS_REASON_BY_RAIL, REASON_FINAL_MESSAGE,
@@ -1266,7 +1257,9 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
                                       or (review_cause == "author_finish" and author_closed and review.get("status") != "fail")):
         review_cause = ""
     held = phase == "error" and str(objective.get("source") or "").startswith("plan_review_")
-    if raw_reason == REASON_OWNER_REQUESTED_FINALIZATION:
+    if reason == "foreign_install_root" and (result.get("reason_detail") or event.get("reason_detail")):
+        clause = str(result.get("reason_detail") or event["reason_detail"])
+    elif raw_reason == REASON_OWNER_REQUESTED_FINALIZATION:
         clause = review_cause = ""  # an owner-requested stop carries its own marker
     elif phase == "cancelled" and isinstance(origin, dict) and origin:
         # The recorded cause and the relation the record PROVES (#1061).
@@ -1275,7 +1268,7 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
         clause = _join_cause_clauses(cancel_cause_clauses(origin, result, event))
     elif held:
         # A task HELD by a blocking plan review states the objective's own reason.
-        clause = TASK_CAUSE_PHRASES.get(str(objective.get("reason") or ""), str(objective.get("reason") or ""))
+        clause = _cause_phrase(str(objective.get("reason") or ""), undescribed)
     elif reason in {REASON_FINAL_MESSAGE, ""}:
         clause = (TASK_CAUSE_PHRASES["author_stop"] if completion.get("action") == "stop" and phase != "cancelled"
                   else TASK_CAUSE_PHRASES["plan_review_awaiting"] if plan_review_awaiting(event, result) and phase == "done" else "")
@@ -1286,7 +1279,7 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
         detail = veto.get("detail") if veto.get("reason") == reason else ""
         key = _plan_review_key(result, event, reason) if reason == "plan_review_advisory" else reason
         clause = (" ".join(strip_markdown(str(detail)).split()) if detail
-                  else TASK_CAUSE_PHRASES.get(key, key))
+                  else _cause_phrase(key, undescribed))
     # The bypass sentence already names its rail; do not repeat the same cause.
     if review_cause and (reason == review_cause or ACCEPTANCE_BYPASS_REASON_BY_RAIL.get(reason) == review_cause):
         clause = ""
@@ -1306,12 +1299,23 @@ def _completion_verdict(result: Dict[str, Any], event: Dict[str, Any], *, includ
     if (objective.get("status") == "best_effort" and not clause and not objective.get("deferred_count")
             and raw_reason != REASON_OWNER_REQUESTED_FINALIZATION and review_cause in {"", "previous_revision_accepted"}):
         warning_clauses.append(TASK_CAUSE_PHRASES["partial_result"])
-    line = _join_cause_clauses([clause, *warning_clauses, TASK_CAUSE_PHRASES.get(review_cause, review_cause),
+    line = _join_cause_clauses([clause, *warning_clauses, _cause_phrase(review_cause, undescribed),
                                 _author_stop_rationale(decision, completion),
-                                *incident_cause_clauses(decision, reason, TASK_CAUSE_PHRASES),
+                                *_incident_cause_clauses(decision, reason),
                                 *_terminal_limitations(result, event, reason, held=held),
                                 TASK_CAUSE_PHRASES.get(custody, custody) if custody else ""])
     return line if not line or line.endswith((".", "!", "?", "…", ")")) else line + "."
+
+
+def _incident_cause_clauses(decision: Dict[str, Any], reason: str) -> List[str]:
+    """An old record's unresolved local evidence-assembly failure states both facts: it and the rail."""
+    from ouroboros.outcomes import REASON_FINAL_MESSAGE
+
+    incident = decision.get("acceptance_incident")
+    if not isinstance(incident, dict) or not incident or str(incident.get("status") or "") == "resolved":
+        return []
+    rail = TASK_CAUSE_PHRASES.get(reason, "") if reason not in {"", REASON_FINAL_MESSAGE} else ""
+    return [TASK_CAUSE_PHRASES["acceptance_preparation_failed"], rail]
 
 
 def _author_stop_rationale(decision: Dict[str, Any], completion: Optional[Dict[str, Any]] = None) -> str:
@@ -1457,16 +1461,17 @@ def project_completion_delivery_outcome(
             # Offering "Open the Project" would reproduce the reported defect —
             # a Main row leading into an empty room.
             return MAIN_MIRROR_INELIGIBLE, False
-        # Only the salvage excerpt survives in the TEXT: the model's own answer is
-        # never cut into it (it rides whole in the typed key below, or not at all),
-        # while salvaged bytes exist nowhere else. The row's door is its Project
-        # reference (the UI builds it from `project_id`), so the text invites nothing:
-        # a sentence promising an action only the capsule performs is a second door.
+        # Text preserves only the labelled salvage excerpt, never a cut of the authored answer (which rides whole
+        # in its typed key or not at all). The Project reference is the sole door, so the text invites nothing;
+        # promising the same action in prose would duplicate it. Salvaged bytes exist nowhere else in this row.
         excerpt = _completion_excerpt(result, chat_id=1, salvage_only=True)
         delivery = source_delivery or {}
         clause = terminal_delivery_clause(delivery.get("state", ""), delivery.get("preserved_path", ""))
-        verdict = _join_cause_clauses([_completion_verdict(result, task_done_event),
-                                      f"Source Project: {clause}" if clause else ""])
+        source_clause = f"Source Project: {clause}" if clause else ""
+        verdict = _join_cause_clauses([_completion_verdict(result, task_done_event), source_clause])
+        # Web details retain undescribed codes; canonical text and Telegram retain the full verdict.
+        undescribed: List[str] = []
+        cause = _join_cause_clauses([_completion_verdict(result, task_done_event, undescribed=undescribed), source_clause])
         detail = " ".join(part for part in (verdict, excerpt) if part)
         from ouroboros.terminal_time import terminal_time_fact
         from ouroboros.terminal_projection import completion_notice
@@ -1481,10 +1486,11 @@ def project_completion_delivery_outcome(
                 **completion_facts(drive_root, tid, task, result, task_done_event),
                 "project_id": snapshot["project_id"],
                 "project_name": snapshot["project_name"],
+                "task_name": snapshot["task_name"],
                 "target_label": snapshot["target_label"], "status": status,
                 "terminal_time": terminal_time_fact(result),
                 "completion_notice": {**completion_notice({**task_done_event, **result, "terminal_delivery": delivery}),
-                                      "salvage": excerpt},
+                                      "salvage": excerpt, "cause": cause, "undescribed": undescribed},
                 **({"completion_reason": verdict or OUTCOME_PHASE_HEADLINE[outcome_phase(result, task_done_event)]}
                    if verdict or outcome_phase(result, task_done_event) != "done" else {}),
                 **mirrored_answer(result, outcome_phase(result, task_done_event)),
@@ -1501,9 +1507,7 @@ def enqueue_project_completion_summary(
     result: Dict[str, Any], task_done_event: Dict[str, Any],
 ) -> bool:
     """Whether this call queued a live Main copy; the typed pair also reports durability."""
-    return project_completion_delivery_outcome(
-        drive_root, evt, task_id, task, result, task_done_event,
-    )[1]
+    return project_completion_delivery_outcome(drive_root, evt, task_id, task, result, task_done_event)[1]
 
 
 def announce_project_started(

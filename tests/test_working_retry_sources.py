@@ -26,6 +26,7 @@ def restored(tmp_path, monkeypatch, request):
     # Startup and the registry are real; only external metadata/model calls are doubled.
     monkeypatch.setenv("OUROBOROS_CONTEXT_MODE", "low")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     monkeypatch.setenv("MCP_ENABLED", "false")
     monkeypatch.setattr(OuroborosAgent, "_log_worker_boot_once", lambda self: None)
     monkeypatch.setattr("ouroboros.llm.LLMClient.chat", lambda *a, **k: pytest.fail("No model call"))
@@ -39,8 +40,6 @@ def restored(tmp_path, monkeypatch, request):
     projected, receipt = emergency_address_view(raw, reclaim, rung="unseen_bodies", drive_root=root, task_id=old.task_id)
     assert receipt.status == "applied"
     limit.messages = projected
-    old._task_acceptance_reviewed = True
-    old._task_acceptance_reviewed_subject = "old subject"
     limit.llm_trace = {"review_runs": [{"authority": "host_root", "verdict": "PASS"}]}
     wc.save_round(limit, "ready")
     task = {"id": old.task_id, "type": "task", "text": "Keep exact source.", "chat_id": 0,
@@ -64,7 +63,6 @@ def restored(tmp_path, monkeypatch, request):
     wc.resume_from_working(agent.tools, frozen, messages, trace, usage, seen)
     assert frozen["messages"] == saved_messages  # The saved source is never rewritten.
     assert messages[2:len(projected)] == projected[2:]  # Existing route rebind refreshes the core only.
-    assert ctx._task_acceptance_reviewed is False and not ctx._task_acceptance_reviewed_subject
     assert trace["review_runs"][0]["superseded_by_revision"] is True
     assert "selected_review_history_view" not in load_task_result(root, ctx.task_id)
     return SimpleNamespace(root=root, old=old.task_id, ctx=ctx, tools=agent.tools, raw=raw,

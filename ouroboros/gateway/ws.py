@@ -330,9 +330,13 @@ async def _accept_chat_after(websocket: WebSocket, previous: asyncio.Task | None
         await asyncio.wait((previous,))  # its failure was its own notice
     try:
         await run_sync_to_completion(accept)
-    except Exception:
+    except Exception as exc:
+        from ouroboros.store import StoreBusy
+
+        busy = isinstance(exc, StoreBusy) or isinstance(exc.__cause__, StoreBusy)
+        reason = "⚠️ Your message was not saved: the dialogue store is busy. Please send it again." if busy else ""
         try:
-            await websocket.send_text(_initialization_notice(client_message_id, chat_id))
+            await websocket.send_text(_initialization_notice(client_message_id, chat_id, reason=reason))
         except Exception:
             log.debug("WebSocket closed before its chat failure notice", exc_info=True)
 
@@ -384,6 +388,7 @@ async def ws_endpoint(websocket: WebSocket) -> None:
 
             payload = msg.get("content", "") if msg_type == "chat" else msg.get("cmd", "")
             if msg_type in ("chat", "command") and (payload or (msg_type == "chat" and msg.get("attachments"))):
+
                 try:
                     thread_id = int(msg.get("chat_id") or 1) if msg_type == "chat" else 1
                 except (TypeError, ValueError):
@@ -393,13 +398,19 @@ async def ws_endpoint(websocket: WebSocket) -> None:
                     from supervisor.message_bus import try_get_bridge
 
                     bridge = try_get_bridge()
+                    if str(payload).strip().lower().startswith("/panic"):
+                        from ouroboros.panic_source import source_evidence
+                        from ouroboros.server_control import request_panic
+                        evidence = source_evidence(websocket, "chat_command" if msg_type == "chat" else "web_ui_ws",
+                                                   client_surface=msg.get("client_surface"))
+                        if request_panic(bridge, payload, evidence=evidence,
+                                         startup_owner_command=getattr(websocket.app.state, "startup_owner_command", None)):
+                            await websocket.send_text(json.dumps({"type": "panic_accepted"}))
+                        else:
+                            await websocket.send_text(json.dumps({"type": "log", "data": {
+                                "level": "warning", "message": "Panic emergency owner is unavailable."}}))
+                        continue  # Never enter ordered chat acceptance or ordinary command admission.
                     if msg_type == "chat":
-                        # The composer sends slash text as a chat frame. Offer
-                        # Panic to the authenticated socket's emergency door
-                        # before this socket's ordered chat-acceptance tail;
-                        # otherwise an earlier blocked append could delay Stop.
-                        if bridge is not None and bridge.panic.request(payload):
-                            continue
                         force_plan = bool(msg.get("force_plan"))
                         client_surface = normalize_client_surface(msg.get("client_surface"))
                         task_metadata: dict[str, Any] = {

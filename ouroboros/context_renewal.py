@@ -158,7 +158,7 @@ def renew_after_refusal(limit_ctx: Any, tools: Any) -> bool:
     index = units_since_note(messages, getattr(getattr(tools, "_ctx", None), "_last_context_observation", None))
     restored = restored_sources(messages)
     seed.append(bound_host_row(RENEWAL_RECORD_NAME, (
-        "[Host record: working view renewed after the provider refused this conversation's size. Same task; "
+        "[Host record: working view renewed during context-size recovery. Same task; "
         "nothing summarized; no model called.] Kept, in order: the assignment, every delivered message and "
         "outward dialogue, my notes, my replies since my newest note and the current review decisions. "
         f"Left the view: {left['tool_rows']} tool rows, {left['covered_replies']} replies before my newest note, "

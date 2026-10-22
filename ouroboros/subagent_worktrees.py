@@ -568,8 +568,9 @@ class _InPlaceFill:
         self.size += len(chunk)
 
 
-def _fill_private_copy(source: Path, checkout: Path, copy_root: Path) -> None:
-    """Give one file Git checked out into a not-yet-returned copy the source's exact bytes.
+def _fill_private_copy(source: Path, checkout: Path, copy_root: Path) -> bool:
+    """Give one file Git checked out into a not-yet-returned copy the source's exact bytes; True when
+    checkout wrote it (its index row then carries checkout's stat).
 
     Nothing reads or runs in the copy before provisioning returns, and the
     whole-tree diff after population binds every byte to the baseline, so the
@@ -593,7 +594,7 @@ def _fill_private_copy(source: Path, checkout: Path, copy_root: Path) -> None:
         if not os.path.lexists(copy_root / ".git"):
             raise
         copy_artifact_file(source, checkout)
-        return
+        return False
     if not stat.S_ISREG(info.st_mode):
         raise OSError(f"snapshot checkout is not a regular file: {checkout}")
     if info.st_mode & 0o600 != 0o600:  # an owner-unwritable umask; copystat restores the mode
@@ -603,6 +604,7 @@ def _fill_private_copy(source: Path, checkout: Path, copy_root: Path) -> None:
         stream_artifact_file(source, sink)
         handle.truncate(sink.size)
     shutil.copystat(source, checkout)
+    return True
 
 
 def provision_execution_snapshot(
@@ -718,6 +720,12 @@ def _provision_git_copy(
                                "--name-only", "-z", target_head, "--", env=real_env).stdout
             if removed:
                 _git_env(target, "update-index", "--force-remove", "-z", "--stdin", env=env, input_bytes=removed)
+        from ouroboros.store import is_wal_index  # a WAL index is shared memory: never staged, read or copied
+        tracked_indexes = [p for p in indexed if is_wal_index(target / p)]  # dropped as a staged removal is
+        if tracked_indexes:
+            _git_env(target, "update-index", "--force-remove", "-z", "--stdin", env=env,
+                     input_bytes="\0".join(tracked_indexes).encode("utf-8", errors="surrogateescape") + b"\0")
+        indexed = [p for p in indexed if p not in tracked_indexes]
         source_index_clean = bool(target_head and _git_env(
             target, "diff-index", "--cached", "--quiet", target_head, "--", env=real_env, check=False).returncode == 0)
         untracked_raw = _git_env(
@@ -725,7 +733,7 @@ def _provision_git_copy(
             env=real_env,
         ).stdout.decode("utf-8", errors="surrogateescape")
         untracked = [p for p in untracked_raw.split("\0") if p]
-        excluded: List[Dict[str, Any]] = []
+        excluded: List[Dict[str, Any]] = [{"path": p, "reason": "sqlite_wal_index"} for p in tracked_indexes]
         eligible: List[str] = []
         untracked_baseline: Dict[str, Dict[str, Any]] = {}
         file_inputs: List[str] = []
@@ -745,8 +753,9 @@ def _provision_git_copy(
                 target, rel, file_outputs=reference, warnings=capture_warnings, binary_verdicts=binary_verdicts)
             if reference:
                 file_inputs.append(rel)
-            elif reason:
-                excluded.append({"path": rel, "reason": reason, "baseline": _side(target / rel)})
+            elif reason:  # a WAL index is recorded by its code with no content baseline: shared memory, never read
+                excluded.append({"path": rel, "reason": "sqlite_wal_index"} if is_wal_index(target / rel)
+                                else {"path": rel, "reason": reason, "baseline": _side(target / rel)})
             else:
                 eligible.append(rel)
                 baseline = _side(target / rel)
@@ -838,6 +847,7 @@ def _provision_git_copy(
         # Read the existing tree inventory so deletions, links and gitlinks
         # keep Git's semantics and excluded paths can never enter the copy.
         copied: List[bytes] = []
+        checked_out: List[bytes] = []
         for item in manifest_raw.split(b"\0"):
             metadata, separator, raw_path = item.partition(b"\t")
             if separator and metadata.split()[0] in (b"100644", b"100755"):
@@ -845,15 +855,19 @@ def _provision_git_copy(
                 original = target / relative
                 if original.is_symlink():
                     raise OSError(f"snapshot input changed from a regular file: {relative}")
-                _fill_private_copy(original, wt_path / relative, wt_path)
+                if _fill_private_copy(original, wt_path / relative, wt_path):
+                    checked_out.append(item)
                 copied.append(raw_path)
-        # The checkout recorded each entry's stat for the bytes IT wrote; a
-        # CRLF/smudge rewrite (core.autocrlf=true is Git for Windows' default)
-        # then differs in size from the copied source bytes, and git trusts a size
-        # mismatch as a modification without re-hashing — every such file would
-        # read as modified in the child's `git status` for the run's whole life.
-        # One update-index re-hashes the copied bytes through the same clean
-        # filters the baseline used (identical blob) and re-records their stat.
+        # The checkout recorded each entry's stat for the bytes IT wrote, and git trusts that stat: a
+        # CRLF/smudge rewrite (core.autocrlf=true is Git for Windows' default) differs in size and would
+        # read as modified for the run's whole life, and a same-size source edit since the baseline keeps
+        # checkout's blob when its time matches to the second (copystat puts the source's mtime back; Git
+        # for Windows' ctime is the creation time), so the diff below would miss it. Those rows go back to
+        # the baseline without stat, and one update-index hashes every copied byte through the same clean
+        # filters the baseline used (identical blob) and records its stat.
+        if checked_out:
+            _git_env(wt_path, "update-index", "-z", "--index-info", env=dict(os.environ),
+                     input_bytes=b"\0".join(checked_out) + b"\0")
         if copied:
             _git_env(wt_path, "update-index", "-z", "--stdin", env=dict(os.environ),
                      input_bytes=b"\0".join(copied) + b"\0")
@@ -1165,7 +1179,7 @@ def payload_capture_git_env(exec_root: Path):
         env["GIT_INDEX_FILE"] = str(index)
         yield env
     finally:
-        shutil.rmtree(control, ignore_errors=True)
+        _force_rmtree(control)  # the capture's git objects are read-only; a plain rmtree leaves them on Windows
 
 
 def _reproduce_confined_link(target_root: Path, src_link: Path, dest_link: Path) -> bool:
@@ -1350,10 +1364,8 @@ def find_execution_snapshot(snapshot_id: str, data_dir: Optional[Any] = None) ->
     snap = str(snapshot_id or "").strip()
     if not snap:
         return None
-    for entry in _load_registry(data_dir, strict=True, op="find_execution_snapshot"):
-        if entry.get("kind") == _KIND_DELEGATED_EXEC and entry.get("snapshot_id") == snap:
-            return entry
-    return None
+    return next((entry for entry in _load_registry(data_dir, strict=True, op="find_execution_snapshot")
+                 if entry.get("kind") == _KIND_DELEGATED_EXEC and entry.get("snapshot_id") == snap), None)
 
 
 def remove_execution_snapshot(
@@ -1467,10 +1479,7 @@ def remove_worktree(
     for entry in entries:
         if entry.get("kind") in (_KIND_DELEGATED_EXEC, _KIND_BODY_CANDIDATE):
             continue
-        if task_id and entry.get("task_id") == str(task_id):
-            match = entry
-            break
-        if want_path and entry.get("path") == want_path:
+        if (task_id and entry.get("task_id") == str(task_id)) or (want_path and entry.get("path") == want_path):
             match = entry
             break
     root = _resolve_root(worktree_root)

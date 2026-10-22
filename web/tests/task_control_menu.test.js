@@ -74,6 +74,25 @@ test('Pause retries an unknown answer with the same id, then a new action gets a
     assert.match(menuSrc, /anchor\.dataset\?\.id \|\| anchor\.closest\?\.\('\[data-task-id\]'\)/);
 });
 
+test("the owner's Pause press declares the owner through the shared client, the same on its retry", async () => {
+    const prior = globalThis.fetch;
+    const posts = [];
+    globalThis.fetch = async (url, init) => {
+        posts.push([url, init.method, JSON.parse(init.body)]);
+        const latch = posts.length === 1;
+        return { ok: true, status: latch ? 202 : 200, json: async () => ({ ok: true, state: 'requested', latch_pending: latch }) };
+    };
+    try {
+        assert.equal(await pauseTaskAction('owner-root', { toast: () => {}, wait: async () => {} }), true);
+    } finally { globalThis.fetch = prior; }
+    assert.deepEqual(posts.map(([url, method]) => [url, method]),
+        [['/api/tasks/owner-root/pause', 'POST'], ['/api/tasks/owner-root/pause', 'POST']]);
+    const [[, , body], [, , retry]] = posts;
+    assert.match(body.request_id, /^pause-/);
+    assert.deepEqual(body, { request_id: body.request_id, actor: 'owner' }, 'the owner declares itself, with no text');
+    assert.deepEqual(retry, body, 'completing the same action repeats the same declared press');
+});
+
 test('Resume retires an unconfirmed Pause id, but a refused Resume leaves it retryable', async () => {
     const ids = [];
     const pause = async (_id, requestId) => { ids.push(requestId); throw new Error('response lost'); };
@@ -88,6 +107,17 @@ test('Resume retires an unconfirmed Pause id, but a refused Resume leaves it ret
     await resumeTaskAction('uncertain-pause', { resume: async () => ({ ok: true }), toast });
     await pauseTaskAction('uncertain-pause', { pause, toast });
     assert.notEqual(ids[3], ids[0]);
+});
+
+test('tree Resume keeps helpers for selection and source refusals use the server sentence', async () => {
+    const seen = [], toast = (text) => seen.push(text);
+    await resumeTaskAction('answered', { resume: async () => ({ ok: true, tree_only: true }), toast });
+    assert.equal(seen.pop(), 'Resumed. Ouroboros or you choose which helpers continue.');
+    const refusal = Object.assign(new Error('pause_source_unreadable'), {
+        body: { message: 'Resume refused: Its saved state could not be restored' },
+    });
+    await resumeTaskAction('saved', { resume: async () => { throw refusal; }, toast });
+    assert.equal(seen.pop(), refusal.body.message);
 });
 
 test('a null Pause acknowledgement keeps its id; a released replay never claims Pausing', async () => {

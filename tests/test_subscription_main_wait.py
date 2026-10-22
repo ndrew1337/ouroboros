@@ -183,6 +183,7 @@ def test_main_authored_checkpoint_after_a_real_projected_image_wait(main_call, m
     monkeypatch.setenv("OUROBOROS_CONTEXT_MODE", "max")
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     monkeypatch.setenv("MCP_ENABLED", "false")
     monkeypatch.setattr(loop, "_maybe_inject_finalization_nudges", lambda *_a: False)
     monkeypatch.setattr(vision_routing, "get_image_input_mode", lambda: "off")

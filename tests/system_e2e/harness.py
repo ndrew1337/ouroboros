@@ -54,6 +54,7 @@ from devtools.benchmarks.common.server_runner import (  # noqa: E402
     IsolatedServer,
     _PROVIDER_ENV_KEYS,
     _is_secret_env_key,
+    alarm_deferred,
     supervisor_state_is_ready,  # noqa: F401 (re-export: THE readiness contract)
 )
 from ouroboros.provider_models import (  # noqa: E402
@@ -97,11 +98,11 @@ SCENARIOS = {
     # must reach the workers already running, not only the pool's next generation.
     "S13": ("skills lifecycle E2E: payload -> stub review -> grants -> enable -> dispatch -> disable/delete + Model Experience; hot-adoption variant: enable after boot dispatches in an ALREADY-SPAWNED worker with no restart", LANE_MOCK),
     # Ф4 wave 3a (plan §8: commit triad+scope BOTH enforcement classes +
-    # stale-rejection; acceptance loop). Renumbered at integration: the parallel
+    # stale-rejection). Renumbered at integration: the parallel
     # wave-3b lane claimed S11-S13 first; S14 (plan review) retired with its engine.
     "S15": ("commit triad+scope, ADVISORY class: red verdicts recorded + waved through with durable override, commit lands", LANE_MOCK),
     "S16": ("commit triad+scope, BLOCKING class: red blocks (HEAD unmoved), identical resubmit refused free, green lands; post-verdict revalidation", LANE_MOCK),
-    "S17": ("acceptance loop (required+blocking): reject -> rework -> accept; paid-identity / free-replay invariants", LANE_MOCK),
+    # S17 (the acceptance loop) retired with the task-acceptance machine.
     # Ф4 wave 4 (plan §8 remainder: update variations, chat-lineage cancel,
     # absorb kill-recovery, delegated interactive answer).
     "S18": ("managed update carrier path: diverged fork, span-confined VERSION conflict auto-resolved, carriers transferred to the official version", LANE_MOCK),
@@ -145,6 +146,7 @@ SCENARIOS = {
     "S39": ("container lifecycle: the managed image boots a released seed into a body checkout and runtime venv on volumes (parent and split layouts), keeps code, packages and data across recreation, stays stopped after Panic until an owner start, refuses a mounted repository and a second container on shared data; the immutable image admits one server per data volume and, networkless, serves onboarding, a project, a task with a child and an artifact across a restart; an Update adding a local-wheel dependency survives an offline recreation, a task imports it, and rollback restores the old lock with the package disclosed", LANE_CONTAINER),
     # #1729/#1730 in real processes: one worker frozen past the idle window is reaped by a real kill.
     "S40": ("idle retry under the owner's Pause: after a Pause and a consumed Resume (and without them) a real worker frozen past the idle window is reaped by a real kill; its new-ID retry dispatches with no spent Resume and continues the saved work; a Pause of that running retry fences its logical root, a model write served after the acceptance never lands while one before it did, one Resume reopens the tree and Stop ends it", LANE_MOCK),
+    "S41": ("live skill-smoke adapter: ordinary author, one independent rebuttal, immutable payload, true/unknown criticism red, tool-policy and identity controls", LANE_MOCK),
 }
 
 MOCK_SLUG = "openai-compatible::mock-model"
@@ -158,7 +160,6 @@ DISTINCT_MOCK_MODEL_IDS = tuple(f"mock-model-t{i}" for i in (1, 2, 3))
 #
 # These are VERBATIM literals from the tree under test and WILL drift with upstream:
 #   REVIEWER_SLOT_MARKER   — ouroboros/review_execution.py::_render_prompt_parts
-#   ACCEPTANCE_KEYS_MARKER — same function, the task_acceptance criteria_used key list
 #   TRIAD_USER_MARKER      — ouroboros/tools/review.py::_dispatch_unified_review
 #   TWO_PART_SURFACE       — ouroboros/triad_review.py::REVIEW_OUTPUT_SHAPES (the commit gate's
 #                            native inspection episode names it on its "Surface:" line)
@@ -168,7 +169,6 @@ DISTINCT_MOCK_MODEL_IDS = tuple(f"mock-model-t{i}" for i in (1, 2, 3))
 # named test failure, not a silently mute stub.
 # ---------------------------------------------------------------------------
 REVIEWER_SLOT_MARKER = "You are an independent Ouroboros reviewer slot."
-ACCEPTANCE_KEYS_MARKER = "criteria_used (the acceptance criteria you re-derived"
 TRIAD_USER_MARKER = "Review the staged diff and context provided in the instructions above."
 # The one wave's native inspection episode (one brief, two parts — contract B):
 # classified by the surface NAME on its prompt line, never by a packet marker.
@@ -196,21 +196,18 @@ _SURFACE_LINE_RE = re.compile(r"^Surface: ([A-Za-z_]+)$", re.MULTILINE)
 # scripted verdict or a call count reaches a native seat and a packet seat alike.
 # The native skill-review episode carries only the dynamic tail of the skill
 # pack (skill_review_passes: the stable prefix with SKILL_REVIEW_MARKER stays
-# behind), and the native acceptance episode carries no packet marker at all;
-# their surface line is the only name they have. An unknown surface stays a
+# behind); its surface line is the only name it has. An unknown surface stays a
 # typed ``native_episode``.
 _NATIVE_SURFACE_KINDS = {
     TWO_PART_SURFACE: "two_part_review",   # the commit gate's one brief of two parts (contract B)
-    "task_acceptance": "acceptance",
     "skill_review": "skill_review",
     "advisory_review": "advisory_review",
 }
 
 MARKER_SOURCES = {
     REVIEWER_SLOT_MARKER: "ouroboros/review_execution.py",
-    ACCEPTANCE_KEYS_MARKER: "ouroboros/review_execution.py",
     TRIAD_USER_MARKER: "ouroboros/tools/review_multi_model.py",   # TRIAD_USER_TURN: the one literal the send and the admission share
-    SKILL_REVIEW_MARKER: "ouroboros/skill_review_prompt.py",
+    SKILL_REVIEW_MARKER: "ouroboros/tools/review_skill.py",
     PLAN_REVIEW_MARKER: "ouroboros/tools/plan_packet.py",
     NATIVE_EPISODE_MARKER: "ouroboros/review_native_episode.py",
 }
@@ -259,8 +256,8 @@ def classify_call(body: dict) -> str:
     """Name the branch a chat-completion body belongs to.
 
     Returns one of: ``safety``, ``skill_review``, ``two_part_review``, ``triad_review``,
-    ``acceptance``, ``reviewer_slot``, ``plan_review``, ``advisory_review``,
-    ``native_episode``, ``finalization``, ``agent``. ORDER MATTERS (roast F22):
+    ``reviewer_slot``, ``plan_review``, ``advisory_review``, ``native_episode``,
+    ``finalization``, ``agent``. ORDER MATTERS (roast F22):
     every review-organ branch is checked BEFORE the finalization-turn check,
     because a review packet may quote a transcript that itself contains a
     finalization marker — a stub that answered such a packet with a final chat
@@ -290,7 +287,7 @@ def classify_call(body: dict) -> str:
         match = _SURFACE_LINE_RE.search(full)
         return _NATIVE_SURFACE_KINDS.get(match.group(1) if match else "", "native_episode")
     if REVIEWER_SLOT_MARKER in full:
-        return "acceptance" if ACCEPTANCE_KEYS_MARKER in full else "reviewer_slot"
+        return "reviewer_slot"
     if any(marker in full for marker in FINALIZATION_MARKERS):
         return "finalization"
     return "agent"
@@ -300,7 +297,7 @@ def classify_call(body: dict) -> str:
 # consume an agent script step or a ReplayModel fixture row, and a scenario's
 # ReviewScript may override their canned answers.
 REVIEW_KINDS = frozenset({
-    "safety", "two_part_review", "triad_review", "acceptance", "reviewer_slot",
+    "safety", "two_part_review", "triad_review", "reviewer_slot",
     "plan_review", "advisory_review", "native_episode",
 })
 
@@ -333,8 +330,8 @@ def canned_review_answer(kind: str) -> dict | None:
         return {"role": "assistant", "content": two_part_clean_text()}
     if kind == "triad_review":
         return {"role": "assistant", "content": TRIAD_CLEAN_TEXT}
-    if kind in ("acceptance", "reviewer_slot"):
-        return {"role": "assistant", "content": reviewer_slot_clean_text(kind)}
+    if kind == "reviewer_slot":
+        return {"role": "assistant", "content": reviewer_slot_clean_text()}
     if kind == "plan_review":
         # The planning organ's reply contract (plan_packet.PLAN_REPLY_CONTRACT, parsed by
         # plan_record.parse_reply): prose plus the participant's own objections and
@@ -351,13 +348,13 @@ def canned_review_answer(kind: str) -> dict | None:
 def skill_review_clean_text() -> str:
     """All-PASS skill-review verdict over the tree's OWN checklist items.
 
-    The item list is imported from the prompt module (its ``_SKILL_REVIEW_ITEMS``
-    is both the prompt's expected-items contract and the parser's required set),
+    The item list is imported from the skill subject module (its ``SKILL_REVIEW_ITEMS``
+    is the closed list a finding may name),
     so an upstream checklist change re-derives the canned verdict instead of
     silently failing coverage. Lazy import: the skill-review module tree is heavy
     and only skill scenarios pay for it.
     """
-    from ouroboros.skill_review_prompt import _SKILL_REVIEW_ITEMS
+    from ouroboros.tools.review_skill import SKILL_REVIEW_ITEMS
 
     return json.dumps([
         {
@@ -366,7 +363,7 @@ def skill_review_clean_text() -> str:
             "severity": "advisory",
             "reason": "Stub skill reviewer: checked and clean for the scripted E2E payload.",
         }
-        for item in _SKILL_REVIEW_ITEMS
+        for item in SKILL_REVIEW_ITEMS
     ])
 
 
@@ -386,13 +383,8 @@ def two_part_clean_text() -> str:
     })
 
 
-def reviewer_slot_clean_text(kind: str) -> str:
-    verdict = {"verdict": "PASS", "findings": [], "summary": "stub reviewer slot: clean."}
-    if kind == "acceptance":
-        verdict["outcome_tier"] = "solved"
-        verdict["dialogue_status"] = "continue_actionable"
-        verdict["criteria_used"] = []
-    return json.dumps(verdict)
+def reviewer_slot_clean_text() -> str:
+    return json.dumps({"verdict": "PASS", "findings": [], "summary": "stub reviewer slot: clean."})
 
 
 class ReviewScript:
@@ -400,7 +392,7 @@ class ReviewScript:
 
     The wave-1 stub answers every review-organ call with the canned ALL-CLEAN
     verdict; the review-surface scenarios need the organ to say something else
-    first (a REVISE plan finding, a critical triad FAIL, an acceptance reject)
+    first (a REVISE plan finding, a critical triad FAIL)
     and only then converge. A ReviewScript maps ``kind`` (a ``REVIEW_KINDS``
     member) to an ORDERED queue of verdicts; each review call of that kind
     consumes one entry, and an exhausted or absent queue falls back to the
@@ -676,7 +668,7 @@ class ScriptedStubModel(LoopbackModelServer):
     fixed keepalive tool, a scenario hands the stub an ORDERED list of tool steps
     (``{"tool": name, "arguments": {...}}``); each plain agent turn consumes one step,
     and an exhausted script yields the tool-less final answer. Review-organ calls
-    (triad / scope / reviewer-slot / acceptance) NEVER consume script steps — they are
+    (triad / scope / reviewer-slot) NEVER consume script steps — they are
     classified by prompt markers and answered with canned all-clean verdicts, and that
     classification runs BEFORE the finalization-turn check (roast F22). Safety
     supervisor calls (json_object response_format) always get a SAFE verdict.
@@ -1123,25 +1115,28 @@ class KeylessIsolatedServer(IsolatedServer):
         container, self._candidate_container = self._candidate_container, None
         if container is None:
             return
-        try:
+        # A scenario's timeout alarm landing in here is held until the container is reaped: the
+        # reap consumes its handles once, so an alarm inside it would leave members running.
+        with alarm_deferred():
             try:
-                super().stop()
-            finally:
                 try:
-                    error = container.reap()
+                    super().stop()
                 finally:
-                    container.close()
-                if error:
-                    raise CandidateError(f"CANDIDATE_RETAINED: process cleanup failed: {error}")
-                if self.proc is not None:
-                    self.proc.wait(timeout=5)
-        except BaseException as exc:
-            from ouroboros.test_environment import retain_tree
+                    try:
+                        error = container.reap()
+                    finally:
+                        container.close()
+                    if error:
+                        raise CandidateError(f"CANDIDATE_RETAINED: process cleanup failed: {error}")
+                    if self.proc is not None:
+                        self.proc.wait(timeout=5)
+            except BaseException as exc:
+                from ouroboros.test_environment import retain_tree
 
-            self._candidate_cleanup_error = f"CANDIDATE_RETAINED: {exc}"
-            retain_tree(self.data_root, self._candidate_cleanup_error)
-            raise
-        self.candidate.release()
+                self._candidate_cleanup_error = f"CANDIDATE_RETAINED: {exc}"
+                retain_tree(self.data_root, self._candidate_cleanup_error)
+                raise
+            self.candidate.release()
 
 
 # The pool rows of ``keyless_review_catalog``: seat ``t<i>`` is catalog row
@@ -1166,7 +1161,7 @@ def keyless_review_catalog(*, distinct_models: bool = False) -> str:
     keyless install.
 
     The panel is MIXED on purpose: ``KEYLESS_PACKET_ROWS`` deliver as packets
-    (``delivery: packet`` — the triad/skill/acceptance packet the stub classifies
+    (``delivery: packet`` — the triad/skill packet the stub classifies
     by its marker) and the last row keeps the catalog default, a native inspection
     episode (the stub classifies it by its ``Surface:`` line). One wave therefore
     exercises both delivery classes end to end and their aggregate: a scripted red
@@ -1234,6 +1229,9 @@ def keyless_settings(stub: ScriptedStubModel, **overrides) -> dict:
         "OPENAI_COMPATIBLE_BASE_URL": stub.base_url,
         "OPENAI_COMPATIBLE_API_KEY": "stub-key-not-a-credential",
         "OUROBOROS_SUBAGENTS": keyless_review_catalog(),
+        # A fresh root with a ready provider would clone the skill hub from GitHub at boot
+        # (#1995); no scenario is about the starter, so the lane stays off the network.
+        "OUROBOROS_STARTER_SKILLS": "[]",
     })
     for slot in ("OUROBOROS_MODEL", "OUROBOROS_MODEL_LIGHT"):
         cfg[slot] = MOCK_SLUG

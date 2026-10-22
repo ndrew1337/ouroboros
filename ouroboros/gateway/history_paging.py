@@ -73,7 +73,7 @@ _GAP_NAMES = {"invalid": "malformed_jsonl", "non_object": "invalid_jsonl_row"}
 # Stored kinds chat.js shows as a bubble of their own whoever sent them: it
 # renders them before a child's words are routed to its card, and their
 # producers (message_bus ``send_photo`` ...) count every one.
-_STANDALONE_KINDS = ("document", "links", "photo", "video", "quiz")
+_STANDALONE_KINDS = ("document", "links", "photo", "video", "quiz", "card")
 # A read around one task (``around=task:<id>``, DESIGN "Room work status") holds a quarter of
 # each stream's quota before the task's earliest row in the room and the rest from it on.
 _AROUND_OLDER_SHARE = 4
@@ -242,10 +242,10 @@ def room_lens(data_dir: pathlib.Path, thread_id: int, project_chat_ids: set, sou
     candidate; the lens is its superset). A Project reads its own chat, the lineage columns of the
     tasks bound to it, the task ids of their descendants (the store's lineage: a child's row the
     supervisor recorded under Main with its task id alone belongs to the room its parent was turned
-    into) and the owner rows its bindings name (by client id, else by chat and time). Main and every
-    chat no Project owns read the rooms no Project owns (A2A and hidden traffic excluded), the rows
-    without a chat and the question rows Main pins as pointers. The cost is the room's own facts and
-    tasks, never another room's history."""
+    into) and the owner rows its bindings name (by client id, else by chat and time). Other rooms
+    probe their stored chat only. Main retains the historical non-Project candidate superset
+    (A2A and hidden traffic excluded), rows without a chat and its question pointers; membership
+    filters out place rows. A place-room read never scans another room's history."""
     if thread_id in project_chat_ids:
         bound = sorted(task for task, chat in bindings_by_task.items() if chat == thread_id)
         keys: list = [("chat_id", thread_id)]
@@ -269,6 +269,9 @@ def room_lens(data_dir: pathlib.Path, thread_id: int, project_chat_ids: set, sou
                 seqs.extend(row.seq for row in candidates if entry_matches_source_ref(row.row, [ref]))
         return {"chat": RoomLens((*keys, *dict.fromkeys(owners)), tuple(sorted(set(seqs)))),
                 "progress": RoomLens(tuple(keys))}
+    if thread_id != 1:
+        own = RoomLens((("chat_id", thread_id),))
+        return {"chat": own, "progress": own}
     chats = [room["chat_id"] for room in ds.rooms(data_dir) if room["chat_id"] not in project_chat_ids
              and room["chat_id"] != HIDDEN_CHAT_ID and not is_a2a_chat_id(room["chat_id"])]
     keys = [("chat_id", chat) for chat in chats] + [("chat_id", None)]
@@ -692,7 +695,7 @@ def _stored_message(row_matches_thread, stored_chat_id, child):
 
 def latest_arrival(rows, page, data_dir, row_matches_thread, stored_chat_id, projected_gaps=frozenset(),
                    task_result=lambda _task_id: {}):
-    """``window.latest_message`` of a recent Project read (DESIGN "Project unread dot").
+    """``window.latest_message`` of a recent Project read (DESIGN "Unread").
 
     The window is ordered and tailed by event time, but a Project message counts
     as unread when it ARRIVES: an answer the terminal outbox delivers late keeps

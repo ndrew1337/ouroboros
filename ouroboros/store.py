@@ -1,10 +1,10 @@
 """Current facts in ``state/current.sqlite`` and the SQLite protocol shared with ``usage_store``.
-PERSIST (WAL only on a fixed SQLite and proven local filesystem), ``synchronous=FULL``;
-a lazy connection per file and thread, short
-``BEGIN IMMEDIATE`` writes, every name-tier access under its name lock. SQLite 3.24 floor.
-``probe``/``open_store``: boot imports within the import window; first writes import absent stores;
-reads never import (facts present: ``StoreMigrating`` until publication; no facts: empty).
-The write gate requires a closed import window and PUBLISHED phase; ``service`` serves the
+PERSIST (WAL only on a fixed SQLite and proven local filesystem; only a private build or a lifecycle
+owner chooses, an ordinary open keeps the file's choice: ``store_journal``), ``synchronous=FULL``; a lazy
+connection per file and thread, short ``BEGIN IMMEDIATE`` writes, every name-tier access under its name
+lock. SQLite 3.24 floor. ``probe``/``open_store``: boot imports within the import window; first writes
+import absent stores; reads never import (facts present: ``StoreMigrating`` until publication; no facts:
+empty). The write gate requires a closed import window and PUBLISHED phase; ``service`` serves the
 importer/exporter/seam."""
 
 from __future__ import annotations
@@ -27,16 +27,16 @@ import weakref
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ouroboros.utils import append_jsonl, machine_json, utc_now_iso  # one compact JSON text: key order kept, facts round-trip
-from ouroboros import store_hot_facts
+from ouroboros import store_hot_facts, store_task_cards, store_timing
 
 STORE_REL = pathlib.Path("state/current.sqlite")
 LOCK_NAME = "current.lock"  # the name-tier lock around every access
 IMPORT_LOCK_NAME = "current_import.lock"
 GENERATION = 8  # the lifecycle generation that owns the store
 GENERATION_KEY = "current_store_generation"  # in state/migrations.json
-SCHEMA_VERSION = 6  # 2: owner questions; 3: acceptance; 4: plans; 5: retention; 6: hot facts
+SCHEMA_VERSION = 7  # 2: owner questions; 3: acceptance; 4: plans; 5: retention; 6: hot facts; 7: task cards
 STORE_WAIT_SEC = 10.0
-JOURNAL_SIZE_LIMIT = 1 << 20  # retain at most 1 MiB of an idle rollback journal
+JOURNAL_SIZE_LIMIT = 64 << 20  # retain at most 64 MiB of an idle rollback journal (PERSISTENCE.md: what it bounds)
 TIER_ENFORCED, TIER_NAME = "enforced", "name"
 PUBLISHED, EXPORTING, RETIRED = "published", "exporting", "retired"
 # The header's application id names the lock protocol before the file is opened ('OUCE'/'OUCN').
@@ -89,7 +89,7 @@ CREATE INDEX custody_invocation ON custody_runs(invocation_id) WHERE invocation_
 CREATE TABLE custody_outbox (event_id TEXT PRIMARY KEY, run_id TEXT, task_id TEXT, event TEXT NOT NULL, created_at TEXT);
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """ + REVIEW_COLLECTION_INDEX + PLAN_COLLECTION_INDEX + "".join(f"CREATE INDEX tasks_{column} ON tasks({column}) WHERE {column}=1;\n"
-              for column in FLAG_COLUMNS.values()) + store_hot_facts.SCHEMA
+              for column in FLAG_COLUMNS.values()) + store_task_cards.SCHEMA + store_hot_facts.SCHEMA
 
 
 class StoreError(RuntimeError):
@@ -129,6 +129,14 @@ def acquisition_budget(seconds: float):
         yield
     finally:
         _WAIT_BUDGET.reset(token)
+
+
+def bounded_wait(wait_sec: float) -> float:
+    """The wait one acquisition may spend: none under ``admission_acquisition``, else narrowed by ``acquisition_budget``."""
+    if _ADMISSION_NO_WAIT.get():
+        return 0.0
+    budget = _WAIT_BUDGET.get()
+    return wait_sec if budget is None else min(wait_sec, budget)
 
 
 @contextlib.contextmanager
@@ -200,19 +208,25 @@ def _settle(key: Tuple[int, int], entry: _Inode) -> None:
     _INODES.pop(key, None)
 
 
-def _borrow(path: Any) -> Tuple[Tuple[int, int], int]:
+def _borrow(path: Any, dir_fd: Optional[int] = None) -> Tuple[Tuple[int, int], int]:
     """A read descriptor of PATH's file (POSIX): on POSIX closing ANY descriptor of a file releases
     every advisory lock this process holds on it, an open transaction's on another thread included,
     and another process then writes the same pages (sqlite.org howtocorrupt §2.2). So a raw read
     shares one descriptor per inode, and ``_return`` closes it only when no store connection of this
-    process has the file open (SQLite's unix VFS defers its own closes the same way)."""
-    key = _identity_key(os.stat(path))
+    process has the file open (SQLite's unix VFS defers its own closes the same way). With ``dir_fd``
+    PATH is one entry of that held directory (``confined_files``), stated and opened relative to it,
+    never through a link."""
+    key = _identity_key(os.stat(path, dir_fd=dir_fd, follow_symlinks=dir_fd is None))
     with _INODE_GUARD:
         entry = _INODES.get(key)
         if entry is not None and entry.files:
             entry.readers += 1
             return key, entry.files[0].fileno()
-    handle = pathlib.Path(path).open("rb", buffering=0)  # outside the guard: a slow open stalls only this caller
+    if dir_fd is None:
+        handle = pathlib.Path(path).open("rb", buffering=0)  # outside the guard: a slow open stalls only this caller
+    else:
+        from ouroboros.confined_files import FILE_FLAGS  # no-follow; a FIFO swapped in never blocks
+        handle = open(os.open(path, FILE_FLAGS, dir_fd=dir_fd), "rb", buffering=0)
     key = _identity_key(os.fstat(handle.fileno()))  # the path may name a newer file than the stat did
     with _INODE_GUARD:
         entry = _INODES.setdefault(key, _Inode())
@@ -241,11 +255,11 @@ class _StoreConnection(sqlite3.Connection):
 
     def close(self) -> None:
         if self._store_build:
-            # A sibling build is published by renaming ONLY the database. Leave no
-            # journal under its temporary name, on success or interrupted construction.
+            # A private build is published by renaming ONLY the database, keeping its chosen journal (a WAL header):
+            # complete or not, no journal, log or index stays under its temporary name (this sole close removes them).
             if self.in_transaction:
                 self.execute("ROLLBACK")
-            _delete_journal(self)
+            _delete_journal(self, keep_wal=True)
             self._store_build = False
         super().close()  # a close that raises leaves the connection counted: its lock may still be held
         key, self._store_key = self._store_key, None
@@ -257,13 +271,13 @@ class _StoreConnection(sqlite3.Connection):
                     _settle(key, entry)
 
 
-def _read_header(path: pathlib.Path) -> bytes:
+def _read_header(path: pathlib.Path, dir_fd: Optional[int] = None) -> bytes:
     """The first 100 bytes, read through the inode registry (``_borrow``); Windows locks belong
     to their handle, and a held handle there would block the export rename."""
     if os.name == "nt":
         with open(path, "rb") as handle:
             return handle.read(100)
-    key, fd = _borrow(path)
+    key, fd = _borrow(path, dir_fd)
     try:
         return os.pread(fd, 100, 0)
     finally:
@@ -283,13 +297,15 @@ def held_descriptor(path: Any) -> Optional[int]:
         return entry.files[0].fileno() if entry is not None and entry.files else None
 
 
-def is_sqlite_file(path: Any) -> bool:
+def is_sqlite_file(path: Any, *, dir_fd: Optional[int] = None) -> bool:
     """Whether PATH holds a SQLite database (its header magic), read without closing a descriptor
-    a store connection may depend on."""
+    a store connection may depend on; a WAL index is none, and is never opened to look. ``dir_fd``:
+    PATH is one entry of that held directory, and a link there is none (``_borrow``)."""
     try:
-        if not stat.S_ISREG(os.stat(path).st_mode):
-            return False  # never open a FIFO or a device to look
-        return _read_header(pathlib.Path(path)).startswith(b"SQLite format 3\x00")
+        if (not stat.S_ISREG(os.stat(path, dir_fd=dir_fd, follow_symlinks=dir_fd is None).st_mode)
+                or is_wal_index(path, dir_fd=dir_fd)):
+            return False  # never open a FIFO or a device to look, nor a WAL index (``is_wal_index``)
+        return _read_header(pathlib.Path(path), dir_fd).startswith(b"SQLite format 3\x00")
     except OSError:
         return False
 
@@ -297,8 +313,8 @@ def is_sqlite_file(path: Any) -> bool:
 class _BorrowedReader:
     """A binary reader over a borrowed descriptor (``_borrow``); closing returns the borrow."""
 
-    def __init__(self, path: Any) -> None:
-        self._key, self._fd = _borrow(path)
+    def __init__(self, path: Any, dir_fd: Optional[int] = None) -> None:
+        self._key, self._fd = _borrow(path, dir_fd)
         self._offset, self._open = 0, True
 
     def __enter__(self) -> "_BorrowedReader":
@@ -348,11 +364,60 @@ class _BorrowedReader:
         return b"".join(parts)
 
 
-def open_for_read(path: Any) -> Any:
+class WalIndexRefused(PermissionError):
+    """A raw read of a SQLite WAL index (``is_wal_index``), refused before any descriptor opens."""
+
+
+def is_wal_index(path: Any, *, dir_fd: Optional[int] = None) -> bool:
+    """Whether PATH is a SQLite WAL index: a regular file (nothing else ever is, and nothing is read
+    before that is known) whose real name (a link stands for the file it names) is its database's name
+    plus ``-shm``, folded as a case-insensitive volume folds it, where the database, a sibling in that
+    real directory, is no link and is SQLite by its header (read only when it is no index itself: the
+    same rule on a strictly shorter name, so the question always ends), and the volume resolves
+    ``<database>-shm`` to PATH's own file, so on a case-sensitive volume ``x.db-SHM`` stays the user's.
+    Every WAL connection holds locks on the index (POSIX record locks, which closing any descriptor of
+    the file drops; Windows byte-range locks, which fail a read across them), and its bytes are shared
+    memory a copy rebuilds from the log: the store's raw readers (``open_for_read`` and what reads
+    through it, ``copy_file_bytes``) refuse it, and the copies and captures that apply this rule leave
+    it out, tracked or not. The rule assumes this process's own databases never end in ``-shm`` (they
+    are ``current.sqlite``, ``usage.sqlite``, ``dialog.sqlite``, ``index.sqlite3``, ``index.sqlite`` and
+    temporaries ending in hex): beside a database ``x``, a database ``x-shm`` reads as ``x``'s index and
+    its own index ``x-shm-shm`` as a file, whose raw read drops only this process's locks, and this
+    process holds none on ``x-shm``. The ``-wal`` log carries no lock and reads as any file does.
+    ``dir_fd`` (POSIX) asks it of one entry of that held directory (``confined_files``): every name is
+    stated relative to it and none is followed, so a link there is no index and names no database."""
+    path = (pathlib.PurePath(path) if dir_fd is not None
+            else pathlib.Path(os.path.realpath(path) if os.path.islink(path) else path))
+    # No database is named ``.`` or ``..`` (``with_name(".")`` would raise).
+    if len(path.name) <= 4 or path.name[-4:].casefold() != "-shm" or path.name[:-4] in {".", ".."}:
+        return False
+    database = path.with_name(path.name[:-4])
+    try:
+        if dir_fd is not None:  # the header is read last, only for the entry ``<database>-shm`` names
+            own = os.stat(path, dir_fd=dir_fd, follow_symlinks=False)
+            named = os.stat(database.with_name(database.name + "-shm"), dir_fd=dir_fd, follow_symlinks=False)
+            return (stat.S_ISREG(own.st_mode) and os.path.samestat(own, named)
+                    and is_sqlite_file(database, dir_fd=dir_fd))
+        return (stat.S_ISREG(os.stat(path).st_mode) and not os.path.islink(database) and is_sqlite_file(database)
+                and os.path.samefile(path, database.with_name(database.name + "-shm")))
+    except OSError:
+        return False
+
+
+def refuse_wal_index(path: Any, *, dir_fd: Optional[int] = None) -> None:
+    """Raise ``WalIndexRefused`` for a WAL index, before anything opens it."""
+    if is_wal_index(path, dir_fd=dir_fd):
+        raise WalIndexRefused(errno.EACCES, "a SQLite WAL index is not read as a file (its bytes are shared "
+                              "memory; the database's content is in the database and its log)", str(path))
+
+
+def open_for_read(path: Any, *, dir_fd: Optional[int] = None) -> Any:
     """``open(path, "rb")`` for any reader in a process that may hold a store: on POSIX the read
     borrows the inode's shared descriptor, whose close waits until no store connection of this
-    process has the file open; Windows opens and closes as usual."""
-    return pathlib.Path(path).open("rb") if os.name == "nt" else _BorrowedReader(path)
+    process has the file open; Windows opens and closes as usual. A WAL index is refused. ``dir_fd``
+    (POSIX) reads one entry of that held directory, never through a link."""
+    refuse_wal_index(path, dir_fd=dir_fd)
+    return pathlib.Path(path).open("rb") if os.name == "nt" else _BorrowedReader(path, dir_fd)
 
 
 def iter_file_bytes(path: Any, *, limit: Optional[int] = None, chunk: int = 1 << 20) -> Iterator[bytes]:
@@ -373,7 +438,9 @@ def read_file_bytes(path: Any, *, limit: Optional[int] = None) -> bytes:
 
 def copy_file_bytes(source: Any, destination: Any) -> Any:
     """``shutil.copy2`` that reads a SQLite file through ``open_for_read`` (a ``copytree``
-    ``copy_function``); the copy is a byte copy, not a consistent snapshot of a live store."""
+    ``copy_function``) and refuses a WAL index; the copy is a byte copy, not a consistent snapshot
+    of a live store."""
+    refuse_wal_index(source)
     if os.name == "nt" or not is_sqlite_file(source):
         return shutil.copy2(source, destination)
     target = pathlib.Path(destination)
@@ -510,13 +577,55 @@ def _journal_mode(path: pathlib.Path, tier: str) -> str:
     return "WAL" if (fixed and tier == TIER_ENFORCED and _filesystem_type(path) in _LOCAL_FILESYSTEMS) else "PERSIST"
 
 
+def _set_journal_mode(conn: sqlite3.Connection, mode: str, wait_sec: float) -> str:
+    """``PRAGMA journal_mode``; a switch INTO WAL (a boot owner's choice: ``store_journal``) waits out
+    contention within ``wait_sec`` in all. Turning a rollback-journal file into WAL takes the write lock
+    from inside a read transaction, where SQLite skips the busy handler (two converters would deadlock),
+    so a connection writing then would fail it at once. A retry's busy handler gets only the time left,
+    and the open's own busy timeout (``wait_sec``) comes back afterwards. Leaving WAL is never retried:
+    every other open WAL connection keeps its shared lock for its life, so waiting would only delay the
+    same refusal."""
+    budget = max(0.0, wait_sec) if mode.upper() == "WAL" else 0.0
+    deadline, bounded = time.monotonic() + budget, False
+    while True:
+        try:
+            actual = conn.execute(f"PRAGMA journal_mode = {mode}").fetchone()[0]
+            break
+        except sqlite3.OperationalError as exc:
+            if not busy(exc) or (left := deadline - time.monotonic()) <= 0:
+                raise
+            time.sleep(min(0.01, left))
+            if (left := deadline - time.monotonic()) <= 0:
+                raise
+            conn.execute(f"PRAGMA busy_timeout = {max(1, int(left * 1000))}")
+            bounded = True
+    if bounded:
+        conn.execute(f"PRAGMA busy_timeout = {int(budget * 1000)}")
+    return actual
+
+
+def _kept_journal(conn: sqlite3.Connection, path: pathlib.Path, tier: str) -> str:
+    """An ordinary open's journal (``store_journal``): none for a file handed off at a seam, connection-local
+    PERSIST for a rollback file (every writer's), WAL kept as it is; never a conversion either way. A WAL
+    file this SQLite, lock tier or filesystem must not share (``_journal_mode``) is refused instead."""
+    if os.path.abspath(path) in _HANDED_OFF:
+        return ""
+    if conn.execute("PRAGMA journal_mode").fetchone()[0] != "wal":
+        return "PERSIST"
+    if _journal_mode(path, tier) == "WAL":
+        return ""
+    raise sqlite3.OperationalError(f"store journal is WAL, which SQLite {sqlite3.sqlite_version}, this lock tier "
+                                   "or filesystem must not share; a boot or handoff of this runtime leaves WAL")
+
+
 def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: float = 0.0,
             shared: bool = False, journal_mode: Optional[str] = None) -> sqlite3.Connection:
     """A connection with the tier's lock protocol (``sqlite3.Error`` is the caller's to type);
     ``wait_sec`` is SQLite's busy wait on the enforced tier (the name tier's one lock is the
     name protocol the caller holds). Pragmas are set once here. ``shared`` allows the store
-    owner to close an idle cached connection from the export/fork thread. An empty
-    ``journal_mode`` leaves the journal alone for the checkpoint/handoff owner."""
+    owner to close an idle cached connection from the export/fork thread. Only ``create`` (a private
+    build) or a lifecycle owner's ``journal_mode`` chooses WAL versus rollback, else ``_kept_journal``;
+    an empty one leaves the journal alone for the checkpoint/handoff owner."""
     query = "mode=rwc" if create else "mode=rw"
     if tier == TIER_NAME:
         query += "&vfs=" + ("win32-none" if os.name == "nt" else "unix-none")
@@ -524,6 +633,7 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
                            timeout=max(0.0, wait_sec) if tier == TIER_ENFORCED else 0.0,
                            check_same_thread=not shared, factory=_StoreConnection)
     conn.row_factory = sqlite3.Row
+    conn._store_kind = store_timing.kind_of(path)
     if os.name != "nt":  # counted before any statement can take a lock (see ``_borrow``)
         try:
             key = _identity_key(os.stat(path))
@@ -536,12 +646,11 @@ def connect(path: pathlib.Path, tier: str, *, create: bool = False, wait_sec: fl
     try:
         conn.execute("PRAGMA synchronous = FULL")
         if journal_mode is None:
-            journal_mode = "" if os.path.abspath(path) in _HANDED_OFF else _journal_mode(path, tier)
-        mode = journal_mode
-        if mode:
-            actual = conn.execute(f"PRAGMA journal_mode = {mode}").fetchone()[0]
-            if actual != mode.lower():
-                raise sqlite3.OperationalError(f"store journal mode {actual}, expected {mode}")
+            journal_mode = _journal_mode(path, tier) if create else _kept_journal(conn, path, tier)
+        if journal_mode:
+            actual = _set_journal_mode(conn, journal_mode, wait_sec if tier == TIER_ENFORCED else 0.0)
+            if actual != journal_mode.lower():
+                raise sqlite3.OperationalError(f"store journal mode {actual}, expected {journal_mode}")
         conn.execute(f"PRAGMA journal_size_limit = {JOURNAL_SIZE_LIMIT}")
     except BaseException as exc:
         exc.rollback_confirmed = not conn.in_transaction
@@ -690,36 +799,69 @@ def close_connections_under(root: pathlib.Path, *, idle_only: bool = False) -> N
 atexit.register(close_connections)  # before module globals (including the inode guard) are cleared
 
 
-# Files this process handed off (``prepare_handoff``): a later open in this process (the seam's own
-# receipt, a late writer before the exit) leaves their journal alone instead of choosing WAL again,
-# until a refused switch hands them back (``forget_handoffs``); the next boot chooses again anyway.
+# Files handed off at an export/switch seam (``prepare_handoff``): a later open in this process (the seam's
+# receipt, a late writer) sets no journal mode on them, not even PERSIST, until a refused switch hands them
+# back (``forget_handoffs``). A lock-tier re-record converts the file the same way but never enters this set.
 _HANDED_OFF: set = set()
 
 
 def forget_handoffs() -> None:
-    """Nothing switches after all (a refused door): this process keeps its stores and its journal choice."""
+    """Nothing switches after all (a refused door): this process keeps its stores, in rollback until a boot chooses."""
     _HANDED_OFF.clear()
 
 
+_WAL_MAGIC = (0x377F0682, 0x377F0683)
+
+
 def log_identity(path: Any) -> Optional[list]:
-    """The WAL log's identity while it holds frames (``[inode, size, mtime_ns]``), else ``None``. A
-    commit lives there until a checkpoint moves it into the database file; an empty or absent log
-    (opened empty by a reader, deleted at the last close) holds none, so its coming and going is no
-    change: a resting duty keyed on the database file plus this wakes on commits only."""
+    """The commits the WAL log holds (``[checkpoint sequence and salts, last commit frame, its
+    checksum, the log's size, its mtime_ns]``), else ``None``. A commit lives there until a checkpoint
+    moves it into the database file; an empty or absent log (opened empty by a reader, deleted at the
+    last close) holds none, so its coming and going is no change. Read from the log, which carries no
+    lock (sqlite.org/fileformat2.html §4): the committed frames are a prefix carrying the generation's
+    salts, the last one ending a commit (a database size); frames after them may carry any salts but
+    no size. What moves: a commit, its commit frame (with the checksum, size and time); a checkpointed
+    log reused in place at the same inode and size, the sequence and salts; a rolled-back transaction's
+    frames, the size and time. A writer killed between writing its commit frame and publishing it in
+    the index leaves a commit frame no reader sees: the next commit of the same length overwrites it,
+    moving its checksum; a shorter one leaves it the last, so only the log's time moves, and where
+    that time stays (a held file on Windows, a coarse clock) the identity stays until the next commit."""
+    name = f"{os.fspath(path)}-wal"
     try:
-        info = os.stat(f"{os.fspath(path)}-wal")
+        if not stat.S_ISREG(os.stat(name).st_mode):
+            return None  # never open a FIFO or a device to look
+        with open(name, "rb", buffering=0) as log:
+            header = log.read(32)
+            if len(header) < 32 or int.from_bytes(header[:4], "big") not in _WAL_MAGIC:
+                return None  # no frame is valid before the header
+            frame = 24 + int.from_bytes(header[8:12], "big")
+
+            def frame_header(number: int) -> bytes:  # frame NUMBER, from 1
+                log.seek(32 + (number - 1) * frame)
+                return log.read(24)
+
+            held, above = 0, (os.fstat(log.fileno()).st_size - 32) // frame + 1
+            while above - held > 1:  # ends at or past the last committed frame: all before carry the salts
+                middle = (held + above) // 2
+                held, above = (middle, above) if frame_header(middle)[8:16] == header[16:24] else (held, middle)
+            while held and frame_header(held)[4:8] == b"\0\0\0\0":
+                held -= 1
+            checksum, info = frame_header(held)[16:24] if held else b"", os.fstat(log.fileno())
     except OSError:
         return None
-    return [info.st_ino, info.st_size, info.st_mtime_ns] if info.st_size else None
+    return [header[12:24].hex(), held, checksum.hex(), info.st_size, info.st_mtime_ns] if held else None
 
 
-def prepare_handoff(path: pathlib.Path, tier: str, *, wait_sec: float = STORE_WAIT_SEC) -> None:
+def prepare_handoff(path: pathlib.Path, tier: str, *, wait_sec: float = STORE_WAIT_SEC, seam: bool = True) -> None:
     """Quiescent export/switch seam: release cached handles and leave a standalone DELETE file.
-    Name-tier callers hold their name lock. An older SQLite may open the resulting file."""
+    Name-tier callers hold their name lock. An older SQLite may open the resulting file. A lock-tier
+    re-record or a boot owner leaving WAL (``seam=False``) converts it the same way while this process
+    keeps running; its ordinary opens then keep the rollback journal (``store_journal``)."""
     close_connections(path)
     with contextlib.closing(connect(path, tier, wait_sec=wait_sec, journal_mode="")) as conn:
         _delete_journal(conn)
-    _HANDED_OFF.add(os.path.abspath(path))
+    if seam:
+        _HANDED_OFF.add(os.path.abspath(path))
 
 
 def wal_file(path: pathlib.Path) -> bool:
@@ -745,11 +887,11 @@ def hand_off(root: Any, *, wait_sec: float = STORE_WAIT_SEC) -> bool:
     return True
 
 
-def _delete_journal(conn: sqlite3.Connection) -> None:
-    if conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal":
-        if conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
-            raise StoreBusy("store checkpoint busy at handoff", reason="contention")
-    if conn.execute("PRAGMA journal_mode = DELETE").fetchone()[0] != "delete":
+def _delete_journal(conn: sqlite3.Connection, *, keep_wal: bool = False) -> None:
+    wal = conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+    if wal and conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()[0]:
+        raise StoreBusy("store checkpoint busy at handoff", reason="contention")
+    if not (wal and keep_wal) and conn.execute("PRAGMA journal_mode = DELETE").fetchone()[0] != "delete":
         raise StoreBusy("store journal still in use at handoff", reason="contention")
 
 
@@ -827,13 +969,15 @@ def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optio
                 finish: Optional[Callable[[], None]] = None) -> Iterator[sqlite3.Connection]:
     """One transaction: a write takes the lock at ``BEGIN IMMEDIATE``, a read's only wait is
     here; any exception rolls back and propagates; ``finish`` (default ``commit``) runs at the
-    end; ``commit_wait_sec`` is the busy wait a COMMIT spends on readers draining."""
-    began = False
+    end; ``commit_wait_sec`` is the busy wait a COMMIT spends on readers draining. The lock's
+    hold is reported to ``store_timing`` either way."""
+    began, held = False, 0.0
     try:
         conn.execute("BEGIN IMMEDIATE" if write else "BEGIN")
         began = True
         if not write:  # take the read lock now
             conn.execute("SELECT 1 FROM meta LIMIT 1").fetchone()
+        held = store_timing.clock()
         if commit_wait_sec is not None:
             conn.execute(f"PRAGMA busy_timeout = {int(commit_wait_sec * 1000)}")
         yield conn
@@ -846,8 +990,11 @@ def transaction(conn: sqlite3.Connection, *, write: bool, commit_wait_sec: Optio
                 exc.rollback_confirmed = not conn.in_transaction
             except sqlite3.Error:
                 exc.rollback_confirmed = False
+        if held:
+            store_timing.record(conn, write, held)
         raise
     (finish or (lambda: commit(conn)))()
+    store_timing.record(conn, write, held)
 
 
 def store_path(root: Any) -> pathlib.Path:
@@ -1062,10 +1209,9 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
     import owner thread's, ``service_thread``): their transactions pass both checks. A ``barrier``
     holds the write lock and the gate without writing (the evidence packer's phase gate) and ends
     in ROLLBACK, so its release never waits for readers to drain as a COMMIT would."""
-    if _ADMISSION_NO_WAIT.get():
-        wait_sec = 0.0
-    elif _WAIT_BUDGET.get() is not None:
-        wait_sec = min(wait_sec, _WAIT_BUDGET.get())
+    from ouroboros.install_identity import check_store_root
+    check_store_root(root, write=write)
+    wait_sec = bounded_wait(wait_sec)
     root = pathlib.Path(root)
     service = service or bool(getattr(_SERVICE, "active", False))
     if write and not service and _in_window(root):
@@ -1089,14 +1235,14 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
             conn = stack.enter_context(connection(store_path(root), tier, wait_sec=wait_sec))
         except sqlite3.Error as exc:
             raise _typed(exc) from exc
-        handoff = False
+        handoff = seam = False
         try:
             changes = conn.total_changes
             with transaction(conn, write=write, commit_wait_sec=wait_sec if tier == TIER_ENFORCED else None,
                              finish=(lambda: conn.execute("ROLLBACK")) if barrier else None):
                 txn = Txn(conn, root)
                 phase = txn.phase()
-                handoff = phase != PUBLISHED
+                handoff = seam = phase != PUBLISHED
                 if write and not service and handoff:
                     raise StoreRetired(f"current store phase is {phase}: the files are the authority")
                 yield txn
@@ -1104,7 +1250,7 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
                     raise StoreError("a barrier transaction wrote rows; its ROLLBACK would discard them")
                 if write and conn.total_changes != changes:
                     txn.set_meta("commit_seq", txn.revision() + 1)
-            handoff = handoff or txn._handoff
+            handoff, seam = handoff or txn._handoff, seam or txn._seam
         except sqlite3.Error as exc:
             raise _typed(exc) from exc
         finally:
@@ -1112,7 +1258,7 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
                 stack.close()  # return the lease before closing every thread's idle handle
                 with name_lock(root, LOCK_NAME, timeout_sec=wait_sec) if tier == TIER_NAME else contextlib.nullcontext():
                     try:
-                        prepare_handoff(store_path(root), tier, wait_sec=wait_sec)
+                        prepare_handoff(store_path(root), tier, wait_sec=wait_sec, seam=seam)
                     except sqlite3.Error as exc:
                         raise _typed(exc) from exc
 
@@ -1141,8 +1287,9 @@ def document_text(document: Dict[str, Any]) -> str:
 
 def encode_document(document: Dict[str, Any]) -> str:
     """The body text stored in ``task_bodies``: the document with each present row-backed field
-    emptied (the rows hold its content)."""
-    return document_text({key: ({} if key in ROW_BACKED_FIELDS else value) for key, value in document.items()})
+    emptied (the rows hold its content) and without the card values its ``task_cards`` row holds."""
+    return document_text({key: ({} if key in ROW_BACKED_FIELDS else value)
+                          for key, value in store_task_cards.strip(document).items()})
 
 
 def typed_columns(document: Dict[str, Any], *, pending_drive: Optional[bool] = None) -> Dict[str, Any]:
@@ -1192,6 +1339,14 @@ def project_handoffs(document: Dict[str, Any], rows: Dict[str, Dict[str, Any]]) 
     return document
 
 
+def materialize(task_id: str, body: Optional[str], records: list, card: Any) -> Optional[Dict[str, Any]]:
+    """The document from its stored parts (``Txn.raw``), decoded now: the body, its handoff rows put
+    back (``project_handoffs``), its card row over it (``store_task_cards.project``); ``None`` without a body."""
+    if body is None:
+        return None
+    return store_task_cards.project(project_handoffs(json.loads(body), decode_handoffs([task_id], records)[task_id]), card)
+
+
 class Txn:
     """One store transaction: documents, obligation rows, meta; riders of the cutover
     (handoffs, custody, outbox) share the same connection."""
@@ -1199,21 +1354,26 @@ class Txn:
     def __init__(self, conn: sqlite3.Connection, root: Any = None) -> None:
         self.conn = conn
         self.root = pathlib.Path(root) if root is not None else None
-        self._handoff = False
+        self._handoff = self._seam = False  # hand the file off; ``_seam``: an export/switch seam
 
     def meta(self, key: str) -> Any:
         record = self.conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
         return None if record is None else json.loads(record["value"])
 
     def set_meta(self, key: str, value: Any) -> None:
-        # The import owner publishes schema versions here, in the same transaction
-        # as its DDL. Extend that gate without doing schema work on passive reads.
-        if key == "schema_version" and int(value) >= store_hot_facts.VERSION:
-            if int(self.meta(key) or 1) < store_hot_facts.VERSION:
+        # The import owner publishes schema versions here, in the same transaction as its DDL: each
+        # schema step's addition runs once, with the version, never on a passive read.
+        if key == "schema_version":
+            held = int(self.meta(key) or 1)
+            if int(value) >= store_hot_facts.VERSION > held:
                 store_hot_facts.upgrade(self)
+            if int(value) >= store_task_cards.VERSION > held:
+                store_task_cards.upgrade(self)
         self.conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, machine_json(value)))
-        if (key == "phase" and value in (EXPORTING, RETIRED)) or key in {"export_manifest", "lock_tier"}:
-            self._handoff = True
+        if (key == "phase" and value in (EXPORTING, RETIRED)) or key == "export_manifest":
+            self._handoff = self._seam = True
+        elif key == "lock_tier":
+            self._handoff = True  # re-recorded at boot: the file is converted, this process carries on
 
     def phase(self) -> str:
         return str(self.meta("phase") or PUBLISHED)
@@ -1235,21 +1395,31 @@ class Txn:
         return None if record is None else record["body"]
 
     def load(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """The document: its body with the row-backed fields projected from ``task_handoffs``."""
+        """The document: its body with the handoff rows and the card row projected in (``materialize``)."""
+        return materialize(task_id, *self.raw(task_id))
+
+    def raw(self, task_id: str) -> tuple:
+        """The document's stored parts, nothing decoded: ``(body text, handoff records, card row)``."""
         body = self.body_text(task_id)
-        return None if body is None else project_handoffs(json.loads(body), self.handoffs(task_id))
+        if body is None:
+            return None, [], None
+        return body, self.handoff_records([task_id]), store_task_cards.read(self, task_id)
 
     def store_task(self, document: Dict[str, Any], *, pending_drive: Optional[bool] = None) -> None:
-        """Upsert body, typed columns and handoffs; ``write_seq`` advances the memo signature."""
+        """Upsert body, typed columns, handoffs and card; ``write_seq`` advances the memo signature.
+        The body is updated in place and only when its bytes changed (a same-size body rewrites its
+        changed pages alone, an identical one nothing); ``tasks`` keeps REPLACE, which NULLs the columns
+        an older writer does not list ("not derived", the import's cue)."""
         task_id = str(document["task_id"])
         columns = typed_columns(document, pending_drive=pending_drive)
         columns["write_seq"] = (self.row(task_id, "write_seq") or 0) + 1
-        self.conn.execute("INSERT OR REPLACE INTO task_bodies (task_id, body) VALUES (?, ?)",
-                          (task_id, encode_document(document)))
+        self.conn.execute("INSERT INTO task_bodies (task_id, body) VALUES (?, ?) ON CONFLICT(task_id) DO UPDATE "
+                          "SET body=excluded.body WHERE task_bodies.body<>excluded.body", (task_id, encode_document(document)))
         names = ("task_id", *columns)
         self.conn.execute(f"INSERT OR REPLACE INTO tasks ({','.join(names)}) VALUES ({','.join('?' * len(names))})",
                           (task_id, *columns.values()))
         self.sync_handoffs(task_id, document)
+        store_task_cards.merge(self, task_id, document)  # the same monotonic rule: a stale document regresses no card
         self._note_terminal_write(columns["status"])
 
     def touch(self, task_id: str) -> None:
@@ -1276,6 +1446,7 @@ class Txn:
     def delete_task(self, task_id: str) -> None:
         for table in ("task_bodies", "tasks", "task_handoffs"):
             self.conn.execute(f"DELETE FROM {table} WHERE task_id=?", (task_id,))
+        store_task_cards.delete(self, task_id)
 
     def set_names(self) -> List[str]:
         return [record["set_name"] for record in
@@ -1325,12 +1496,9 @@ class Txn:
                 f"({','.join('?' * len(chunk))}) ORDER BY rowid", chunk).fetchall())
         return records
 
-    def handoffs_of(self, task_ids: List[str]) -> Dict[str, Dict[str, Dict[str, Any]]]:
-        """``{task_id: {kind: {op_id: facts}}}`` for the given tasks (one query), every kind present."""
-        return decode_handoffs(task_ids, self.handoff_records(task_ids))
-
     def handoffs(self, task_id: str) -> Dict[str, Dict[str, Any]]:
-        return self.handoffs_of([task_id]).get(task_id, {})
+        """``{kind: {op_id: facts}}`` of one task (one query), every kind present."""
+        return decode_handoffs([task_id], self.handoff_records([task_id]))[task_id]
 
     def handoff(self, task_id: str, op_id: str) -> Optional[Any]:
         record = self.conn.execute("SELECT facts FROM task_handoffs WHERE task_id=? AND op_id=?",
@@ -1412,13 +1580,15 @@ class Txn:
 def update_task(root: Any, task_id: str, mutator: Callable[[Dict[str, Any]], Optional[Dict[str, Any]]], *,
                 pending_drive: Any = None) -> Optional[Dict[str, Any]]:
     """Merge CURRENT under the published write gate; ``None`` commits without a write.
-    ``pending_drive`` is a value or ``(txn, current, updated) -> Optional[bool]``.
-    Schema preparation precedes the callback, including on a first-touched old child store."""
+    ``pending_drive`` is a value or ``(txn, current, updated) -> Optional[bool]``, ``current`` the
+    pristine document (the mutator works on its own copy, decoded from the same stored bytes, not
+    an encoded deep copy). Schema preparation precedes the callback, including on a first-touched
+    old child store."""
     while True:
         with open_store(root, write=True) as txn:
             if int(txn.meta("schema_version") or 1) >= SCHEMA_VERSION:
-                current = txn.load(task_id) or {}
-                updated = mutator(json.loads(json.dumps(current)))
+                raw = txn.raw(task_id)
+                current, updated = materialize(task_id, *raw) or {}, mutator(materialize(task_id, *raw) or {})
                 if updated is None:
                     return None
                 flag = pending_drive(txn, current, updated) if callable(pending_drive) else pending_drive

@@ -465,7 +465,9 @@ def test_an_actor_first_start_accepts_its_own_handle_and_stored_id_and_refuses_a
 
     for retry in (False, True):
         for own in ("primary-builder", "codex=gpt-6-astra/xhigh"):
-            assert _start(own, retry=retry) == "configured_work_order_unavailable", (own, retry)
+            # A retry's next refusal is the shared validator's: its token was never recorded (#1614).
+            expected = "unknown_invocation" if retry else "configured_work_order_unavailable"
+            assert _start(own, retry=retry) == expected, (own, retry)
         for foreign in ("other", "cursor=kimi-k3-high", "no-such-row"):
             assert _start(foreign, retry=retry) == "configured_actor_route_mismatch", (foreign, retry)
 

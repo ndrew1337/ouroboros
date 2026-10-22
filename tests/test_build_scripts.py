@@ -67,6 +67,53 @@ def _python_standalone_extras(src: str, interpreter: str) -> tuple[set, list]:
 class TestBuildSh:
     """build.sh must bundle Chromium headless shell without bundled macOS WebKit."""
 
+    def test_macos_source_entry_is_built_before_headers_are_pruned(self):
+        src = _read("build.sh")
+        compile_pos = src.index("xcrun clang")
+        install_pos = src.index('cp build/macos/ouroboros-shell')
+        assert src.index("rm -rf build dist") < compile_pos < _find_pyinstaller_cmd_pos(src) < install_pos
+        assert '-mmacosx-version-min=12.0' in src
+        assert '-Wl,-rpath,@executable_path/../Frameworks/python-standalone/lib' in src
+        assert 'python-standalone/include/python${SHELL_PY_VERSION}' in src
+        assert '"python-standalone/lib/$SHELL_PY_LIB"' in src
+        stub = _read("packaging/macos/ouroboros_shell.c")
+        assert "Py_InitializeFromConfig" in stub and "Py_RunMain" in stub
+        assert "Py_SetPythonHome" not in stub and "execv" not in stub
+
+    @pytest.mark.parametrize("matching", [True, False])
+    def test_entry_install_requires_its_own_runtime_library_not_build_pythons(self, tmp_path, matching):
+        """Run the real install block against the static-python layout (no artifact is executed)."""
+        # The PATH's bash, as the notarization tests below: a bare "bash" on Windows starts System32's WSL launcher.
+        bash = shutil.which("bash")
+        if not bash:
+            pytest.skip("build.sh's install block needs bash")
+        src = _read("build.sh")
+        start = src.index('cp build/macos/ouroboros-shell')
+        end = src.index('echo "--- Installing packaged CLI wrappers', start)
+        app = tmp_path / "New app.app"
+        frameworks = app / "Contents/Frameworks"
+        (app / "Contents/MacOS").mkdir(parents=True)
+        (frameworks / "python-standalone/lib").mkdir(parents=True)
+        library = frameworks / ("python-standalone/lib/libpython3.10.dylib" if matching else "libpython3.10.dylib")
+        library.write_bytes(b"library fixture, never executed")
+        compiled = tmp_path / "build/macos/ouroboros-shell"
+        compiled.parent.mkdir(parents=True)
+        compiled.write_bytes(b"entry fixture, never executed")
+        result = subprocess.run([bash, "-ec", src[start:end]], cwd=tmp_path, capture_output=True, text=True,
+                                env={**os.environ, "APP_PATH": str(app), "SHELL_PY_LIB": "libpython3.10.dylib"})
+        assert (result.returncode == 0) is matching, result.stderr
+        assert (app / "Contents/MacOS/ouroboros-shell").read_bytes() == compiled.read_bytes()
+
+    def test_source_entry_identity_is_restored_after_deep_sign_then_outer_seal_verified(self):
+        src = _read("build.sh").replace("\\\n", " ")
+        commands = [line.strip() for line in src.splitlines() if line.strip().startswith("codesign -s")]
+        deep = next(i for i, line in enumerate(commands) if "--deep" in line)
+        assert '--identifier com.ouroboros.agent' in commands[deep + 1]
+        assert 'Contents/MacOS/ouroboros-shell' in commands[deep + 1]
+        assert '--deep' not in commands[deep + 2] and '"$APP_PATH"' in commands[deep + 2]
+        assert '"$SHELL_SIGN_ID" != "com.ouroboros.agent"' in src
+        assert src.index('"$SHELL_SIGN_ID" !=') < src.index('codesign --verify --strict --deep')
+
     def test_playwright_install_chromium_present(self):
         src = _read("build.sh")
         assert "playwright install --only-shell chromium" in src, (
@@ -220,8 +267,6 @@ class TestBuildSh:
 
     def test_source_handoff_interpreter_receives_the_desktop_extra(self):
         """The source launcher needs desktop modules outside PyInstaller's archive."""
-        launcher = _read("launcher.py")
-        assert 'os.execv(EMBEDDED_PYTHON, [EMBEDDED_PYTHON, str(REPO_DIR / "launcher.py")' in launcher
         src = _read("build.sh").replace("\\\n", " ")
         extras, installs = _python_standalone_extras(src, "python-standalone/bin/python3")
         assert "desktop" in extras, f"python-standalone receives only extras {sorted(extras)}"
@@ -1205,18 +1250,21 @@ def test_spec_retains_cross_platform_packaging_hooks():
 @pytest.mark.skipif(not _BUNDLE_FILES_PRESENT, reason=_PACKAGING_SKIP_REASON)
 def test_launcher_retains_cross_platform_runtime_hooks():
     launcher_source = _pkg_read("launcher.py")
-    assert "embedded_python_candidates" in launcher_source
+    assert "find_embedded_python" in launcher_source
+    assert "embedded_python_candidates" in _pkg_read("ouroboros/launcher_bootstrap.py")
     assert "_prepare_windows_webview_runtime" in launcher_source
     assert "git_install_hint()" in launcher_source
     assert "create_kill_on_close_job" in launcher_source
-    assert "kill_process_on_port(int(companion_port))" in launcher_source
-    assert "force_kill_pid(child.pid)" in launcher_source
+    assert "kill_runtime_orphans(DATA_DIR" in launcher_source
+    reaper = _pkg_read("ouroboros/launcher_server_reaper.py")
+    assert "kill_process_on_port(int(companion_port))" in reaper
+    assert "force_kill_pid(child.pid)" in reaper
 
 
 @pytest.mark.skipif(not _BUNDLE_FILES_PRESENT, reason=_PACKAGING_SKIP_REASON)
 def test_launcher_preserves_macos_git_setup_path():
     launcher_source = _pkg_read("launcher.py")
-    assert 'subprocess.Popen(["xcode-select", "--install"])' in launcher_source
+    assert '_hidden_popen(["xcode-select", "--install"], bootstrap=True)' in launcher_source  # owned, no window flag off Windows
     assert "Install Git (Xcode CLI Tools)" in launcher_source
     assert "Installing... A system dialog may appear." in launcher_source
 
@@ -1298,21 +1346,27 @@ def test_ci_release_preflight_validates_tag_matches_version():
     assert 'tag != expected_tag' in workflow
 
 
+_RELEASE_REQUIRED = ("build", "windows-proof", "release-preflight", "lint", "full-test", "system-e2e-mock",
+                     "ui-smoke", "integration-test", "marker-guards", "docker-ui-smoke", "docker-portable-test",
+                     "skill-smoke", "test-verdict")
+
+
 def test_ci_collects_independent_failures_without_relaxing_release_gates():
+    import yaml
+
     workflow = _ci_workflow()
-    assert "${{ always() && !cancelled() && startsWith(github.ref, 'refs/tags/v') }}" in workflow
+    jobs = yaml.safe_load(workflow)["jobs"]
     assert "tag_valid: ${{ steps.release_meta.outputs.tag_valid }}" in workflow
-    assert "needs.release-preflight.outputs.tag_valid == 'true'" in workflow
-    assert "needs.release-preflight.result == 'success'" in workflow.split("\n  release:\n", 1)[1]
-    for expression in (
-        "FULL_TEST_RESULT: ${{ needs.full-test.result }}",
-        "INTEGRATION_RESULT: ${{ needs.integration-test.result }}",
-        "SYSTEM_E2E_RESULT: ${{ needs.system-e2e-mock.result }}",
-    ):
-        assert expression in workflow
-    assert '"$FULL_TEST_RESULT" != success' in workflow
-    assert '"$INTEGRATION_RESULT" != success' in workflow
-    assert '"$SYSTEM_E2E_RESULT" != success' in workflow
+    # Builds start once the tag is valid, beside the tests, instead of waiting for them.
+    assert "needs" not in jobs["release-preflight"]
+    assert jobs["build"]["needs"] == ["release-preflight"]
+    assert "needs.release-preflight.outputs.tag_valid == 'true'" in jobs["build"]["if"]
+    # ...and the release job, not the preflight, requires every lane: nothing is waived by tag.
+    release = jobs["release"]["if"]
+    for name in _RELEASE_REQUIRED:
+        assert f"needs.{name}.result == 'success'" in release, name
+        assert name in jobs["release"]["needs"], name
+    assert "refs/tags/v7" not in workflow
     assert "if: startsWith(github.ref, 'refs/tags/v')" in workflow.split("  android-build:", 1)[1].split("  release-preflight:", 1)[0]
     assert "continue-on-error: true" in workflow.split("  vendor-package-smoke:", 1)[1].split("  release:", 1)[0]
 
@@ -1331,27 +1385,15 @@ def test_ci_setup_aware_failure_collection_guards_each_independent_lane():
     assert "refs/tags/v" in ui["Run browser tools Chromium/WebKit smoke"]["if"]
 
 
-def test_ci_release_prerequisite_shell_gate_truth_table():
+def test_ci_release_requires_success_and_never_a_skipped_or_red_lane():
+    """The release `if` asks every required job for success, so a skipped lane (no result at all)
+    or a red one stops publication on every tag alike; FLAKY and ACCEPTED tests are green lanes."""
     import yaml
 
-    jobs = yaml.safe_load(_ci_workflow())["jobs"]
-    step = next(step for step in jobs["release-preflight"]["steps"]
-                if step.get("name") == "Require test prerequisites for publication")
-    cases = [
-        (("success", "success", "success"), True),
-        (("failure", "success", "success"), False),
-        (("success", "skipped", "success"), False),
-        (("success", "success", "cancelled"), False),
-        (("", "success", "success"), False),
-    ]
-    for (full, integration, system), expected in cases:
-        env = os.environ.copy()
-        env.update(FULL_TEST_RESULT=full, INTEGRATION_RESULT=integration, SYSTEM_E2E_RESULT=system)
-        bash = shutil.which("bash")
-        if bash is None:
-            pytest.skip("workflow shell is unavailable on this host")
-        result = subprocess.run([bash, "-c", step["run"]], env=env, capture_output=True, text=True)
-        assert (result.returncode == 0) is expected, (full, integration, system, result.stderr)
+    release = yaml.safe_load(_ci_workflow())["jobs"]["release"]["if"]
+    assert "github.ref == 'refs/tags/" not in release and "github.repository ==" not in release
+    assert "!= 'skipped'" not in release
+    assert release.count("== 'success'") == len(_RELEASE_REQUIRED)
 
 
 def test_ci_failure_collection_guards_every_independent_step_and_rerun_uploads():
@@ -1359,8 +1401,9 @@ def test_ci_failure_collection_guards_every_independent_step_and_rerun_uploads()
 
     jobs = yaml.safe_load(_ci_workflow())["jobs"]
     expected = {
-        "quick-test": ["Verify generated Pages output", "Lint (deterministic F-rule gate — catches the NameError-under-except class)", "Run browser-module tests (node --test — mirrored by the hermetic commit gate)", "Lint browser modules (ESLint no-undef — CI-only second layer of the acorn gate)", "Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
-        "full-test-runs": ["Run browser-module tests (node --test — mirrored by the hermetic commit gate)", "Lint browser modules (ESLint no-undef — CI-only second layer of the acorn gate)", "Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
+        "lint": ["Verify generated Pages output", "Lint (deterministic F-rule gate — catches the NameError-under-except class)", "Lint browser modules (ESLint no-undef — CI-only second layer of the acorn gate)"],
+        "quick-test": ["Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
+        "full-test-runs": ["Run browser-module tests (node --test — mirrored by the hermetic commit gate)", "Run tests (parallel — excludes the costly marker lanes AND the serial real-process suites)", "Run tests (serial — real subprocess/port/global-state suites that flake under -n)", "Run tests (size-ratchet lane — blocking here, warning-only locally)", "Guard extracted transport imports stay out of core"],
         "marker-guards": ["Guard non-empty browser marker lanes", "Guard non-empty serial marker lane", "Guard non-empty skill_smoke marker lane", "Guard non-empty size_ratchet marker lane"],
         "docker-ui-smoke": ["Install UI smoke browser binaries", "Run Docker UI smoke", "Run Docker browser tools Chromium/WebKit smoke"],
         "system-e2e-mock": ["Run the keyless system E2E scenario lane (real isolated servers)", "Run the cancellation E-suite mock lane"],
@@ -1458,10 +1501,9 @@ def test_ci_has_fork_safe_three_os_betterleaks_candidate_matrix():
     start = workflow.index("  betterleaks-platform-smoke:")
     job = workflow[start : workflow.index("\n  # ─", start)]
     assert "github.event_name == 'workflow_dispatch'" in quick_job
-    assert "github.event_name == 'pull_request'" in job
-    assert "github.base_ref == 'ouroboros'" in job
-    assert "github.event_name == 'workflow_dispatch'" in job
-    assert "pull_request_target" not in job
+    # Manual runs only: ci.yml has no pull_request trigger, so no dormant PR branch is kept.
+    assert "if: github.event_name == 'workflow_dispatch'" in job
+    assert "pull_request" not in job
     assert "os: [ubuntu-latest, windows-latest, macos-latest]" in job
     assert "uses: ./.github/actions/setup-python-env" in job
     assert "python -m ouroboros.betterleaks_runtime install" in job

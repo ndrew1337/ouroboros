@@ -60,6 +60,22 @@ def _ack(root, transaction_id):
     dr._write_restart_transaction(root, {**row, "status": "normal_exit_acknowledged", "exit_code": 42})
 
 
+@pytest.mark.parametrize("promised", ["task_ids", "return_ids", "none"])
+def test_refused_return_reports_planned_and_saved_promises(tmp_path, monkeypatch, promised):
+    from supervisor.restart_retention import recover_saved_running
+
+    _queue, _state, workers = _install_queue(tmp_path, monkeypatch)
+    _plain_run(tmp_path, workers, "unsaved")
+    assert recover_saved_running(workers.RUNNING.values(), tmp_path,
+        transaction={promised: ["unsaved"]}, cause="restart") == []
+    path = tmp_path / "logs/supervisor.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+    refused = [row for row in rows if row.get("type") == "restart_return_refused"]
+    assert bool(refused) is (promised != "none")
+    if refused:
+        assert refused[-1]["refused"] == {"unsaved": "no_usable_recovery_source"}
+
+
 @pytest.mark.parametrize("age_sec", [0, 7 * 86400], ids=["fresh", "week-old"])
 def test_quit_keeps_running_work_and_all_accepted_queue_held_for_resume(tmp_path, monkeypatch, age_sec):
     queue, state, workers = _install_queue(tmp_path, monkeypatch)
@@ -76,7 +92,7 @@ def test_quit_keeps_running_work_and_all_accepted_queue_held_for_resume(tmp_path
     assert set(rows) == {"saved-root", "saved-child", "queued"}
     for task_id in ("saved-root", "saved-child", "queued"):
         hold = budget_hold_fact(rows[task_id])
-        assert hold and hold["reason"] == HOLD_SAVED_WORK and hold["stop_cause"] == "app_stop"
+        assert hold and hold["reason"] == HOLD_SAVED_WORK and hold["door"] == "app_stop"
         assert load_task_result(tmp_path, task_id)["status"] == STATUS_SCHEDULED
     handoff = rows["saved-root"]["_working_recovery"]
     assert handoff["from_attempt"] == 1 and rows["saved-root"]["_attempt"] == 2 and handoff["cause"] == "app_stop"
@@ -303,7 +319,7 @@ def test_a_panic_after_an_acknowledged_restart_returns_nothing_by_itself(tmp_pat
     _stop_and_boot(queue, workers)
     rows = {row["id"]: row for row in workers.PENDING}
     assert set(rows) == {"saved-root", "queued"}
-    assert budget_hold_fact(rows["saved-root"])["stop_cause"] == "panic"
+    assert budget_hold_fact(rows["saved-root"])["door"] == "panic"
     assert budget_hold_fact(rows["queued"]) is not None, "the queue waits for Resume too"
 
 
@@ -340,7 +356,7 @@ def test_panic_holds_and_a_stop_or_an_earlier_hold_is_never_lifted(tmp_path, mon
     workers.PENDING[:] = []
     queue.restore_pending_from_snapshot()
     rows = {row["id"]: row for row in workers.PENDING}
-    assert budget_hold_fact(rows["saved-root"])["stop_cause"] == "panic"
+    assert budget_hold_fact(rows["saved-root"])["door"] == "panic"
     assert "stopped-root" not in rows, "Stop wins over saved work"
     assert budget_hold_fact(rows["held-before"])["reason"] == HOLD_OWNER_RESTART
 
@@ -357,6 +373,9 @@ def test_an_owner_restart_returns_its_named_work_instead_of_cancelling_it(tmp_pa
     _pool_events(workers, monkeypatch)
     _working_run(tmp_path, workers, "saved-root")
     _plain_run(tmp_path, workers, "unsaved")
+    from tests._work_stop_helpers import live_restart
+    transaction = live_restart(tmp_path, monkeypatch)
+    monkeypatch.setattr(server_restart, "_LAST_RETURN_TX", {"id": transaction["transaction_id"]})
     monkeypatch.setattr(server_restart, "DATA_DIR", tmp_path)
     monkeypatch.setattr(server_restart, "_stop_owned_daemon", lambda *_a, **_k: None)
     monkeypatch.setattr("ouroboros.delegate_custody.reconcile_orphaned_runs", lambda *_a, **_k: None)

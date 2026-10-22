@@ -100,6 +100,13 @@ def _subtask_outcome_summary(data: Dict[str, Any], receipts: list | None = None)
         if envelope:
             custody["trigger"] = str(envelope.get("trigger") or "")
             custody["audit_status"] = str(envelope.get("audit_status") or "unknown")
+            if isinstance(envelope.get("owner_stop_children"), dict):
+                receipt = envelope["owner_stop_children"]
+                custody["owner_stop_children"] = {
+                    "count": len(receipt.get("children") or []),
+                    "full_source": receipt.get("full_source"),
+                    **({"gap": receipt["gap"]} if receipt.get("gap") else {}),
+                }
             for field in ("open_run_ids", "pending_invocation_ids", "undisposed_patch_run_ids", "terminal_runs"):
                 values = envelope.get(field)
                 values = list(values) if isinstance(values, list) else []
@@ -228,7 +235,7 @@ def get_task_result_entry() -> ToolEntry:
             "include_focus_source": {"type": "boolean", "default": False, "description": "Read the exact bytes this task's focus source_ref answered when the focus was authored (the retained_source of an [INDEPENDENT_ROOTS] row); same bounds contract as include_completion_source."},
             "focus_source_sha256": {"type": "string", "default": "", "description": "With include_focus_source: select the retained source by the sha256 the roster row quoted, so a later focus of the same author cannot substitute its evidence."},
             "review_source_sha256": {"type": "string", "default": "", "description": "Root turns: read only the exact acceptance-review source named by a late-evidence digest, pinned to the physical task_id even after a retry. Works across forked/empty drives. Without a range returns complete_chars/hash; then use source_start_char/source_end_char to read exact text. Does not include authority."},
-            "delegated_output_sha256": {"type": "string", "default": "", "description": "Read a retained full delegated output that this PHYSICAL task_id's own receipts publish, pinned even after a retry: call exactly the source_read of a staged_output or other_staged_outputs ref (unordered; each says complete) named in public summary delegated_custody.terminal_runs or predecessor_terminal_runs (it names the publishing task; the ref's task_id is only the staging store). Works across forked/empty drives and after drive cleanup. Omit ranges for complete_chars/hash, then use source_start_char/source_end_char. Never marks the run's result as read; does not include authority."},
+            "delegated_output_sha256": {"type": "string", "default": "", "description": "Read a retained full delegated output that this PHYSICAL task_id's own receipts publish, pinned even after a retry: call exactly the source_read of a staged_output/other_staged_outputs or terminal_observation/other_terminal_observations ref (unordered; each says complete; an observation is the exact engine read-back, not proof of full output) named in public summary delegated_custody.terminal_runs or predecessor_terminal_runs (it names the publishing task; the ref's task_id is only the staging store). Works across forked/empty drives and after drive cleanup. Omit ranges for complete_chars/hash, then use source_start_char/source_end_char. Never marks the run's result as read; does not include authority."},
             "presence_reentry_sha256": {"type": "string", "default": "", "description": "Read the exact Presence reentry observation checkpoint named in a resumed-conversation note. Includes full observed messages and transport facts plus coverage gaps. Uses the existing task scope; omit ranges for complete_chars/hash, then page with source_start_char/source_end_char."},
             "presence_reentry_offset": {"type": "integer", "description": "With presence_reentry_sha256: scan the frozen canonical interval of that checkpoint's own conversation, including rows beyond its initial scan budget. Start at history_start and follow next_offset until interval_exhausted. Small pages return complete rows and explicit gaps. Oversized pages return complete_chars/hash; use source_start_char/source_end_char with the same offset to reconstruct that page's exact JSON before advancing."},
             "source_start_char": {"type": "integer", "description": "Inclusive character offset for the requested canonical source range."},
@@ -415,16 +422,6 @@ def _get_task_result(
     except Exception:
         receipts = []
     outcome_summary = _subtask_outcome_summary(data, receipts=receipts)
-    debt = data.get("acceptance_debt")
-    if isinstance(debt, dict) and debt.get("source_ref"):
-        from ouroboros.acceptance_history import historical_source_reference
-
-        summary = json.loads(outcome_summary)
-        summary["acceptance_debt"] = {key: debt.get(key) for key in (
-            "debt_id", "task_id", "accounting_root_task_id", "delivery_status")}
-        summary["acceptance_debt"]["source_ref"] = historical_source_reference(
-            status_drive_root, str(data.get("task_id") or task_id), debt["source_ref"], subject=True)
-        outcome_summary = json.dumps(summary, ensure_ascii=False, indent=2)
     from ouroboros.tools.join_ledger import _child_result_sha256
 
     child_result_sha256 = _child_result_sha256(data)
@@ -982,7 +979,11 @@ def await_messages_entry() -> ToolEntry:
 
 def _count_live_sibling_children(ctx: ToolContext, status_drive_root: Path, *, exclude_task_id: str) -> int:
     """Count this parent's children still running/scheduled/requested (excluding the one
-    just waited on). Advisory only — a failure returns 0 so it never breaks wait_task."""
+    just waited on). Advisory only — a failure returns 0 so it never breaks wait_task.
+
+    Select indexed, stored row facts in any role, without decoding task bodies.
+    The typed parent identity applies even when its body is padded or unreadable.
+    """
     parent_id = str(getattr(ctx, "task_id", "") or "").strip()
     if not parent_id:
         return 0
@@ -991,16 +992,12 @@ def _count_live_sibling_children(ctx: ToolContext, status_drive_root: Path, *, e
             STATUS_REQUESTED,
             STATUS_RUNNING,
             STATUS_SCHEDULED,
-            list_task_results,
         )
+        from ouroboros.task_store import task_facts
 
-        live = 0
-        for item in list_task_results(status_drive_root, statuses=[STATUS_RUNNING, STATUS_SCHEDULED, STATUS_REQUESTED]):
-            if str(item.get("task_id") or item.get("id") or "") == exclude_task_id:
-                continue
-            if str(item.get("parent_task_id") or "") == parent_id:
-                live += 1
-        return live
+        return len(task_facts(
+            status_drive_root, where="parent_task_id=? AND task_id<>? AND status IN (?,?,?)",
+            params=(parent_id, exclude_task_id, STATUS_RUNNING, STATUS_SCHEDULED, STATUS_REQUESTED)))
     except Exception:
         return 0
 

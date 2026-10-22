@@ -1,3 +1,4 @@
+import { isPanicFrame } from './panic.js';
 // Owner attachments inside the owner's own chat bubble (docs/DESIGN.md "Chat
 // attachments"): one message, attachments above the caption, whole images
 // (one at its own ratio, several in the shared contain grid), the existing
@@ -126,7 +127,7 @@ function cardHtml(view, atoms, note = view.available ? '' : tr('media.attachment
     const meta = metaText(view, atoms, note);
     const kind = note ? '' : readable(view);
     return `<div class="chat-file-item${view.available ? '' : ' is-unavailable'}">
-        <button type="button" class="chat-file-card" ${view.available ? 'aria-haspopup="dialog"' : 'disabled aria-disabled="true"'}
+        <button type="button" class="btn btn-default chat-file-card" ${view.available ? 'aria-haspopup="dialog"' : 'disabled aria-disabled="true"'}
             aria-label="${escapeHtmlAttr(`${view.name}${meta ? ` — ${meta}` : ''}`)}">
             ${FILE_GLYPH}
             <span class="chat-file-copy">
@@ -351,6 +352,7 @@ export function createComposerAttachments({ preview, attachBtn, fileInput, input
 const KEPT_FRAME_KEYS = ['type', 'content', 'client_message_id', 'sender_session_id', 'force_plan', 'chat_id', 'project_id', 'reply_to'];
 
 function keptFrame(frame) {
+    if (isPanicFrame(frame)) return null;
     if (frame?.type !== 'chat' || typeof frame.content !== 'string' || !frame.client_message_id) return null;
     return { ...Object.fromEntries(KEPT_FRAME_KEYS.filter((key) => key in frame).map((key) => [key, frame[key]])),
         attachments: Array.from(Array.isArray(frame.attachments) ? frame.attachments : [], (item) => ({
@@ -398,8 +400,10 @@ export function createUnconfirmedSends({ send, root, onDomWrite, showToast, comp
             else unreadable = true;
         }
     } catch { unreadable = true; }
+    // The tab's own storage, not an action of the owner's that failed: said, but not felt (toast.js, haptics.js).
     if (unreadable) showToast(tr('chat.send_unconfirmed_unread',
-        'This tab could not read an unsaved message it kept for a reload, so it cannot be offered again.'), 'error');
+        'This tab could not read an unsaved message it kept for a reload, so it cannot be offered again.'), 'error',
+        { haptic: false });
 
     function persist() {
         if (!storage || !storageKey) return;
@@ -409,7 +413,8 @@ export function createUnconfirmedSends({ send, root, onDomWrite, showToast, comp
                 .map(({ frame, views, ts }) => ({ frame: keptFrame(frame), views, ts }))));
         } catch {
             showToast(tr('chat.send_unconfirmed_unkept',
-                'This tab could not keep the unsaved message for a reload. Send again still works until then.'), 'error');
+                'This tab could not keep the unsaved message for a reload. Send again still works until then.'), 'error',
+                { haptic: false });
         }
     }
 
@@ -494,6 +499,7 @@ export function createUnconfirmedSends({ send, root, onDomWrite, showToast, comp
 
     return {
         track(frame, { views = [], ts = '', queued = false } = {}) {
+            if (isPanicFrame(frame)) return;
             const id = String(frame?.client_message_id || '');
             if (!id) return;
             frames.set(id, { frame, views: attachmentViews(views), ts, queued });

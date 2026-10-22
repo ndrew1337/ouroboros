@@ -61,9 +61,9 @@ LIVE_ROOMS = ("none", "lines", "lines_with_words")
 MARKS = ("all", "room_and_global", "none")
 LEGACY_FILE = "memory/dialogue_blocks.json"
 # A task's typed host facts its lane-2 line names by type and address, never by text or JSON:
-# the late review the owner did not see, a failed or uncertain send, a cancel receipt (it may
-# carry an unreviewed model draft), a custody notice and a terminal incident (the old passive
-# view showed each of them).
+# the late review the owner did not see (old task-acceptance rows only; nothing writes them
+# now), a failed or uncertain send, a cancel receipt (it may carry an unreviewed model draft),
+# a custody notice and a terminal incident (the old passive view showed each of them).
 TYPED_HOST_FACTS: Mapping[str, str] = MappingProxyType({
     "acceptance_late_settlement": "late review evidence", "presence_delivery": "delivery",
     "cancel_receipt": "cancel receipt", "custody_notice": "custody notice", "terminal_incident": "terminal incident"})
@@ -135,7 +135,7 @@ class ViewSpec:
 
 ROLE_DEFAULTS: Mapping[str, ViewSpec] = MappingProxyType({
     "integrator": ViewSpec("integrator"),
-    # a wake: the integrator's view of Main (it has no chat of its own) plus people's words in the other live rooms
+    # A wake sees Main, distinct words from other ordinary rooms, and place pointers.
     "consciousness": ViewSpec("consciousness", live_rooms="lines_with_words"),
     "presence": ViewSpec("presence", origin_words=False, live_rooms="none", marks="room_and_global"),
     "child": ViewSpec("child", room_lanes=False, live_rooms="none", marks="room_and_global", knowledge=False,
@@ -150,10 +150,11 @@ def view_role(task: Mapping[str, Any]) -> str:
     """The view role, first match wins, in ``knowledge.focus_signature``'s order.
 
     A nanny is the one dispatch fact (``_nanny_route_dispatched_for``), then a delegated
-    child, a wake's own ledger category, a Presence turn; everything else integrates.
+    child, an explicit focus cause, a wake's ledger category, and legacy Presence.
+    Everything else integrates.
     The facts are read at the task's top level or under ``metadata``.
     """
-    from ouroboros.consciousness_authority import CONSCIOUSNESS_CATEGORY
+    from ouroboros.consciousness_authority import CONSCIOUSNESS_CATEGORY, WAKE_CAUSE_FOCUS, wake_cause
     from ouroboros.subagent_dispatch_notes import _nanny_route_dispatched_for  # D03->D07 is lazy-only
 
     meta = dict(_mapping(task.get("metadata")))
@@ -161,6 +162,8 @@ def view_role(task: Mapping[str, Any]) -> str:
         return "nanny"
     if str(task.get("delegation_role") or meta.get("delegation_role") or "").strip().lower() == "subagent":
         return "child"
+    if wake_cause({**task, **meta}) == WAKE_CAUSE_FOCUS:
+        return "presence"
     if (task.get("usage_category") or meta.get("usage_category")) == CONSCIOUSNESS_CATEGORY:
         return "consciousness"
     if is_presence_task(task):
@@ -200,7 +203,7 @@ def _task_ctx(task: Mapping[str, Any]) -> SimpleNamespace:
 
 def view_room_id(task: Mapping[str, Any], ctx: Any, drive_root: Any, *, project_chat_ids: Any,
                  presence: bool = False) -> str:
-    """The current room of a view: ``own_room_chat`` (binding, then chat, then ancestors).
+    """Use the focus room when supplied, then ``own_room_chat`` for other tasks.
 
     A result outside the Projects and Main, or none (the hidden partition, another
     transport chat, a task without a chat), is Main, as the old focused view was; a
@@ -208,6 +211,9 @@ def view_room_id(task: Mapping[str, Any], ctx: Any, drive_root: Any, *, project_
     """
     from ouroboros.dialogue_evidence import own_room_chat  # D03->D06 is lazy-only
 
+    focus = _mapping(_mapping(task.get("metadata")).get("focus") or task.get("focus"))
+    if presence and focus.get("room_chat_id") is not None:
+        return str(focus["room_chat_id"])
     try:
         own = own_room_chat(ctx if ctx is not None else _task_ctx(task), drive_root)
     except (TypeError, ValueError, OSError):
@@ -564,6 +570,7 @@ def _notes_by_room(store: ChronicleStore) -> Dict[str, List[Dict[str, Any]]]:
         sealed = store.sealed_row_refs(room)
         kept = [{"id": record["id"], "date": _minute(record.get("ts")).split(" ")[0],
                  "role": str(_mapping(_mapping(record.get("author")).get("focus")).get("role") or "mind"),
+                 "origin": dict(_mapping(_mapping(record.get("author")).get("focus"))),
                  "text": str(record.get("current_text") or "")}
                 for record in store.room_records(room)
                 if record["kind"] == "note" and f"note:{record['id']}" not in sealed]
@@ -595,7 +602,8 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     whole = {e["id"] for e in story if e.get("kind") == "legacy" and e.get("text") and not e.get("told_by")}
     told = {e["id"]: {**e, "part": None} for e in story if e.get("kind") in ("page", "part") and e.get("told_by")
             and e["room_id"] == room}
-    sample = next((meta for _address, meta, _pos in reversed(entries) if meta.get("transport")), None)
+    sample = next((meta for _address, meta, _pos in reversed(entries)
+                   if meta.get("transport") or meta.get("presence_provenance")), None)
     facts: Dict[str, Any] = {"room_id": room, "label": label(room, sample), "head": store.room_head(room),
                              "facts": memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ()))),
                              "legacy": [], "under_parts": [], "notes": [], "origins": [], "since": "",
@@ -634,18 +642,36 @@ def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label
                 by_room: Mapping[str, List[Entry]], notes: Mapping[str, List[Dict[str, Any]]],
                 lineage: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Every other room with open rows or notes not yet sealed, oldest last activity first, with its standing facts."""
+    from ouroboros.dialogue_provenance import row_provenance
+
     rooms = []
+    shown = {entry[0]["row_sha256"] for entry in by_room.get(spec.room_id, [])} if spec.room_lanes else set()
     for room in sorted((set(by_room) | set(notes)) - {spec.room_id}):
         entries = by_room.get(room, [])
         words = []
         if spec.live_rooms == "lines_with_words":
-            people = [(entry, cls) for entry in entries if (cls := row_class(entry[1], pos=entry[2], **lineage))["lane"] == 1
+            people = [(entry, cls) for entry in entries if entry[0]["row_sha256"] not in shown
+                      and row_provenance(entry[1]) != "place"
+                      and (cls := row_class(entry[1], pos=entry[2], **lineage))["lane"] == 1
                       and cls["author"].get("kind") == "human"]
             texts = _row_texts(root, [entry for entry, _cls in people]) if people else {}
             words = [_spoken(entry, cls["author"], texts) for entry, cls in people]
-        sample = next((meta for _address, meta, _pos in reversed(entries) if meta.get("transport")), None)
+            shown.update(entry[0]["row_sha256"] for entry, _cls in people)
+        sample = next((meta for _address, meta, _pos in reversed(entries)
+                       if meta.get("transport") or meta.get("presence_provenance")), None)
+        facts = memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ())))
+        # A room can have only notes left after its rows are sealed. Its writer's
+        # typed origin still keeps those place notes out of the integrating view.
+        if not facts.get("place"):
+            origin = next((note["origin"] for note in notes.get(room, ())
+                           if note.get("origin", {}).get("room_id") == room
+                           and (note["origin"].get("place_id") or note["origin"].get("conversation_key"))), None)
+            if origin:
+                facts["place"] = {"place_id": origin.get("place_id", ""),
+                                  "conversation_key": origin.get("conversation_key", ""),
+                                  "answered_events": 0, "last_address": "no open rows"}
         rooms.append({"room_id": room, "label": label(room, sample), "key": entries[-1][2] if entries else -1,
-                      "facts": memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ()))),
+                      "facts": facts,
                       "notes": list(notes.get(room, ())), "words": words})
     return sorted(rooms, key=lambda item: (item["key"], item["room_id"]))
 
@@ -662,7 +688,7 @@ def _mark_target(target: Any) -> str:
     return f"source {target.get('path') or target.get('kind') or 'not recorded'}{location}"
 
 
-def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str]) -> Dict[str, Any]:
+def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str], *, own_room: bool = True) -> Dict[str, Any]:
     """A host-kept late review (``late_review_marks``): its words, when it settled, its full source and its release."""
     review, target = _mapping(mark.get("review")), _mapping(mark.get("target_ref"))
     read = review.get("source_read")
@@ -670,17 +696,21 @@ def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str]) -> Di
     reader = (f"{read.get('tool')}({json.dumps(read.get('arguments') or {}, ensure_ascii=False, sort_keys=True)})"
               if isinstance(read, Mapping) else
               f"memory_read(source_ref={json.dumps(ref, ensure_ascii=False, sort_keys=True)})")
-    return {"id": mark["id"], "scope": "room", "room": label(mark.get("room_id")), "text": str(mark.get("text") or ""),
+    if not own_room:
+        reader = f"memory_read(node_id={json.dumps(mark['id'])})"  # the full mark carries its retained source reader
+    return {"id": mark["id"], "scope": "room", "room": label(mark.get("room_id")),
+            "text": str(mark.get("text") or "") if own_room else "",
             "by": "host", "date": _minute(mark.get("ts")).split(" ")[0], "target": _mark_target(target), "quote": "",
             "late_review": {"task_id": str(review.get("task_id") or ""), "source": reader,
-                            "sha256": str(target.get("sha256") or "")}}
+                            "sha256": str(target.get("sha256") or ""), "own_room": own_room}}
 
 
 def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., str]) -> List[Dict[str, Any]]:
     """The acting marks a role keeps in view: every room's, or this room's and the global ones.
 
     Late review feedback the host keeps in view belongs to the room of its work whatever the role's
-    mark scope: that room's view and consciousness hold it, another room's turn never does.
+    mark scope: that room holds its words; consciousness gets pointers for foreign rooms.
+    Ordinary foreign-room turns keep omitting it.
     """
     if spec.marks == "none":
         return []
@@ -691,7 +721,7 @@ def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., s
     for mark in marks:
         if is_late_review_mark(mark):
             if spec.role == "consciousness" or str(mark.get("room_id")) == spec.room_id:
-                entries.append(_late_review_entry(mark, label))
+                entries.append(_late_review_entry(mark, label, own_room=str(mark.get("room_id")) == spec.room_id))
             continue
         author = _mapping(mark.get("author"))
         by = _mapping(author.get("focus")).get("role") or (
@@ -865,6 +895,10 @@ def _rooms_line(rooms: List[Dict[str, Any]]) -> str:
 def _live_room(room: Mapping[str, Any], spoken: Any = frozenset()) -> List[str]:
     lines = [f"### {room['label']} — {_facts_text(room['facts'])}",
              f"memory_read(room_id='{room['room_id']}'{', rows=true' if room['facts']['rows'] else ''})"]
+    if place := room["facts"].get("place"):
+        lines.append(f"Place {place['place_id'] or '?'}; conversation {place['conversation_key'] or '?'}; "
+                     f"answered events {place['answered_events']}; last row {place['last_address']}")
+        return lines + [f"note {note['id']}: memory_read(node_id='{note['id']}')" for note in room["notes"]]
     return lines + _note_lines(room["notes"]) + [
         _row_pointer(word, "words") if word["address"] in spoken else word["line"] for word in room["words"]]
 
@@ -949,6 +983,9 @@ def _late_reviews_text(marks: List[Dict[str, Any]], role: str) -> str:
     lines = ["## Late review feedback (host)", "", _LATE_REVIEW_INTRO.format(who=who)]
     for mark in marks:
         late = mark["late_review"]
+        if late.get("own_room") is False:
+            lines.append(f"- [{mark['room']}] Late review of task {late['task_id']}: {late['source']}")
+            continue
         release = "" if helper else f"; memory_mark(release_id='{mark['id']}', reason=…)"
         lines += [f"- [{mark['room']}; kept since {mark['date']}] " + _indented(mark["text"]).lstrip(),
                   f"{INDENT}full source (sha256 {late['sha256'][:12]}): {late['source']}{release}"]

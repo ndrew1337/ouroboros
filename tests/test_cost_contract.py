@@ -25,6 +25,7 @@ maintenance jobs: a second run over unchanged inputs commits nothing and reads n
 
 from __future__ import annotations
 
+import contextlib
 import json
 import math
 import os
@@ -114,9 +115,10 @@ def measured(request, small, tmp_path_factory) -> Dict[int, Dict[str, Any]]:
 
 def contract_breaches(small: Dict[str, int], large: Dict[str, int], k_large: int,
                       keys: Iterable[str] = WORK) -> Dict[str, Any]:
-    """Every counter that differs between the roots, and VM steps beyond ``vm_allowance``."""
+    """Every counter that grows from the small root to the large one, and VM steps beyond ``vm_allowance``.
+    A count the large root spends less of is background noise in the small root's cold boot, not growth."""
     breaches: Dict[str, Any] = {key: (small.get(key, 0), large.get(key, 0)) for key in keys
-                                if abs(small.get(key, 0) - large.get(key, 0)) > (
+                                if large.get(key, 0) - small.get(key, 0) > (
                                     BYTE_JITTER if key in BYTE_KEYS else COUNT_JITTER)}
     allowed = vm_allowance(k_large)
     if large.get("vm_steps", 0) > small.get("vm_steps", 0) + allowed:
@@ -250,8 +252,14 @@ JOB_NAMES = tuple(getattr(_maintenance(), "JOBS", {}))
 
 def job_runner(name: str) -> Callable[[pathlib.Path], Any]:
     """One named job's run in this process: ``maintenance.run_job(root, name)``."""
+    from tests._store_shared import as_install
+
     maintenance = _maintenance()
-    return lambda root: maintenance.run_job(root, name, should_stop=lambda: False)
+
+    def run(root: pathlib.Path) -> Any:
+        with as_install(root):  # the maintenance child runs as the install it maintains
+            return maintenance.run_job(root, name, should_stop=lambda: False)
+    return run
 
 
 def _rests_at_every_size(measured: Dict[Any, Any], run: Callable[[pathlib.Path], Any], what: str) -> None:
@@ -348,3 +356,71 @@ def test_the_rest_law_catches_a_job_that_redoes_its_work(tmp_path, rests):
         done.write_text("done", encoding="utf-8")
 
     assert bool(rest_breaches(second_run(job, tmp_path))) is not rests
+
+
+@pytest.fixture
+def contained_meter():
+    """The meter tests below make installs and uninstalls fail on purpose. A regression could leave a
+    meter installed; it is put back when the test ends, so the failure stays this test's own instead of
+    cascading into every later meter test as "one cost meter at a time"."""
+    from tests import _cost_meter
+
+    yield
+    if _cost_meter._ACTIVE is not None:
+        with contextlib.suppress(Exception):  # the test's own failure is the one to report
+            _cost_meter.uninstall(_cost_meter._ACTIVE)
+
+
+def test_the_meter_installs_where_a_door_is_missing_and_never_records_a_wrapper_as_the_original(
+        tmp_path, monkeypatch, contained_meter):
+    """``os.pread`` is POSIX-only, so on Windows the meter counts without it. An install that meets a door still
+    wrapped refuses and puts back every door it replaced: a wrapper recorded as the original would recurse in
+    every later caller of that door, in this process and in every test after it."""
+    from tests import _cost_meter
+
+    real_stat, real_open = os.stat, open
+    with monkeypatch.context() as patch:
+        patch.setattr(json, "loads", _cost_meter._w_json_loads)  # left wrapped; os.stat .. open come first
+        with pytest.raises(RuntimeError, match="still the meter's wrapper"):
+            CostMeter(tmp_path).__enter__()
+        assert os.stat is real_stat and open is real_open
+    monkeypatch.delattr(os, "pread", raising=False)
+    with CostMeter(tmp_path) as meter:
+        tagged("read", lambda: os.stat(tmp_path))
+    assert meter.snapshot("read")["counts"]["stat"] == 1 and os.stat is real_stat
+
+
+@pytest.mark.parametrize("takes", [0, 1], ids=["rebinding_refused", "restoring_refused"])
+def test_the_meter_puts_every_door_back_past_a_module_that_refuses(tmp_path, monkeypatch, takes, contained_meter):
+    """A module holding a door's alias may refuse the wrapper (the install fails) or refuse to give it
+    back (the uninstall fails). Either way every other door goes back, the refusal is named once,
+    and the next install starts from the real doors."""
+    import types
+
+    class OneWay(types.ModuleType):
+        """Takes ``takes`` assignments of its ``stat`` alias, then refuses."""
+
+        def __setattr__(self, attr, value):
+            if attr == "stat":
+                if not self.__dict__["takes"]:
+                    raise TypeError("stat is read-only here")
+                self.__dict__["takes"] -= 1
+            super().__setattr__(attr, value)
+
+    alias = OneWay("tests._cost_meter_one_way")
+    alias.__dict__.update(stat=os.stat, takes=takes)
+    monkeypatch.setitem(sys.modules, alias.__name__, alias)
+    real_stat, real_open = os.stat, open
+    if takes:
+        meter = CostMeter(tmp_path).__enter__()
+        assert alias.stat is not real_stat, "the alias took the wrapper"
+        with pytest.raises(RuntimeError, match=r"could not put back tests\._cost_meter_one_way\.stat"):
+            meter.__exit__(None, None, None)
+    else:
+        with pytest.raises(TypeError, match="read-only"):
+            CostMeter(tmp_path).__enter__()
+    assert os.stat is real_stat and open is real_open, "every other door went back"
+    monkeypatch.delitem(sys.modules, alias.__name__)
+    with CostMeter(tmp_path) as meter:
+        tagged("read", lambda: os.stat(tmp_path))
+    assert meter.snapshot("read")["counts"]["stat"] == 1

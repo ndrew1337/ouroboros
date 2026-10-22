@@ -87,7 +87,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_stage_promoted_initial_attachments",
     })),
     "supervisor/worker_owner_wait.py": ("supervisor/workers.py", "_pool", frozenset({
-        "DRIVE_ROOT", "RUNNING", "WORKERS", "repo_writer_task_allowed", "time",
+        "DRIVE_ROOT", "MAX_WORKERS", "RUNNING", "WORKERS", "repo_writer_task_allowed", "time",
     })),
     # F2.2 lane rows (4fffefb1), pinned here by the ADOPTION truth wave: the four
     # queue/worker leaves the F2.2 cancel-organ train landed proof-green but never
@@ -101,7 +101,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "persist_queue_snapshot", "restore_invalid_depth_admission", "sort_pending",
     })),
     "supervisor/queue_timeouts.py": ("supervisor/queue.py", "_queue", frozenset({
-        "DRIVE_ROOT", "FINALIZATION_GRACE_SEC", "HEARTBEAT_STALE_SEC", "PENDING",
+        "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "FINALIZATION_GRACE_SEC", "HEARTBEAT_STALE_SEC", "PENDING",
         "QUEUE_MAX_RETRIES", "RUNNING", "_enforce_task_timeouts_locked", "_expire_pending_deadlines_locked",
         "_ensure_reaper_started", "_has_live_descendant", "_has_pending_descendant",
         "_is_descendant_of", "_queue_lock", "_reap_queue",
@@ -303,21 +303,10 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     "ouroboros/post_task_synthesis.py": ("ouroboros/agent_task_pipeline.py", "_atp", frozenset({
         "_is_root_post_task", "load_task_result", "_publish_root_post_task_checkpoint",
     })),
-    "ouroboros/loop_acceptance.py": ("ouroboros/loop.py", "_loop", frozenset({
-        "_append_or_merge_user_message", "_end_task_acceptance_fence",
-        "_set_acceptance_decision", "_task_acceptance_eligible", "get_task_review_mode", "get_review_enforcement",
-    })),
-    "ouroboros/loop_acceptance_review.py": ("ouroboros/loop.py", "_loop", frozenset({
-        "_append_or_merge_user_message", "_arm_delivery_control", "_begin_task_acceptance_fence",
-        "_collect_acceptance_obligations", "_dispose_obligations_on_clean_pass",
-        "_end_task_acceptance_fence", "_execute_task_acceptance_panel",
-        "_extract_plain_text_from_content", "_format_obligations_clause",
-        "_latch_final_answer_marker", "_mark_root_acceptance_checkpoint",
-        "_no_tool_final_answer", "_open_acceptance_obligations", "_replace_delivery_candidate", "_set_acceptance_decision",
-        "_supersede_task_acceptance_for_evidence_change",
-        "_supersede_task_acceptance_for_owner_followup", "_task_acceptance_eligible",
-        "_task_acceptance_owner_generation_changed", "_task_acceptance_subtree_snapshot",
-        "get_review_enforcement", "get_task_review_mode",
+    # The root admission seal moved out of the deleted loop_acceptance leaf with the fold;
+    # its release ends the fence through the handle.
+    "ouroboros/delivery_seal.py": ("ouroboros/loop.py", "_loop", frozenset({
+        "_end_task_acceptance_fence",
     })),
     # The P6 wrap-up rail (upstream d4fd933c/8bbdac50) prices the forced prompt
     # here, so the budget leaf now reads the forced-finalization prompt tail,
@@ -344,7 +333,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         'DeliveryCandidate', 'TERMINAL_ORIGIN_MODEL_FINAL', '_LoopExitContext',
         '_append_or_merge_user_message', '_arm_delivery_control', '_begin_task_acceptance_fence',
         '_child_disposition_state', '_compute_subagent_handoff', '_current_delivery_candidate',
-        '_delivery_evidence_state', '_delivery_replace_required', '_disclose_service_finalization',
+        '_delivery_evidence_state', '_disclose_service_finalization',
         '_drain_incoming_messages',
         '_end_task_acceptance_fence', '_enforce_swarm_actions', '_extract_plain_text_from_content',
         '_finalize_forced_services', '_finalize_task_services', '_force_plan_disclosure',
@@ -353,11 +342,10 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         '_maybe_early_finalize', '_maybe_enforce_child_absorption_gate', '_maybe_inject_finalization_nudges',
         '_merge_finalization_trace', '_no_tool_final_answer', '_project_child_result_dispositions',
         '_publish_delivery_candidate', '_replace_delivery_candidate', '_resolve_delivery_control',
-        '_run_task_acceptance_review_once', '_service_finalization_evidence', '_set_acceptance_decision',
-        '_supersede_delivery_acceptance_binding', '_supersede_task_acceptance_for_evidence_change', '_supersede_task_acceptance_for_owner_followup',
-        # G1 (#1731): a root's local stop keeps its author disposition without an
-        # eligibility probe, so the leaf no longer reads the eligibility/mode pair.
-        '_task_acceptance_owner_generation_changed', 'get_review_enforcement',
+        '_service_finalization_evidence',
+        # The fold: the result review is its own tool, so the leaf reads no acceptance
+        # decision, binding or review mode; the seal's owner follow-up names its new home.
+        '_owner_generation_changed', '_release_for_owner_followup',
     })),
     "ouroboros/loop_forced_finalization.py": ("ouroboros/loop.py", "_loop", frozenset({
         'DeliveryCandidate', '_LoopExitContext', '_append_or_merge_user_message',
@@ -368,10 +356,11 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         '_finalize_task_services', '_force_plan_decision', '_force_plan_disclosure',
         '_force_plan_reminder', '_forced_delegation_note', '_forced_fallback_result',
         '_forced_orphan_note', '_forced_unaccepted_binding', '_handle_model_wait_control', '_live_delivery_candidate',
-        '_load_direct_child_results', '_prepare_forced_prompt', '_project_child_result_dispositions',
-        '_publish_delivery_candidate', '_record_forced_acceptance_bypass', '_record_forced_finalization',
-        '_replace_delivery_candidate', '_resolve_forced_delivery_control_body', '_server_web_allowed_by_task',
-        '_service_finalization_evidence', '_set_acceptance_decision', '_supersede_task_acceptance_for_owner_followup',
+        '_load_direct_child_results', '_last_assistant_text', '_prepare_forced_prompt', '_project_child_result_dispositions',
+        'provider_no_call_source',
+        '_publish_delivery_candidate', '_record_forced_finalization', '_release_for_owner_followup',
+        '_replace_delivery_candidate', '_resolve_forced_delivery_control_body', '_retire_main_reasoning',
+        '_server_web_allowed_by_task', '_service_finalization_evidence',
         'call_llm_with_retry',
     })),
     "ouroboros/loop_messages.py": ("ouroboros/loop.py", "_loop", frozenset({
@@ -388,7 +377,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_reconcile_transport_wait", "_run_cross_model_fallback_chain",
         "_context_overflow_retries", "_dispatch_round_model", "_emit_checkpoint_event",
         "_measure_round_main_fit", "_output_exhausted_notice", "_rebind_context_fit_plan",
-        "_server_web_allowed_by_task", "_task_deadline_epoch", "call_llm_with_retry",
+        "_retire_main_reasoning", "_server_web_allowed_by_task", "_task_deadline_epoch", "call_llm_with_retry",
         "last_physical_attempt_capture", "seal_task_transcript",
     })),
     "ouroboros/loop_nudges.py": ("ouroboros/loop.py", "_loop", frozenset({
@@ -410,7 +399,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "MAX_PROJECTED_ACTOR_FINDINGS", "OUTCOME_TIER_BEST_EFFORT", "OUTCOME_TIER_BLOCKED",
         "OUTCOME_TIER_SOLVED", "TYPED_FAILURE_FACT_KEYS", "disclosed_list_projection", "panel_reason",
         "projected_finding_row", "provider_for_model", "redact_projection",
-        "review_binding_hash", "review_executions_from_actor_usage",
+        "review_executions_from_actor_usage",
     })),
     "ouroboros/review_state_custody.py": ("ouroboros/review_state.py", "_rs", frozenset({
         "_truncate_review_artifact", "_utc_now", "update_state",

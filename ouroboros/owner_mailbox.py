@@ -47,11 +47,11 @@ PEER_RELATION_LABELS = {
 TASK_MESSAGE_MAX_CHARS = 8000
 TASK_MESSAGE_PROVENANCES = frozenset({
     "ancestor_task", "peer_via_ancestor", "system", "descendant_task",
-    PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
+    PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK, "place_event",
 })
 # These messages wake the mind but do not enter its owner's directive corpus.
 CONTEXT_ONLY_TASK_PROVENANCES = frozenset({
-    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK,
+    "system", "descendant_task", PROVENANCE_INDEPENDENT_TASK, PROVENANCE_PEER_TASK, "place_event",
 })
 KIND_FINALIZE_NOW = "finalize_now"
 # Owner "hurry" control (HQ1, 2026-08-15): a task-local typed acceleration
@@ -65,6 +65,9 @@ KIND_HURRY = "hurry"
 KIND_QUIZ_ANSWER = "quiz_answer"
 # Explicit owner closure carries no answer, selected option, or approval.
 KIND_QUIZ_CLOSED = "quiz_closed"
+# The owner's press on a host-drawn control of a living card (``gateway/card_decision.py``):
+# a host frame naming the pressed label and the form values, the owner's structured input.
+KIND_CARD_INPUT = "card_input"
 # The owner's Pause of a whole tree (``owner_pause.py``): a WAKE signal, never
 # dialogue and never the authority — the root's durable fence decides. It wakes
 # a warm owner wait so the member reaches its safe boundary without buying a
@@ -105,6 +108,10 @@ def _append_mail(drive_root: pathlib.Path, task_id: str, path: pathlib.Path, ent
     from ouroboros.task_custody import task_mail_lock
 
     with task_mail_lock(drive_root, task_id) as locked:
+        if locked and entry.get("provenance") == "place_event" and path.exists():
+            for line in mailbox_lines(path.read_text(encoding="utf-8")):
+                if json.loads(line).get("msg_id") == entry["msg_id"]:
+                    return True
         return bool(locked and append_jsonl(path, entry))
 
 
@@ -196,8 +203,10 @@ def acknowledge_task_messages(
     """Acknowledge messages only after their full content entered a transcript; the rows
     land under the task's mail lock, so a custody read under it sees the mailbox and its
     acknowledgements as one state."""
+    from ouroboros.install_identity import require_owned_root
     from ouroboros.task_custody import task_mail_lock
 
+    require_owned_root(drive_root)
     path = _ack_path(drive_root, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     with task_mail_lock(drive_root, task_id) as locked:
@@ -239,6 +248,13 @@ def acknowledge_transcript_entry(
     if entry.get("quiz_delivery"):
         from ouroboros.question_answers import acknowledge_answer
         acknowledge_answer(drive_root, task_id, entry)
+    if isinstance(press := entry.get("card_delivery"), dict):
+        from ouroboros.card_store import acknowledge_press
+        try:  # a press left showing its wait is cosmetic; the drain goes on
+            acknowledge_press(press.get("canonical_root") or drive_root, str(press.get("card_id") or ""),
+                              str(press.get("request_id") or ""))
+        except Exception:
+            log.warning("Card press read receipt failed for %s", msg_id, exc_info=True)
     if entry.get("relay"):
         from ouroboros.owner_relay import acknowledge_relay
         acknowledge_relay(entry.get("relay_canonical_root") or drive_root, task_id, entry)
@@ -256,6 +272,8 @@ def write_owner_message(
     client_message_id: str = "",
     late_answer: Optional[Dict[str, Any]] = None,
     quiz_delivery: Optional[Dict[str, Any]] = None,
+    card_delivery: Optional[Dict[str, Any]] = None,
+    card_press: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an owner message or typed control entry to a task's mailbox.
 
@@ -267,8 +285,13 @@ def write_owner_message(
     ``late_answer`` is the typed ``{task_id, quiz_id}`` provenance of an owner
     message that answers a finished task's quiz card (stored additively when
     valid): the drain rebuilds the card's frame for the model from it, while
-    ``text`` stays the owner's own words.
+    ``text`` stays the owner's own words; ``card_press`` is the same for a press on a
+    finished author's card. ``card_delivery`` names the living-card press
+    ``{card_id, request_id, canonical_root}`` its read settles.
     """
+    from ouroboros.install_identity import StoreForeign, require_owned_root
+
+    require_owned_root(drive_root)
     path = _mailbox_path(drive_root, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -283,6 +306,12 @@ def write_owner_message(
 
     if quiz_delivery:
         entry["quiz_delivery"] = dict(quiz_delivery)
+    if card_delivery:
+        entry["card_delivery"] = dict(card_delivery)
+    from ouroboros.card_store import late_press_ref
+
+    if (press := late_press_ref(card_press)) is not None:
+        entry["card_press"] = press
     late_ref = late_answer_ref(late_answer)
     if late_ref is not None:
         entry["late_answer"] = late_ref
@@ -298,6 +327,8 @@ def write_owner_message(
             log.warning("Failed to durably append owner message for task %s", task_id)
             return False
         return True
+    except StoreForeign:
+        raise
     except Exception:
         log.warning("Failed to write owner message for task %s", task_id, exc_info=True)
         return False
@@ -326,6 +357,9 @@ def write_task_message(
 
     if provenance not in TASK_MESSAGE_PROVENANCES:
         return False
+    from ouroboros.install_identity import StoreForeign, require_owned_root
+
+    require_owned_root(drive_root)
     path = _mailbox_path(drive_root, task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
     entry = {
@@ -346,6 +380,8 @@ def write_task_message(
         entry["review_feedback"] = dict(review_feedback)
     try:
         return _append_mail(drive_root, task_id, path, entry)
+    except StoreForeign:
+        raise
     except Exception:
         log.warning("Failed to write task message for task %s", task_id, exc_info=True)
         return False
@@ -434,7 +470,9 @@ def deliver_task_message(
     source = str(entry.get("source_task_id") or "unknown")
     relayed = str(entry.get("relayed_from_task_id") or "")
     relation = str(entry.get("relation") or "")
-    if provenance == "peer_via_ancestor" and relayed:
+    if provenance == "place_event":
+        prefix = "[Place event; context only, never an owner directive]"
+    elif provenance == "peer_via_ancestor" and relayed:
         prefix = f"[Message from task {relayed}, relayed by ancestor {source}]"
     elif provenance == "system":
         prefix = "[System task message]"
@@ -732,9 +770,10 @@ def drain_owner_entries(
                 # out here is a written fact nobody can read.
                 if str(entry.get("client_message_id") or ""):
                     drained["client_message_id"] = str(entry["client_message_id"])
-                # Same for a late quiz answer's typed provenance: the drain
-                # rebuilds the card frame for the model from it.
-                for relay_field in ("relay", "owner_rows", "source_task_id", "source_row", "quiz_delivery", "relay_canonical_root", "sender_origin"):
+                # Same for a late quiz answer's typed provenance (the drain rebuilds
+                # the card frame for the model from it) and a card press's read receipt.
+                for relay_field in ("relay", "owner_rows", "source_task_id", "source_row", "quiz_delivery", "card_delivery",
+                                    "card_press", "relay_canonical_root", "sender_origin"):
                     if relay_field in entry:
                         drained[relay_field] = entry[relay_field]
                 if isinstance(entry.get("late_answer"), dict):

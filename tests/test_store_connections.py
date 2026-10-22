@@ -1,11 +1,14 @@
 """Persistent SQLite connections: cost, lifetime, durability and old-body compatibility."""
 import contextlib
+import json
 import multiprocessing
 import os
 import sqlite3
 import subprocess
 import sys
 import threading
+import time
+import types
 
 import pytest
 
@@ -135,6 +138,15 @@ def test_idle_reader_sees_a_later_independent_commit(tmp_path):
 
 
 def test_delete_and_persist_writers_interleave_with_full_durability(tmp_path, monkeypatch):
+    """An older body (SQLite's default DELETE journal) and this one (PERSIST) write the same store in
+    turn. Two bodies never run at once (the PID lock admits one), and within one install every process
+    picks the same mode (a boot lock-tier re-record no longer leaves the server in DELETE mode: see
+    test_store_import), so on Windows each turn of the older writer comes after this process let its
+    handles go, as its exit does. There a PERSIST connection keeps its journal open for as long as it
+    lives (the VFS reports UNDELETABLE_WHEN_OPEN and opens files without FILE_SHARE_DELETE), and the
+    DELETE-mode commit, which deletes the journal, fails with a disk I/O error (SQLITE_IOERR_DELETE)
+    while any such handle is open. POSIX closes that journal when the lock drops, so there this
+    process's cached writer stays open across the foreign DELETE commits, which the test keeps covering."""
     monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
     path = publish(tmp_path)
     with contextlib.closing(sqlite3.connect(path, isolation_level=None)) as old:
@@ -147,8 +159,141 @@ def test_delete_and_persist_writers_interleave_with_full_durability(tmp_path, mo
                 assert txn.conn.execute("PRAGMA synchronous").fetchone()[0] == 2
                 assert txn.conn.execute("PRAGMA journal_size_limit").fetchone()[0] == store.JOURNAL_SIZE_LIMIT
                 txn.set_meta("reply", number)
+            if os.name == "nt":  # this body's turn ends as its exit ends it there: its handles let go
+                store.close_connections(path)
             assert old.execute("SELECT value FROM meta WHERE key='reply'").fetchone()[0] == str(number)
         assert old.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+
+
+@pytest.mark.parametrize("wait_sec", [5.0, 0.0], ids=["budget", "no_budget"])
+def test_an_explicit_wal_selection_waits_out_another_writer_within_its_budget(tmp_path, monkeypatch, wait_sec):
+    """Only a lifecycle owner turns an existing rollback-journal file into WAL (``store_journal``), and
+    that switch takes the write lock from inside a read transaction, where SQLite skips the busy handler:
+    another connection writing at that moment would fail it at once with "database is locked". The
+    selection waits out the writer within its own budget; with no budget it still refuses at once."""
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    path = publish(tmp_path)
+    store.close_connections()
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    writer = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    writer.execute("BEGIN IMMEDIATE")  # another connection holds the write lock
+    released = threading.Timer(0.3, lambda: writer.execute("ROLLBACK"))
+    released.start()
+    started = time.monotonic()
+    try:
+        if not wait_sec:
+            with pytest.raises(sqlite3.OperationalError, match="locked"):
+                store.connect(path, store.TIER_ENFORCED, wait_sec=wait_sec, journal_mode="WAL")
+            assert time.monotonic() - started < 0.2, "no budget, no wait"
+            return
+        conn = store.connect(path, store.TIER_ENFORCED, wait_sec=wait_sec, journal_mode="WAL")
+        try:
+            assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        finally:
+            conn.close()
+        assert time.monotonic() - started >= 0.25, "it waited for the writer instead of failing"
+    finally:
+        released.join(5)
+        writer.close()
+
+
+def _trace_wal_waits(monkeypatch, budget):
+    """Observe the helper's clock and the timeout SQLite actually receives, without replacing waits."""
+    trace = {"clock": [], "sleeps": [], "attempts": []}
+
+    def clock():
+        sample = time.monotonic()
+        trace["clock"].append(sample)
+        return sample
+
+    def remaining():
+        return trace["clock"][0] + budget - trace["clock"][-1]
+
+    def sleep(seconds):
+        before = time.monotonic()
+        left = remaining()
+        time.sleep(seconds)
+        trace["sleeps"].append({"remaining": left, "granted": seconds,
+                                "elapsed": time.monotonic() - before})
+
+    class Connection(store._StoreConnection):
+        def execute(self, sql, *args, **kwargs):
+            if not sql.startswith("PRAGMA journal_mode = "):
+                return super().execute(sql, *args, **kwargs)
+            attempt = {"remaining": remaining(), "started": time.monotonic(),
+                       "timeout_ms": super().execute("PRAGMA busy_timeout").fetchone()[0]}
+            try:
+                return super().execute(sql, *args, **kwargs)
+            finally:
+                attempt["elapsed"] = time.monotonic() - attempt["started"]
+                trace["attempts"].append(attempt)
+
+    monkeypatch.setattr(store, "time", types.SimpleNamespace(monotonic=clock, sleep=sleep))
+    monkeypatch.setattr(store, "_StoreConnection", Connection)
+    return trace
+
+
+def test_an_explicit_wal_selection_never_waits_past_its_budget(tmp_path, monkeypatch):
+    """The waits of an explicit WAL selection add up to its budget, not more: retries that a writer refuses at
+    once, then an attempt that a remaining reader holds in SQLite's busy handler, which may wait only
+    for what is left (the connection's own busy timeout would allow the whole budget again). The writer
+    lets go halfway. Check waits granted against the helper's sampled deadline: under macOS CPU
+    contention SQLite's busy handler can take much longer than the timeout it was given. Setup
+    and native scheduling time are diagnostics, not additional waits granted by the helper."""
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    path = publish(tmp_path)
+    store.close_connections()
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    reader = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    reader.execute("BEGIN")
+    reader.execute("SELECT * FROM meta").fetchall()  # a reader that stays through the budget
+    writer = sqlite3.connect(path, isolation_level=None, check_same_thread=False)
+    writer.execute("BEGIN IMMEDIATE")  # a writer that lets go halfway through it
+    released_at = []
+    released = threading.Timer(2.0, lambda: (writer.execute("ROLLBACK"), released_at.append(time.monotonic())))
+    released.start()
+    budget = 4.0
+    trace = _trace_wal_waits(monkeypatch, budget)
+    started = time.monotonic()
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.connect(path, store.TIER_ENFORCED, wait_sec=budget, journal_mode="WAL")
+        finished = time.monotonic()
+        phases = json.dumps({"setup_sec": trace["clock"][0] - started,
+                             "total_sec": finished - started, "released_at": released_at, **trace})
+        # Only a writer that let go before the open ended put the reader's wait to the test.
+        assert released_at and released_at[0] < finished, phases
+        assert len(trace["attempts"]) > 1 and trace["sleeps"], phases
+        assert all(0 < wait["granted"] <= wait["remaining"] for wait in trace["sleeps"]), phases
+        # SQLite's timeout is an integer millisecond; a final sub-ms remainder may grant 1 ms.
+        assert all(0 <= attempt["timeout_ms"] <= attempt["remaining"] * 1000 + 1
+                   for attempt in trace["attempts"]), phases
+        assert trace["attempts"][-1]["timeout_ms"] < budget * 1000, phases
+    finally:
+        released.join(10)
+        writer.close()
+        reader.execute("ROLLBACK")
+        reader.close()
+
+
+def test_leaving_wal_with_another_wal_connection_open_still_refuses_at_once(tmp_path, monkeypatch):
+    """Only the switch INTO WAL waits. Leaving WAL needs every other WAL connection gone, and each keeps its
+    shared lock for its life, so a lifecycle request for PERSIST on a WAL store (an older SQLite, an unknown
+    filesystem) with another connection idle in it refuses at once, instead of waiting out its whole budget
+    for the same refusal. The 1 s line sits far below the 4 s budget and far above a refusal at once."""
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    path = publish(tmp_path)
+    store.close_connections()
+    idle = sqlite3.connect(path, isolation_level=None)
+    try:
+        assert idle.execute("PRAGMA journal_mode = WAL").fetchone()[0] == "wal"  # another body's WAL store
+        idle.execute("SELECT * FROM meta").fetchall()  # and its connection, idle and open for its life
+        started = time.monotonic()
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            store.connect(path, store.TIER_ENFORCED, wait_sec=4.0, journal_mode="PERSIST")
+        assert time.monotonic() - started < 1.0, "leaving WAL refuses at once"
+    finally:
+        idle.close()
 
 
 def test_handoff_closes_other_threads_idle_connections_before_rename(tmp_path):
@@ -266,7 +411,11 @@ def test_export_closes_connections_and_leaves_delete_file(tmp_path, money):
     assert not path.with_name(path.name + "-journal").exists()
 
 
-def test_replaced_file_drops_the_old_cached_connection(tmp_path):
+def test_replaced_file_drops_the_old_cached_connection(tmp_path, monkeypatch):
+    # Only a rollback-journal file is replaced under an idle handle: an idle WAL handle keeps a shared
+    # lock that every handoff out of WAL waits for, and a WAL file renamed over leaves its log to the
+    # next file of that name (sqlite.org/howtocorrupt.html, "mispairing database files and hot journals").
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
     path = publish(tmp_path)
     replacement = publish(tmp_path / "new")
     with store.open_store(tmp_path, write=True) as txn:

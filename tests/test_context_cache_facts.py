@@ -65,3 +65,72 @@ def test_provider_refusal_keeps_previous_usable_cache_facts(tmp_path):
         usage, "task", False)
     assert reply is None
     assert usage["_last_round_cache_usage"] == previous
+
+
+def _facts_line(tmp_path, usage):
+    context = _ctx(tmp_path)
+    context.context_fit_plan = None
+    context.active_model = "next-model"
+    context.round_idx = 3
+    context.accumulated_usage.update(usage)
+    assert append_context_facts(context)
+    return context.messages[-1]["content"]
+
+
+@pytest.mark.parametrize("reported_cache, expected", [(None, "unknown"), (0, "0/1,000 tokens (0.0%)")])
+def test_the_providers_own_report_outranks_a_billing_zero(tmp_path, reported_cache, expected):
+    """An adapter that synthesizes a billing 0 beside an unreported cache (GigaChat) is unknown, not 0%."""
+    previous = {"round": 2, "provider": "gigachat", "model": "m", "prompt_tokens": 1000, "cached_tokens": 0,
+                "reported_tokens": {"prompt_tokens": 1000, "cached_tokens": reported_cache,
+                                    "completion_tokens": 5, "cache_write_tokens": None}}
+    assert f"previous usable input cache {expected} [round 2, gigachat, m]" in _facts_line(
+        tmp_path, {"_last_round_cache_usage": previous})
+
+
+@pytest.mark.parametrize("change, clause", [
+    ({"kind": "rewritten", "index": 174, "sanctioned_by": "superseded_skill_snapshot"},
+     "; before that request sent message 174 changed (superseded_skill_snapshot)"),
+    ({"kind": "rewritten", "index": 9, "sanctioned_by": None},
+     "; before that request sent message 9 changed (origin not recorded)"),
+    ({"kind": "rewritten", "index": 31, "sanctioned_by": "image_eviction"},
+     "; before that request sent message 31 changed (image_eviction)"),
+    ({"kind": "shrunk", "index": 10, "sanctioned_by": "compaction", "previous_messages": 10, "current_messages": 4},
+     "; before that request sent history shrank from 10 to 4 messages (compaction)"),
+    ({"kind": "tools_changed", "index": 0, "sanctioned_by": None}, "; before that request: tool set changed"),
+    ({"kind": "system_rewritten", "index": 0, "sanctioned_by": None}, "; before that request: system view rebuilt"),
+    ({"kind": "no_baseline", "index": 0, "sanctioned_by": None},
+     "; before that request: resume without a send record"),
+])
+def test_a_change_of_sent_history_is_named_beside_the_cache_it_preceded(tmp_path, change, clause):
+    previous = {"round": 2, "provider": "claudexor", "model": "codex", "prompt_tokens": 682_741,
+                "cached_tokens": 438_912, "cache_write_tokens": 0}
+    line = _facts_line(tmp_path, {"_last_round_cache_usage": previous, "_recent_prefix_breaks": [{**change, "round": 2}]})
+    assert "previous usable input cache 438,912/682,741 tokens (64.3%) [round 2, claudexor, codex]; write 0 tokens" + clause in line
+
+
+def test_the_cause_survives_the_next_rounds_own_change(tmp_path):
+    """Signed-reasoning routes count this round's change before the facts line names the previous one.
+
+    #2076 changed sent history before every request; one remembered change would always
+    be the current round's, and the clause about the previous request would never print."""
+    from ouroboros.transcript_prefix import count_history_change
+
+    usage = {"_last_round_cache_usage": {"round": 2, "provider": "anthropic", "model": "m", "prompt_tokens": 1000,
+                                         "cached_tokens": 40, "cache_write_tokens": 960}}
+    for round_idx, index in ((1, 5), (2, 7), (2, 3), (3, 8)):
+        count_history_change(usage, {"round": round_idx, "index": index, "kind": "rewritten",
+                                     "sanctioned_by": "superseded_skill_snapshot"})
+    assert usage["prompt_prefix_breaks"] == 4
+    assert [(item["round"], item["index"]) for item in usage["_recent_prefix_breaks"]] == [(2, 7), (3, 8)]
+    assert "; before that request sent message 7 changed (superseded_skill_snapshot)" in _facts_line(tmp_path, usage)
+
+
+def test_no_clause_without_a_change_before_that_request(tmp_path):
+    previous = {"round": 2, "provider": "claudexor", "model": "codex", "prompt_tokens": 1000,
+                "cached_tokens": 997, "cache_write_tokens": 0}
+    earlier = {"round": 1, "kind": "rewritten", "index": 3, "sanctioned_by": "compaction"}
+    later = {"round": 3, "kind": "rewritten", "index": 4, "sanctioned_by": "compaction"}
+    for usage in ({"_last_round_cache_usage": previous},
+                  {"_last_round_cache_usage": previous, "_recent_prefix_breaks": [earlier, later]}):
+        line = _facts_line(tmp_path, usage)
+        assert "write 0 tokens |" in line and "before that request" not in line

@@ -24,8 +24,14 @@ from ouroboros.gateway.health_contracts import BootDocument, BootJob, BootStep, 
 from ouroboros.gateway.attachment_contracts import (  # noqa: F401 -- public re-exports
     AttachmentManifestEntry, ChatAttachmentInbound, ChatAttachmentView,
 )
-from ouroboros.gateway.widgets import ExtensionLiveSnapshot, WidgetTab, WidgetsResponse
+from ouroboros.gateway.contributions import UiContribution, UiContributionsResponse, UiPreferencesResponse
+from ouroboros.gateway.widgets import ExtensionLiveSnapshot, WidgetFaultRequest, WidgetFaultResponse, WidgetTab, WidgetsResponse
 from ouroboros.gateway.decision_contracts import DecisionRequest, DecisionResponse  # noqa: F401 -- public re-exports
+from ouroboros.gateway.card_contracts import CardOutbound, CardStateOutbound  # noqa: F401 -- public re-exports
+from ouroboros.gateway.update_contracts import (  # noqa: F401 -- public re-exports
+    UpdateApplyErrorResponse, UpdateApplyRequest, UpdateApplySuccessResponse, UpdateMergePlan,
+    UpdatePreflightRequest, UpdatePreflightResponse, UpdateProgressChangedOutbound, UpdateStatusReadyOutbound,
+)
 from ouroboros.gateway.management_contracts import (  # noqa: F401 -- public re-exports
     ExtensionsIndexResponse, LocalModelStatusResponse, MarketplaceInstalledResponse, MarketplaceSearchResponse,
     McpStatusResponse, ModelCatalogResponse, SkillLifecycleQueueResponse,
@@ -73,6 +79,13 @@ class CommandInbound(TypedDict):
 
     type: Literal["command"]
     cmd: str
+    client_surface: NotRequired[dict]
+
+
+class PanicAcceptedOutbound(TypedDict):
+    """The emergency owner accepted this connection's request; exit is unproved."""
+
+    type: Literal["panic_accepted"]
 
 
 class ExtensionInbound(TypedDict, total=False):
@@ -249,6 +262,7 @@ class ChatOutbound(ChatReferenceFields):
     card_row: NotRequired[Literal["timeline", "reviews"]]
     card_row_id: NotRequired[str]
     card_row_revision: NotRequired[int]  # canonical source order, independent of delivery timestamp
+    terminal_receipt: NotRequired[Literal["retained_work"]]  # a placed row typed as a terminal receipt, not progress
     late_evidence: NotRequired[Dict[str, Any]]  # late review identity/revision + exact applied source; no transcript
     # Event-time human presentation; raw task/project ids remain machine keys.
     target_label: NotRequired[str]
@@ -259,7 +273,7 @@ class ChatOutbound(ChatReferenceFields):
     terminal_time: NotRequired[Dict[str, Any]]  # host-owned occurrence, separate from publication ts
     completion_answer: NotRequired[str]  # a Project root's model-authored final answer, mirrored into Main (DESIGN)
     completion_reason: NotRequired[str]  # one recorded nonclean-outcome fact beside the answer
-    completion_notice: NotRequired[Dict[str, Any]]  # transport view: neutral, detail, phase; optional preserved salvage
+    completion_notice: NotRequired[Dict[str, Any]]  # transport view: neutral/detail/phase/salvage; Main adds cause and undescribed codes
     delivery_id: NotRequired[str]  # stable logical publication identity across transport retries
     set_at: NotRequired[str]  # a `reminder` row's provenance, live frame only (its text carries the signature): when written
     scheduled_for: NotRequired[str]  # the due point it was written for
@@ -528,86 +542,6 @@ class MessageAnnotationOutbound(TypedDict):
     ts: NotRequired[str]
 
 
-class UpdateMergePlan(TypedDict, total=False):
-    """Exact, channel-bound merge plan shared by preflight and apply responses."""
-
-    available: bool
-    auto_mergeable: bool
-    kind: Literal["clean", "conflicting", "current", "unavailable", "unknown"]
-    error: str
-    remote: str
-    remote_branch: str
-    target_ref: str
-    update_channel: str
-    current_branch: str
-    base_sha: str
-    target_sha: str
-    local_dirty_count: int
-    local_snapshot: str
-    merge_commit: str
-    code_conflict_paths: List[str]
-    doc_conflict_paths: List[str]
-    hot_code_paths: List[str]
-    recommended_strategy: Literal["auto_merge", "assisted"]
-
-
-class UpdatePreflightRequest(TypedDict, total=False):
-    """POST /api/update/preflight has an intentionally empty JSON body."""
-
-
-class UpdatePreflightResponse(TypedDict):
-    merge_plan: UpdateMergePlan
-
-
-class UpdateApplyRequest(TypedDict):
-    strategy: Literal["auto_merge", "assisted", "manual", "replace"]
-    expected_base_sha: NotRequired[str]
-    expected_target_sha: NotRequired[str]
-    confirm_recovery: NotRequired[bool]
-
-
-class UpdateApplySuccessResponse(TypedDict):
-    status: Literal["ok", "restart_required", "assisted_started", "manual"]
-    restarting: NotRequired[bool]
-    strategy: NotRequired[Literal["auto_merge", "assisted", "manual", "replace"]]
-    task_id: NotRequired[str]
-    merge_plan: NotRequired[UpdateMergePlan]
-    error: NotRequired[str]
-
-
-class UpdateApplyErrorResponse(TypedDict):
-    error: str
-    reason: NotRequired[str]
-    abandoned: NotRequired[bool]
-    status: NotRequired[Dict[str, Any]]  # preparation observations, not the success discriminator
-    update_intent: NotRequired[Dict[str, Any]]
-    rescue: NotRequired[Dict[str, Any]]
-    keep_branch: NotRequired[str]
-    blockers: NotRequired[List[str]]
-    rolled_back: NotRequired[bool]
-    rollback: NotRequired[str]
-    restart_required: NotRequired[bool]
-    merge_plan: NotRequired[UpdateMergePlan]
-    smoke: NotRequired[Dict[str, Any]]
-    # Stash-first prologue disclosures (additive): how the owner's stashed work
-    # was unwound on an aborted update. The wave numbers rode the retired
-    # wave-floor refusal (#1487 removed it); the optional keys stay in the shape.
-    stash_note: NotRequired[str]
-    estimated_wave_usd: NotRequired[Optional[float]]
-    remaining_usd: NotRequired[Optional[float]]
-
-
-class UpdateProgressChangedOutbound(TypedDict):
-    """Invalidation only; never proof that boot finalization completed."""
-    type: Literal["update_progress_changed"]
-
-
-class UpdateStatusReadyOutbound(TypedDict):
-    type: Literal["update_status_ready"]
-    available: bool
-    check_ok: Optional[bool]
-
-
 class ProjectCreateRequest(TypedDict, total=False):
     """POST /api/projects body (v6.59.0). ONE source: ``path`` (attach an existing
     owner folder; optional ``init_git`` attach-snapshot commit — never auto-init),
@@ -819,6 +753,8 @@ class StateResponse(WorkStateFields):
     projects: list
     # COMPLETE (uncapped) registered project chat_ids — the live WS fan-out isolation SSOT, unlike `projects`.
     project_chat_ids: list
+    # Main's room revision (its standalone messages, the kind a Project's visible_revision counts); null while unreadable.
+    main_visible_revision: NotRequired[Optional[int]]
     # Task->project bindings ({task_id: {project_id, chat_id}}) so the frontend
     # can recognise a project-scoped task card: suppress the stray "turn into
     # project" button (v6.33.0 P2) and render a pointer that opens the bound
@@ -944,13 +880,21 @@ class OwnerSkillPresenceRuntimeResponse(TypedDict):
 
 
 class SkillGrantResponse(TypedDict, total=False):
-    """``POST /api/skills/{skill}/grants``; a refusal answers ``SkillActionRefusal``."""
+    """``POST /api/skills/{skill}/grants``; a refusal answers ``SkillActionRefusal``. A grant that
+    turns the skill on may install packages: past the answer bound the body is
+    ``{ok, pending: true, job_id, message}`` (follow the lifecycle queue)."""
 
     ok: bool
+    pending: bool
+    job_id: str
+    message: str
     skill: str
     content_hash: str
     granted_keys: list[str]
     granted_permissions: list[str]
+    turn_on_when_ready: str
+    setup_error: str  # grants succeeded; the requested setup did not
+    enabled: bool  # present when this grant also carried the owner's Enable
     extension_action: str
     extension_reason: str
     load_error: str
@@ -963,6 +907,9 @@ class SkillGrantResponse(TypedDict, total=False):
 
 class SkillDeleteResponse(TypedDict, total=False):
     ok: bool
+    pending: bool  # queued behind a long job past the answer bound: {ok, pending, job_id, message}
+    job_id: str
+    message: str
     skill: str
     source: str
     content_hash: str
@@ -972,17 +919,6 @@ class SkillDeleteResponse(TypedDict, total=False):
     extension_reason: str
     error: str
 
-
-class UiPreferencesResponse(TypedDict):
-    ok: NotRequired[bool]
-    widget_order: list[str]
-    widget_start_mode: dict[str, Literal["auto", "manual", "retain"]]  # owner per-card launch-policy override
-    widget_size: dict[str, dict[str, int]]  # owner Widgets card width: {w: masonry columns the card spans, 12 = full width; h: 0}
-    nested_subagents_expanded: bool
-    sidebar_width: int  # px; 0 = CSS default (resizable side sections, v6.33.0)
-    project_panel_width: int  # px; 0 = CSS default
-    project_seen_revision: dict[str, int]  # monotonic paint ACK per active Project
-    welcome: dict[str, str]  # install-wide empty-Main UI copy: mode default|hidden|custom and plain text
 
 
 class DesktopAutostartResponse(TypedDict):  # GET/POST /api/desktop/autostart (OS registration) and /api/desktop/background (unavailable|off|on)
@@ -999,11 +935,29 @@ class GitLogResponse(TypedDict):
     sha: str
 
 
-class EvolutionDataResponse(TypedDict):
+class EvolutionRefresh(TypedDict):  # the background re-measurement behind GET /api/evolution-data
+    state: Literal["idle", "running", "failed"]
+    started_at: str
+    finished_at: str
+    error: str  # "" unless failed; the saved copy stays
+    unmeasured: int  # versions of the saved copy whose commit could not be read (retried by force)
+    unmeasured_error: str  # the first such reason, "" when every version was measured
+
+
+class EvolutionDataResponse(TypedDict):  # answered at once from the saved copy (ouroboros/evolution_history.py)
+    # {tag, aliases, version, date, commit, level, milestone, code_lines, bible_bytes, system_bytes (None = not measured),
+    #  release: {source: readme|tag|"", title, kind, heading, body}}, oldest first
+    versions: list[Dict[str, Any]]
+    saved_at: str  # "" = no saved copy yet
+    refresh: EvolutionRefresh
+    # identity / scratchpad: {at_versions: [characters | None per version], first_at, latest: {at, chars} | None}
+    install: Dict[str, Any]
+    # Published before the version history above and kept for older clients: one point per tag name {tag, date, code_lines, bible_kb,
+    # system_kb, identity_kb, scratchpad_kb, memory_kb}; unmeasured values and the three memory fields are null.
     points: list[Dict[str, Any]]
+    cached: bool  # true when the answer comes from a saved copy (always, once one exists)
     checkpoints: NotRequired[list[Dict[str, Any]]]
     generated_at: str
-    cached: bool
 
 
 class UploadResponse(TypedDict):
@@ -1171,6 +1125,8 @@ class TaskDetailResponse(TypedDict, total=False):
     artifacts: List[Dict[str, Any]]  # Open result rows; a nested file carries additive ``relpath``.
     # Per result directory: {name, files, size, excluded, available} for its ``?archive=`` ZIP.
     artifact_archives: Dict[str, Dict[str, Any]]
+    # Wrap up's saved-work document {name, request_id}: ``?wrap_up=<request_id>`` writes it on read; no size/digest.
+    wrap_up_document: Dict[str, str]
     cost_breakdown: TaskCostBreakdown
     history_retention: HistoryRetentionProjection
     model_waits: Dict[str, Any]
@@ -1271,8 +1227,10 @@ class TaskEvent(TypedDict, total=False):
 
 
 class TaskPauseRequest(TypedDict):
-    """Text-free tree Pause; reuse request_id on retry."""
+    """Tree Pause; reuse request_id on retry. ``actor`` (owner|ouroboros) and ``reason`` declare who and why."""
     request_id: str
+    actor: NotRequired[str]
+    reason: NotRequired[str]
 
 
 class TaskPauseResponse(TypedDict, total=False):
@@ -1469,12 +1427,14 @@ from ouroboros.gateway.client_contracts import FileBrowserListResponse, ServedUi
 WS_MESSAGE_TYPES: tuple[str, ...] = (
     "chat",
     "command",
+    "panic_accepted",  # immediate acceptance only, not proof of process exit
     "photo",
     "video",
     "document",
     "links",
     "quiz",
     "quiz_state",
+    "card", "card_state",  # gateway/card_contracts.py frames
     "typing",
     "log",
     "heartbeat",
@@ -1490,12 +1450,13 @@ WS_MESSAGE_TYPES: tuple[str, ...] = (
 
 __all__ = [
     "CostPresentation",
-    "ChatInbound", "TaskConstraintInbound", "CommandInbound", "ExtensionInbound",
+    "ChatInbound", "TaskConstraintInbound", "CommandInbound", "PanicAcceptedOutbound", "ExtensionInbound",
     "TransportMetadata",
     "ChatOutbound",
     "PhotoOutbound", "VideoOutbound", "DocumentOutbound",
     "LinkAction", "LinksOutbound",
     "QuizOption", "QuizOutbound", "QuizStateOutbound",
+    "CardOutbound", "CardStateOutbound",
     "DecisionRequest", "DecisionResponse",
     "TypingOutbound",
     "LogOutbound",
@@ -1528,13 +1489,14 @@ __all__ = [
     "OnboardingPresetProjection",
     "SettingsPostCommitFailureResponse",
     "SkillGrantResponse", "SkillDeleteResponse",
-    "UiPreferencesResponse", "DesktopAutostartResponse",
+    "UiContribution", "UiContributionsResponse", "UiPreferencesResponse", "DesktopAutostartResponse",
     "GitLogResponse",
     "EvolutionDataResponse",
+    "EvolutionRefresh",
     "ScheduledTasksResponse", "ScheduleUpsertResponse", "ScheduleDeleteResponse", "ScheduleActionResponse",
     "UploadResponse",
     "ExtensionsIndexResponse", "ExtensionLiveSnapshot", "WidgetTab",
-    "WidgetsResponse",
+    "WidgetsResponse", "WidgetFaultRequest", "WidgetFaultResponse",
     "SkillPublishPreflightResponse",
     "SkillLifecycleQueueResponse",
     "MarketplaceSearchResponse",

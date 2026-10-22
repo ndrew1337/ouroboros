@@ -223,8 +223,9 @@ def test_only_requested_content_over_the_window_can_shrink_a_chosen_form(
         assert _view_json(by_id["tail"]["content"])["shown_ranges"] == [[100_000, 108_000]]
     assert by_id["tiny"]["content"] == "ok\r\n" and owner in messages
     assert receipt["reserve_tokens"] == reserve
+    margin = math.ceil(window / RECLAIM_LOW_WATER_DIVISOR) if not chosen_fits else 0
     assert receipt["requested_room_tokens"] == (None if window is None else
-                                                  window - reserve - receipt["minimum_tokens"])
+                                                  window - reserve - receipt["minimum_tokens"] - margin)
     assert receipt["unsolicited_body_tokens"] <= receipt["unsolicited_allowance_tokens"]
     if chosen_fits and receipt["chosen_tokens"] + reserve < target:
         assert receipt["unsolicited_body_tokens"] > 0  # correction still spends the available share
@@ -232,7 +233,7 @@ def test_only_requested_content_over_the_window_can_shrink_a_chosen_form(
         assert receipt["unsolicited_body_tokens"] == 0
     sent = fit(messages, [])["estimated_input_tokens"] + reserve
     assert receipt["status"] == ("capacity_unknown" if window is None else "projected")
-    assert window is None or sent <= window
+    assert window is None or sent <= window - margin
     for row in trace["tool_calls"]:
         if row.get("result_partial"):
             original = next(item["result"] for item in rows if item["tool_call_id"] == row["tool_call_id"])
@@ -531,6 +532,6 @@ def test_producer_page_sizes_stay_positive_ints_for_every_paging_consumer():
                    "ouroboros.tools.delegate_terminal_evidence", "ouroboros.skill_publish_result",
                    "ouroboros.tools.delegate", "ouroboros.tools.followup",
                    "ouroboros.skill_catalogue", "ouroboros.delegate_supervision",
-                   "ouroboros.delegate_interactions"):
+                   "ouroboros.delegate_interactions", "ouroboros.tools.recent_tasks"):
         source = inspect.getsource(importlib.import_module(module))
         assert "tool_result_limit(" in source, module

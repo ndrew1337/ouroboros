@@ -16,6 +16,7 @@ import {
 } from '../modules/chat_activity.js';
 import { upsertToolFoldRow } from '../modules/chat_render_batch.js';
 import { summarizeChatLiveEvent } from '../modules/log_events.js';
+import { clock } from '../modules/work_status.js';
 import { ElementStub, installDom, restoreDom, walkCard } from './chat_dom_fixture.js';
 import { projection, room, work } from './work_fixture.js';
 
@@ -90,6 +91,8 @@ function fixture(history = [], detail = { active_direct_turns: [] }, chatId = 1)
         card: (id = TASK) => walkCard(messages, id),
         rows: (id = TASK) => nodes(walkCard(messages, id)).filter((n) => n.classList?.contains('chat-live-line')),
         meta: (id = TASK) => walkCard(messages, id)?.querySelector('[data-live-meta]')?.innerHTML || '',
+        // The labelled facts beyond the compact line (tool calls, models, origin): the card's own details list.
+        facts: (id = TASK) => walkCard(messages, id)?.querySelector('[data-live-facts]')?.innerHTML || '',
         status: () => env.mount.querySelector('.status-badge')?.textContent,
         typingHidden: () => messages.children
             .find((node) => String(node.className || '').includes('typing-bubble'))?.style.display === 'none',
@@ -128,7 +131,7 @@ test('inert tool carrier restores a speechless card without invented narration o
         assert.match(f.rows().map(row => row.innerHTML).join(' '), /1 tool call/);
         assert.equal(f.card().querySelector('[data-live-phase]').hidden, true, 'history alone confers no liveness');
         assert.match(f.meta(), /Activity unconfirmed/, 'the hidden chip is replaced by the meta label');
-        assert.match(f.meta(), /1 tool call/);
+        assert.match(f.facts(), /<dt>Tool calls<\/dt><dd>1<\/dd>/);
         assert.equal(f.card().querySelector('[data-resume-run]'), null);
         assert.equal(f.card().querySelector('[data-cancel-run]'), null);
         assert.equal(f.card().querySelector('[data-live-title]').textContent, '');
@@ -219,7 +222,8 @@ for (const chatId of [1, 1234]) test(`canonical owner wait settles without a Pro
         const sleeping = { ...row, phase: 'budget_paused', pause_cause: 'sleep' };
         f.census([sleeping], room('waiting'), [work(sleeping, { activity: 'waiting',
             because: [{ code: 'sleeping', text: 'Sleeping until it is woken' }] })]);
-        assert.equal(f.card().querySelector('[data-live-phase]').textContent, 'Waiting · sleeping');
+        assert.equal(f.card().querySelector('[data-live-phase]').textContent, 'Waiting');
+        assert.equal(f.card().querySelector('[data-live-phase-secondary]').textContent, 'Sleeping until it is woken');
         assert.equal(f.status(), 'Waiting', 'a cold sleep waits; its reason stays on the row');
         f.census([{ ...row, owner_wait: undefined, required_question_unavailable: false }], room('working', { call: 'working' }));
         assert.equal(f.status(), 'Working', 'no quiz evidence invents no wait');
@@ -249,8 +253,11 @@ test('a work\'s Resume control exposes the card\'s Resume with its cause and kee
         document.body = new ElementStub('body', document);
         await f.instance.refreshHistory({ revision: 1 });
         const row = { activity_id: TASK, chat_id: 1, kind: 'direct_chat', phase: 'budget_paused', pause_cause: 'owner' };
-        const paused = (controls) => work(row, { activity: 'paused', paused_by: 'owner',
-            because: [{ code: 'paused_by_owner', text: 'Paused by you' }], controls });
+        const by = { actor: 'owner', text: '', at: TS };
+        const paused = (controls) => work(row, { activity: 'paused',
+            because: [{ code: 'paused_by_owner', text: 'You paused it', since: TS, by }], controls });
+        const said = () => [f.card().querySelector('[data-live-phase]').textContent,
+            f.card().querySelector('[data-live-phase-secondary]').textContent];
         // The census alone (a paused phase) offers no Resume: only the work's own control does.
         f.census([row], room('paused'), [paused([{ action: 'stop', target: TASK }])]);
         assert.equal(f.card().querySelector('[data-resume-run]'), null, 'a paused phase without the work\'s Resume control');
@@ -258,10 +265,10 @@ test('a work\'s Resume control exposes the card\'s Resume with its cause and kee
         const button = f.card().querySelector('[data-resume-run]');
         assert.ok(button);
         assert.equal(button.textContent, 'Resume');
-        assert.equal(f.card().querySelector('[data-live-phase]').textContent, 'Paused · by you');
+        assert.deepEqual(said(), ['Paused', `You paused it · ${clock(TS)}`]);
         await button.listeners.get('click')[0]({ stopPropagation() {} });
         assert.equal(f.requests.filter(url => url.endsWith(`/tasks/${TASK}/resume`)).length, 1);
-        assert.equal(f.card().querySelector('[data-live-phase]').textContent, 'Paused · by you', 'a refusal invents no Running state');
+        assert.deepEqual(said(), ['Paused', `You paused it · ${clock(TS)}`], 'a refusal invents no Running state');
         for (const phase of ['budget_pausing', 'queued', 'working', 'unknown']) {
             f.census([{ ...row, phase }], room('working'), [work({ ...row, phase }, { controls: [{ action: 'stop', target: TASK }] })]);
             assert.equal(f.card().querySelector('[data-resume-run]'), null, phase);
@@ -385,7 +392,7 @@ test('a direct turn with two successful tools is the task card: ONE evidence row
             'the closed row counts; the tool names wait behind Expand');
         f.emit('chat', { ...final, tool_calls: 2 });
         assert.equal(f.card().dataset.finished, '1');
-        assert.match(f.meta(), /2 tool calls/);
+        assert.match(f.facts(), /<dt>Tool calls<\/dt><dd>2<\/dd>/);
         assert.match(f.meta(), /\$0\.12/);
     } finally { f.close(); }
     const g = fixture([
@@ -403,7 +410,7 @@ test('a direct turn with two successful tools is the task card: ONE evidence row
         // The replay row is the same row: the host's totals reach the same builder.
         assert.equal(g.rows().length, 2);
         assert.ok(g.rows().some((n) => /2 tool calls/.test(n.innerHTML)));
-        assert.match(g.meta(), /2 tool calls/);
+        assert.match(g.facts(), /<dt>Tool calls<\/dt><dd>2<\/dd>/);
     } finally { g.close(); }
 });
 
@@ -530,7 +537,8 @@ for (const replay of [false, true]) {
                 assert.ok(card, `child ${id} is rendered`);
                 const title = role === 'Subagent' ? `${role} (${id.slice(0, 8)})` : role;
                 assert.equal(card.querySelector('[data-live-title]').textContent, title);
-                assert.match(f.meta(id), /Agent model: gpt-5\.6-sol/);
+                assert.match(f.meta(id), /gpt-5\.6-sol/, 'the compact line names the model');
+                assert.match(f.facts(id), /<dt>Agent model<\/dt><dd>gpt-5\.6-sol<\/dd>/);
                 assert.equal(card.dataset.parentTaskId, TASK);
             }
         } finally { f.close(); }
@@ -1023,7 +1031,7 @@ test('a child folds its own live calls and host counters', () => {
         f.log({ type: 'task_metrics_event', task_id: CHILD, tool_calls: 5, tool_errors: 0,
             tool_call_counts: { read_file: 5 } });
         assert.equal(folded().length, 1, 'host counters update the same folded row');
-        assert.match(f.meta(CHILD), /5 tool calls/);
+        assert.match(f.facts(CHILD), /<dt>Tool calls<\/dt><dd>5<\/dd>/);
     } finally { f.close(); }
 });
 

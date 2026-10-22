@@ -2,6 +2,8 @@
  * a frame deadline. Frames only settle geometry after those owners are ready.
  * No fetch, pager, message cache or timer lives here.
  */
+import { DRAG } from './drawer_drag.js';  // a touch's axis is decided by the drawer's own rule
+
 // A width that moves again within MOVE_FRAMES frames keeps moving (a drag, a live window resize); one that then
 // holds WIDTH_HELD_FRAMES frames (about 200ms at 60Hz) has stopped: a drag paused that long is laid out once.
 const MOVE_FRAMES = 3, WIDTH_HELD_FRAMES = 12;
@@ -56,6 +58,9 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
     const state = {
         top: 0,
         stick: true,
+        // Whether the owner's own gesture moved the feed last, not the app's navigation (a waiting pill's jump to a
+        // question, ↓, a quote): the phone composer folds only for the owner's own reading (composer_fold.js).
+        ownMove: false,
         get generation() { return generation; },
         // The unread opening still owed (`claim(true)`): its claim's generation, else null.
         get arriving() { return arriving === generation ? arriving : null; },
@@ -133,12 +138,14 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
          * reader's own later gesture supersedes it, even one a bounded box absorbs. */
         claim(arrive = false) {
             state.cancel();
+            state.ownMove = false;
             const token = claimed = generation;
             arriving = arrive ? token : null;
             return () => token === generation;
         },
         bindGestures(navigate) {
             let touchY = null, pressed = null, latched = null, wheelAt = -Infinity, boxScrolled = null, gestures = 0;
+            let touchStart = null, axis = null;  // where the touch began, and its axis once decided
             const doc = feed.ownerDocument;
             // Keys scroll the focused control's scroller or, with nothing focused,
             // the one last pressed; neither sends keydown to the feed itself.
@@ -164,11 +171,25 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
                 }
                 if (event.type === 'pointerdown') {
                     pressed = feed.contains(event.target) ? event.target : null;
-                    if (event.target === feed) { state.cancel(); state.stick = false; }
+                    if (event.target === feed) { state.cancel(); state.stick = false; state.ownMove = true; }
                     dragging = event.target === feed ? 'held' : '';
                     return; // a scrollbar drag owns position, not archive traversal
                 }
-                if (event.type === 'touchstart') { touchY = event.touches?.[0]?.clientY; latched = null; return; }
+                if (event.type === 'touchstart') {
+                    const t = event.touches?.[0];
+                    touchY = t?.clientY; touchStart = { x: t?.clientX ?? 0, y: t?.clientY ?? 0 }; axis = null; latched = null;
+                    return;
+                }
+                if (event.type === 'touchmove' && axis !== 'y') {
+                    // The axis is decided once, as drawer_drag.js decides it: a sideways finger (the drawer, a swipe to
+                    // reply) is not reading, nor is the drift before the axis is decided (it ended following).
+                    const t = event.touches?.[0];
+                    const dx = Math.abs((t?.clientX ?? touchStart?.x ?? 0) - (touchStart?.x ?? 0));
+                    const dy = Math.abs((t?.clientY ?? 0) - (touchStart?.y ?? t?.clientY ?? 0));
+                    if (axis === null && dy >= DRAG.slop && dy >= dx) axis = 'y';
+                    else if (axis === null && dx >= DRAG.slop && dx > DRAG.axisRatio * dy) axis = 'x';
+                    if (axis !== 'y') return;
+                }
                 const origin = event.type === 'keydown' ? keyOrigin(event) : event.target;
                 if (event.type === 'keydown' && (event.defaultPrevented
                         || event.target?.closest?.('input, textarea, select, [contenteditable="true"]')
@@ -201,7 +222,7 @@ export function createChatReadingPosition({ visible, alive, ready, feed, anchors
                     absorb();
                     return;
                 }
-                state.cancel(); state.stick = false;
+                state.cancel(); state.stick = false; state.ownMove = true;
                 const token = generation, own = ++gestures, since = event.timeStamp;
                 requestAnimationFrame(() => {
                     if (!alive() || !visible() || token !== generation || own !== gestures) return;

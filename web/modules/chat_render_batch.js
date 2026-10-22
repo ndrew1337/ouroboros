@@ -8,8 +8,8 @@ const nodePosition = node => node?.dataset?.historySource
     ? { source: node.dataset.historySource, offset: Number(node.dataset.historyOffset) } : null;
 
 // A feed holding only chrome has no conversation: the history control, the typing
-// indicator, Main's empty-state greeting and an ephemeral notice (the reconnect
-// banner). The loading state and the greeting share this one rule.
+// indicator, Main's empty-state greeting and an ephemeral notice (Restart
+// complete). The loading state and the greeting share this one rule.
 export const feedIsEmpty = messages => Array.from(messages.children).every(node =>
     node.classList.contains('chat-load-older') || node.classList.contains('typing-bubble')
     || node.classList.contains('chat-empty-welcome') || node.dataset.ephemeral === '1');
@@ -278,7 +278,7 @@ export function captureLiveCardProjection(record) {
         record.phaseEl?.hidden, record.phaseEl?.className, record.phaseEl?.textContent,
         record.titleEl?.textContent, record.activityEl?.textContent,
         record.metaEl?.innerHTML, record.countEl?.hidden, record.countEl?.textContent,
-        record.inlineTypingEl?.style?.display, record.toggleEl?.textContent,
+        record.phaseEl?.dataset?.chipTone, record.toggleEl?.textContent,
         record.disclosureEl?.getAttribute?.('aria-expanded'),
         root.querySelector?.('.chat-live-actions')?.innerHTML || '',
     ];
@@ -290,12 +290,13 @@ export function liveCardProjectionChanged(before, record) {
     return before.some((value, index) => value !== after[index]);
 }
 
-// The expanded state belongs to the card's one disclosure, the "Show details" button; the summary band
+// The expanded state belongs to the card's one disclosure, the "Details" button; the summary band
 // above it is reading content and states nothing (a Main portal hides the button: work_portal.js).
+// Its word stays; `aria-expanded` and the turned chevron say open or closed.
 export function syncLiveCardToggle(record) {
     if (!record?.toggleEl) return;
     const expanded = record.root.dataset.expanded === '1';
-    const text = expanded ? 'Hide details' : 'Show details';
+    const text = 'Details';
     const ariaExpanded = expanded ? 'true' : 'false';
     if (record.toggleEl.textContent !== text) record.toggleEl.textContent = text;
     if (record.disclosureEl && record.disclosureEl.getAttribute('aria-expanded') !== ariaExpanded) {

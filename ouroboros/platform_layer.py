@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from typing import Any, Callable, List, Optional
+from ouroboros.platform_peer import local_connection_peer  # noqa: F401 — platform facade
 
 log = logging.getLogger(__name__)
 
@@ -168,7 +169,7 @@ def bootstrap_process_path() -> list[str]:
 def request_native_attention(
     show_window: Optional[Callable[[], None]] = None, *, sound: bool = True,
 ) -> dict[str, object]:
-    """Request one best-effort window/sound cue without claiming a banner."""
+    """Legacy attention bridge. macOS has no separate sound: notifications own it."""
     window_attention = ""
     if show_window is not None:
         try:
@@ -176,21 +177,13 @@ def request_native_attention(
             window_attention = "launcher"
         except Exception as exc:
             log.debug("Native window attention failed: %s", exc)
-    if not sound:
+    if not sound or IS_MACOS:
         if window_attention:
             return {"ok": True, "status": "window_only", "sound_played": False,
                     "window_attention": window_attention}
         return {"ok": False, "status": "unsupported", "reason": "no_window_attention"}
     try:
-        if IS_MACOS:
-            path = "/System/Library/Sounds/Glass.aiff"
-            if not pathlib.Path(path).is_file():
-                raise FileNotFoundError(path)
-            proc = subprocess.run(["/usr/bin/afplay", path], check=False,
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2)
-            if proc.returncode:
-                raise RuntimeError(f"sound_exit_{proc.returncode}")
-        elif IS_WINDOWS:
+        if IS_WINDOWS:
             import winsound
             winsound.MessageBeep(winsound.MB_ICONASTERISK)
         elif IS_LINUX and (command := shutil.which("canberra-gtk-play")):
@@ -489,7 +482,9 @@ def open_path_external(path: pathlib.Path) -> None:
     elif IS_WINDOWS:
         os.startfile(str(target))  # type: ignore[attr-defined]
     else:
-        subprocess.Popen(["xdg-open", str(target)])
+        from ouroboros.desktop_media import host_environment
+
+        subprocess.Popen(["xdg-open", str(target)], env=host_environment())
 
 
 def is_unstable_macos_app_path(path: pathlib.Path) -> bool:
@@ -567,12 +562,13 @@ def pid_lock_acquire(path: str) -> bool:
 def pid_lock_release(path: str) -> None:
     """Release the PID lock."""
     global _lock_fd
-    if _lock_fd is not None:
-        with contextlib.suppress(Exception):
-            file_unlock(_lock_fd.fileno())
-        with contextlib.suppress(Exception):
-            _lock_fd.close()
-        _lock_fd = None
+    if _lock_fd is None:
+        return  # already released, or another launcher owns the new PID file
+    with contextlib.suppress(Exception):
+        file_unlock(_lock_fd.fileno())
+    with contextlib.suppress(Exception):
+        _lock_fd.close()
+    _lock_fd = None
     with contextlib.suppress(Exception):
         os.unlink(path)
 
@@ -1064,11 +1060,13 @@ def kill_process_on_port(port: int) -> None:
     """Kill any process listening on the given TCP port."""
     try:
         if IS_WINDOWS:
-            res = _hidden_run(["netstat", "-ano"], capture_output=True, text=True, timeout=5)
-            listeners = [
-                line.split()[-1] for line in res.stdout.splitlines()
-                if f":{port}" in line and "LISTENING" in line and line.split()
-            ]
+            # psutil's socket table, not netstat's text, whose state words and code page are localized.
+            import psutil
+
+            listeners = list(dict.fromkeys(  # a dual-stack listener has an IPv4 and an IPv6 row
+                conn.pid for conn in psutil.net_connections(kind="tcp")
+                if conn.status == psutil.CONN_LISTEN and conn.laddr and conn.laddr.port == port and conn.pid
+            ))
         else:
             # -sTCP:LISTEN scopes the sweep to the listener (a bare tcp:PORT
             # selector also matches ESTABLISHED client sockets — on browser
@@ -1078,12 +1076,8 @@ def kill_process_on_port(port: int) -> None:
                 ["lsof", "-nP", "-ti", f"tcp:{port}", "-sTCP:LISTEN"],
                 capture_output=True, text=True, timeout=5,
             )
-            listeners = res.stdout.split()
-        for pid_str in listeners:
-            try:
-                pid = int(pid_str)
-            except ValueError:
-                continue
+            listeners = [int(pid) for pid in res.stdout.split() if pid.isdigit()]
+        for pid in listeners:
             if pid != os.getpid():
                 force_kill_pid(pid)
     except Exception:
@@ -1326,6 +1320,12 @@ def merge_hidden_kwargs(kwargs: dict) -> dict:
     if hidden := subprocess_hidden_kwargs():
         result["creationflags"] = result.get("creationflags", 0) | hidden.get("creationflags", 0)
     return result
+
+
+def inherited_console_kwargs() -> dict:
+    """A successor keeps this process's console (a terminal run); Windows hides it only when there is none (GUI)."""
+    attached = not IS_WINDOWS or _kernel32.GetConsoleProcessList((ctypes.wintypes.DWORD * 1)(), 1)
+    return {} if attached else subprocess_hidden_kwargs()
 
 
 # Git installation hint.

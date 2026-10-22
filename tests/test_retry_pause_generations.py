@@ -185,7 +185,6 @@ def test_pause_revalidates_physical_authority_inside_the_logical_launch_lock(
 @pytest.mark.parametrize("actor", ["retry", "retry_chain"])
 def test_physical_retry_resume_survives_fence_publication_contention(
         host, monkeypatch, clock, reaper, actor):  # noqa: F811
-    from ouroboros import acceptance_late
     from ouroboros.store import StoreBusy
 
     running = _running_actor(host, monkeypatch, clock, reaper, actor)
@@ -195,13 +194,8 @@ def test_physical_retry_resume_survives_fence_publication_contention(
     _park(host, running, plan)
     assert queue.resume_budget_paused_task(running["id"])["ok"]
     [again] = _assign(host, monkeypatch)
-    prepare = acceptance_late.resume_paused_acceptance_preparations
     release, finish = owner_pause.release_fence, owner_pause._finish_resume_publication
-    calls, publications, failures = [], [], []
-
-    def prepared(*args):
-        calls.append(prepare(*args))
-        return calls[-1]
+    publications, failures = [], []
 
     def contended(*args, **kwargs):
         publications.append(True)
@@ -219,12 +213,11 @@ def test_physical_retry_resume_survives_fence_publication_contention(
             failures.append(str(exc))
             raise
 
-    monkeypatch.setattr(acceptance_late, "resume_paused_acceptance_preparations", prepared)
     monkeypatch.setattr(owner_pause, "release_fence", contended)
     monkeypatch.setattr(owner_pause, "_finish_resume_publication", observed_finish)
     seen = _loop_once(host, monkeypatch, again, plan=plan)
     assert not failures, failures
-    assert seen["kind"] == "pause" and calls == [0] and len(publications) == 2
+    assert seen["kind"] == "pause" and len(publications) == 2
     assert owner_pause.read_fence(host.root, "held")["state"] == "released"
     assert budget_pause.budget_pause_row(host.root, running["id"])["grant"]["consumed_at"]
     with owner_pause.launch_admission(seen["ctx"]):
@@ -410,7 +403,7 @@ def test_root_resume_holds_queued_children_for_selection_without_a_projected_lat
         fault.setattr(owner_pause, "read_fence", unreadable)
         refused = queue.resume_budget_paused_task("held")
     rows = {t["id"]: t for t in workers.PENDING}
-    assert refused == {"ok": False, "error": "owner_pause_custody_unreadable"}, refused
+    assert refused["ok"] is False and refused["error"] == "owner_pause_custody_unreadable", refused
     assert rows["held"].get("_budget_pause") and not any(budget_hold_fact(rows[c]) for c in children)
     assert (queue.BUDGET_ROOT_FENCES.get("held") or {}).get("fence_id") == projected
     resumed = queue.resume_budget_paused_task("held")
@@ -423,7 +416,7 @@ def test_root_resume_holds_queued_children_for_selection_without_a_projected_lat
     assert queue.resume_budget_paused_task(children[0], selected_by="held")["ok"]
     assert [t["id"] for t in _assign(host, monkeypatch)] == [children[0]], "only the selected child runs"
     [sibling] = [t for t in workers.PENDING if t["id"] == children[1]]
-    assert budget_hold_fact(sibling)["selected"] is False
+    assert budget_hold_fact(sibling) and "_resume_selection" not in sibling
     newer = pause("newer")  # a replacement Pause: the older Resume selects nothing more
     assert newer["fence_id"] != first["fence_id"]
     late = queue.resume_budget_paused_task(children[1], selected_by="held")

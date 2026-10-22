@@ -217,7 +217,8 @@ def test_anthropic_preserves_the_message_seal_and_gives_schemas_only_a_free_slot
     assert len(kept) == len(_deep_markers(payload)) == 4
     has_book = book and mode == "max"
     assert ("cache_control" in payload["tools"][-1]) == (not has_book)
-    assert kept[-1]["text"] == ("result 0" if long else messages[1]["content"][-1]["text"])
+    # The newest tool result, or the task message itself: the seal changed neither row.
+    assert kept[-1]["text"] == ("result 5" if long else messages[1]["content"])
     assert any(block.get("text", "").startswith("## DEVELOPMENT.md\n") for block in kept) == has_book
     assert all(block["cache_control"] == {"type": "ephemeral", "ttl": "1h"} for block in kept)
     assert messages == canonical and tools == _tools()
@@ -366,7 +367,7 @@ def test_the_task_trace_keeps_the_view_fact_of_its_request(tmp_path, monkeypatch
 
     monkeypatch.setattr(loop, "call_llm_with_retry",
                         lambda *_a, **_kw: ({"role": "assistant", "content": "done"}, 0.0))
-    monkeypatch.setattr(loop, "_run_task_acceptance_review_once", lambda **_kw: False)
+    monkeypatch.setattr("ouroboros.tools.review_result.result_review_at_delivery", lambda *_a, **_kw: False)
     monkeypatch.setenv("OUROBOROS_TASK_REVIEW_MODE", "off")
     facts = {"role": "integrator", "room_id": "1", "floor": {"steps": {}}, "story_status": {"folded": 0, "total": 2}}
     for given in (facts, None):
@@ -534,13 +535,29 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
             == plan(meta + big, 1.0).nano_projection.memory_facts["floor"]["physical_allowance_tokens"])
 
 
-def test_a_measured_build_times_each_section_on_its_receipt(tmp_path):
+def test_a_measured_build_times_each_section_on_its_receipt(tmp_path, monkeypatch):
     """The receipt of a build inside ``measured_sections`` carries each section's wall and CPU time;
     a build outside one carries neither, and the request itself is the same."""
     from ouroboros.context_timing import measured_sections
+    from ouroboros import context_timing, skill_catalogue
+    from types import SimpleNamespace
 
     env, memory, _rooms = world(tmp_path)
     events = memory.drive_root / "logs" / "events.jsonl"
+    # Skill discovery moved ahead of catalog rendering; its cost must still be
+    # in installed_skills, and the always-on block and catalog share one read.
+    clock = [0.0]
+    discoveries = []
+    discover = skill_catalogue.discover_context_skills
+
+    def discover_skills(root):
+        discoveries.append(root)
+        clock[0] += 2.0
+        return discover(root)
+
+    monkeypatch.setattr(skill_catalogue, "discover_context_skills", discover_skills)
+    monkeypatch.setattr(context_timing, "time", SimpleNamespace(
+        perf_counter=lambda: clock[0], thread_time=lambda: clock[0] / 2))
 
     def receipt():
         return [json.loads(line) for line in events.read_text(encoding="utf-8").splitlines()
@@ -550,8 +567,12 @@ def test_a_measured_build_times_each_section_on_its_receipt(tmp_path):
     with measured_sections():
         timed_messages, _cap = _messages(env, memory, MAIN)
     timed = receipt()
+    assert discoveries == [memory.drive_root]
+    assert timed["sections_ms"]["installed_skills"] == 2000
+    assert timed["sections_cpu_ms"]["installed_skills"] == 1000
     events.write_bytes(history)  # the second build reads the same recent events as the first
     plain_messages, _cap = _messages(env, memory, MAIN)
+    assert discoveries == [memory.drive_root, memory.drive_root]
     plain = receipt()
     assert {"memory_view", "knowledge", "health", "runtime", "drive_state", "fit"} <= set(timed["sections_ms"])
     assert set(timed["sections_cpu_ms"]) == set(timed["sections_ms"])

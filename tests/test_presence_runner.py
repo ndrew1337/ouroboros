@@ -130,6 +130,40 @@ def test_runner_builds_bounded_fresh_task_and_logs_shared_dialogue(tmp_path):
     assert rows[1]["presence_provenance"] == rows[0]["presence_provenance"]
 
 
+def test_inbound_presence_row_waits_out_a_concurrent_dialogue_write(tmp_path):
+    """The inbound row is a required acceptance: a write already holding the dialogue store makes
+    it wait, not answer ``chat_log_unwritable`` at once (a burst of released turns hit that)."""
+    from ouroboros import dialogue_store
+
+    repo, data = tmp_path / "repo", tmp_path / "data"
+    repo.mkdir()
+    data.mkdir()
+    dialogue_store.append(data, "progress", {"ts": "2026-10-20T00:00:00+00:00", "text": "warm"})
+    holding, done = threading.Event(), threading.Event()
+
+    def hold() -> None:
+        with dialogue_store.transaction(data, write=True):
+            holding.set()
+            done.wait(0.6)
+
+    class Agent:
+        def handle_task(self, task):
+            _terminal(data, task, "Hi")
+            return [{"type": "presence_result", "outcome": "message", "text": "Hi", "work_ref": ""}]
+
+    holder = threading.Thread(target=hold, daemon=True)
+    holder.start()
+    assert holding.wait(5)
+    try:
+        result = run_presence_turn(admission=_admission(), event=_event(), repo_dir=repo, drive_root=data,
+                                   agent_factory=lambda **_kwargs: Agent(), gate=PresenceTurnGate(2))
+    finally:
+        done.set()
+        holder.join(5)
+    assert result.outcome == "message" and result.text == "Hi"
+    assert [row["direction"] for row in chat_rows(data)] == ["in", "out"]
+
+
 def test_presence_initial_attachment_rejection_defaults_to_partial_staging(tmp_path):
     """В25c (capinv-447): one bad attachment no longer discards the whole set —
     the staged sibling rides into the task and the rejected row stays disclosed."""
@@ -181,7 +215,7 @@ def test_presence_context_loads_declared_topic_and_completion_contract(tmp_path)
     )
     assert "Participate helpfully." in section
     assert "Alex prefers concise replies." in section
-    assert "presence_finish" in section
+    assert "finish_task" in section
 
 
 def test_configured_presence_parallelism_is_bounded(monkeypatch, tmp_path):
@@ -408,7 +442,10 @@ def test_previous_turn_is_per_conversation_and_never_rewritten_by_a_replay(tmp_p
 
 def test_previous_turn_shows_what_a_transport_tool_delivered(tmp_path):
     from ouroboros.presence_delivery import PresenceDeliveryRecorder
+    from ouroboros.places import connect_place
 
+    connect_place(tmp_path, place_id=_admission().binding_id, connector="telegram-bot", provider="telegram",
+                  account_id="bot-1", conversation_id="room-1")
     recorder = PresenceDeliveryRecorder(tmp_path)
 
     def send(task):

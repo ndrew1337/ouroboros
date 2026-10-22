@@ -25,13 +25,14 @@ EXCEPTIONS = {
     ("supervisor/message_bus.py", "send_with_budget", "envelope"): (1, "Persists the caller's role/type for progress history."),
     ("supervisor/message_bus.py", "LocalChatBridge.send_message", "envelope"): (1, "Wire projection preserves caller role/type; legacy assistant default is intentional."),
     ("supervisor/message_bus.py", "LocalChatBridge.send_quiz", "envelope"): (1, "Relays the model-authored question pointer with its recorded voice."),
-    ("supervisor/events_chat_delivery.py", "_handle_send_message", "call"): (1, "Relays producer role/type without classifying content."),
+    ("supervisor/events_chat_delivery.py", "_send_message", "call"): (1, "Relays producer role/type without classifying content."),
+    ("supervisor/events_chat_delivery.py", "replay_deferred_deliveries", "envelope"): (1, "Continues the stored envelope with its original role/type, without producing new text."),
     ("supervisor/terminal_delivery.py", "replay_pending_deliveries", "envelope"): (1, "Replays the exact stored envelope, including legacy terminal notices (#1010)."),
     ("supervisor/terminal_delivery.py", "build_completed_result_event", "envelope"): (1, "Model final or legacy result; project_terminal_result_event owns terminal provenance (#1010 unchanged)."),
     ("ouroboros/agent_task_pipeline.py", "emit_task_results", "envelope"): (1, "Final model output; prepare_terminal_send_event applies host terminal provenance separately."),
     ("ouroboros/agent.py", "OuroborosAgent._emit_progress", "envelope"): (1, "Explicit narration fact selects model versus host; end-to-end voice test pins both branches."),
     ("ouroboros/tools/control_runtime.py", "_send_user_message", "envelope"): (1, "The model authors this nonterminal reply; proactive_message is not a System voice."),
-    ("ouroboros/owner_relay.py", "publish_relay", "call"): (1, "One Ouroboros bubble (relay shape F): the teller's own note under the owner's host-held quoted words; no host-authored text."),
+    ("ouroboros/owner_relay.py", "publish_relay", "call"): (1, "One relay row, drawn as a note card: the teller's own note and summary under the owner's host-held quoted words; no host-authored text."),
 }
 
 
@@ -157,9 +158,9 @@ def test_exceptions_are_counted_and_stale_rows_fail():
 # typed annotation on it, and a landed act publishes no row. A standalone System row exists only
 # where nothing else can carry the fact. Each literal host type: (class, number of producer sites).
 # Two types are mixed and disclosed: `deep_self_review_queued` also echoes the model's own request,
-# `skill_repair` also the host's automatic repair after a marketplace install.
+# `skill_repair` also the host's automatic repair after a marketplace install. Nothing produces an
+# `acceptance_late_settlement` row since the review fold; the old rows still render as card rows.
 HOST_ROW_CLASSES = {
-    "acceptance_late_settlement": ("card_row", 1),
     "budget_notice": ("runtime_state", 1),
     "cancel_receipt": ("owner_act_receipt", 2),
     "command_reply": ("owner_act_receipt", 2),
@@ -172,6 +173,7 @@ HOST_ROW_CLASSES = {
     "host_progress": ("card_row", 1),
     "initialization_notice": ("not_started", 1),
     "managed_update_notice": ("runtime_state", 2),
+    "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),
     "project_completion_summary": ("main_lifecycle", 1),
     "project_handoff": ("main_lifecycle", 1),
@@ -202,6 +204,7 @@ HOST_ROW_CLASSES = {
     "task_scheduled": ("card_row", 1),
     "task_start_unconfirmed": ("not_started", 1),
     "terminal_incident": ("no_mind", 2),
+    "ui_hold": ("runtime_state", 1),
     "worker_failure": ("no_mind", 2),
     "worker_readiness_notice": ("runtime_state", 2),
 }

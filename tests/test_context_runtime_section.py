@@ -18,6 +18,25 @@ from ouroboros.context import build_runtime_section, build_user_content
 
 from tests._context_shared import _make_health_env
 
+
+@pytest.mark.parametrize("root_only", [False, True])
+def test_schedule_digest_distinguishes_unreadable_from_empty(tmp_path, root_only):
+    from types import SimpleNamespace
+    from ouroboros.context import _scheduled_tasks_digest
+
+    env = SimpleNamespace(drive_root=tmp_path) if root_only else SimpleNamespace(drive_path=lambda rel: tmp_path / rel)
+    path = tmp_path / "state" / "scheduled_tasks.json"
+    path.parent.mkdir()
+    path.write_text("{unreadable", encoding="utf-8")
+    unreadable = _scheduled_tasks_digest(env)
+    assert unreadable["unavailable"] and "standing" not in unreadable
+    assert unreadable["pointer"] == "manage_schedules(action='list')"
+    path.write_text('{"tasks": []}', encoding="utf-8")
+    empty = _scheduled_tasks_digest(env)
+    assert "unavailable" not in empty
+    assert empty["standing"] == empty["attention"] == empty["one_shots"] == []
+
+
 @pytest.mark.parametrize("enforcement", ["blocking", "advisory"])
 def test_force_plan_metadata_adds_structured_notice_without_rewriting_user_text(
     monkeypatch, enforcement,
@@ -83,7 +102,9 @@ def test_runtime_section_includes_light_runtime_mode_rule(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("trigger", ["once", "cron"])
-def test_runtime_keeps_the_admitted_occurrences_due_time_after_schedule_advances(tmp_path, trigger):
+@pytest.mark.parametrize("previous", [None, {"task_id": "prior", "state": "pending_observation"},
+                                     {"task_id": "prior", "state": "completed", "quiet": True, "line": ""}])
+def test_runtime_keeps_the_admitted_occurrences_due_time_after_schedule_advances(tmp_path, trigger, previous):
     env = _make_health_env(tmp_path)
     due = "2026-09-29T00:30:00+00:00"
     claimed = "2026-09-30T03:00:00+00:00"
@@ -91,18 +112,21 @@ def test_runtime_keeps_the_admitted_occurrences_due_time_after_schedule_advances
         "id": "follow-up", "enabled": trigger == "cron", "name": "Review results",
         "trigger": {"type": trigger, "run_at": due, "expr": "30 0 * * *"},
         "next_run_at": "2026-10-01T00:30:00+00:00",
+        **({"completed_at": claimed} if trigger == "once" else {}),
     }]}), encoding="utf-8")
     task = {"id": "late-run", "type": "task", "metadata": {"schedule_occurrence": {
         "schedule_id": "follow-up", "token": "occurrence-token", "due_at": due, "claimed_at": claimed,
+        **({"previous": previous} if previous is not None else {}),
     }}}
     runtime = json.loads(build_runtime_section(env, task).split("\n\n", 1)[1])
     assert runtime["task"]["schedule_occurrence"] == {
         "schedule_id": "follow-up", "due_at": due, "claimed_at": claimed,
+        **({"previous": previous} if previous is not None else {}),
     }
     if trigger == "once":
-        assert "scheduled_tasks" not in runtime  # consumed one-shot no longer appears in the digest
+        assert not any(runtime["scheduled_tasks"][group] for group in ("standing", "attention", "one_shots"))
     else:
-        assert runtime["scheduled_tasks"]["active"][0]["next_run_at"] != due
+        assert runtime["scheduled_tasks"]["standing"][0]["next_run_at"] != due
 
 
 def test_runtime_does_not_invent_a_due_time_for_legacy_or_ordinary_work(tmp_path):

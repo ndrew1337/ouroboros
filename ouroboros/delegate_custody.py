@@ -21,6 +21,8 @@ from ouroboros._usage_rows import REVIEW_ATTRIBUTION_KEYS  # noqa: F401 -- deleg
 from ouroboros.delegate_custody_usage import (
     disclosed_spend,
     disclosed_tokens,  # noqa: F401 -- public custody vocabulary used by collection
+    held_run_names,
+    names_another_run,
     project_retirement_lock,
     summary_of,
 )
@@ -46,6 +48,7 @@ SETTLE_FAILED = "delegate_run_settle_failed"
 # is no terminal detail to settle against, and inventing a $0 ledger row for a run nobody
 # can describe is the one shape the ledger must never produce.
 CLOSED_ABSENT = "delegate_run_closed_absent"
+STORE_BOUND = "delegate_run_store_bound"
 PROJECT_RETIRED = "delegate_run_project_retired"
 PROJECT_RETIRE_FAILED = "delegate_run_project_retire_failed"
 CANCEL_OUTCOME = "delegate_run_cancel_outcome"
@@ -118,6 +121,7 @@ class RunCustody:
     profile_id: str = ""
     effort: Optional[str] = None
     processing_preference: Optional[str] = None
+    prompt_cache_ttl: Optional[Dict[str, Any]] = None
     row_effort: Optional[str] = None  # the configured row's pin ('' = Auto); None on rows without one
     project_id: str = ""
     project_owned: bool = False
@@ -136,6 +140,7 @@ class RunCustody:
     # Idempotency-Key only for an exact transport retry; deliberately new work
     # gets a fresh id. ``idempotency_key`` above only finds pending work.
     invocation_id: str = ""
+    daemon_store_id: str = ""  # immutable engine store UUID; empty legacy authority stays unknown
     # Configured-actor binding. Empty on historical/root-legacy delegate starts.
     selected_subagent_id: str = ""
     config_fingerprint: str = ""
@@ -288,19 +293,28 @@ def emit(drive_root: Any, kind: str, payload: Dict[str, Any], *, propagate_conte
             log.debug("Start history unavailable", exc_info=True)
     return written
 
-def daemon_says_absent(exc: Any) -> bool:
-    """True when the daemon ANSWERED that the named resource does not exist.
+def daemon_says_absent(exc: Any, *, gateway: Any = None, run: Optional[RunCustody] = None) -> bool:
+    """A run's 404 proves absence in its owning store; project cleanup uses raw HTTP.
 
-    A 404 from a reachable daemon is a definitive fact, not a failure to find out: a run
-    the daemon does not have is not mutating anything, and a registration it does not have
-    is already retired. Collapsing it into "unreachable" is what left a finished run in
-    ``open_runs`` forever, re-faulted on every pass, with a CRITICAL health invariant no
-    settlement or cancel could ever clear.
-
-    Deliberately NOT "any 4xx": a 400 or a 403 is the daemon refusing US, which says
-    nothing about whether the resource is there.
+    A run bound to a store (handshake ``storeId``) is absent only for that store. An unbound
+    run (started before engines named their store, or never read) keeps the earlier contract:
+    the one managed daemon's 404 closes it.
     """
-    return int(getattr(exc, "status_code", 0) or 0) == 404
+    return int(getattr(exc, "status_code", 0) or 0) == 404 and (run is None or _absence_provable(run, gateway))
+
+
+def _absence_provable(run: RunCustody, gateway: Any) -> bool:
+    return not run.terminal_source and (not run.daemon_store_id
+                                        or run.daemon_store_id == getattr(gateway, "store_identity", ""))
+
+
+def bind_daemon_store(drive_root: Any, gateway: Any, entry: RunCustody) -> None:
+    """Bind a successful exact run read, never infer identity from a 404 or PID."""
+    identity = getattr(gateway, "store_identity", "")
+    if isinstance(identity, str) and identity and not entry.daemon_store_id:
+        if emit(drive_root, STORE_BOUND, {"run_id": entry.run_id, "task_id": entry.task_id,
+                "invocation_id": entry.invocation_id, "daemon_store_id": identity}):
+            entry.daemon_store_id = identity
 
 PROJECT_HAS_THREADS = "project_has_threads"  # the engine's typed refusal of a project DELETE
 
@@ -358,8 +372,8 @@ def actor_decision_lock(drive_root: Any, task_id: str) -> Iterator[None]:
 
     The custody log and the verification-receipt store are separate append-only
     authorities.  This short critical section joins only their decision edge:
-    re-read current authority, then append either a zero-run receipt or a fresh
-    START_REQUESTED row.  Transport, waiting and settlement stay outside it.
+    re-read authority before a zero-run receipt, START_REQUESTED or absent-run
+    closure. Network operations stay outside it.
     """
 
     from ouroboros.platform_layer import (
@@ -468,6 +482,7 @@ def _merge_started_into(entry: RunCustody, previous: RunCustody) -> None:
     for attr in ("terminal_source", "observation_seq", "interaction_source", "pending_interaction_ids", "output_terminal_sha"):
         setattr(entry, attr, copy.deepcopy(getattr(previous, attr)))
     entry.output_reader_receipts = previous.output_reader_receipts
+    entry.daemon_store_id = previous.daemon_store_id or entry.daemon_store_id
     entry.patch_apply_key = previous.patch_apply_key
     entry.project_owned = previous.project_owned and entry.project_owned
     entry.project_persistent = previous.project_persistent or entry.project_persistent
@@ -480,6 +495,8 @@ def _merge_started_into(entry: RunCustody, previous: RunCustody) -> None:
             setattr(entry, attr, getattr(previous, attr))
     if previous.work_order_source_request:
         entry.work_order_source_request = dict(previous.work_order_source_request)
+    if previous.prompt_cache_ttl:
+        entry.prompt_cache_ttl = copy.deepcopy(previous.prompt_cache_ttl)
     for start, end in previous.verified_source_ranges:
         _merge_verified_source_range(entry, start, end)
     merge_source_delivery_confirmations(entry, previous)
@@ -511,12 +528,16 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         source_request = row.get("work_order_source_request")
         entry = RunCustody(
             run_id=run_id,
+            daemon_store_id=str(row.get("daemon_store_id") or ""),
             project_owned=bool(row.get("project_owned")),
             project_persistent=bool(row.get("project_persistent")),
             delegated=row.get("delegated") is True,
             resource_ref=dict(ref) if isinstance(ref, dict) else {},
             work_order_source_request=(
                 dict(source_request) if isinstance(source_request, dict) else {}
+            ),
+            prompt_cache_ttl=(
+                copy.deepcopy(row["prompt_cache_ttl"]) if isinstance(row.get("prompt_cache_ttl"), dict) else None
             ),
             **{attr: str(row.get(key) or "") for attr, key in _STARTED_STR_FIELDS},
             **{key: row[key] for key in _STARTED_OPTION_FIELDS if isinstance(row.get(key), str)},
@@ -547,6 +568,9 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
             project_id=str(row.get("project_id") or ""), source=str(row.get("source") or ""))
     if custody is None:
         return
+    if kind == STORE_BOUND and not custody.daemon_store_id:
+        if row.get("task_id") == custody.task_id and row.get("invocation_id") == custody.invocation_id:
+            custody.daemon_store_id = str(row.get("daemon_store_id") or "")
     if kind in (TERMINAL_OBSERVED, INTERACTIONS_OBSERVED):
         seq = row.get("observation_seq")
         if not isinstance(seq, int) or isinstance(seq, bool) or seq < custody.observation_seq:
@@ -654,7 +678,8 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
     elif kind == CONTAINMENT_FAULT:
         custody.containment_fault = dict(row)
     elif kind == CONTAINMENT_RESOLVED:
-        custody.containment_fault = {}
+        if not row.get("expected_reason") or row["expected_reason"] == custody.containment_fault.get("reason"):
+            custody.containment_fault = {}
 
 
 def _unique_rows(rows: Any) -> Iterator[Dict[str, Any]]:
@@ -930,9 +955,12 @@ def record_started(drive_root: Any, custody: RunCustody,
     # recorded separately can lose half of itself to a crash); shape spreads LAST.
     landed = emit(drive_root, STARTED, {
         "run_id": custody.run_id,
+        "daemon_store_id": custody.daemon_store_id,
         "project_owned": custody.project_owned, "project_persistent": custody.project_persistent,
         "resource_ref": custody.resource_ref or {},
         "work_order_source_request": custody.work_order_source_request or {},
+        **({"prompt_cache_ttl": copy.deepcopy(custody.prompt_cache_ttl)}
+           if isinstance(custody.prompt_cache_ttl, dict) else {}),
         **{key: getattr(custody, attr) for attr, key in _STARTED_STR_FIELDS},
         **(shape or {}),
         **{key: getattr(custody, key) for key in _STARTED_OPTION_FIELDS if getattr(custody, key) is not None},
@@ -1070,24 +1098,23 @@ def _retire_project_locked(drive_root: Any, gateway: Any, custody: RunCustody, *
 
 
 def close_absent_run(drive_root: Any, gateway: Any, custody: RunCustody, reason: str) -> None:
-    """Close custody over a run the daemon says it does not have.
+    """Close one owning-store absence without fabricating terminal output or money."""
+    from ouroboros.delegate_custody_current import run
+    from ouroboros.gateways.claudexor import ClaudexorUnavailable
 
-    "Absent" is a fact about the daemon that answered, not the run: across the
-    D30 provisioning boundary a 404 can mean a DIFFERENT daemon whose child may
-    still be writing. Closing is a deliberate trade - an unreachable run cannot
-    be cancelled/verified/settled, and holding it open re-faults it forever; no
-    terminal detail, so no settlement (that would invent tokens/spend). The
-    absent-run FACT and the registration are recorded INDEPENDENTLY (P34R.4):
-    CLOSED_ABSENT closes custody now, the registration survives on
-    ``project_owned`` until PROJECT_RETIRED - retried by later sharers and the
-    sweep; a 404 on the PROJECT counts as discharged."""
+    with actor_decision_lock(drive_root, custody.task_id):
+        current = run(drive_root, custody.run_id) or custody
+        if current.settled:
+            custody.settled = True
+            return
+        if not _absence_provable(current, gateway):
+            raise ClaudexorUnavailable("daemon_store_identity_unproven", "Run absence is unproven in its owning store")
+        custody.settled = emit(drive_root, CLOSED_ABSENT, {
+            "run_id": custody.run_id, "task_id": custody.task_id,
+            "route": custody.route_id, "project_id": custody.project_id, "reason": reason,
+        })
+    # Network retirement is independent of the closed fact, outside the actor lock.
     retire_project(drive_root, gateway, custody)
-    # The absent-run FACT lands regardless of the registration (holding the
-    # run open as cleanup-debt proxy was the same category error).
-    custody.settled = emit(drive_root, CLOSED_ABSENT, {
-        "run_id": custody.run_id, "task_id": custody.task_id,
-        "route": custody.route_id, "project_id": custody.project_id, "reason": reason,
-    })
     if custody.settled:
         # The compact fault projection is cleared by its OWN writer pair, so a run
         # closed absent through reconciliation (which never passes _cancel_result)
@@ -1097,7 +1124,17 @@ def close_absent_run(drive_root: Any, gateway: Any, custody: RunCustody, reason:
 
 def settle_run(drive_root: Any, gateway: Any, custody: RunCustody, detail: Dict[str, Any]) -> Dict[str, Any]:
     """Compatibility settlement for the panel/control owners; collection separates cleanup."""
-    from ouroboros.delegate_collection import record_terminal_money
+    from ouroboros.delegate_collection import observe_run, record_terminal_money
+
+    # Cancellation already paid for this exact read-back. Preserve it before
+    # money/retirement, including a repeated settlement: the body can collect
+    # it after the engine disappears. Never fetch output or wait for capture on
+    # the stop path; an unavailable source is a gap, not a reason to delay Stop.
+    if not custody.review_owned:
+        try:
+            observe_run(drive_root, custody, detail)
+        except Exception:
+            log.warning("Terminal observation was not retained for %s", custody.run_id, exc_info=True)
 
     if custody.settled:
         return {"settled": True, "ledger_recorded": custody.ledger_recorded,
@@ -1227,8 +1264,9 @@ def record_containment_fault(drive_root: Any, custody: RunCustody, reason: str,
     })
 
 
-def resolve_containment_fault(drive_root: Any, custody: RunCustody, reason: str) -> None:
-    emit(drive_root, CONTAINMENT_RESOLVED, {"run_id": custody.run_id, "task_id": custody.task_id, "reason": reason})
+def resolve_containment_fault(drive_root: Any, custody: RunCustody, reason: str, *, expected_reason: str = "") -> None:
+    emit(drive_root, CONTAINMENT_RESOLVED, {"run_id": custody.run_id, "task_id": custody.task_id, "reason": reason,
+                                         **({"expected_reason": expected_reason} if expected_reason else {})})
 
 
 def cancel_and_verify(drive_root: Any, gateway: Any, custody: RunCustody, reason: str) -> Dict[str, Any]:
@@ -1255,7 +1293,7 @@ def cancel_and_verify(drive_root: Any, gateway: Any, custody: RunCustody, reason
         accepted = bool((receipt or {}).get("accepted"))
         control_status = str((receipt or {}).get("status") or "")
     except ClaudexorUnavailable as exc:
-        if daemon_says_absent(exc):
+        if daemon_says_absent(exc, gateway=gateway, run=custody):
             close_absent_run(drive_root, gateway, custody, "cancel_run_absent")
             return _cancel_result(drive_root, custody, CANCEL_CONFIRMED, accepted=False,
                                   control_status="", state="absent")
@@ -1266,7 +1304,7 @@ def cancel_and_verify(drive_root: Any, gateway: Any, custody: RunCustody, reason
     try:
         detail = gateway.get_run(custody.run_id)
     except ClaudexorUnavailable as exc:
-        if daemon_says_absent(exc):
+        if daemon_says_absent(exc, gateway=gateway, run=custody):
             close_absent_run(drive_root, gateway, custody, "get_run_absent")
             return _cancel_result(drive_root, custody, CANCEL_CONFIRMED, accepted=accepted,
                                   control_status=control_status, state="absent")
@@ -1381,10 +1419,12 @@ __all__ = [
     "disclosed_spend",
     "disposition_lock_path",
     "emit",
+    "held_run_names",
     "idempotency_key",
     "is_terminal",
     "invocation_record",
     "lookup",
+    "names_another_run",
     "new_invocation_id",
     "open_containment_faults",
     "open_runs",

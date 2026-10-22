@@ -24,6 +24,8 @@ definite no-run):
    the tree MAY already carry its patch;
 4. authority does not widen — native access is not wider than the run's
    recorded access, and a writing run writes for the target the old run held.
+   An omitted ``access`` keeps that recorded access (``inherited_access``),
+   so a continuation never refuses itself; an explicit one is the caller's.
 
 Everything else is a FACT, never a refusal: the cause (any terminal cause), an
 unread result, the patch disposition, another actor, route or configuration, a
@@ -89,6 +91,7 @@ class AdoptedSnapshot(NamedTuple):
     baseline_sha: str
     path: str
     adopted_from: str
+    excluded_untracked: tuple = ()  # the snapshot's own exclusions, for the start receipt
 
 
 class ContinuationStart(NamedTuple):
@@ -247,7 +250,8 @@ def bind_continuation(ctx: Any, drive: Any, run_id: str, *, actor: Dict[str, Any
             or _ACCESS_RANK[this_access] > _ACCESS_RANK[entry.access]):
         return {}, REFUSAL_AUTHORITY_WIDENED, (
             f"Run {rid} ran with access {entry.access or 'unrecorded'!r}; this start derives "
-            f"{this_access or 'unrecorded'!r}. A continuation may keep or lower native access, never widen it.")
+            f"{this_access or 'unrecorded'!r}. A continuation may keep or lower native access, never widen it"
+            + ("; omit access to keep the run's own." if entry.access in _ACCESS_RANK else "."))
     if this_access != "readonly" and (not entry.target_root or entry.target_root != str(target_root or "")):
         return {}, REFUSAL_TARGET_MISMATCH, (
             f"Run {rid} wrote for {entry.target_root or 'an unrecorded target'}; this task's present target is "
@@ -287,6 +291,27 @@ def bind_continuation(ctx: Any, drive: Any, run_id: str, *, actor: Dict[str, Any
     return facts, "", ""
 
 
+def inherited_access(ctx: Any, run_id: Any) -> Optional[str]:
+    """The lowering an omitted ``access`` takes on ``continue_from``: the run's recorded access.
+
+    The selected snapshot only ever lowers (``validate_subagent_snapshot``), so the start
+    runs at the narrower of today's captured profile and the continued run's, and the
+    task's own authority still shapes it (``_derive_authority``). ``full``, an unrecorded
+    access or unreadable custody inherits nothing: the floors above answer those.
+    """
+    from ouroboros.configured_subagents import SESSION_ACCESS_LOWERING
+    from ouroboros.delegate_custody_current import run
+
+    drive = custody.custody_root(ctx)
+    try:
+        entry = None if custody.custody_log_unreadable(drive) else run(drive, str(run_id or "").strip())
+    except Exception:
+        log.debug("Continued run's access unavailable for %s", run_id, exc_info=True)
+        return None
+    access = str(getattr(entry, "access", "") or "")
+    return access if access in SESSION_ACCESS_LOWERING else None
+
+
 def _adopted_snapshot(entry: Any, authority: Any) -> Tuple[Optional[AdoptedSnapshot], str, str]:
     """The predecessor's undisposed snapshot a WRITING continuation runs in, or a refusal."""
     from ouroboros.configured_subagents import SESSION_ACCESS_PROFILES
@@ -307,7 +332,8 @@ def _adopted_snapshot(entry: Any, authority: Any) -> Tuple[Optional[AdoptedSnaps
             f"({record.get('error') or 'no registry entry or directory'}), so its work cannot be continued in "
             "the same tree. Apply or reject its captured patch with integrate_delegated_patch, then continue "
             "again: the next continuation starts from a fresh snapshot of the target.")
-    return AdoptedSnapshot(entry.snapshot_id, entry.baseline_sha, entry.execution_root, entry.run_id), "", ""
+    return AdoptedSnapshot(entry.snapshot_id, entry.baseline_sha, entry.execution_root, entry.run_id,
+                           tuple(record.get("excluded_untracked") or ())), "", ""
 
 
 def continuation_prompt(facts: Dict[str, Any], caller_text: str) -> str:
@@ -397,9 +423,20 @@ def start_binding(ctx: Any, drive: Any, token: str, *, gateway: Any, actor: Dict
         inherit_source_obligations(entry, source_binding)
         record.update(capture_id=invocation_id, snapshot_task_id=entry.snapshot_task_id or entry.task_id)
     caller = coordination_context if bool(actor.get("compiled_work_order")) else text
+    request = {"continueFrom": token, **({"continueCarrier": preference} if preference else {})}
+    if authority.access == "readonly" and entry.access != "readonly":
+        from ouroboros.workspace_preflight import _route_row, route_grants_auxiliary_roots
+
+        # Omission inherits the writer's live execution and auxiliary grants. Replace
+        # the whole object with the ordinary read-only shape; scope still names the
+        # current source, not the writer's private, possibly unapplied snapshot.
+        execution = {"isolation": "envelope", "delegated": False}
+        if route_grants_auxiliary_roots(_route_row(gateway, route.route_id)):
+            execution["auxiliaryWritableRoots"] = []
+        request["execution"] = execution
     return ContinuationStart(
         facts=facts, prompt=continuation_prompt(facts, caller),
-        request={"continueFrom": token, **({"continueCarrier": preference} if preference else {})},
+        request=request,
         custody=record, snapshot=adopted), None
 
 
@@ -496,19 +533,20 @@ def terminal_continuity(run_id: str, summary: Dict[str, Any]) -> Dict[str, Any]:
     facts: Dict[str, Any] = {}
     if isinstance(summary.get("resumable"), dict):
         facts["resumable"] = summary["resumable"]
-    lines = [_receipt_line(run_id, row) for row in summary.get("continuity") or () if isinstance(row, dict)]
+    names = custody.held_run_names({"summary": summary}, run_id)  # a run held by its job id
+    lines = [_receipt_line(names, row) for row in summary.get("continuity") or () if isinstance(row, dict)]
     if lines:
         facts["continuity"] = lines
     return facts
 
 
-def _receipt_line(run_id: str, row: Dict[str, Any]) -> str:
+def _receipt_line(names: frozenset, row: Dict[str, Any]) -> str:
     """One continued try: carrier, accounts, memory, attested model, and every non-default flag."""
     source = row.get("from") if isinstance(row.get("from"), dict) else {}
     target = row.get("to") if isinstance(row.get("to"), dict) else {}
     parts = [f"try {row.get('tryIndex')} ({row.get('attemptId') or '?'}): {row.get('carrier') or '?'} "
              f"after {row.get('cause') or '?'}"
-             + (f" of run {source.get('runId')}" if source.get("runId") and source.get("runId") != run_id else ""),
+             + (f" of run {source.get('runId')}" if source.get("runId") and str(source["runId"]) not in names else ""),
              f"profile {source.get('profileId') or '?'} -> {target.get('profileId') or '?'}",
              f"memory {row.get('memory') or 'unknown'}",
              f"model {row.get('observedModel') or 'unattested'}"]
@@ -535,6 +573,7 @@ __all__ = [
     "continuation_prompt",
     "disposition_refusal",
     "engine_continues",
+    "inherited_access",
     "replayed_custody",
     "retry_matches_caller_text",
     "snapshot_handover",

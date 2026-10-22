@@ -1,10 +1,13 @@
 """WAL needs a fixed SQLite, enforced locks AND a positively identified local filesystem."""
 import contextlib
 import ctypes
+import json
 import os
 import pathlib
+import shutil
 import sqlite3
 import sys
+import threading
 
 import pytest
 
@@ -41,20 +44,29 @@ def test_ineligible_engine_or_tier_never_probes_filesystem(monkeypatch, tier, ve
     assert store._journal_mode(pathlib.Path("store.sqlite"), tier) == "PERSIST"
 
 
+def _mountinfo_path(path: pathlib.Path) -> str:
+    """A mount point as the kernel writes it in mountinfo: space, tab, newline and backslash as octal
+    escapes. The parser only runs on Linux, but this test runs everywhere: a Windows tmp_path carries
+    backslashes and a drive anchor, so its root mount is that anchor rather than ``/``."""
+    return str(path).translate({ord(" "): r"\040", ord("\t"): r"\011", ord("\n"): r"\012", ord("\\"): r"\134"})
+
+
 @pytest.mark.parametrize("kind,expected", [
     ("ext4", "ext4"), ("xfs", "xfs"), ("nfs", "nfs"), ("nfs4", "nfs4"), ("cifs", "cifs"),
     ("smb3", "smb3"), ("fuse", "fuse"), ("fuseblk", "fuseblk"), ("fuse.drive", "fuse.drive"), ("9p", "9p")])
 def test_linux_uses_longest_mount_including_bind_and_escaped_names(tmp_path, kind, expected):
-    mount = tmp_path / "nested mount"
+    mount = tmp_path.resolve() / "nested mount"
     mount.mkdir()
-    escaped = str(mount).replace(" ", r"\040")
-    table = f"1 0 8:1 / / rw - ext4 /dev/root rw\n2 1 0:2 /bind {escaped} rw - {kind} source rw\n"
+    root, escaped = _mountinfo_path(pathlib.Path(mount.anchor)), _mountinfo_path(mount)
+    table = f"1 0 8:1 / {root} rw - ext4 /dev/root rw\n2 1 0:2 /bind {escaped} rw - {kind} source rw\n"
     assert store._linux_filesystem(mount / "store.sqlite", table) == expected
     assert store._linux_filesystem(tmp_path / "elsewhere.sqlite", table) == "ext4"
     assert store._linux_filesystem(mount, "bad mountinfo") is None
     assert store._linux_filesystem(mount, "") is None
 
 
+@pytest.mark.skipif(os.name == "nt", reason="overlay options separate directories with ':', which a Windows "
+                    "drive path carries; this parser runs only on Linux")
 @pytest.mark.parametrize("backing", ["ext4", "nfs", "fuse.drive", "missing"])
 def test_overlay_requires_every_backing_directory_to_be_known_local(tmp_path, backing):
     overlay, lower, upper = [tmp_path / part for part in ("overlay", "lower", "upper")]
@@ -180,7 +192,7 @@ def test_failed_build_rolls_back_and_releases_its_temporary_journal(tmp_path, mo
     assert all(not path.with_name(path.name + suffix).exists() for suffix in ("-journal", "-wal", "-shm"))
     with contextlib.closing(sqlite3.connect(path)) as conn:
         assert conn.execute("SELECT * FROM pending").fetchall() == []
-        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0] == ("wal" if mode == "WAL" else "delete")
 
 
 @pytest.mark.parametrize("dialogue", [False, True])
@@ -226,8 +238,8 @@ def test_a_door_reset_hands_every_store_off_out_of_wal_first(tmp_path, monkeypat
 @pytest.mark.parametrize("outcome", ["refused_before_tree_effects", "failed", "raised"])
 def test_a_reset_that_changed_nothing_hands_the_stores_back(tmp_path, monkeypatch, outcome):
     """After a successful hand-off: a reset refused before any tree effect leaves this process running
-    on its own stores, which choose their journal again; any other failure may already have moved
-    the checkout, so the stores stay handed off."""
+    on its own stores, in the rollback journal until a boot chooses again; any other failure may
+    already have moved the checkout, so the stores stay handed off."""
     monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 53, 1))
     monkeypatch.setattr(store, "_filesystem_type", lambda _path: "apfs")
     publish(tmp_path)
@@ -276,3 +288,579 @@ def test_a_store_that_cannot_hand_off_refuses_the_door_reset(tmp_path, monkeypat
         reset=lambda: pytest.fail("the checkout moved past a store still in WAL"))
     assert (ok, deferred) == (False, False) and "checkpoint busy" in message
     assert handed not in store._HANDED_OFF, "a refused door hands every store back to this process"
+
+
+def test_the_log_identity_moves_with_every_commit(tmp_path):
+    """Read from the log's header and frame headers beside its size and time: a commit adds a commit
+    frame, a rolled-back transaction's spilled frames add none (only the log's size and time move),
+    and a log reused in place at the same size after a checkpoint carries a new generation's salts."""
+    path = tmp_path / "log.sqlite"
+    writer = sqlite3.connect(path, isolation_level=None)
+    assert writer.execute("PRAGMA journal_mode=WAL").fetchone()[0] == "wal"
+    writer.execute("PRAGMA wal_autocheckpoint=0")
+    writer.execute("CREATE TABLE t(v)")
+    held = sqlite3.connect(path, isolation_level=None)  # stays open: no last close removes the log
+    log = path.with_name(path.name + "-wal")
+
+    def commit(rows, connection=writer):
+        connection.execute("BEGIN IMMEDIATE")
+        connection.executemany("INSERT INTO t VALUES (?)", [("x" * 900,)] * rows)
+        connection.execute("COMMIT")
+        return store.log_identity(path)
+
+    first = commit(20)
+    assert first[1] > 1 and commit(1)[1] > first[1]  # every commit adds its frames
+    committed = store.log_identity(path)
+    spiller = sqlite3.connect(path, isolation_level=None)
+    spiller.execute("PRAGMA cache_size = 5")  # the transaction spills frames into the log before it ends
+    spiller.execute("BEGIN IMMEDIATE")
+    spiller.executemany("INSERT INTO t VALUES (?)", [("y" * 3000,)] * 300)
+    spiller.execute("ROLLBACK")
+    spilled = store.log_identity(path)
+    assert log.stat().st_size > 32 + 4096 * committed[1] and spilled[:3] == committed[:3] and spilled[3] > committed[3]
+    small = commit(1)
+    assert small[0] == committed[0] and small[1] > committed[1]  # over the spilled frames, one commit further
+    assert writer.execute("PRAGMA wal_checkpoint(PASSIVE)").fetchone()[0] == 0
+    size = log.stat().st_size
+    reused = commit(1)  # every frame is in the database: the log restarts in place
+    assert log.stat().st_size == size and reused[0] != small[0] and reused[1] < small[1]
+    for connection in (spiller, held, writer):
+        connection.close()
+
+
+def test_a_killed_writer_s_unseen_commit_frame_does_not_hide_the_next_commit(tmp_path):
+    """A writer killed between writing its commit frame and publishing it in the index leaves a frame
+    that looks committed, which no reader sees while another connection keeps the index alive; the
+    next commit of the same length overwrites it at the same frame number (Opus reproduced it with
+    SIGKILL). Here the orphan is a real commit frame of the same update, taken from a copy of the
+    store, so the frame and the salts stay the same: the frame's checksum moves the identity even
+    while the log's size and time stay, as a coarse or a held file's time may."""
+    path = tmp_path / "log.sqlite"
+    with contextlib.closing(sqlite3.connect(path, isolation_level=None)) as setup:
+        setup.execute("CREATE TABLE t(v)")
+        setup.execute("INSERT INTO t VALUES ('start')")
+    writer = store.connect(path, store.TIER_ENFORCED, journal_mode="WAL")  # counted: its file reads borrow
+    writer.execute("PRAGMA wal_autocheckpoint = 0")
+    writer.execute("UPDATE t SET v = 'committed'")
+    held = sqlite3.connect(path, isolation_level=None)  # keeps the index: no recovery adopts the orphan
+    assert held.execute("SELECT v FROM t").fetchone() == ("committed",)
+    log = path.with_name(path.name + "-wal")
+    published = store.log_identity(path)
+    copy = tmp_path / "copy.sqlite"
+    copy.write_bytes(store.read_file_bytes(path))
+    shutil.copyfile(log, copy.with_name(copy.name + "-wal"))
+    with contextlib.closing(sqlite3.connect(copy, isolation_level=None)) as other:  # recovers the same log
+        other.execute("PRAGMA wal_autocheckpoint = 0")
+        other.execute("UPDATE t SET v = 'killed'")  # the killed writer's commit, one frame further
+        orphan = copy.with_name(copy.name + "-wal").read_bytes()[log.stat().st_size:]
+    with open(log, "r+b") as raw:  # it reached the log, never the index
+        raw.seek(log.stat().st_size)
+        raw.write(orphan)
+    seen, size, written = store.log_identity(path), log.stat().st_size, log.stat().st_mtime_ns
+    assert seen[1] == published[1] + 1 and held.execute("SELECT v FROM t").fetchone() == ("committed",)
+    writer.execute("UPDATE t SET v = 'next'")  # the next commit of the same length overwrites the orphan
+    os.utime(log, ns=(written, written))  # the log's time as a coarse or held file time keeps it
+    after = store.log_identity(path)
+    assert held.execute("SELECT v FROM t").fetchone() == ("next",) and log.stat().st_size == size
+    assert after[:2] == seen[:2], "the same frame of the same generation"
+    assert after != seen, "the commit frame's checksum must move the identity"
+    for connection in (held, writer):
+        connection.close()
+
+
+def test_a_shorter_commit_over_a_killed_writer_s_longer_one_moves_only_the_log_s_time(tmp_path):
+    """A killed writer's unseen commit spans four frames, and the next commit writes one: the
+    unseen commit frame stays the log's last, so the frame, its checksum and the log's size stay the
+    same, and only the log's time moves the identity (pinned: with the time constant, it would not
+    move at all; on a volume that keeps a held file's time it stays until the next commit)."""
+    path = tmp_path / "log.sqlite"
+    with contextlib.closing(sqlite3.connect(path, isolation_level=None)) as setup:
+        setup.execute("CREATE TABLE t(k INTEGER PRIMARY KEY, v)")
+        setup.executemany("INSERT INTO t VALUES (?, ?)", [(k, "a" * 3000) for k in range(4)])  # a leaf page each
+    writer = store.connect(path, store.TIER_ENFORCED, journal_mode="WAL")  # counted: its file reads borrow
+    writer.execute("PRAGMA wal_autocheckpoint = 0")
+    writer.execute("UPDATE t SET v = 'b' || substr(v, 2) WHERE k = 0")
+    held = sqlite3.connect(path, isolation_level=None)  # keeps the index: no recovery adopts the orphan
+    log = path.with_name(path.name + "-wal")
+    published = store.log_identity(path)
+    copy = tmp_path / "copy.sqlite"
+    copy.write_bytes(store.read_file_bytes(path))
+    shutil.copyfile(log, copy.with_name(copy.name + "-wal"))
+    with contextlib.closing(sqlite3.connect(copy, isolation_level=None)) as other:  # recovers the same log
+        other.execute("PRAGMA wal_autocheckpoint = 0")
+        other.execute("UPDATE t SET v = 'k' || substr(v, 2)")  # the killed writer's commit: four leaf pages
+        orphan = copy.with_name(copy.name + "-wal").read_bytes()[log.stat().st_size:]
+    with open(log, "r+b") as raw:  # it reached the log, never the index
+        raw.seek(log.stat().st_size)
+        raw.write(orphan)
+    then = log.stat().st_mtime_ns - 10 ** 10
+    os.utime(log, ns=(then, then))  # written ten seconds ago, past any file time's grain
+    seen = store.log_identity(path)
+    rows = "SELECT group_concat(substr(v, 1, 1), '') FROM t"
+    assert seen[1] - published[1] == 4 and held.execute(rows).fetchone() == ("baaa",)  # the orphan unseen
+    writer.execute("UPDATE t SET v = 'n' || substr(v, 2) WHERE k = 3")  # one frame: shorter than the orphan
+    moved = store.log_identity(path)
+    assert held.execute(rows).fetchone() == ("baan",)
+    assert [part for part, (now, before) in enumerate(zip(moved, seen)) if now != before] == [4], (seen, moved)
+    for connection in (held, writer):
+        connection.close()
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs FIFOs")
+def test_a_fifo_in_the_log_s_place_is_never_opened(tmp_path):
+    """Opening a FIFO for reading waits for a writer: the log's identity looks at a regular file only,
+    as ``is_sqlite_file`` does, on the history page's request thread and in recovery alike."""
+    path = tmp_path / "log.sqlite"
+    fifo = path.with_name(path.name + "-wal")
+    os.mkfifo(fifo)
+    result = []
+    reader = threading.Thread(target=lambda: result.append(store.log_identity(path)), daemon=True)
+    reader.start()
+    reader.join(timeout=10)
+    blocked = reader.is_alive()
+    if blocked:  # a writer's open ends the reader's wait
+        os.close(os.open(fifo, os.O_WRONLY | os.O_NONBLOCK))
+        reader.join(timeout=10)
+    assert not blocked and result == [None]
+
+
+@pytest.mark.parametrize("mode", ["PERSIST", "WAL"])
+def test_the_store_state_sees_a_vacuum_that_keeps_every_row(tmp_path, monkeypatch, mode):
+    """``committed_content`` cannot show that nothing wrote: a VACUUM keeps every row. The store
+    state also holds the write's trace; an ordinary read leaves the build's journal choice as it was."""
+    from tests._store_journal_shared import committed_content, store_state, use_journal
+    from tests.test_store import document
+
+    use_journal(monkeypatch, mode)
+    path = publish(tmp_path, document("t1"), document("t2"))  # the private build already chose MODE
+    before = store_state(path)
+    with store.open_store(tmp_path, write=False) as txn:  # an ordinary read keeps the file's journal
+        assert txn.load("t1")["status"] == "completed"
+    assert store_state(path) == before
+    with contextlib.closing(store.connect(path, store.TIER_ENFORCED)) as conn:
+        conn.execute("VACUUM")
+    assert committed_content(path) == before.content and store_state(path) != before
+
+
+# ---- who chooses the journal (ouroboros/store_journal.py) --------------------------------
+
+REPO = pathlib.Path(__file__).resolve().parents[1]
+# A peer process on another interpreter, whose SQLite would choose MODE (argv[2]) for every store.
+_PEER_WRITE = """
+import contextlib, pathlib, sys
+from ouroboros import store
+store._journal_mode = lambda *_: sys.argv[2]
+with contextlib.closing(store.connect(pathlib.Path(sys.argv[1]), store.TIER_ENFORCED, wait_sec=5)) as conn:
+    conn.execute("BEGIN IMMEDIATE")
+    conn.execute("INSERT OR REPLACE INTO meta VALUES ('peer', '2')")
+    store.commit(conn)
+    print(conn.execute("PRAGMA journal_mode").fetchone()[0])
+"""
+
+
+def _built(kind, root):
+    """The store KIND as its own private build makes it, and its ordinary reader."""
+    from ouroboros import delegate_custody_current, dialogue_store
+
+    if kind == "facts":
+        return publish(root), lambda: delegate_custody_current.runs(root)  # the helper of 2026-10-20
+    if kind == "money":
+        usage_store.migrate_from_journal(root)
+
+        def read():
+            with usage_store.read(root) as txn:
+                return txn.meta("peer")
+        return root / usage_store.STORE_REL, read
+    return dialogue_store.create(root, tier=store.TIER_ENFORCED), lambda: dialogue_store.meta(root, "peer")
+
+
+def _peer(path, mode):
+    from tests.group_run import run_in_group
+
+    return run_in_group([sys.executable, "-c", _PEER_WRITE, str(path), mode], timeout=60, cwd=str(REPO),
+                        env=dict(os.environ))
+
+
+@pytest.mark.parametrize("kind", ["facts", "money", "dialogue"])
+def test_a_reader_whose_sqlite_would_choose_wal_keeps_a_rollback_store(tmp_path, monkeypatch, kind):
+    """The incident: the app's SQLite may not share WAL, a helper on another interpreter could. The
+    helper's ordinary read (``write=False`` is still ``mode=rw``), cold and cached, and a write of a peer
+    process with that policy keep the rollback journal, so the app's own writer beside them never meets
+    a WAL file it would have to turn back while the helper holds the log."""
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    path, read = _built(kind, tmp_path)
+    with contextlib.closing(store.connect(path, store.TIER_ENFORCED)) as owner:  # the app's connection
+        assert owner.execute("PRAGMA journal_mode").fetchone()[0] == "persist"
+        monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")  # the helper's runtime
+        read()
+        read()
+        assert not store.wal_file(path)
+        owner.execute("BEGIN IMMEDIATE")
+        owner.execute("INSERT OR REPLACE INTO meta VALUES ('owner', '1')")
+        store.commit(owner)
+        peer = _peer(path, "WAL")
+        assert peer.returncode == 0, peer.stderr
+        assert peer.stdout.strip().splitlines()[-1] == "persist"
+        assert owner.execute("SELECT value FROM meta WHERE key='peer'").fetchone()[0] == "2"
+        read()
+        assert not store.wal_file(path)
+
+
+@pytest.mark.parametrize("kind", ["facts", "money", "dialogue"])
+def test_a_reader_whose_sqlite_must_not_share_wal_refuses_a_wal_store_unchanged(tmp_path, monkeypatch, kind):
+    """The reverse: a WAL store this runtime's SQLite, tier or filesystem must not share is refused typed
+    at an ordinary open, cold and again, in this process and in a peer: it is neither used under the
+    WAL-reset race (sqlite.org/wal.html §11) nor turned back while its owner holds the log, and the
+    owner's connection keeps working. Only a boot or handoff of that runtime leaves WAL."""
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    path, read = _built(kind, tmp_path)
+    store.close_connections()
+    with contextlib.closing(store.connect(path, store.TIER_ENFORCED)) as owner:
+        assert owner.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+        owner.execute("SELECT * FROM meta").fetchall()
+        monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+        for _ in range(2):
+            with pytest.raises((store.StoreError, usage_store.UsageAccountingError), match="journal is WAL"):
+                read()
+        peer = _peer(path, "PERSIST")
+        assert peer.returncode != 0 and "journal is WAL" in peer.stderr
+        assert store.wal_file(path)
+        owner.execute("BEGIN IMMEDIATE")
+        owner.execute("INSERT OR REPLACE INTO meta VALUES ('owner', '1')")
+        store.commit(owner)
+        assert owner.execute("SELECT value FROM meta WHERE key='owner'").fetchone()[0] == "1"
+
+
+@pytest.mark.parametrize("mode", ["PERSIST", "WAL"])
+def test_a_private_build_publishes_its_choice_with_nothing_beside_it(tmp_path, monkeypatch, mode):
+    """Every private build (facts, money, dialogue, the evidence index) is renamed into place in the journal
+    it chose, WAL included, with no log or index and no hot journal under its temporary name. The index
+    build writes on through ordinary handles, whose rollback PERSIST leaves a zeroed journal there; its own
+    cleanup removes that once the database moved, as before this change."""
+    from ouroboros import dialogue_store, evidence_packs
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: mode)
+    replace, published, temporaries = os.replace, {}, []
+    hot = bytes([0xD9, 0xD5, 0x05, 0xF9, 0x20, 0xA1, 0x63, 0xD7])  # a rollback journal's header magic
+
+    def inspect(source, target):
+        source = pathlib.Path(source)
+        if source.name.startswith((".index.sqlite.tmp.", "current.sqlite.import-", "usage.sqlite.import-",
+                                   "dialog.sqlite.import-")):
+            assert [suffix for suffix in ("-wal", "-shm") if pathlib.Path(f"{source}{suffix}").exists()] == []
+            journal = pathlib.Path(f"{source}-journal")
+            if journal.exists():
+                assert source.name.startswith(".index.sqlite.tmp.") and mode == "PERSIST"
+                assert journal.read_bytes()[:8] != hot, "never a hot journal beside a published database"
+            assert store.wal_file(source) is (mode == "WAL")
+            published[pathlib.Path(target).name] = pathlib.Path(target)
+            temporaries.append(source)
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", inspect)
+    store_import.ensure_current_store(tmp_path, with_children=False)
+    usage_store.migrate_from_journal(tmp_path)
+    dialogue_store.create(tmp_path, tier=store.TIER_ENFORCED)
+    with evidence_packs.open_index(tmp_path):
+        pass
+    monkeypatch.setattr(os, "replace", replace)
+    store.close_connections()
+    assert sorted(published) == ["current.sqlite", "dialog.sqlite", "index.sqlite", "usage.sqlite"]
+    assert [path for path in temporaries for suffix in ("", "-journal", "-wal", "-shm")
+            if pathlib.Path(f"{path}{suffix}").exists()] == []
+    for target in published.values():
+        assert store.wal_file(target) is (mode == "WAL")
+        with contextlib.closing(sqlite3.connect(target)) as conn:
+            assert conn.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+
+
+def _three_stores(root):
+    from ouroboros import dialogue_import, dialogue_store
+
+    store_import.ensure_current_store(root, with_children=False)
+    usage_store.migrate_from_journal(root)
+    dialogue_import.cutover(root)
+    store.close_connections()
+    return [store.store_path(root), root / usage_store.STORE_REL, dialogue_store.path(root)]
+
+
+def test_only_the_boot_promotes_an_existing_store_to_wal(tmp_path, monkeypatch):
+    """A rollback store stays rollback for every ordinary and lazy owner of a runtime that may use WAL
+    (a first-touch import check, the supervisor's money revival, a lazy cutover); only the boot owners,
+    before their producers, choose WAL for it, and every reader serves afterwards."""
+    from ouroboros import dialogue_import, dialogue_store
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    paths = _three_stores(tmp_path)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    store_import.ensure_current_store(tmp_path, with_children=False)
+    usage_store.migrate_from_journal(tmp_path)
+    dialogue_import.cutover(tmp_path)
+    with store.open_store(tmp_path, write=False):
+        pass
+    store_import.ensure_current_store(tmp_path, with_children=False, body_sha="helper-stamp")
+    assert [store.wal_file(path) for path in paths] == [False, False, False]
+    assert store_import.ensure_current_store(tmp_path, with_children=False, body_sha="b" * 40, initialize_journal=True)["journal_selected"]
+    assert usage_store.migrate_from_journal(tmp_path, initialize_journal=True)["journal_selected"]
+    assert dialogue_import.cutover(tmp_path, initialize_journal=True)["journal_selected"]  # server._dialogue_cutover
+    assert [store.wal_file(path) for path in paths] == [True, True, True]
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.set_meta("after_boot", 1)
+    with usage_store.read(tmp_path) as txn:
+        assert txn.meta("import")["status"] == "completed"
+    assert dialogue_store.meta(tmp_path, "cutover") is not None
+
+
+def test_the_boot_leaves_wal_its_runtime_must_not_share_before_any_read(tmp_path, monkeypatch):
+    """A WAL store met by a runtime that must not share WAL: every ordinary owner refuses it typed, and
+    the boot owners leave WAL first, under the tier the file is used with, then read and serve it."""
+    from ouroboros import dialogue_import, dialogue_store
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    paths = _three_stores(tmp_path)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    with pytest.raises(store.StoreError, match="journal is WAL"):
+        store_import.ensure_current_store(tmp_path, with_children=False)
+    with pytest.raises(usage_store.UsageAccountingError, match="journal is WAL"):
+        usage_store.migrate_from_journal(tmp_path)
+    with pytest.raises(store.StoreError, match="journal is WAL"):
+        dialogue_import.cutover(tmp_path)
+    assert [store.wal_file(path) for path in paths] == [True, True, True]
+    store_import.ensure_current_store(tmp_path, with_children=False, body_sha="b" * 40, initialize_journal=True)
+    usage_store.migrate_from_journal(tmp_path, initialize_journal=True)
+    dialogue_import.cutover(tmp_path, initialize_journal=True)
+    assert [store.wal_file(path) for path in paths] == [False, False, False]
+    assert all(not path.with_name(path.name + suffix).exists() for path in paths for suffix in ("-wal", "-shm"))
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.set_meta("after_boot", 1)
+        assert txn.conn.execute("PRAGMA journal_mode").fetchone()[0] == "persist"
+    with usage_store.read(tmp_path) as txn:
+        assert txn.meta("import")["status"] == "completed"
+    assert dialogue_store.meta(tmp_path, "cutover") is not None
+
+
+def test_a_boot_promotion_defers_for_an_early_reader_and_the_store_keeps_serving(tmp_path, monkeypatch, caplog):
+    """Optional tuning: an early reader's lease at boot defers WAL with a warning; the rollback store keeps
+    serving, the next boot chooses again, and a matching journal is a no-op that keeps every handle."""
+    from ouroboros import store_journal
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    path = publish(tmp_path)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    with store.open_store(tmp_path, write=False) as txn:  # an early HTTP reader holds its lease
+        assert store_journal.configure_journal(path, store.TIER_ENFORCED, wait_sec=0) is False
+        assert txn.phase() == store.PUBLISHED
+    assert not store.wal_file(path) and "deferred" in caplog.text
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.set_meta("after_reader", True)
+    assert store_journal.configure_journal(path, store.TIER_ENFORCED) is True and store.wal_file(path)
+    with store.open_store(tmp_path, write=False) as txn:
+        assert txn.meta("after_reader") is True
+        held = txn.conn
+    assert store_journal.configure_journal(path, store.TIER_ENFORCED) is True  # matching: nothing closes
+    with store.open_store(tmp_path, write=False) as txn:
+        assert txn.conn is held
+
+
+def test_a_required_wal_exit_never_defers_silently(tmp_path, monkeypatch):
+    """Leaving WAL is compatibility, not tuning: while another connection holds the log the boot's
+    selection raises (the boot fails visibly) and this runtime's ordinary opens refuse the file; once
+    that holder is gone the same selection leaves WAL and the store serves."""
+    from ouroboros import store_journal
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    path = publish(tmp_path)
+    store.close_connections()
+    holder = sqlite3.connect(path, isolation_level=None)
+    try:
+        holder.execute("SELECT * FROM meta").fetchall()  # another runtime's WAL connection, open for its life
+        monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+        with pytest.raises((store.StoreBusy, sqlite3.OperationalError)):
+            store_journal.configure_journal(path, store.TIER_ENFORCED, wait_sec=0.2)
+        assert store.wal_file(path)
+        with pytest.raises(store.StoreError, match="journal is WAL"):
+            with store.open_store(tmp_path, write=False):
+                pass
+    finally:
+        holder.close()
+    assert store_journal.configure_journal(path, store.TIER_ENFORCED) is True and not store.wal_file(path)
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.set_meta("served", True)
+
+
+@pytest.mark.parametrize("which", ["facts", "dialogue"])
+@pytest.mark.parametrize("conversion", ["completes", "busy"])
+def test_a_retier_leaves_wal_under_the_old_tier_before_the_header_names_the_new_one(tmp_path, monkeypatch, which,
+                                                                                    conversion):
+    """Enforced (WAL) -> name tier: the file leaves WAL through the enforced protocol it is used with, and
+    only then does its header name the name tier, whose VFS takes no locks. A conversion that cannot
+    finish publishes nothing: the old tier and its WAL file stay, and the next retier tries again."""
+    from ouroboros import dialogue_store, platform_layer
+
+    monkeypatch.setattr(store, "_journal_mode", lambda _path, tier: "WAL" if tier == store.TIER_ENFORCED else "PERSIST")
+    monkeypatch.setattr(platform_layer, "kernel_file_locks_enforced", lambda path, **kw: True)
+    if which == "facts":
+        store_import.ensure_current_store(tmp_path, with_children=False)
+        path, read_tier = store.store_path(tmp_path), lambda: store.probe(tmp_path)[1]
+        identity = store_import._mount_identity(tmp_path / "state")
+        monkeypatch.setattr(store_import, "_mount_identity", lambda _p: {**identity, "st_dev": identity["st_dev"] + 1})
+        retier = lambda: store_import.ensure_current_store(tmp_path, with_children=False)  # noqa: E731
+    else:
+        path, read_tier = dialogue_store.create(tmp_path), lambda: dialogue_store.header_tier(tmp_path)
+        retier = lambda: dialogue_store.retier(tmp_path)  # noqa: E731
+    store.close_connections()
+    assert store.wal_file(path) and read_tier() == store.TIER_ENFORCED
+    monkeypatch.setattr(platform_layer, "kernel_file_locks_enforced", lambda path, **kw: False)
+    seen, real = [], store.prepare_handoff
+
+    def handoff(target, tier, **kwargs):
+        seen.append((tier, read_tier(), store.wal_file(target)))
+        if conversion == "busy":
+            raise store.StoreBusy("store checkpoint busy at handoff", reason="contention")
+        return real(target, tier, **kwargs)
+
+    monkeypatch.setattr(store, "prepare_handoff", handoff)
+    if conversion == "busy":
+        with pytest.raises(store.StoreBusy):
+            retier()
+        assert store.wal_file(path) and read_tier() == store.TIER_ENFORCED
+    else:
+        retier()
+        assert not store.wal_file(path) and read_tier() == store.TIER_NAME
+    assert seen[0] == (store.TIER_ENFORCED, store.TIER_ENFORCED, True)
+
+
+def test_a_wal_evidence_index_another_runtime_built_is_rebuilt_not_converted(tmp_path, monkeypatch):
+    """The evidence index is a cache with its own private build: a WAL index that this runtime must not
+    share fails validation instead of being converted, and the rebuild publishes this runtime's choice
+    with the same rows (lazy child stores keep their creator's choice the same way)."""
+    from ouroboros import evidence_packs as packs
+    from tests.test_evidence_index_rebuild import _publish, _tasks
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    _publish(tmp_path, "t1")
+    assert _tasks(tmp_path) == {"t1"}
+    index = packs.packs_dir(tmp_path) / packs.INDEX_NAME
+    store.close_connections()
+    assert store.wal_file(index)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    monkeypatch.setattr(packs, "_VALIDATED", {})
+    assert _tasks(tmp_path) == {"t1"}
+    store.close_connections()
+    assert not store.wal_file(index)
+
+
+def test_body_stamp_and_rebuild_cli_do_not_promote_current_store(tmp_path, monkeypatch, capsys):
+    """The public repair CLI keeps the published journal even on a WAL-eligible interpreter."""
+    from ouroboros import startup_migrations
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    publish(tmp_path)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    store_import.ensure_current_store(tmp_path, body_sha="helper", with_children=False)
+    monkeypatch.setattr(sys, "argv", ["startup_migrations", "--data-root", str(tmp_path)])
+    startup_migrations.main()
+    assert not store.wal_file(store.store_path(tmp_path))
+    assert json.loads(capsys.readouterr().out)["status"] in {"unchanged", "reconciled"}
+    startup_migrations.prepare_startup_state(tmp_path, initialize_journal=True)
+    assert store.wal_file(store.store_path(tmp_path))
+
+
+def test_boot_retries_a_transient_pooled_lease_before_required_wal_exit(tmp_path, monkeypatch):
+    """A real HTTP-style pooled lease delays mandatory demotion but does not lose the boot."""
+    import threading
+    import time
+    from ouroboros import startup_migrations, store_journal
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    path = publish(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    errors = []
+    def reader():
+        try:
+            with store.open_store(tmp_path, write=False) as txn:
+                assert txn.phase() == store.PUBLISHED
+                entered.set()
+                assert release.wait(5)
+        except BaseException as exc:
+            errors.append(exc)
+    thread = threading.Thread(target=reader)
+    thread.start()
+    assert entered.wait(5)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    waits = []
+    def sleep(delay):
+        waits.append(delay)
+        release.set()
+        thread.join(5)
+        assert not thread.is_alive()
+    from types import SimpleNamespace
+    monkeypatch.setattr(store_journal, "time", SimpleNamespace(monotonic=time.monotonic, sleep=sleep))
+    try:
+        report = startup_migrations.prepare_startup_state(tmp_path, initialize_journal=True)
+    finally:
+        release.set()
+        thread.join(5)
+    assert not errors and waits and report["status"] == "unchanged"
+    assert not store.wal_file(path)
+    with store.open_store(tmp_path, write=True) as txn:
+        txn.set_meta("boot_serves", True)
+
+
+@pytest.mark.parametrize("failure", ["contention", "permission", "io"])
+def test_required_demotion_retries_only_contention_with_one_budget(tmp_path, monkeypatch, failure):
+    from types import SimpleNamespace
+    from ouroboros import store_journal
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "WAL")
+    path = publish(tmp_path)
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST")
+    clock, waits, calls = [0.0], [], []
+    error = (store.StoreBusy("lease held", reason="contention") if failure == "contention" else
+             PermissionError("refused") if failure == "permission" else sqlite3.OperationalError("disk I/O error"))
+    def handoff(*args, wait_sec, **kwargs):
+        calls.append(wait_sec)
+        raise error
+    def sleep(delay):
+        waits.append(delay)
+        clock[0] += delay
+    monkeypatch.setattr(store, "prepare_handoff", handoff)
+    monkeypatch.setattr(store_journal, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
+    with pytest.raises(type(error)):
+        store_journal.configure_journal(path, store.TIER_ENFORCED, wait_sec=0.12)
+    assert store.wal_file(path)
+    assert sum(waits) <= 0.120001 and all(later <= earlier for earlier, later in zip(calls, calls[1:]))
+    assert bool(waits) is (failure == "contention")
+    if failure != "contention":
+        assert len(calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["WAL", "PERSIST"])
+def test_boot_prepares_existing_child_stores_before_lazy_consumers(tmp_path, monkeypatch, mode):
+    """Existing descendants need compatibility even after the children import job finished. The
+    header pass creates no absent store, promotes no rollback child, and leaves all rows intact."""
+    from ouroboros import dialogue_store, startup_migrations
+    from tests._store_journal_shared import committed_content
+
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: mode)
+    child = tmp_path / "task_drives" / "child"
+    nested = child / "state" / "headless_tasks" / "nested" / "data"
+    empty = tmp_path / "task_drives" / "empty"
+    empty.mkdir(parents=True)
+    paths = _three_stores(child) + _three_stores(nested)
+    store_import.ensure_current_store(tmp_path)
+    before = {path: committed_content(path) for path in paths}
+    monkeypatch.setattr(store, "_journal_mode", lambda *_: "PERSIST" if mode == "WAL" else "WAL")
+    if mode == "WAL":
+        with pytest.raises(store.StoreError, match="journal is WAL"):
+            dialogue_store.meta(child, "cutover")
+    startup_migrations.prepare_startup_state(tmp_path, initialize_journal=True)
+    assert all(not store.wal_file(path) for path in paths)
+    assert all(committed_content(path) == before[path] for path in paths)
+    assert not (empty / "state" / "dialog.sqlite").exists()
+    for root in (child, nested):
+        with store.open_store(root, write=True) as txn:
+            txn.set_meta("lazy_writer", True)
+        assert dialogue_store.meta(root, "cutover") is not None
+        with usage_store.read(root) as txn:
+            assert txn.meta("import")["status"] == "completed"

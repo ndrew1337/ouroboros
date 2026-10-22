@@ -102,26 +102,29 @@ export function joinMetaParts(parts) {
 }
 
 /** Card identity consumes projected facts; it does not infer execution from marks.
- *  The chip's detail sentence is also text on the line, shown only while the card
- *  is expanded through its own summary control (pointer, keyboard or touch), never
- *  a hover-only title. Its separator rides inside the hidden wrapper, so a
- *  collapsed line keeps no dangling ` · `, and a copy of the open line keeps it.
- *  Text-mode escaping keeps the markup equal to its serialization, which the meta
- *  line's no-op check compares, so a quote never forces a rebuild. */
-export function executorIdentityMarkup(chip, { agentModel = '' } = {}) {
-    const detail = chip?.title
-        ? `<span class="chat-live-executor-detail">${META_PART_SEPARATOR}<span class="chat-live-meta-text">${escapeHtmlText(chip.title)}</span></span>`
-        : '';
-    const identity = chip
-        ? `<span class="harness-chip chat-live-executor-chip" title="${escapeHtml(chip.title || '')}">`
-            + harnessIdentityMarkup(chip.harness, { label: chip.label || '', className: 'chat-live-executor-identity' }) + '</span>' + detail
-        : '';
-    const facts = [
-        agentModel ? `${chip ? 'Coordinator' : 'Agent model'}: ${agentModel}` : '',
-        chip?.observedModels?.length ? `Observed: ${chip.observedModels.join(', ')}` : '',
-    ];
-    return joinMetaParts([
-        identity,
-        ...facts.filter(Boolean).map(text => `<span class="chat-live-meta-text">${escapeHtml(text)}</span>`),
-    ]);
+ *  The chip's detail sentence is card text too, never a hover-only title: the
+ *  `Executor` row of the card's details (chat_activity.renderLiveCardMeta), which
+ *  its one disclosure opens by pointer, keyboard or touch, so the compact line
+ *  never reflows when the card opens. Text-mode escaping keeps the markup equal to
+ *  its serialization, which the meta line's no-op check compares, so a quote never
+ *  forces a rebuild. `model` is the executor's own model fact (executorModelText),
+ *  never the coordinating model: that one is a labelled row of the details. */
+export function executorIdentityMarkup(chip, { model = '' } = {}) {
+    if (!chip) return '';
+    const identity = `<span class="harness-chip chat-live-executor-chip" title="${escapeHtml(chip.title || '')}">`
+        + harnessIdentityMarkup(chip.harness, { label: chip.label || '', className: 'chat-live-executor-identity' }) + '</span>';
+    return joinMetaParts([identity, model ? `<span class="chat-live-meta-text">${escapeHtmlText(model)}</span>` : '']);
+}
+
+/** The model the executor itself ran, as far as its evidence says: settled observed
+ *  models (separate historical facts, listed as such), else the run's own progress
+ *  report with its source. A requested model says so; an unconfirmed one is absent
+ *  (the detail sentence says `model unconfirmed`). `compact` shortens a provider id. */
+export function executorModelText(chip, compact = (model) => model) {
+    if (chip?.observedModels?.length) return chip.observedModels.join(', ');
+    const observation = chip?.observation;
+    const model = compact(String(observation?.model || ''));
+    if (!model) return '';
+    if (observation.model_source === 'observed') return model;
+    return observation.model_source === 'requested' ? `requested ${model}` : '';
 }

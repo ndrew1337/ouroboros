@@ -48,8 +48,7 @@ def _read_source(root, entry, ref):
 def observe_run(root, entry, detail: dict) -> bool:
     """Publish exact execution/question facts, never collection, control or consumption."""
     summary = c.summary_of(detail)
-    named = summary.get("runId") or summary.get("id") or detail.get("runId")
-    if named and str(named) != entry.run_id:
+    if c.names_another_run(detail, entry.run_id):  # a run held by its job id is still this run
         raise ValueError("execution observation belongs to another run")
     state = str(summary.get("state") or "")
     seq = detail.get("lastSeq", 0)
@@ -116,7 +115,10 @@ def record_terminal_money(root, entry, detail: dict, *, failures=None) -> dict:
     profile, access = observed.get("profile_id", ""), str(summary.get("effectiveAccess") or "")
     if not entry.ledger_recorded:
         try:
-            record_subscription_session(entry.run_id, drive_root=pathlib.Path(entry.ledger_root or root),
+            from ouroboros.install_identity import require_owned_root
+
+            require_owned_root(entry.ledger_root or root)  # the usage store is not behind ``open_store``'s check
+            attempt_id = record_subscription_session(entry.run_id, drive_root=pathlib.Path(entry.ledger_root or root),
                 route=entry.route_id, model=observed.get("model", ""), task_id=entry.task_id,
                 root_task_id=entry.root_task_id, parent_task_id=entry.parent_task_id,
                 category=entry.category, source=entry.source,
@@ -137,6 +139,8 @@ def record_terminal_money(root, entry, detail: dict, *, failures=None) -> dict:
             entry.ledger_recorded = True
             c.emit(root, c.LEDGER_RECORDED, {"run_id": entry.run_id, "task_id": entry.task_id,
                 "root_task_id": entry.root_task_id, "parent_task_id": entry.parent_task_id, "route": entry.route_id})
+            if not entry.review_owned:
+                _emit_session_usage(root, entry, summary, observed, attempt_id)
     if entry.ledger_recorded:
         failure = summary.get("failure") if isinstance(summary.get("failure"), dict) else {}
         facts = summary.get("outcomeFacts") if isinstance(summary.get("outcomeFacts"), dict) else {}
@@ -160,6 +164,36 @@ def record_terminal_money(root, entry, detail: dict, *, failures=None) -> dict:
             except Exception:
                 log.debug("Session history unavailable", exc_info=True)
     return {"settled": entry.settled, "ledger_recorded": entry.ledger_recorded, "retried": True}
+
+
+def _emit_session_usage(root, entry, summary, observed, attempt_id):
+    """Best-effort telemetry after money; a missing event never repeats inference.
+
+    The custody event already represents unknown/legacy sessions. Only a valid
+    native split adds token facts. Recollection can repeat this row; consumers
+    key it by run, while the ledger remains the sole monetary authority.
+    """
+    from ouroboros.review_session_usage import session_usage_facts
+    from ouroboros.contracts.record_contract import RECORD_CONTRACT_VERSION
+    from ouroboros.event_usage import event_token_counts
+    from ouroboros.utils import append_jsonl, utc_now_iso
+
+    facts = session_usage_facts(entry.run_id, requested_route=entry.route_id,
+                                observed_attempt=observed, summary=summary)
+    if "input_token_usage" not in facts:
+        return
+    try:
+        append_jsonl(c.event_log_path(root), {
+            "type": "llm_usage", "ts": utc_now_iso(), "record_contract_version": RECORD_CONTRACT_VERSION,
+            "task_id": entry.task_id, "root_task_id": entry.root_task_id or entry.task_id,
+            "parent_task_id": entry.parent_task_id, "delegation_role": "subagent" if entry.parent_task_id else "",
+            "source": entry.source, "category": entry.category, "provider": "claudexor", "api_key_type": "claudexor",
+            "model": "", "claudexor": facts["claudexor"], "input_token_usage": facts["input_token_usage"],
+            **event_token_counts(facts),
+            "accounting_authority": "physical_attempt_ledger", "ledger_attempt_ids": [attempt_id],
+        })
+    except Exception:
+        log.warning("Delegated usage event unavailable for %s", entry.run_id, exc_info=True)
 
 
 def _retain_output(root, entry, detail, gateway, staging_task_id="", output_authority=None):
@@ -206,7 +240,7 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
     from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
     from ouroboros.delegate_continuation import disposition_refusal
     from ouroboros.tools.delegate_integration import capture_terminal_patch_for_drive
-    from ouroboros.tools.subagent_integration_delegated import retain_investigation_evidence
+    from ouroboros.tools.subagent_integration_delegated import retain_run_evidence
 
     root = pathlib.Path(root)
     if stopped is not None and stopped():
@@ -262,10 +296,10 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
             closing = stopped is not None and stopped()
             money = ({"settled": entry.settled, "ledger_recorded": entry.ledger_recorded}
                      if closing else record_terminal_money(root, entry, detail, failures=failures))
-            # Existing evidence-only cleanup is explicit and comes AFTER full
-            # output retention. Mutating results remain the author's decision.
+            # Named evidence and evidence-only cleanup come AFTER full output
+            # retention. Mutating results remain the author's decision.
             if not closing and capture and entry.output_complete and entry.output_source:
-                capture = retain_investigation_evidence(root, entry, capture, gateway)
+                capture = retain_run_evidence(root, entry, capture, gateway)
             if not closing and entry.project_persistent and entry.project_owned:
                 c.retire_project(root, gateway, entry)  # records kept, never deletes the project
             return {"status": "collected" if not collection_pending(current.run(root, run_id)) else "pending",
@@ -287,8 +321,22 @@ def retained_payload(root, entry, *, require_complete: bool = True) -> dict | No
         return None
 
 
+def saved_named_evidence(root, entry) -> tuple[pathlib.Path, dict]:
+    """Where a Git run's retained ``.review-evidence/`` summary lives and what it last said (``{}``
+    when none): one addressed read, never a recapture (#2070)."""
+    path = c.delegated_capture_dir(root, entry.task_id, c.capture_key(entry)) / "evidence" / "summary.json"
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        saved = {}
+    return path, saved if isinstance(saved, dict) else {}
+
+
 def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
-    """Existing captured manifest or an honest pending fact; never triggers capture."""
+    """Existing captured manifest or an honest pending fact; never triggers capture.
+
+    A Git run's saved named-evidence summary rides along, so saved-result and
+    retry-successor delivery keep its status and reader."""
     directory = entry.resource_ref.get("workspace_kind") == "directory"
     if not entry.execution_root and not directory:
         return None
@@ -304,13 +352,18 @@ def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
         return {"status": "pending", "note": "Body capture is still owed; no patch was applied. integrate_delegated_patch "
                 "prepares a finished run's capture itself and returns it for inspection first.",
                 "patch_disposition": entry.patch_disposed or "pending"}
+    other_reader = bool(reader_task_id and reader_task_id != entry.task_id)
     if directory:
         from ouroboros.delegate_directory import directory_capture_block
         block = directory_capture_block(root, entry, manifest)
     else:
         from ouroboros.tools.delegate_integration import _capture_block
         block = _capture_block(entry, cap_dir, manifest, manifest.get("authority_drift") or {})
-    if reader_task_id and reader_task_id != entry.task_id:
+        summary, named = saved_named_evidence(root, entry)
+        if named:  # another task reads it by absolute artifact path, as the patch and manifest below
+            block["named_evidence"] = ({**named, "summary_read": {"root": "artifact_store", "path": str(summary)}}
+                                       if other_reader and named.get("summary_read") else named)
+    if other_reader:
         for kind in ("patch", "manifest"):
             if block.get(f"{kind}_read") and block.get(f"{kind}_artifact"):
                 block[f"{kind}_read"] = {"root": "artifact_store", "path": block[f"{kind}_artifact"]}
@@ -352,7 +405,9 @@ class BodyRuntime:
         self.collection_failures: dict[str, dict] = {}
         # Each held run's latest dated execution fact, as the last observation read it.
         self.observed: dict[str, dict] = {}
+        self.observation_gaps: dict[str, tuple] = {}
         self._observing = None
+        self._connecting = None
         self.thread = threading.Thread(target=self._drive, name="delegated-body", daemon=True)
         try:
             self.thread.start()
@@ -393,6 +448,7 @@ class BodyRuntime:
             if self.active:
                 self.requested.add(str(run_id))
                 self.retry_requested.add(str(run_id))
+                self.observation_gaps.pop(str(run_id), None)
                 self.changed.set()
 
     def _gateway(self):
@@ -402,12 +458,41 @@ class BodyRuntime:
         return read_owned_gateway()
 
     def _observer_gateway(self):
-        """The generation's one observation client: a handshake and an HTTP client per poll of
-        every held run kept the server's interpreter busy (N4). A failed read drops it."""
+        """One observation client; discovery and handshake never hold the runtime lock."""
+        from ouroboros.gateways.claudexor_metadata import endpoint_generation
+
         with self.lock:
-            if self._observing is None:
-                self._observing = self._gateway()
-            return self._observing
+            gateway = self._observing
+        endpoint = getattr(gateway, "_endpoint", None)
+        if endpoint is not None and endpoint.descriptor_path and endpoint_generation(endpoint) is None:
+            self._drop_observer_gateway(gateway)
+        with self.lock:
+            if self._observing is not None:
+                return self._observing
+            owner = self._connecting is None
+            if owner:
+                self._connecting = Future()
+            pending = self._connecting
+        if owner:
+            try:
+                gateway = self._gateway()
+                with self.lock:
+                    self._observing = gateway
+                pending.set_result(gateway)
+            except BaseException as exc:
+                pending.set_exception(exc)
+            finally:
+                with self.lock:
+                    self._connecting = None
+        return pending.result()
+
+    def _observation_key(self, entry):
+        from ouroboros.gateways.claudexor_metadata import endpoint_generation
+
+        gateway = self._observing
+        endpoint = getattr(gateway, "_endpoint", None)
+        generation = endpoint_generation(endpoint) if endpoint is not None else id(gateway)
+        return generation, entry.invocation_id, entry.daemon_store_id
 
     def _drop_observer_gateway(self, gateway=None):
         with self.lock:
@@ -422,22 +507,39 @@ class BodyRuntime:
         gateway = self._observer_gateway()
         try:
             detail = gateway.get_run(entry.run_id, timeout_sec=SHORT_POLL_TIMEOUT_SEC)
-        except BaseException:
-            self._remember(entry, None)
-            self._drop_observer_gateway(gateway)  # a moved or restarted daemon gets a fresh handshake
+        except BaseException as exc:
+            self._remember(entry, None, error=exc)
+            if c.daemon_says_absent(exc, gateway=gateway, run=entry):
+                c.close_absent_run(self.root, gateway, entry, "body_observation_absent")
+                return
+            if c.daemon_says_absent(exc):
+                c.record_containment_fault(self.root, entry, "run_absence_identity_unproven",
+                    "The daemon returned 404, but ownership by this store is unproven; run outcome remains unknown.")
+                with self.lock:
+                    self.observation_gaps[entry.run_id] = self._observation_key(entry)
+            if not getattr(exc, "status_code", 0) and not getattr(exc, "observation_answered", False):
+                self._drop_observer_gateway(gateway)
             raise
+        with self.lock:
+            self.observation_gaps.pop(entry.run_id, None)
         # A late valid source fact remains evidence; it grants no wait.
         observe_run(self.root, entry, detail)
+        c.bind_daemon_store(self.root, gateway, entry)
+        if entry.containment_fault.get("reason") == "run_absence_identity_unproven":
+            c.resolve_containment_fault(self.root, entry, "run_observed",
+                                        expected_reason="run_absence_identity_unproven")
         self._remember(entry, detail)
 
-    def _remember(self, entry, detail):
+    def _remember(self, entry, detail, *, error=None):
         """Keep this read's execution fact for readers that must not poll the engine themselves
-        (``gateway/reply_preparation.py``); ``detail`` None is a read nothing answered."""
+        (``gateway/reply_preparation.py``), including a received HTTP refusal."""
         from ouroboros.delegate_supervision import run_activity
 
         summary = c.summary_of(detail) if detail is not None else {}
         fact = {"run_id": entry.run_id, "task_id": entry.task_id, "invocation_id": entry.invocation_id,
-                "answered": detail is not None, "run_state": str(summary.get("state") or ""),
+                "answered": detail is not None or bool(getattr(error, "status_code", 0)),
+                "error_code": str(getattr(error, "code", "")), "http_status": getattr(error, "status_code", 0),
+                "run_state": str(summary.get("state") or ""),
                 "waiting_on_user": bool(summary.get("waitingOnUser") or (detail or {}).get("pendingInteractions")),
                 "at": time.monotonic()}  # dated on this process's clock, like every in-process reader
         with self.lock:
@@ -486,6 +588,7 @@ class BodyRuntime:
         with self.lock:
             for rid in set(self.observed) - set(entries):
                 del self.observed[rid]  # a run no longer held has no current execution fact
+                self.observation_gaps.pop(rid, None)
         with self.lock:
             self.retry_requested.intersection_update(
                 rid for rid in self.retry_requested
@@ -501,7 +604,7 @@ class BodyRuntime:
             with self.lock:
                 if not entry.terminal_source and (not entry.settled or entry.terminal_state):
                     previous = self.reads.get(entry.run_id)
-                    if previous is None or previous.done():
+                    if (previous is None or previous.done()) and self.observation_gaps.get(entry.run_id) != self._observation_key(entry):
                         self.reads[entry.run_id] = self.observers.submit(self._observe, entry)
                 if collection_pending(entry):
                     previous = self.collections.get(entry.run_id)

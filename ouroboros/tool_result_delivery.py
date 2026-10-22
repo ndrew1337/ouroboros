@@ -26,8 +26,9 @@ Two policies share the machinery:
     RECLAIM_LOW_WATER_DIVISOR)))`` less what requested forms already took of
     ``B - R - Pmin`` -- one allowance per batch, the reserve subtracted once --
     while a form the call asked for (a head/tail view, a page, a window) may use
-    the physical room ``W - R - Pmin``: an owner target is economy for what the
-    host adds unasked, never a cut of a chosen read. The chosen forms are
+    the physical room ``W - R - Pmin``. When those forms require a physical cut,
+    leave ``ceil(W / RECLAIM_LOW_WATER_DIVISOR)`` for the next turn's host rows.
+    An owner target bounds only unasked material. The chosen forms are
     measured whole beside the minimum unasked envelopes, so each side is priced
     at its own measured density -- a plain page fitting W stays whole beside a
     heavily escaped log, never cut by a batch average. The complete candidate is
@@ -360,6 +361,8 @@ def _measured_frame(
     *, drive_root: pathlib.Path, task_id: str,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
     """Main's first show: one measured batch allowance, requested forms first."""
+    from ouroboros.context_fit import reclaim_low_water_margin
+
     count = len(rows)
     texts = [reader_text(text) for text in full]
     digests = [hashlib.sha256(text.encode("utf-8")).hexdigest() for text in texts]
@@ -416,7 +419,7 @@ def _measured_frame(
              for i in range(count) if requests[i] is not None}
     receipt.update(measurements=2, minimum_tokens=p_min, whole_tokens=p_whole, free_tokens=free,
                    requested_room_tokens=room, unsolicited_allowance_tokens=unsolicited_allowance)
-    whole_fits = (room is None or p_whole + reserve <= capacity) and all(wants[i] >= len(texts[i]) for i in wants)
+    whole_fits = (room is None or p_whole + reserve < capacity) and all(wants[i] >= len(texts[i]) for i in wants)
     complete = "complete" if room is not None else "capacity_unknown"
     if whole_fits and p_whole + reserve <= boundary and p_whole - p_min <= unsolicited_allowance:
         return rows, {**receipt, "status": complete}  # every body together inside the unasked share
@@ -425,6 +428,13 @@ def _measured_frame(
     chosen_contents = [form(i, wants[i]) if i in wants else envelopes[i] for i in range(count)]
     chosen = minimum if not wants else whole if chosen_contents == full else measure(chosen_contents)
     p_chosen = _tokens(chosen)
+    # A chosen view that needs a physical cut must survive the next facts/clock rows.
+    # Reuse recovery's W/8 work room; a fitting chosen form and an unknown W stay whole.
+    requested_capacity = capacity
+    if capacity is not None and p_chosen + reserve >= capacity:
+        requested_capacity -= reclaim_low_water_margin(None, capacity)
+        room = requested_capacity - reserve - p_min
+        receipt["requested_room_tokens"] = room
     receipt.update(measurements=2 + (chosen is not minimum and chosen is not whole), chosen_tokens=p_chosen)
     chosen_chars = sum(max(0, len(chosen_contents[i]) - len(envelopes[i])) for i in wants)
     requested_rate = max(p_chosen - p_min, 1) / max(chosen_chars, 1)
@@ -486,15 +496,19 @@ def _measured_frame(
         receipt["measurements"] += 1
         body_tokens = max(0, _tokens(final) - _tokens(without_unsolicited))
         receipt["unsolicited_body_tokens"] = body_tokens
+        if capacity is not None and _tokens(without_unsolicited) + reserve >= capacity:
+            # Real source envelopes can be larger than their stand-ins.
+            requested_capacity = capacity - reclaim_low_water_margin(None, capacity)
+            receipt["requested_room_tokens"] = requested_capacity - reserve - p_min
         # Only the window shrinks a requested form; the target binds unsolicited bodies alone.
-        capacity_over = _tokens(final) + reserve - capacity if capacity is not None else 0
+        capacity_over = _tokens(final) + reserve - requested_capacity if capacity is not None else 0
         economy_over = max(body_tokens - unsolicited_allowance,
                            _tokens(final) + reserve - boundary if body_tokens else 0)
         over = max(capacity_over, economy_over)
         # An unasked overshoot cannot take space from chosen forms that fit
         # beside the minimum unasked envelopes. Both eligibility and cost use
         # that already measured baseline, including real source locators.
-        shrink_chosen = capacity is not None and _tokens(without_unsolicited) + reserve > capacity
+        shrink_chosen = capacity is not None and _tokens(without_unsolicited) + reserve > requested_capacity
         shrinking = [i for i in range(count) if shrink_chosen or requests[i] is None]
         shown_total = sum(min(allocation[i], len(texts[i])) for i in shrinking)
         if over <= 0 or shown_total <= 0 or attempt > _MAX_REMEASURES:

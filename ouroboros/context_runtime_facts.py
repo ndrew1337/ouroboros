@@ -24,6 +24,18 @@ from ouroboros.config import runtime_setting
 log = logging.getLogger(__name__)
 
 
+def schedule_store_fact(env: Any) -> Dict[str, Any]:
+    """Observed schedule controls for context; an unreadable table is not empty."""
+    from supervisor.followup_policy import observed_store
+    from supervisor.queue import ScheduleStoreUnreadable, load_schedule_store
+
+    root = getattr(env, "drive_root", None) or pathlib.Path(env.drive_path("state/scheduled_tasks.json")).parent.parent
+    try:
+        return observed_store(root, load_schedule_store(root))
+    except ScheduleStoreUnreadable as exc:
+        return {"unavailable": str(exc), "pointer": "manage_schedules(action='list')"}
+
+
 def task_schedule_fact(task: Dict[str, Any]) -> Dict[str, Any]:
     """The admitted occurrence's original clock, even after its row advances.
 
@@ -34,9 +46,12 @@ def task_schedule_fact(task: Dict[str, Any]) -> Dict[str, Any]:
     occurrence = metadata.get("schedule_occurrence")
     if not isinstance(occurrence, dict):
         return {}
-    return {"schedule_occurrence": {
+    fact = {
         key: occurrence.get(key) for key in ("schedule_id", "due_at", "claimed_at")
-    }}
+    }
+    if "previous" in occurrence:
+        fact["previous"] = occurrence["previous"]
+    return {"schedule_occurrence": fact}
 
 
 def task_execution_clock_fact(task: Dict[str, Any], ctx: Any) -> Dict[str, Any]:

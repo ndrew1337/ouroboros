@@ -1,6 +1,6 @@
 /** Dependency-free JSDoc mirror of `ouroboros.gateway.management_contracts`: skills and extensions,
  *  the marketplaces, agent accounts (relayed Claudexor engine objects), local model, MCP, the model
- *  catalog, updates and core control. `SkillReviewResponse` and `UpdateLetter` sit in ./api_types.js. */
+ *  catalog, updates and core control. `UpdateLetter` sits in ./api_types.js. */
 
 /**
  * One `GET /api/extensions` `skills` row; a name collision gives one row per occupant (`identity_collision`).
@@ -18,6 +18,7 @@
  * @property {string} content_hash
  * @property {string} payload_root
  * @property {string} installed_at
+ * @property {string=} removal  // uninstall | delete | ''
  * @property {string=} review_status
  * @property {boolean=} review_stale
  * @property {{status: string, stale: boolean, executable_review: boolean, blocking_reason: string, review_enforcement: string, summary: string, author_accepted: (boolean|undefined), reviewed_content_hash: (string|undefined), author_disposition: (Object|undefined), preflight_failed: (boolean|undefined), preflight_failed_stale: (boolean|undefined)}=} review_gate
@@ -92,6 +93,7 @@
  * @property {Array<string|Object>=} keys
  * @property {Array<string|Object>=} granted_keys
  * @property {string=} expected_content_hash
+ * @property {boolean=} enable_after_grant
  */
 
 /**
@@ -103,7 +105,11 @@
 /**
  * @typedef {Object} SkillToggleResponse
  * @property {string} skill
- * @property {boolean} enabled
+ * @property {boolean=} ok
+ * @property {boolean=} pending  // enabling still installs packages: follow job_id on the lifecycle queue; no enabled yet
+ * @property {string=} job_id
+ * @property {string=} message
+ * @property {boolean=} enabled
  * @property {string=} review_status
  * @property {boolean=} review_stale
  * @property {Object=} review_gate
@@ -120,6 +126,8 @@
  * @typedef {Object} SkillActionRefusal
  * @property {boolean=} ok
  * @property {string} error
+ * @property {string=} code
+ * @property {string=} detail
  * @property {number=} status_code
  * @property {string=} skill
  * @property {string=} source
@@ -193,6 +201,59 @@
  * @property {?string} load_error
  * @property {string} process
  * @property {string} server_reconcile
+ */
+
+/**
+ * Skill review and owner attestation outcome (`gateway/management_contracts.py::SkillReviewResponse`).
+ * @typedef {Object} SkillReviewResponse
+ * @property {string} skill
+ * @property {string} status  // clean | warnings | blockers | pending
+ * @property {string=} content_hash
+ * @property {string=} error
+ * @property {boolean=} ok  // attest only
+ * @property {number=} status_code  // attest refusal only
+ * @property {boolean=} pending  // attest: the job outlasted the answer bound; review: the wave is still open (its author left on an addressed message)
+ * @property {string=} message  // attest only, with pending
+ * @property {string[]=} reviewer_models
+ * @property {string=} review_profile
+ * @property {Object[]=} findings
+ * @property {Object[]=} raw_actor_records
+ * @property {*=} advisory_result
+ * @property {Object=} review_gate
+ * @property {boolean=} executable_review
+ * @property {*=} auto_flow
+ * @property {string[]=} auto_granted_keys
+ * @property {string[]=} requested_keys
+ * @property {string[]=} auto_granted_permissions
+ * @property {string[]=} requested_permissions
+ * @property {string=} deps_status
+ * @property {string=} deps_error
+ * @property {string=} extension_action
+ * @property {string=} extension_reason
+ * @property {string=} extension_process
+ * @property {string=} extension_server_reconcile
+ * @property {string|null=} extension_load_error
+ * @property {boolean|null=} extension_live_loaded
+ * @property {string=} record_id  // the review's ledger record
+ * @property {boolean=} reused  // a settled record of the same subject answered at $0
+ * @property {boolean=} paid
+ * @property {Object[]=} seats
+ * @property {Object=} governance
+ * @property {string=} job_id
+ * @property {string=} job_status
+ * @property {string=} group_id
+ * @property {number=} review_round
+ * @property {number=} snapshot_attempt
+ * @property {boolean=} snapshot_revised
+ * @property {string=} task_id
+ * @property {string=} root_task_id
+ * @property {string=} origin_task_id
+ * @property {string=} origin_root_task_id
+ * @property {string=} presentation_owner_task_id
+ * @property {number=} chat_id
+ * @property {string=} source
+ * @property {string=} terminal_reason
+ * @property {Object[]=} executions
  */
 
 /**
@@ -331,7 +392,12 @@
  */
 
 /**
- * Maintenance refusal: the engine's ControlProblem object.
+ * Engine or host preparation problem. POST may prepare Node/npm:
+ * 409 maintenance_restart_required asks for chat-header Restart;
+ * 409/503 maintenance_preparation_failed reports failure. Both carry
+ * context.acceptance=not_submitted, scope=this_attempt. Optional inspection failure still
+ * permits POST. After 503 acceptance=unknown, keep the same body and Idempotency-Key,
+ * even after a later preparation-only reply, then resend both.
  * @typedef {Object} ClaudexorMaintenanceProblem
  * @property {Object} error  // {code, message, retryable?, requiredActions?, context?}
  */
@@ -516,6 +582,14 @@
  */
 
 /**
+ * @typedef {Object} McpListingAttempt
+ * @property {string} at
+ * @property {boolean} ok
+ * @property {string} error
+ * @property {boolean} partial
+ */
+
+/**
  * One configured MCP server (a configuration error row carries only id, enabled, tool_count, last_error, code).
  * @typedef {Object} McpServerStatus
  * @property {string} id
@@ -536,6 +610,10 @@
  * @property {?string} last_error
  * @property {*=} last_refreshed
  * @property {*=} last_attempted
+ * @property {?string=} listed_at
+ * @property {?McpListingAttempt=} latest_attempt
+ * @property {boolean=} complete
+ * @property {string=} publication_error
  * @property {string=} code
  */
 
@@ -548,6 +626,8 @@
  * @typedef {Object} McpRefreshResponse
  * @property {string=} server_id
  * @property {boolean=} ok
+ * @property {boolean=} published
+ * @property {string=} publication_error
  * @property {number=} tool_count
  * @property {string[]=} configuration_warnings
  * @property {Object[]=} tool_name_collisions
@@ -577,10 +657,12 @@
  */
 
 /**
- * Process-local execution observation on /api/update/status (`{}` when none); not recovery authority.
+ * The last apply attempt on /api/update/status (`{}` when none), kept across restarts; never authority.
+ * `outcome` is empty until concluded; `applied` only after a later server's startup checks; `unknown` names missing evidence.
  * @typedef {Object} UpdateProgress
  * @property {string=} operation_id
  * @property {string=} generation
+ * @property {boolean=} current_generation
  * @property {string=} stage
  * @property {string=} started_at
  * @property {string=} stage_started_at
@@ -588,6 +670,18 @@
  * @property {string=} result
  * @property {string=} error
  * @property {boolean=} restart_required
+ * @property {(''|'applied'|'not_applied'|'rolled_back'|'failed'|'unknown')=} outcome
+ * @property {string=} outcome_at
+ * @property {('executor'|'boot')=} concluded_by
+ * @property {string=} reason
+ * @property {string[]=} blockers
+ * @property {(''|'none'|'invoked')=} work_stop
+ * @property {string=} base_sha
+ * @property {string=} target_sha
+ * @property {string=} tx_attempt_id
+ * @property {string=} keep_branch
+ * @property {string=} stash_note
+ * @property {boolean=} retention_unconfirmed - Live observation could not be saved across restart.
  */
 
 /**
@@ -642,6 +736,7 @@
 /**
  * @typedef {Object} CommandRequest
  * @property {string} cmd
+ * @property {Object=} client_surface
  * @property {string=} visible_text
  * @property {string=} visible_task_id
  * @property {Object=} task_constraint
@@ -703,6 +798,12 @@
 /**
  * `GET /api/extensions`: every installed skill and what the extension loader has live.
  * @typedef {Object} ExtensionsIndexResponse
+ * @property {UiContribution[]} contributions
+ * @property {Object.<string,Object[]>} offers
+ * @property {Object} preferences
+ * @property {Object.<string,{key:string,available:boolean,reason:string}>} voice
+ * @property {string[]} icons
+ * @property {Object.<string,string[]>} problems
  * @property {InstalledSkill[]} skills
  * @property {ExtensionLiveSnapshot} live
  */
@@ -754,10 +855,54 @@
 /**
  * `extension_loader.snapshot()` — the `live` block of `GET /api/extensions`.
  * @typedef {Object} ExtensionLiveSnapshot
+ * @property {UiContribution[]} contributions
  * @property {string[]} extensions
  * @property {string[]} tools
  * @property {string[]} routes
  * @property {string[]} ws_handlers
  * @property {Object[]} ui_tabs
  * @property {Object[]} settings_sections
+ */
+
+/**
+ * Manifest contribution, projected from one live revision. Optional provider fields stay absent.
+ * @typedef {Object} UiContribution
+ * @property {string} key
+ * @property {string} skill
+ * @property {string} skill_label
+ * @property {string} id
+ * @property {string=} placement
+ * @property {string=} provides
+ * @property {string} label
+ * @property {string} title
+ * @property {string} icon
+ * @property {Object<string,string>=} icon_spec
+ * @property {number} order
+ * @property {Object=} action
+ * @property {{url:string,refresh_s:number}=} source
+ * @property {string=} runtime
+ * @property {string=} route_url
+ * @property {string=} destination
+ * @property {string=} scope
+ * @property {string[]=} wakes
+ * @property {string=} settings
+ * @property {string=} read_only
+ * @property {Object[]=} tools
+ * @property {string[]=} languages
+ * @property {string[]=} formats
+ * @property {string=} install_size
+ * @property {number=} max_bytes
+ * @property {number=} max_seconds
+ * @property {{kind:string,url:string}} render
+ * @property {string=} revision
+ */
+/**
+ * GET /api/ui/contributions (no-store). A missing chosen engine remains selected.
+ * @typedef {Object} UiContributionsResponse
+ * @property {UiContribution[]} contributions
+ * @property {Object.<string,Object[]>} offers
+ * @property {Object} preferences
+ * @property {Object.<string,{key:string,available:boolean,reason:string}>} voice
+ * @property {string[]} icons
+ * @property {Object.<string,string[]>} problems
  */

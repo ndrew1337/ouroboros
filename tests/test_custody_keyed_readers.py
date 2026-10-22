@@ -120,15 +120,18 @@ def _over_every_row(fn, *args, **kwargs):
         return fn(*args, **kwargs)
 
 
-_FOLDED = {"NEVER READ": "results not read to EOF: ", "AWAITS DISPOSITION": "patches awaiting apply/reject: "}
+_FOLDED = {"NEVER READ": "unread", "AWAITS DISPOSITION": "patches"}
 
 
-def _named(lines, marker):
-    """Run ids a marker names: each own run's line, or another task's one folded line (Q3=A)."""
+def _named(lines, marker, root):
+    """Run ids from own lines or the exact foreign list the aggregate line names."""
+    from tests.test_health_invariants_ownership import _foreign_source
+
     named = {line.split("— run ")[1].split()[0] for line in lines if marker in line and "— run " in line}
     for line in lines:
-        if "ANOTHER TASK'S DELEGATED WORK" in line and _FOLDED.get(marker, "\0") in line:
-            named |= set(line.split(_FOLDED[marker])[1].split(";")[0].split(".")[0].split(", "))
+        if "OTHER TASKS' DELEGATED WORK" in line and marker in _FOLDED:
+            for work in _foreign_source(root, line).values():
+                named |= set(work[_FOLDED[marker]])
     return named
 
 
@@ -140,9 +143,9 @@ def test_health_lines_equal_the_every_row_read_for_every_reader(tmp_path, reader
     _seed_health(tmp_path)
     keyed = _delegated_lines(tmp_path, task_id=reader, active_root="/tmp/t1")
     assert keyed == _over_every_row(_delegated_lines, tmp_path, task_id=reader, active_root="/tmp/t1")
-    assert _named(keyed, "NEVER READ") == {"run-nan-complete", "run-text-complete"}, keyed
-    assert _named(keyed, "AWAITS DISPOSITION") == {"run-snapshot", "run-copy"}, keyed
-    assert _named(keyed, "OWN DELEGATED RUN ENDED") == ({"run-own"} if reader == "own" else set()), keyed
+    assert _named(keyed, "NEVER READ", tmp_path) == {"run-nan-complete", "run-text-complete"}, keyed
+    assert _named(keyed, "AWAITS DISPOSITION", tmp_path) == {"run-snapshot", "run-copy"}, keyed
+    assert _named(keyed, "OWN DELEGATED RUN ENDED", tmp_path) == ({"run-own"} if reader == "own" else set()), keyed
 
 
 def test_the_selection_skips_closed_rows_it_cannot_name(tmp_path, monkeypatch):
@@ -189,7 +192,7 @@ def test_every_stored_flag_pair_names_the_same_unread_outputs(tmp_path, monkeypa
     for reader in ("owner", "reader", ""):
         keyed = _delegated_lines(tmp_path, task_id=reader)
         assert keyed == _over_every_row(_delegated_lines, tmp_path, task_id=reader), reader
-        assert _named(keyed, "NEVER READ") == expected, reader
+        assert _named(keyed, "NEVER READ", tmp_path) == expected, reader
     decoded = _decodes(monkeypatch)
     assert set(current.health_runs(tmp_path, "reader")) == kept
     assert len(decoded) == len(kept), "only the kept rows reach Python"
@@ -200,8 +203,8 @@ def test_a_failed_selection_reads_every_row_into_the_one_shared_state(tmp_path, 
     because the full read lands in the state all three blocks share."""
     _seed_health(tmp_path)
     baseline = _delegated_lines(tmp_path, task_id="own")
-    assert _named(baseline, "OWN DELEGATED RUN ENDED") == {"run-own"}
-    assert "run-nan-complete" in _named(baseline, "NEVER READ")
+    assert _named(baseline, "OWN DELEGATED RUN ENDED", tmp_path) == {"run-own"}
+    assert "run-nan-complete" in _named(baseline, "NEVER READ", tmp_path)
 
     selections, replays = [], []
     real_replay = custody.replay

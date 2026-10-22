@@ -181,6 +181,7 @@ def _chat_record(
     actions: Optional[List[Dict[str, str]]] = None,
     title: str = "",
     quiz: Optional[Dict[str, Any]] = None,
+    card: Optional[Dict[str, Any]] = None,
     size_bytes: Optional[int] = None,
     client_surface: Optional[Dict[str, Any]] = None,
     message_meta: Optional[Dict[str, Any]] = None,
@@ -284,8 +285,6 @@ def _chat_record(
                 revision = meta.get("card_row_revision")
                 if type(revision) is int and revision >= 0:
                     record["card_row_revision"] = revision
-        if record_type == "acceptance_late_settlement" and isinstance(meta.get("late_evidence"), dict):
-            record["late_evidence"] = dict(meta["late_evidence"])
         if filename:
             record["filename"] = filename
         if mime:
@@ -305,6 +304,8 @@ def _chat_record(
             # Quiz rows persist the full card (no base64 anywhere) so history
             # replay rebuilds it with its lifecycle state.
             record["quiz"] = dict(quiz)
+        if card:  # the identity only; the body stays in the card store (supervisor/card_delivery.py)
+            record["card"] = dict(card)
         if size_bytes is not None:
             record["size_bytes"] = int(size_bytes)
         return root, record
@@ -324,15 +325,17 @@ def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: boo
     if record is None:
         return None
     try:
-        receipt = dialogue_store.append(root, "chat", record, feed=feed)
+        receipt = (dialogue_store.append(root, "chat", record, feed=feed, idempotent=direction != "in")
+                   if require_write else dialogue_store.append_quietly(root, "chat", record, feed=feed))
     except (StoreError, OSError, ValueError) as exc:
         if require_write:
             raise RuntimeError("canonical message acceptance could not be persisted") from exc
         log.warning("chat row not stored in %s", root, exc_info=True)
         return None
-    if not receipt.duplicate:
-        from ouroboros.notice_receipts import record as record_notice_receipt
-        record_notice_receipt(root, record)
+    if receipt is None:
+        return None
+    from ouroboros.notice_receipts import record as record_notice_receipt
+    record_notice_receipt(root, record)  # idempotent: a duplicate also repairs a receipt its first write lost
     return receipt.row
 
 

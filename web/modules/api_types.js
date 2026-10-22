@@ -1,4 +1,4 @@
-/** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`; the interface-language envelopes (`UiI18n*`) sit in ./ui_i18n_types.js, the model-route previews in ./model_route_types.js, the Dashboard storage envelopes (`Storage*`) in ./storage_types.js, the MCP import preview in ./mcp_import_types.js, the replaceable-client envelopes (`ServedUiState`, setup bootstrap, `/api/contract`, chat history rows, journey request bodies) in ./client_contract_types.js, the product-management envelopes (skills, marketplaces, accounts, local model, MCP, update status) in ./management_contract_types.js, the owner-decision ingress in ./decision_types.js. */
+/** Dependency-free JSDoc mirror of `ouroboros.gateway.contracts`; the interface-language envelopes (`UiI18n*`) sit in ./ui_i18n_types.js, the model-route previews in ./model_route_types.js, the Dashboard storage envelopes (`Storage*`) in ./storage_types.js, the Dashboard Evolution history (`Evolution*`) in ./evolution_types.js, the MCP import preview in ./mcp_import_types.js, the replaceable-client envelopes (`ServedUiState`, setup bootstrap, `/api/contract`, chat history rows, journey request bodies) in ./client_contract_types.js, the product-management envelopes (skills, marketplaces, accounts, local model, MCP, update status) in ./management_contract_types.js, the owner-decision ingress in ./decision_types.js. */
 /**
  * @typedef {Object} CostPresentation
  * @property {'own'|'root_tree'} scope
@@ -40,6 +40,7 @@
  * @property {Object} accounting  // physical-attempt ledger projection
  * @property {Array<ProjectEntry>} projects  // active/deleting sidebar projection
  * @property {Array<number>} project_chat_ids  // complete (uncapped) project chat_ids — WS fan-out isolation SSOT (v6.32.0)
+ * @property {?number=} main_visible_revision  // Main's room revision (its standalone messages, as a Project's visible_revision counts); null while unreadable
  * @property {Object<string, {project_id: string, chat_id: number, origin_bound?: boolean}>} task_bindings  // bound task -> its project: suppress the stray "turn into project" button (v6.33.0 P2) + render a pointer that opens the project panel (v6.33.0 F4). origin_bound marks a task the host included because its OWNER MESSAGE already has a project (#902), so one message cannot keep a second convertible card
  * @property {ActiveDirectTurn[]=} active_direct_turns  // active direct/ephemeral chat turns snapshot
  * @property {boolean=} active_chat_activities_complete
@@ -66,8 +67,8 @@
  * @property {Array<{name: string, state: 'running'|'done'|'failed', started_at: string, ended_at: ?string, error: ?string}>} steps
  * @property {Object<string, {state: ?string, done: ?number, total: ?number}>} jobs  // the store's named background jobs
  * @property {?string} error
+ * @property {?{ts: string, max_event_lag_sec: ?number}=} supervisor_load  // latest supervisor_load row's headline; null before the first
  */
-
 /**
  * Background Consciousness alarm clock (server._describe_bg_consciousness_state over consciousness.status_snapshot). A wake-up is an ordinary Main turn; the direct-activity census owns its liveness.
  * @typedef {Object} BgConsciousnessState
@@ -92,13 +93,8 @@
 /** @typedef {import('./task_activity_types.js').ActiveDirectTurn} ActiveDirectTurn */
 /** @typedef {import('./task_activity_types.js').ActiveChatActivity} ActiveChatActivity */
 /** @typedef {import('./task_activity_types.js').ToolVerificationFact} ToolVerificationFact */
-/**
- * @typedef {Object} EvolutionDataResponse
- * @property {Object[]} points
- * @property {Object[]=} checkpoints
- * @property {string} generated_at
- * @property {boolean} cached
- */
+/** @typedef {import('./evolution_types.js').EvolutionRefresh} EvolutionRefresh */
+/** @typedef {import('./evolution_types.js').EvolutionDataResponse} EvolutionDataResponse */
 /**
  * @typedef {Object} HealthResponse
  * @property {"ok"} status
@@ -244,11 +240,8 @@
  * @property {string=} project_id  // per-project memory scope (v6.32.0)
  * @property {Object=} client_surface  // raw sending-surface observables measured at send time (pywebview/ua/viewport/matchMedia/captured_at; optional IANA timezone)
  */
-/**
- * @typedef {Object} CommandInbound
- * @property {"command"} type
- * @property {string} cmd
- */
+/** @typedef {import('./client_contract_types.js').CommandInbound} CommandInbound */
+/** @typedef {import('./client_contract_types.js').PanicAcceptedOutbound} PanicAcceptedOutbound */
 /**
  * @typedef {Object} ChatOutbound
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
@@ -458,6 +451,7 @@
  *   A host-stamped placement fact for a task-keyed System row: "timeline" = a timeline item of the task's card, "reviews" = the card's Reviews group carries the fact (the row is still attached to the card); absent = an ordinary row.
  * @property {string=} card_row_id  // the row's stable identity across live delivery, outbox replay and history
  * @property {number=} card_row_revision  // canonical source order, independent of delivery timestamp
+ * @property {"retained_work"=} terminal_receipt  // a placed row the host types as a terminal receipt (Wrap up's saved work), not progress
  * @property {Object=} late_evidence
  *   Late-review identity, reviewed revision and exact applied source_ref served by
  *   taskSourceDownloadUrl; not an original reviewer transcript or a copy of the row.
@@ -469,7 +463,7 @@
  * @property {Object=} terminal_time  // host-owned occurrence; ts remains publication time
  * @property {string=} completion_answer  // a Project root's model-authored final answer, mirrored into Main
  * @property {string=} completion_reason One recorded nonclean-outcome fact beside the answer.
- * @property {Object=} completion_notice Transport view: neutral, detail, phase, optional preserved salvage.
+ * @property {Object=} completion_notice Transport view: neutral/detail/phase/salvage; Main adds cause and undescribed codes.
  * @property {string=} delivery_id Stable logical publication identity across transport retries.
  * @property {string=} set_at  // a `reminder` row: when its words were written (live frame only; the text carries the signature)
  * @property {string=} scheduled_for  // a `reminder` row: the due point it was written for
@@ -924,6 +918,7 @@
  * @property {number} span
  * @property {number} grid_span
  * @property {string} revision
+ * @property {boolean=} pinned_card  // a kept living card (skill "_cards"); presses use the card: decision family
  */
 
 /**
@@ -963,61 +958,22 @@
  * @property {string} repair_hint
  */
 
-/**
- * Skill review and owner attestation outcome (`gateway/management_contracts.py::SkillReviewResponse`).
- * @typedef {Object} SkillReviewResponse
- * @property {string} skill
- * @property {string} status  // clean | warnings | blockers | pending
- * @property {string=} content_hash
- * @property {string=} error
- * @property {boolean=} ok  // attest only
- * @property {number=} status_code  // attest refusal only
- * @property {string[]=} reviewer_models
- * @property {string=} review_profile
- * @property {Object[]=} findings
- * @property {Object[]=} raw_actor_records
- * @property {*=} advisory_result
- * @property {Object=} review_gate
- * @property {boolean=} executable_review
- * @property {*=} auto_flow
- * @property {string[]=} auto_granted_keys
- * @property {string[]=} requested_keys
- * @property {string[]=} auto_granted_permissions
- * @property {string[]=} requested_permissions
- * @property {string=} deps_status
- * @property {string=} deps_error
- * @property {string=} extension_action
- * @property {string=} extension_reason
- * @property {string=} extension_process
- * @property {string=} extension_server_reconcile
- * @property {string|null=} extension_load_error
- * @property {boolean|null=} extension_live_loaded
- * @property {*=} convergence_hint
- * @property {string=} job_id
- * @property {string=} job_status
- * @property {string=} group_id
- * @property {number=} review_round
- * @property {number=} snapshot_attempt
- * @property {boolean=} snapshot_revised
- * @property {string=} task_id
- * @property {string=} root_task_id
- * @property {string=} origin_task_id
- * @property {string=} origin_root_task_id
- * @property {string=} presentation_owner_task_id
- * @property {number=} chat_id
- * @property {string=} source
- * @property {string=} terminal_reason
- * @property {Object[]=} executions
- */
+/** @typedef {import('./management_contract_types.js').SkillReviewResponse} SkillReviewResponse */
 
 /**
- * `POST /api/skills/{skill}/grants`; a refusal answers `SkillActionRefusal`.
+ * `POST /api/skills/{skill}/grants`; refusals use `SkillActionRefusal`, slow setup {ok, pending: true, job_id, message}.
  * @typedef {Object} SkillGrantResponse
  * @property {boolean} ok
- * @property {string} skill
+ * @property {boolean=} pending
+ * @property {string=} job_id
+ * @property {string=} message
+ * @property {string=} skill
+ * @property {boolean=} enabled
  * @property {string=} content_hash
  * @property {string[]=} granted_keys
  * @property {string[]=} granted_permissions
+ * @property {string=} turn_on_when_ready
+ * @property {string=} setup_error
  * @property {string=} extension_action
  * @property {string=} extension_reason
  * @property {string=} load_error
@@ -1194,6 +1150,9 @@
  * @property {Object.<string, {name:string, files:number, size:number, excluded:number, available:boolean}>=} artifact_archives
  *   Per top-level result directory, what `?archive=<dir>` would stream now (members from one
  *   confined stat each, rows left out counted); a folder offers its `.zip` only when `available`.
+ * @property {{name:string, request_id:string}=} wrap_up_document
+ *   Wrap up's saved-work document, written on read by `?wrap_up=<request_id>` on the task-file
+ *   route (`taskWrapUpDocumentUrl`); no size or digest exists before it is downloaded.
  * @property {Object.<string,Object>=} model_waits
  * @property {TaskCostBreakdown=} cost_breakdown
  * @property {{status: 'pending'|'problem'|'complete', pending_count: number, problem_count: number, promoted_ref_count: number, promoted_source_handle_count: number, problem_reasons?: Array<{reason:string,count:number}>}=} history_retention
@@ -1346,7 +1305,7 @@
  */
 /**
  * @typedef {Object} ScheduleActionResponse
- * @property {boolean} ok  // the requested state was ACHIEVED and both audit records landed (restored_not_ready: changed, not ok)
+ * @property {boolean} ok  // the requested state was ACHIEVED and both audit records landed
  * @property {boolean} changed  // the durable fact, whatever the audit did
  * @property {string} status
  * @property {string} schedule_id
@@ -1362,10 +1321,7 @@
  * @typedef {Object} ScheduleDeleteResponse
  * @property {boolean} ok
  */
-/**
- * @typedef {Object} TaskPauseRequest
- * @property {string} request_id
- */
+/** @typedef {import('./task_activity_types.js').TaskPauseRequest} TaskPauseRequest */
 /** @typedef {import('./task_activity_types.js').TaskPauseResponse} TaskPauseResponse */
 /**
  * @typedef {Object} TaskContinueRequest
@@ -1440,6 +1396,9 @@
  * `POST /api/skills/{skill}/delete`; a refusal carries only ok, error and status_code.
  * @typedef {Object} SkillDeleteResponse
  * @property {boolean} ok
+ * @property {boolean=} pending  // queued behind a long job past the answer bound: {ok, pending, job_id, message}
+ * @property {string=} job_id
+ * @property {string=} message
  * @property {string=} skill
  * @property {string=} source
  * @property {string=} content_hash
@@ -1451,6 +1410,8 @@
  */
 /**
  * @typedef {Object} UiPreferencesResponse
+ * @property {{stt:string,tts:string,tts_voice:string}} voice
+ * @property {{hidden:string[],order:string[]}} contributions
  * @property {string[]} widget_order
  * @property {Object.<string,'auto'|'manual'|'retain'>} widget_start_mode  // owner per-card launch-policy override, keyed "<skill>:<tab_id>"
  * @property {Object.<string,{w:number,h:number}>} widget_size  // owner Widgets card width: w masonry columns the card spans (12 = full width), h 0 (reserved)
@@ -1458,6 +1419,7 @@
  * @property {number} sidebar_width  // px; 0 = CSS default (v6.33.0)
  * @property {number} project_panel_width  // px; 0 = CSS default
  * @property {Object.<string,number>} project_seen_revision  // monotonic paint ACK
+ * @property {?number} main_seen_revision  // Main's monotonic paint ACK; null until a client first reads Main
  * @property {{mode:'default'|'hidden'|'custom',text:string}} welcome  // install-wide empty-Main UI copy, not chat history
  * @property {boolean=} ok
  */
@@ -1514,6 +1476,7 @@
  * @property {string=} task_id
  * @property {UpdateMergePlan=} merge_plan
  * @property {string=} error
+ * @property {string=} keep_branch
  */
 
 /**
@@ -1576,6 +1539,9 @@ export const MAX_QUIZ_OPTIONS = 6;
 // Mirror task_decision._COMMENT_MAX: ingress refuses longer comments, never
 // truncates; cards must offer only comments the ingress can deliver verbatim.
 export const MAX_DECISION_COMMENT = 2000;
-export const GATEWAY_CONTRACT_VERSION = '7.7.0';
+export const GATEWAY_CONTRACT_VERSION = '7.8.0';
 /** @typedef {import('./client_contract_types.js').ChatHistoryPosition} ChatHistoryPosition */
 /** @typedef {import('./client_contract_types.js').ChatHistoryResponse} ChatHistoryResponse */
+
+/** @typedef {import('./management_contract_types.js').UiContribution} UiContribution */
+/** @typedef {import('./management_contract_types.js').UiContributionsResponse} UiContributionsResponse */

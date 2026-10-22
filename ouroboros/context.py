@@ -42,9 +42,6 @@ from ouroboros.context_input_selection import (
     _validate_declared_input_task,
 )
 from ouroboros.context_health import (
-    _compute_cache_hit_rate as _compute_cache_hit_rate,
-)
-from ouroboros.context_health import (
     _iter_recent_jsonl as _iter_recent_jsonl,
 )
 from ouroboros.context_health import (
@@ -66,7 +63,6 @@ from ouroboros.i18n_memory import current_language as _ui_language_tag
 from ouroboros.context_timing import section_spans, timed, timed_section
 from ouroboros.utils import (
     get_git_info,
-    read_json_dict,
     read_text,
     safe_relpath,
     utc_now_iso,
@@ -121,6 +117,15 @@ def build_user_content(task: Dict[str, Any]) -> Any:
         )
         text = plan_notice + str(text or "")
     image_b64 = task.get("image_base64")
+    if not image_b64 and task.get("image_source_ref"):
+        # A prestart Pause has original input, but no checkpointed transcript.
+        # Resolve and verify its durable source through the same owner as other
+        # task inputs, then use the unchanged inline-image preparation path.
+        import base64
+        from ouroboros.artifacts import read_actor_source_bytes
+
+        raw = read_actor_source_bytes(task["drive_root"], str(task["id"]), task["image_source_ref"])
+        image_b64 = base64.b64encode(raw).decode("ascii")
     attachment_image_blocks = _build_attachment_image_blocks(task)
 
     if not image_b64 and not attachment_image_blocks:
@@ -241,40 +246,10 @@ def _build_attachment_image_blocks(task: Dict[str, Any]) -> List[Dict[str, Any]]
 
 
 def _scheduled_tasks_digest(env: Any, *, limit: int = 8) -> Optional[Dict[str, Any]]:
-    """Compact digest of active schedules (cron + one-shot) for task/consciousness
-    context. Keeps the agent aware of standing schedules without inlining the full
-    schedule table; notes how many active schedules were omitted past ``limit``.
-    """
-    try:
-        data = read_json_dict(env.drive_path("state/scheduled_tasks.json")) or {}
-    except Exception:
-        log.debug("Failed to read scheduled tasks for context digest", exc_info=True)
-        return None
-    from supervisor.followup_policy import observed_store
-    from supervisor.queue_schedules import schedule_lifecycle_status
-    root = pathlib.Path(env.drive_path("state/scheduled_tasks.json")).parent.parent
-    data = observed_store(root, data)
-    # A deleted row still finishing accepted work stays in view until it goes.
-    tasks = [t for t in data.get("tasks", []) if isinstance(t, dict) and (t.get("enabled", True)
-             or t.get("followup_hold") or t.get("followup_wait") or t.get("delete_requested_at"))]
-    if not tasks:
-        return None
-    out: Dict[str, Any] = {"active": [], "held": [], "waiting": []}
-    for record in tasks[:limit]:
-        trigger = record.get("trigger") or {}
-        status = schedule_lifecycle_status(record)
-        entry = {"id": record.get("id"), "name": record.get("name"), "status": status,
-                 "relation": record.get("relation"), "followup_hold": record.get("followup_hold"),
-                 "followup_wait": record.get("followup_wait"), "hold_persisted": record.get("hold_persisted"),
-                 "timezone": record.get("timezone") or "local", "next_run_at": record.get("next_run_at") or ""}
-        entry["run_at" if trigger.get("type") == "once" else "cron"] = trigger.get("run_at" if trigger.get("type") == "once" else "expr", "")
-        if status == "delete_pending":
-            out.setdefault("delete_pending", []).append(entry)
-            continue
-        out["held" if record.get("followup_hold") else "waiting" if record.get("followup_wait") else "active"].append(entry)
-    if len(tasks) > limit:
-        out["omitted_count"] = len(tasks) - limit
-    return out
+    from datetime import datetime, timezone
+    from supervisor.schedule_view import digest
+    data = schedule_store_fact(env)
+    return data if "unavailable" in data else digest(data["tasks"], datetime.now(timezone.utc), limit=limit)
 
 
 # The owner-surface note is shared by the runtime-section builder.
@@ -304,6 +279,7 @@ from ouroboros.context_runtime_facts import (  # noqa: E402,F401 — re-exported
     _runtime_budget_info,
     task_execution_clock_fact,
     task_schedule_fact,
+    schedule_store_fact,
     storage_fact,
 )
 
@@ -617,8 +593,8 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
                     "If the task is genuinely AMBIGUOUS (several defensible readings/formats "
                     "survive your research), you may add an optional block before that line: "
                     "`CANDIDATES:` on its own line, then one `- <candidate> — <why/when it holds>` "
-                    "per line, then the `FINAL ANSWER:` line with your chosen one — the "
-                    "candidates are latched for the acceptance reviewer to adjudicate. "
+                    "per line, then the `FINAL ANSWER:` line with your chosen one — a "
+                    "review of your result reads the candidates beside your choice. "
                     "The internal review-ledger identifiers `best_effort` and "
                     "`blocked_with_evidence` are metadata, never the answer: even when "
                     "blocked, the FINAL ANSWER line must carry your best-supported actual "
@@ -1102,10 +1078,13 @@ def _registry_row(source_id: str, fields: dict) -> str:
 
 
 @timed_section("installed_skills")
-def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
-    try:
+def _build_installed_skills_section(env: Any, *, max_lines: int = 100, skills: Optional[List[Any]] = None) -> str:
+    try:  # ``skills``: the context build's own discovery, so this catalog and its always-on block agree
+        from ouroboros.skill_catalogue import always_in_context_skills, discover_context_skills
         from ouroboros.skill_loader import summarize_skills
-        summary = summarize_skills(pathlib.Path(env.drive_root))
+        skills = discover_context_skills(env.drive_root) if skills is None else skills
+        summary = summarize_skills(pathlib.Path(env.drive_root), skills)
+        always_on = {skill.name for skill in always_in_context_skills(skills)}
     except Exception:
         log.debug("Failed to build installed skills section", exc_info=True)
         return ""
@@ -1123,12 +1102,7 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
     ]
     count = 0
     for skill in summary.get("skills") or []:
-        if not isinstance(skill, dict):
-            continue
-        if (
-            not skill.get("enabled")
-            or not bool(skill.get("executable_review"))
-        ):
+        if not isinstance(skill, dict) or not skill.get("enabled") or not skill.get("executable_review"):
             continue
         name = _field(skill.get("name"), 80)
         if not name:
@@ -1138,17 +1112,26 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100) -> str:
         review_status = _field(skill.get("review_status"), 40)
         description = _field(skill.get("description"), 260)
         when = _field(skill.get("when_to_use"), 260)
-        surfaces = [
-            _field(item.get("name"), 100)
-            for item in (skill.get("tool_surfaces") or [])
-            if isinstance(item, dict) and item.get("name")
-        ]
+        surfaces = [_field(item.get("name"), 100) for item in (skill.get("tool_surfaces") or [])
+                    if isinstance(item, dict) and item.get("name")]
         meta = f"{kind}{', v' + version if version else ''}{', ' + review_status if review_status else ''}"
         lines.append(f"- {name} ({meta}): {description or 'No description.'}")
         if skill.get("review_gate", {}).get("author_accepted"):
             lines.append("  Current payload accepted by author under Advisory; reviewer evidence remains at its original hash.")
         if when:
             lines.append(f"  Trigger: {when}")
+        if skill.get("name") in always_on:
+            lines.append("  Context: always; its text is in the Always-in-context skills section.")
+        suggestions = skill.get("suggested_schedules") or []
+        for suggestion in suggestions:
+            lines.append(f"  Suggests schedule {_field(suggestion.get('name'), 96)}: "
+                         f"cron {_field(suggestion.get('cron'), 160)} "
+                         f"({_field(suggestion.get('timezone') or 'local', 80)}) — "
+                         f"{_field(suggestion.get('description'), 260)}. Not scheduled unless adopted.")
+        if suggestions:
+            omitted = skill.get("suggested_schedules_omitted_count", 0)
+            lines.append(f"  Schedule source: list_skills(name={name!r}) supplies manifest.read"
+                         + (f"; {omitted} more suggestions omitted." if omitted else "."))
         # CPL-7 Model Experience: bounded prose; absent section renders nothing.
         experience = skill.get("model_experience")
         if isinstance(experience, dict):
@@ -1322,6 +1305,10 @@ def _capture_context_core(
     except Exception:
         log.warning("Failed to build the Review block", exc_info=True)
     semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable"))
+    from ouroboros.skill_catalogue import always_in_context_section, discover_context_skills
+    skills = timed("installed_skills", discover_context_skills, canonical_root)  # shared with the catalog below
+    if always_on := always_in_context_section(skills):
+        semi_stable_parts.append(always_on)
     # Knowledge leads the changing block (its edits never cost the cached story) and
     # rides only where the view holds it: a child or nanny reads it by knowledge_read.
     head_parts = (build_knowledge_sections(context_env, project_id=resolve_project_id(task),
@@ -1358,7 +1345,7 @@ def _capture_context_core(
     registry_digest = _build_registry_digest(context_env)
     if registry_digest:
         dynamic_parts.append(registry_digest)
-    installed_skills = _build_installed_skills_section(context_env)
+    installed_skills = _build_installed_skills_section(context_env, skills=skills)
     if installed_skills:
         dynamic_parts.append(installed_skills)
     dynamic_parts.extend([

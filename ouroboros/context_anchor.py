@@ -2,13 +2,13 @@
 
 Main measures every candidate on the conversation it belongs to. The last request a model
 accepted in this task gives the provider-reported input U and the host's raw estimate B of
-that same candidate; the next candidate is ``U + (B' - B) * U / B``. Another task's request
-says nothing reliable about this one: its composition and size differ (17.10.2026: a 97k
-helper request's density, borrowed by a 900k release task, hid a full window). The largest
+that same candidate; the next candidate is ``U + (B' - B) * U / B``. Before this task has an
+anchor, ``context_fit`` uses fresh same-model evidence only at comparable raw input size;
+otherwise it stays cold (a 97k helper must not calibrate a 900k task). The largest
 input a model accepted here is a floor under its window: a stated window below it is no
-window. The smallest estimate a model refused here bounds it from above and clears the
-free room the facts state. All live in the task's usage, so a working checkpoint keeps
-them and a new execution starts cold. Data and arithmetic only; the loop records them.
+window. A size refusal clears predicted free room; only room below an accepted input
+remains a lower bound. All live in the task's usage, so a working checkpoint keeps
+them; a new execution has no task anchor. Data and arithmetic only; the loop records them.
 """
 
 from __future__ import annotations

@@ -14,9 +14,21 @@ from pathlib import Path
 
 
 def default_temp_parent() -> Path:
-    """A short macOS root keeps nested multiprocessing sockets inside AF_UNIX's path limit.
-    Other platforms retain their normal temporary-directory selection."""
-    return Path("/tmp") if sys.platform == "darwin" else Path(tempfile.gettempdir())
+    """A short root keeps nested multiprocessing sockets inside AF_UNIX's path limit (104 bytes
+    on macOS, 108 on Linux): rooted in an inherited, already nested TMPDIR, a nested forkserver
+    or manager address outgrew it (#2110). Other platforms keep their temporary directory."""
+    short = sys.platform == "darwin" or sys.platform.startswith("linux")
+    return Path("/tmp") if short else Path(tempfile.gettempdir())
+
+
+def git_ancestor(path: Path):
+    """The nearest directory at or above ``path`` that Git would treat as a checkout.
+
+    safe_test refuses a disposable parent with one; delegated-session facts name the same refusal."""
+    for directory in (path, *path.parents):
+        if (directory / ".git").exists():
+            return directory
+    return None
 
 
 def settings_keys() -> set[str]:
@@ -80,7 +92,7 @@ OUTPUT_LOCATION_KEYS = ("OUROBOROS_TEST_TEMP_ROOT", "OUROBOROS_TEST_EVIDENCE_ROO
 
 def declare_scratch(root, role: str) -> None:
     """A fresh producer declares reproducibility, never liveness or deletion authority."""
-    if role not in {"pytest-session", "pytest-basetemp"}:
+    if role not in {"pytest-session", "pytest-basetemp", "body-process"}:
         raise ValueError(f"unknown test scratch role: {role}")
     with (Path(root) / SCRATCH_MARKER).open("x", encoding="utf-8") as stream:
         stream.write(role + "\n")
@@ -91,6 +103,14 @@ def retain_tree(root, reason: str) -> bool:
     try:
         with (Path(root) / RETENTION_MARKER).open("a", encoding="utf-8") as stream:
             stream.write(reason.rstrip() + "\n")
+        # A quiescent body environment may have recorded an empty walk. Publish
+        # this nested retention to its addressed declaration before returning.
+        for parent in Path(root).resolve().parents:
+            declaration = parent / SCRATCH_MARKER
+            try:
+                os.utime(declaration, None)
+            except FileNotFoundError:
+                continue
     except OSError:
         return False
     return True
@@ -105,6 +125,51 @@ def retention_markers(root) -> list[Path]:
         if RETENTION_MARKER in files:
             found.append(Path(directory) / RETENTION_MARKER)
     return found
+
+
+def _retention_identity(path):
+    try:
+        seen = path.lstat()
+        return [seen.st_dev, seen.st_ino, seen.st_mode, seen.st_size, seen.st_mtime_ns, seen.st_ctime_ns]
+    except FileNotFoundError:
+        return None
+    except OSError:
+        return "unreadable"
+
+
+def scratch_retention(root, *, previous=None, classify=False) -> dict:
+    """One walk per quiescent tree; later checks read only its recorded witness.
+
+    A declaration proves reproducibility, not absence of nested retained readers.
+    Unclassified/changed trees stay retained until an unlocked classification;
+    undeclared legacy trees and unreadable subtrees never certify deletion.
+    """
+    root = Path(root)
+    observed = {"root": _retention_identity(root),
+                "declaration": _retention_identity(root / SCRATCH_MARKER)}
+    empty = {**observed, "marker": "", "identity": None, "retained": False}
+    if observed["root"] is None:
+        return empty
+    marker = root / RETENTION_MARKER
+    identity = _retention_identity(marker)
+    if identity is not None:
+        return {**observed, "marker": RETENTION_MARKER, "identity": identity, "retained": True}
+    if isinstance(previous, dict) and all(previous.get(key) == value for key, value in observed.items()):
+        relative = previous.get("marker")
+        if isinstance(relative, str) and isinstance(previous.get("retained"), bool) and (
+                not relative or previous.get("identity") is not None
+                and _retention_identity(root / relative) == previous["identity"]):
+            return previous
+    if (not classify or observed["root"] == "unreadable" or observed["declaration"] in (None, "unreadable")
+            or root.is_symlink() or not root.is_dir()
+            or (root / SCRATCH_MARKER).is_symlink() or not (root / SCRATCH_MARKER).is_file()):
+        return {**empty, "retained": True}
+    markers = retention_markers(root)
+    if not markers:
+        return empty
+    marker = markers[0]
+    return {**observed, "marker": str(marker.relative_to(root)),
+            "identity": _retention_identity(marker), "retained": True}
 
 
 def retain_diagnostic_outputs(root, env, *, cwd=None) -> None:

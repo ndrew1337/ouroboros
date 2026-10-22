@@ -199,17 +199,22 @@ class TestAliasProducerFanOutSweep:
         ("ouroboros/skill_loader.py", "cost_usd", "to_dict"): ("skill review outcome receipt serialization", 1),
         ("ouroboros/skill_loader.py", "cost_usd", "_read_review_record"): ("skill review state load", 1),
         ("ouroboros/skill_review.py", "cost_usd", "_run_deterministic_preflight"): ("skill review preflight receipt", 1),
-        ("ouroboros/skill_review.py", "cost_usd", "_persist_reviewed_outcome"): ("skill review outcome receipt", 1),
+        ("ouroboros/skill_review.py", "cost_usd", "_outcome_from_result"): ("skill review outcome receipt, read from the wave record's cost", 1),
+        ("ouroboros/skill_review.py", "cost_usd", "_persist_projection"): ("skill review outcome receipt (the review.json projection)", 1),
+        ("ouroboros/tools/review_skill.py", "cost_usd", "seat_facts"): ("skill review per-seat facts of the review.json projection", 1),
+        ("ouroboros/tools/review_skill.py", "cost_usd", "legacy_actor_records"): ("skill review record rows rendered in the legacy actor shape", 1),
         ("ouroboros/skill_owner_attestation.py", "cost_usd", "run_owner_attestation"): ("owner attestation review receipt", 1),
         ("ouroboros/tools/delegate_terminal_evidence.py", "cost_usd", "_reported_cost"): ("delegate terminal evidence rows", 4),
         ("ouroboros/tools/review_admission.py", "cost_usd", "triad_not_dispatched_records"): ("review admission receipt", 1),
         ("ouroboros/tools/review_change.py", "cost_usd", "run_system_review"): ("system review seat receipt, the ledger's triad_raw input; the record stores usd", 1),
+        ("ouroboros/reviewer_slot_config.py", "cost_usd", "review_cost_facts"): ("reviewer seat cost receipt (the triad record's cost_usd + cost_kind pair) on ledger, plan, skill-review and slot-execution seats; /api/review-pool converts it at its boundary to the review card's cost {kind, usd} (public_slot_executions), while plan-record ask participants (GET /api/tasks, /api/tasks/{id}) and the skill-review response's raw_actor_records pass it through as nested review receipts (outcomes.py pass-through)", 1),
         # evolution checkpoint plane (durable state files, never a gateway payload;
         # the campaign HISTORY row producer left this list in fix-round-3)
         ("ouroboros/evolution_checkpoints.py", "cost_usd", "build_solve_capability_digest"): ("evolution capability digest", 1),
         ("ouroboros/evolution_checkpoints.py", "cost_usd", "append_evolution_checkpoint"): ("evolution checkpoint records", 1),
         # custody settlement events
         ("ouroboros/delegate_collection.py", "cost_usd", "record_terminal_money"): ("custody SETTLED event row", 1),
+        ("ouroboros/owner_stop_receipt.py", "cost_usd", "retained_run_facts"): ("frozen per-run custody accounting receipt (disclosed spend + finality), passed through as evidence; not the task's ledger upper bound", 1),
     }
 
     @staticmethod
@@ -508,6 +513,56 @@ class TestProjectionBoundaryNormalization:
         assert _retired_alias_paths_deep(envelope) == []
         assert envelope["usage"]["accounted_upper_bound_usd"] == 0.75
         assert envelope["accounted_upper_bound_usd"] == 0.75
+
+
+class TestRetainedWorkAccountingPlane:
+    @pytest.mark.parametrize("disclosed, estimated, amount, expected", [
+        (False, False, 7.0, None), (True, True, 0.25, 0.25), (True, False, 0.0, 0.0),
+    ])
+    def test_run_receipt_keeps_its_accounting_schema_beside_public_task_cost(
+        self, tmp_path, disclosed, estimated, amount, expected,
+    ):
+        from ouroboros.delegate_custody import RunCustody
+        from ouroboros.owner_stop_receipt import retained_run_facts
+        from ouroboros.outcomes import public_task_result
+
+        run = RunCustody(run_id="run", task_id="task", cost_usd=amount,
+                         spend_disclosed=disclosed, spend_estimated=estimated)
+        facts = retained_run_facts(tmp_path, run)
+        evidence = {"owner_stop_children": {"runs": [facts]}}
+        public = public_task_result({"task_id": "task", "status": "cancelled", "cost_usd": 9.0,
+                                     "delegate_terminal_reconciliation": evidence})
+        assert public["accounted_upper_bound_usd"] == 9.0 and "cost_usd" not in public
+        receipt = public["delegate_terminal_reconciliation"]["owner_stop_children"]["runs"][0]
+        assert receipt["accounting"] == {"settled": False, "ledger_recorded": False,
+                                          "cost_usd": expected, "cost_final": disclosed and not estimated}
+        assert public["delegate_terminal_reconciliation"] == evidence
+
+
+class TestReviewPoolBoundary:
+    """The slot-execution receipts keep the triad record's ``cost_usd`` + ``cost_kind`` pair (the review
+    ledger reads it), and ``GET /api/review-pool`` shows them: the payload projects each seat's cost to the
+    review card's ``cost: {kind, usd}``, so no retired alias leaves the gateway, in ``last_executions`` or
+    in a pool row's ``last_execution``."""
+
+    def test_review_pool_shows_a_seat_cost_without_the_retired_alias(self, monkeypatch):
+        from ouroboros import reviewer_slot_config, server_maintenance
+        from ouroboros.gateway import settings as settings_mod
+
+        receipt = {"surface": "commit_gate", "record_id": "rec-1", "effective": {"model": "openai/gpt-5.6-luna"},
+                   **reviewer_slot_config.review_cost_facts(0.025, route="api_chat", model="openai/gpt-5.6-luna")}
+        assert receipt["cost_usd"] == 0.025  # the receipt as the ledger keeps it
+        monkeypatch.setattr(reviewer_slot_config, "reviewer_slot_last_executions", lambda: {"review-probe": receipt})
+        monkeypatch.setattr(server_maintenance, "review_pool_migration_records", lambda: {})
+        monkeypatch.setattr(settings_mod, "_review_pool_costs", lambda items: {})
+        catalog = {"enabled": False, "items": [{"subagent_id": "review-probe", "recommended_use": "Reviews diffs.", "review_eligible": True,
+                              "route": {"kind": "api_model", "target_id": "openai/gpt-5.6-luna"}}]}
+        payload = json.loads(json.dumps(settings_mod.review_pool_payload({"OUROBOROS_SUBAGENTS": json.dumps(catalog)})))
+        assert _retired_alias_paths_deep(payload) == []
+        [row] = payload["pool"]
+        for execution in (payload["last_executions"]["review-probe"], row["last_execution"]):
+            assert execution["cost"] == {"kind": "usd", "usd": 0.025} and execution["record_id"] == "rec-1"
+        assert receipt["cost_usd"] == 0.025, "the receipt itself is not rewritten"
 
 
 class TestEvolutionHistoryPlane:

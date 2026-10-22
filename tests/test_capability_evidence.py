@@ -731,7 +731,7 @@ def test_first_successful_call_seeds_density_so_the_next_projection_is_measured(
     model = "anthropic/claude-fable-5"  # Claude-family, routed through OpenRouter
     core = context_fit.ContextCore(
         base_prompt="p", bible_md="b", architecture_md="a", development_md="d",
-        semi_stable_text="s", dynamic_text="y", user_content_json='"u"',
+        semi_stable_text="s", dynamic_text="y", user_content_json=json.dumps("u" * 200_000),  # comparable to the 50k send
         docs_need_development=False,
     )
     env = SimpleNamespace(drive_root=str(tmp_path))
@@ -762,6 +762,8 @@ def test_first_successful_call_seeds_density_so_the_next_projection_is_measured(
         model=model,
         provider="openrouter",
         prompt_tokens_estimate=50_000,     # == 200,000 prompt chars
+        physical_context=context_fit._physical_context_for_fit(context_fit.measure_main_fit(
+            first, first.messages_for("max"), [], profile="owner_max", rendered_mode="max", round_id="r1")),
         # The modern producer stamps the fit-estimator basis (no images here,
         # so it equals the raw estimate); a 0 legacy field records basis="raw",
         # which the MAIN fit resolver deliberately refuses to calibrate on.

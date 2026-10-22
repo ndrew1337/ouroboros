@@ -39,6 +39,7 @@ from ouroboros.contracts.plugin_api import (
     capability_available,  # noqa: F401
 )
 from ouroboros.event_bus import get_global_event_bus
+from ouroboros.extension_contributions import stage_contributions
 from ouroboros.extension_companion import CompanionDescriptor, get_global_supervisor, is_server_process  # noqa: F401
 from ouroboros.extension_ui_validation import (
     _assert_ws_message_type,  # noqa: F401
@@ -138,6 +139,7 @@ from ouroboros.extension_surface_names import (
     parse_extension_surface_name,  # noqa: F401
 )
 from ouroboros.skill_loader import _SKILL_DIR_CACHE_NAMES, _sanitize_skill_name, LoadedSkill, SkillPayloadUnreadable, compute_content_hash, discover_skills, discover_selected_skill_candidates, discover_skill_identity, find_skill, grant_status_for_skill, requested_core_setting_keys, skill_conflict_status, skill_review_gate, skill_state_dir, skill_state_dir_path  # noqa: F401
+from ouroboros.skill_loader import _skill_location_inventory
 from ouroboros.skill_token import SkillToken  # noqa: F401
 from ouroboros.tools.skill_exec import _scrub_env  # noqa: F401
 from ouroboros.utils import atomic_write_json, read_json_dict, utc_now_iso  # noqa: F401
@@ -217,6 +219,8 @@ def _publish_out_of_process_registration(
     ))
     try:
         _stage_out_of_process_surfaces(api, skill, catalog)
+        if current_hash is not None:
+            stage_contributions(api, skill, current_hash)
         for name in names:
             if name not in declared:
                 raise ExtensionRegistrationError(
@@ -329,8 +333,9 @@ def reconcile_extension(
         from ouroboros.config import get_skills_repo_path
 
         resolved_repo_path = get_skills_repo_path() if repo_path is None else repo_path
+        locations = None if skills is not None else _skill_location_inventory(drive_root, repo_path=resolved_repo_path)
         peers = list(skills) if skills is not None else discover_skill_identity(
-            drive_root, skill_name, repo_path=resolved_repo_path
+            drive_root, skill_name, repo_path=resolved_repo_path, locations=locations
         )
         if selected_skill is not None:
             peers = [item for item in peers if item.name != selected_skill.name]
@@ -348,6 +353,7 @@ def reconcile_extension(
             repo_path=resolved_repo_path,
             skills=peers if skills is not None else None,
             selected_skill=subject,
+            locations=locations,
         )
         loaded_present = bool(state.get("loaded_present"))
         was_live = bool(state.get("live_loaded"))
@@ -360,6 +366,7 @@ def reconcile_extension(
                 repo_path=resolved_repo_path,
                 skills=peers if skills is not None else None,
                 selected_skill=subject,
+                locations=locations,
             )
             loaded_present = bool(state.get("loaded_present"))
             was_live = bool(state.get("live_loaded"))
@@ -661,7 +668,9 @@ def load_extension(
     if auto_specs:
         deps_reason = _deps_block_reason(pathlib.Path(drive_root), skill)
         if deps_reason:
-            return f"skill {skill.name!r} cannot load until isolated dependencies are ready: {deps_reason}"
+            from ouroboros.skill_dependencies import dependency_sentence
+
+            return dependency_sentence(deps_reason)  # the same sentence liveness shows for this code
 
     # Core settings and privileged host capabilities require hash-bound grants.
     grant_status = grant_status_for_skill(pathlib.Path(drive_root), skill)
@@ -762,6 +771,7 @@ def load_extension(
             if current_execution_mode() is ExecutionMode.IN_PROCESS:
                 api._disclose_model_capable_dispatch("register", "register")
             register(api)
+            stage_contributions(api, skill, current_hash)
             # ABI-9: nothing register() staged is visible yet; publish the
             # whole snapshot atomically (validate -> swap -> attach; deferred
             # side effects attach only after the swap).

@@ -249,7 +249,7 @@ def acknowledge_question_delivery(ctx: Any, text: str) -> None:
 def wake_reason(ctx: Any, chosen: Dict[str, Any]) -> str:
     """Why the sleep is ready now (``""`` = not yet). Owner input is never filtered."""
     from ouroboros.deadline_utils import parse_deadline_ts, utc_now
-    from ouroboros.owner_mailbox import KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED, KIND_TASK_MESSAGE
+    from ouroboros.owner_mailbox import KIND_CARD_INPUT, KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED, KIND_TASK_MESSAGE
     from ouroboros.owner_wait import _wait_entries
     from ouroboros.task_status import SETTLED_STATUSES
 
@@ -269,7 +269,7 @@ def wake_reason(ctx: Any, chosen: Dict[str, Any]) -> str:
 
     for entry in read_source(_wait_entries, ctx) or ():
         kind = str(entry.get("kind") or KIND_OWNER_TEXT)
-        if kind in {KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED}:
+        if kind in {KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED, KIND_CARD_INPUT}:
             return "owner_text"
         if kind != KIND_TASK_MESSAGE:
             return f"control:{kind}"  # finalize_now, hurry, owner_pause, ... always wake
@@ -278,13 +278,13 @@ def wake_reason(ctx: Any, chosen: Dict[str, Any]) -> str:
                 or source in chosen.get("senders", [])):
             return f"mail:{source or 'unknown'}"
     if chosen.get("tasks"):
-        from ouroboros.task_results import load_task_result
+        from ouroboros.task_store import task_versions
 
-        root = _canonical_root(ctx)
+        versions = read_source(task_versions, _canonical_root(ctx), chosen["tasks"]) or {}
         for task_id in chosen["tasks"]:
-            row = read_source(load_task_result, root, task_id, strict=False) or {}
-            if str(row.get("status") or "") in SETTLED_STATUSES:
-                return f"task:{task_id}:{row.get('status')}"
+            status = versions.get(task_id, (0, "", False))[1]
+            if status in SETTLED_STATUSES:
+                return f"task:{task_id}:{status}"
     from ouroboros.delegate_custody import TERMINAL_STATES
     from ouroboros.sleep_custody import seen_interactions
 

@@ -17,6 +17,12 @@ enabled catalog row the author names, pool member or not — the optional pre-co
 ``system`` (``subject=system``) is ``/review``: one row (default: the direct Main row) reads the whole
 system and writes a report, recorded as a ``surface=system`` record that asks no verdict question. The
 surface is part of every identity, so a preflight record never answers the commit panel.
+
+Two subjects are composed by their own modules and run on this wave: a task result
+(``subject=result``, ``tools/review_result.py``) and a skill payload (``subject=skill``,
+``tools/review_skill.py``). The skill subject is internal: ``skill_review`` is the model's tool and the
+owner's Skills-page action, and it hands this operation the frozen payload it already built
+(``_frozen_skill``); the public schema lists no skill subject (owner, 21.10 1A).
 """
 
 from __future__ import annotations
@@ -38,8 +44,8 @@ from ouroboros.config import (
 from ouroboros.preflight_receipts import bind_execution_exhibit
 from ouroboros.review_body_fact import body_fact, layer_for
 from ouroboros.review_ledger import (
-    PART_CHANGE, PARTS, QUESTION_NOT_PERFORMED, build_wave_record, ledger_root, load_record, new_record_id,
-    panel_facts, panel_not_reached, reduce_verdict, revise_record, row_verdict, write_record,
+    PART_CHANGE, PART_RESULT, PART_SKILL, PARTS, QUESTION_NOT_PERFORMED, build_wave_record, ledger_root, load_record, new_record_id,
+    panel_facts, panel_not_reached, reduce_verdict, revise_record, row_verdict, seat_findings, write_record,
 )
 from ouroboros.settings_scales import EFFORT_SCALE
 from ouroboros.reviewer_slot_config import ComposedPanel, PanelCompositionError as ReviewChangeArgumentError
@@ -59,11 +65,23 @@ from ouroboros.utils import run_cmd, utc_now_iso
 log = logging.getLogger(__name__)
 
 TOOL_NAME = "review_change"
+# A result wave keeps its own paid-cycle count per task tree (attempt rows carry this tool
+# name), as task acceptance did: change reviews never use up an owed result review. A skill
+# wave likewise keeps its own (``review_skill``: per root task, or per content version in the
+# manual lane, owner Q23).
+RESULT_TOOL_NAME = "review_result"
+SKILL_TOOL_NAME = "review_skill"
 SURFACE = "change"
-SURFACES = ("change", "preflight", "system")
+RESULT = "result"
+SKILL = "skill"
+SINGLE_QUESTION = (RESULT, SKILL)
+SURFACES = ("change", "preflight", "system", RESULT, SKILL)
 ROOTS = ("active_workspace", "system_repo")
 CHANGE_KINDS = ("index", "worktree", "base..head")
-SUBJECT_KINDS = (*CHANGE_KINDS, "system")
+SUBJECT_KINDS = (*CHANGE_KINDS, "system", RESULT, SKILL)
+# What the model's tool offers: the skill subject is ``skill_review``'s own spelling.
+PUBLIC_SURFACES = tuple(surface for surface in SURFACES if surface != SKILL)
+PUBLIC_SUBJECT_KINDS = tuple(kind for kind in SUBJECT_KINDS if kind != SKILL)
 # The part a system review's one seat answers: a report, outside the verdict
 # questions (``review_ledger.PARTS``), so its record never states a verdict.
 REPORT_PART = "report"
@@ -93,11 +111,18 @@ class ReviewChangeRequest:
     review_rebuttal: str = ""
     treat_as_body: bool = False
     surface: str = SURFACE
+    answer: str = ""  # subject=result: the reply under review (omitted = the task's latest reply)
 
 
 _ARG_NAMES = frozenset(ReviewChangeRequest.__dataclass_fields__)
 _TEXT_ARGS = ("root", "workspace_root", "subject", "base", "head", "surface", "goal", "scope",
-              "reason", "reviewer_effort", "review_rebuttal")
+              "reason", "reviewer_effort", "review_rebuttal", "answer")
+
+
+def wave_tool_name(request: Any) -> str:
+    """The attempt rows' tool name: one paid-cycle count per kind of review."""
+    surface = str(getattr(request, "surface", "") or "")
+    return RESULT_TOOL_NAME if surface == RESULT else SKILL_TOOL_NAME if surface == SKILL else TOOL_NAME
 
 
 def _text(args: Dict[str, Any], name: str, problems: List[str]) -> str:
@@ -126,6 +151,8 @@ def parse_request(args: Dict[str, Any]) -> ReviewChangeRequest:
     root = text["root"].strip() or "active_workspace"
     subject, base, head = text["subject"].strip(), text["base"].strip(), text["head"].strip()
     surface = text["surface"].strip() or SURFACE
+    if subject in SINGLE_QUESTION and surface == SURFACE:
+        surface = subject  # the subject names its surface, as /review's does
     lists = {name: _strings(args, name, problems, verbatim=name == "author_questions")
              for name in ("author_questions", "reviewers", "coupling_only")}
     if root not in ROOTS:
@@ -138,6 +165,12 @@ def parse_request(args: Dict[str, Any]) -> ReviewChangeRequest:
         problems.append(f"subject must be one of {', '.join(SUBJECT_KINDS)}, got {subject!r}")
     elif (subject == "system") != (surface == "system"):
         problems.append("subject=system goes with surface=system: /review reads the whole system repository")
+    elif (subject == RESULT) != (surface == RESULT):
+        problems.append("subject=result goes with surface=result: it reviews this task's result, not a change")
+    elif (subject == SKILL) != (surface == SKILL):
+        problems.append("subject=skill goes with surface=skill: a skill payload is reviewed through skill_review")
+    elif subject in SINGLE_QUESTION and (text["workspace_root"].strip() or base or head or root != "active_workspace"):
+        problems.append(f"subject={subject} reviews its own frozen subject; root, workspace_root, base and head do not apply")
     elif subject == "system" and (text["workspace_root"].strip() or base or head):
         problems.append("subject=system reads the installed system repository; workspace_root, base and head do not apply")
     elif subject == "base..head" and not (base and head):
@@ -152,6 +185,10 @@ def parse_request(args: Dict[str, Any]) -> ReviewChangeRequest:
         problems.append(f"surface={surface} seats exactly one reviewer, named in reviewers"
                         + (" (omitted = the direct Main row)" if surface == "system" else "")
                         + "; coupling_only does not apply")
+    if subject in SINGLE_QUESTION and lists["coupling_only"]:
+        problems.append(f"coupling_only belongs to a change review; a {subject} review asks one question of every seat")
+    if text["answer"].strip() and subject != RESULT:
+        problems.append("answer belongs to subject=result")
     effort = text["reviewer_effort"].strip()
     if effort and effort not in EFFORT_SCALE:
         problems.append(f"reviewer_effort must be one of {', '.join(EFFORT_SCALE)}, got {effort!r}")
@@ -165,7 +202,9 @@ def parse_request(args: Dict[str, Any]) -> ReviewChangeRequest:
         subject=subject, base=base, head=head,
         goal=text["goal"], scope=text["scope"], author_questions=lists["author_questions"],
         reviewers=lists["reviewers"], reason=text["reason"], coupling_only=lists["coupling_only"],
-        reviewer_effort=effort, review_rebuttal=text["review_rebuttal"], treat_as_body=treat is True,
+        reviewer_effort=effort, review_rebuttal=text["review_rebuttal"],
+        treat_as_body=treat is True and subject not in SINGLE_QUESTION,
+        answer=text["answer"],
         surface=surface)
 
 
@@ -266,18 +305,33 @@ def _verify_revisions(root: pathlib.Path, request: ReviewChangeRequest) -> None:
 # --- Panel ------------------------------------------------------------------------
 
 def compose_panel(request: ReviewChangeRequest, *, body: bool = False, strictness: Optional[str] = None) -> ComposedPanel:
-    """The shared strictness policy, applied to this change's own-body fact."""
+    """The shared strictness policy, applied to this change's own-body fact; a result wave composes freely
+    (named rows in every mode, a narrowed panel records a missing reason) and every seat answers its one
+    result question; a skill wave composes as the skill surface (Blocking widens to every ticked reviewer,
+    Advisory narrows with a reason, Cyber Pro composes freely) and every seat answers the one skill question."""
     from ouroboros.reviewer_slot_config import compose_review_panel, review_strictness
 
+    surface = ("preflight" if request.surface == "preflight" else request.surface if request.surface in SINGLE_QUESTION
+               else "own_body" if body else "change")
     try:
-        return compose_review_panel(request.reviewers, request.reason,
-            surface="preflight" if request.surface == "preflight" else "own_body" if body else "change",
+        panel = compose_review_panel(request.reviewers, request.reason, surface=surface,
             strictness=strictness or review_strictness(get_review_enforcement(), get_runtime_mode()),
             reviewer_effort=request.reviewer_effort, coupling_only=request.coupling_only)
     except ReviewChangeArgumentError:
         raise
     except ValueError as exc:
         return ComposedPanel((), True, {"composition": "full_pool", "composition_error": str(exc)})
+    return single_question_panel(panel, request.surface)
+
+
+def single_question_panel(panel: ComposedPanel, surface: str) -> ComposedPanel:
+    """A single-question wave's seats answer its one part (``result`` / ``skill``), whoever composed them."""
+    from ouroboros.reviewer_slot_config import PoolSeat
+
+    if surface not in SINGLE_QUESTION:
+        return panel
+    part = PART_RESULT if surface == RESULT else PART_SKILL
+    return ComposedPanel(tuple(PoolSeat(seat.slot, (part,), seat.additional) for seat in panel.seats), True, panel.facts)
 
 
 @contextlib.contextmanager
@@ -344,6 +398,10 @@ def _round_sha(request: ReviewChangeRequest, frozen: Any) -> str:
 
 
 def _wave_label(request: ReviewChangeRequest, root: pathlib.Path) -> str:
+    if request.surface == RESULT:
+        return "review_change result: this task's result against what was asked (review only; nothing is delivered)"
+    if request.surface == SKILL:
+        return f"skill_review: the payload of skill {root.name} (review only; nothing is enabled or granted)"
     span = {"base..head": f"{request.base}..{request.head}", "index": "staged index", "worktree": "worktree"}
     against = f" against {request.base}" if request.base and request.subject != "base..head" else ""
     surface = "" if request.surface == SURFACE else f" {request.surface}"
@@ -355,7 +413,16 @@ def _prepare_wave(ctx: ToolContext, request: ReviewChangeRequest, frozen: Any, p
     """Every identity of this wave, computed under its own panel."""
     from ouroboros.tools.commit_gate import commit_review_contract_fingerprint, compute_rebuttal_sha256, resolve_root_task_id
 
-    rules = checklist_fingerprint(layer)
+    if request.surface == RESULT:
+        from ouroboros.tools.review_result import result_rules
+
+        rules = result_rules()
+    elif request.surface == SKILL:
+        from ouroboros.tools.review_skill import skill_rules
+
+        rules = skill_rules()
+    else:
+        rules = checklist_fingerprint(layer)
     enforcement = str(get_review_enforcement() or "")
     contract_fp = str(rejoin.review_contract_fingerprint or "") if rejoin is not None else str(commit_review_contract_fingerprint() or "")
     rebuttal_sha = str(compute_rebuttal_sha256(request.review_rebuttal) or "")
@@ -366,11 +433,14 @@ def _prepare_wave(ctx: ToolContext, request: ReviewChangeRequest, frozen: Any, p
     reuse_key = review_reuse_key(
         frozen, rules_sha=str((rules.get("rules_source") or {}).get("sha") or ""), layer=layer,
         assigned=panel.assigned, enforcement=enforcement, contract_fp=contract_fp, round_sha=round_sha)
+    # A subject may name the root task its paid-cycle allowance belongs to ("" = the manual lane,
+    # counted per content version): a skill reviewed from the Skills page is nobody's task.
+    ceiling_root = getattr(frozen, "ceiling_root", None)
     return _Wave(request=request, frozen=frozen, panel=panel, root=root, fact=fact, layer=layer, rules=rules,
                  enforcement=enforcement, contract_fp=contract_fp, rebuttal_sha=rebuttal_sha,
                  retry_key=review_retry_key(frozen, round_sha=round_sha), reuse_key=reuse_key,
-                 root_task_id=str(resolve_root_task_id(ctx) or ""), record_id=new_record_id(),
-                 label=_wave_label(request, root))
+                 root_task_id=str(ceiling_root if ceiling_root is not None else resolve_root_task_id(ctx) or ""),
+                 record_id=new_record_id(), label=_wave_label(request, root))
 
 
 # The shared task context's review state; the wave runs with this call's
@@ -401,7 +471,7 @@ def _wave_context(ctx: ToolContext, wave: _Wave) -> Iterator[None]:
     saved = {name: getattr(ctx, name, missing) for name in _CTX_FIELDS}
     try:
         git_mod._reset_commit_review_state(ctx)
-        ctx._current_review_tool_name = TOOL_NAME
+        ctx._current_review_tool_name = wave_tool_name(wave.request)
         ctx._current_review_retry_key = wave.retry_key
         ctx._current_review_record_id = wave.record_id
         ctx._current_review_rebuttal_sha256 = wave.rebuttal_sha
@@ -463,13 +533,17 @@ def _forensic(ctx: ToolContext) -> Dict[str, Any]:
 
 
 def _open_seats(forensic: Dict[str, Any]) -> List[str]:
+    """Seats whose answer may still arrive. A seat whose custody is lost is terminal ("outcome
+    unknown, never re-sent"): it is a failed seat of a settled record, never a reason to keep
+    the record open for a re-issue that cannot change it."""
     rows = list(forensic.get("triad_raw", []))
     return [str(row.get("slot_id") or "") for row in rows
-            if bool(row.get("late_result_pending")) or str(row.get("operation_state") or "") in {"in_flight", "custody_lost"}]
+            if str(row.get("operation_state") or "") != "custody_lost"
+            and (bool(row.get("late_result_pending")) or str(row.get("operation_state") or "") == "in_flight")]
 
 
 def _seats_open(forensic: Dict[str, Any]) -> bool:
-    return bool(forensic.get("custody_lost")) or bool(_open_seats(forensic))
+    return bool(_open_seats(forensic))
 
 
 def _checkout_custody(ctx: ToolContext, forensic: Dict[str, Any]) -> Dict[str, Any]:
@@ -488,32 +562,6 @@ def _checkout_custody(ctx: ToolContext, forensic: Dict[str, Any]) -> Dict[str, A
     if git_mod._review_custody_pending(ctx):
         facts["review_custody_pending"] = True
     return facts
-
-
-def seat_findings(triad_raw: Sequence[Dict[str, Any]],
-                  additional: set) -> Tuple[List[dict], List[dict], List[dict]]:
-    """(critical, advisory, additional) FAIL items, each attributed to its seat
-    and the PART it answered (``answers`` by part; a record without ``answers``
-    is a packet seat whose ``parsed_items`` are the change's)."""
-    critical, advisory, extra = [], [], []
-
-    def _severity(item: Dict[str, Any]) -> str:
-        return "critical" if str(item.get("severity") or "").lower() == "critical" else "advisory"
-
-    for raw in triad_raw:
-        seat = str(raw.get("slot_id") or "")
-        answers = raw.get("answers") if isinstance(raw.get("answers"), dict) else None
-        if answers:
-            items = [(part, item) for part in PARTS for item in (answers.get(part) or {}).get("findings") or []
-                     if isinstance(item, dict)]
-        else:
-            items = [(PART_CHANGE, item) for item in raw.get("parsed_items") or []
-                     if isinstance(item, dict) and str(item.get("verdict") or "FAIL").upper() == "FAIL"]
-        for part, item in items:
-            severity = _severity(item)
-            finding = {**item, "seat_id": seat, "part": part, "severity": severity}
-            (extra if seat in additional else critical if severity == "critical" else advisory).append(finding)
-    return critical, advisory, extra
 
 
 def wave_facts(ctx: ToolContext, wave: _Wave, *, outcome: Dict[str, Any], forensic: Dict[str, Any]) -> Dict[str, Any]:
@@ -550,8 +598,13 @@ def wave_facts(ctx: ToolContext, wave: _Wave, *, outcome: Dict[str, Any], forens
         "dispute_input": forensic.get("dispute_input"),
         "enforcement_blocks": wave.layer == "body" and bool(review_enforcement_blocks(wave.enforcement)),
         "structured": structured, "slot_executions": executions, "triad_raw": triad_raw,
-        "blocked": bool(outcome.get("blocked")), "block_reason": str(outcome.get("block_reason") or ""),
-        "dispatch_refusal": refusal, "pending": _seats_open(forensic), "degraded_reasons": degraded,
+        # The wave's "pending" block counts a lost seat as still owed; once no seat can still answer
+        # (``_open_seats``), the record is decided by its answers, never held by that block.
+        "blocked": bool(outcome.get("blocked")) and not (
+            str(outcome.get("block_reason") or "") == "review_late_result_pending" and not _seats_open(forensic)),
+        "block_reason": str(outcome.get("block_reason") or ""),
+        "dispatch_refusal": refusal, "pending": _seats_open(forensic), "lost_seat_terminal": True,
+        "degraded_reasons": degraded,
         "critical_findings": critical, "advisory_findings": advisory, "additional_findings": additional,
         "tests": {"policy": "NOT_RUN", "result": "unknown"},
         "preflight": {"status": "not_performed", "record_id": ""},
@@ -568,12 +621,13 @@ def subject_facts(frozen: Any, retention: Optional[Dict[str, Any]] = None) -> Di
     alive by open custody (``retention`` says what), ``""`` when it was removed."""
     spec = frozen.spec
     checkout = str(getattr(frozen, "checkout", "") or "")
+    extra = getattr(frozen, "extra_subject_facts", None)  # a subject may state more identity than the git keys
     return {"root_kind": str(spec.root_kind), "root": str(spec.root), "kind": str(spec.kind),
             "base": str(spec.base or getattr(frozen, "parent_sha", "") or ""), "head": str(spec.head or ""),
             "governance_root": str(getattr(spec, "governance_root", "") or ""),
             "tree_sha": str(getattr(frozen, "tree_sha", "") or ""), "diff_sha": str(getattr(frozen, "diff_sha", "") or ""),
             "checkout": checkout, "retained_checkout": checkout if retention else "",
-            "retention": dict(retention or {})}
+            "retention": dict(retention or {}), **(dict(extra() or {}) if callable(extra) else {})}
 
 
 def _assigned_verdict(record: Any, rows: List[Dict[str, Any]], outcome: Dict[str, Any]) -> Dict[str, Any]:
@@ -596,6 +650,12 @@ def _finish_record(record: Any, wave: _Wave, outcome: Dict[str, Any], *, reuse_k
                                   "treat_as_body": wave.request.treat_as_body,
                                   "checklist_hash": str(wave.rules.get("checklist_hash") or ""),
                                   "rules_source": dict(wave.rules.get("rules_source") or {})}}
+    brief_facts = getattr(wave.frozen, "brief_facts", None)  # a subject's own brief facts (a skill's lifecycle, rule)
+    for key, value in (dict(brief_facts() or {}) if callable(brief_facts) else {}).items():
+        if key == "checklist":
+            record.brief["checklist"].update(dict(value or {}))
+        else:
+            record.brief[key] = value
     record.fingerprints = {**dict(record.fingerprints or {}), "reuse_key": reuse_key, "retry_key": wave.retry_key}
     additional = set(wave.panel.additional)
     for seat in record.rows:
@@ -610,17 +670,34 @@ def _finish_record(record: Any, wave: _Wave, outcome: Dict[str, Any], *, reuse_k
         panel = panel_facts(record.rows, composition=str(wave.panel.facts.get("composition") or "full_pool"),
                             reason=str(wave.panel.facts.get("reason") or ""),
                             chosen_by=str(wave.panel.facts.get("chosen_by") or "owner"))
-    record.panel = {**panel, **wave.panel.facts, "not_reached": panel_not_reached(record.rows)}
+    record.panel = {**panel, **wave.panel.facts, "not_reached": panel_not_reached(record.rows, lost_is_terminal=True)}
     if wave.request.surface == "preflight":
         for key in ("pool", "strictness", "pool_empty", "main_self_review", "reason_missing"):
             record.panel.pop(key, None)
 
 
+_SUBJECT_IDENTITY = ("root_kind", "root", "kind", "base", "head", "tree_sha", "diff_sha", "governance_root")
+
+
 def _write(drive: Any, record: Any, *, rejoin: bool = False) -> Tuple[Dict[str, Any], bool]:
-    """Write the one record (a rejoin revises the record its open operation left
-    pending); an unwritten record is answered from memory and says so."""
+    """Write the one record (a rejoin revises the record its open operation left pending, keeping what that
+    dispatch's seats read: the subject's identity, the brief and the fingerprints with the reuse key over its
+    rebuttal; the seats' answers, refs and custody facts are the settling wave's); an unwritten record is
+    answered from memory and says so."""
+    def settle(prior: Dict[str, Any]) -> Dict[str, Any]:
+        fresh = record.to_dict()
+        retry = (prior.get("fingerprints") or {}).get("retry_key")
+        if not retry or retry != (fresh.get("fingerprints") or {}).get("retry_key"):
+            return fresh
+        # The same round keeps what its seats read, also when a late collector settled it a moment earlier;
+        # what the dispatching record lacks (a lost dispute-input binding) is the settling wave's.
+        identity = {key: value for key, value in dict(prior.get("subject") or {}).items() if key in _SUBJECT_IDENTITY}
+        kept = {key: {**dict(fresh.get(key) or {}), **dict(prior[key] or {})}
+                for key in ("brief", "fingerprints") if key in prior}
+        return {**fresh, **kept, "subject": {**dict(fresh.get("subject") or {}), **identity}}
+
     try:
-        revised = revise_record(drive, record.record_id, lambda _prior: record.to_dict()) if rejoin else None
+        revised = revise_record(drive, record.record_id, settle) if rejoin else None
         return revised or write_record(drive, record), True
     except (OSError, ValueError) as exc:
         log.warning("review_change ledger record was not written", exc_info=True)
@@ -650,8 +727,9 @@ def _settle(ctx: ToolContext, wave: _Wave, facts: Dict[str, Any], outcome: Dict[
     settle_attempt(ctx, wave, outcome, payload, facts)
     result = review_result(payload, reused=False)
     result["durable"] = durable
-    from ouroboros.review_history_view import queue_review_history_context
-    queue_review_history_context(ctx, family="commit", repo_root=wave.root)
+    if wave.request.surface not in SINGLE_QUESTION:
+        from ouroboros.review_history_view import queue_review_history_context
+        queue_review_history_context(ctx, family="commit", repo_root=wave.root)
     return result
 
 
@@ -681,10 +759,16 @@ def review_result(record: Dict[str, Any], *, reused: bool) -> Dict[str, Any]:
 
 
 def _cycles_exhausted(ctx: ToolContext, wave: _Wave) -> Optional[Dict[str, Any]]:
-    """The shared per-task-tree ceiling of (this root, ``review_change``)."""
+    """The shared per-task-tree ceiling of (this root, this kind of review: ``wave_tool_name``); a skill
+    wave outside any task (the manual lane) meets the same number per content version (owner Q23)."""
     from ouroboros.tools.commit_gate import check_review_cycles_ceiling
 
-    probe = SimpleNamespace(**{**vars(ctx), "repo_dir": wave.root, "_current_review_tool_name": TOOL_NAME})
+    if wave.request.surface == SKILL and not wave.root_task_id:
+        from ouroboros.tools.review_skill import manual_lane_ceiling
+
+        return manual_lane_ceiling(ctx, wave)
+    probe = SimpleNamespace(**{**vars(ctx), "repo_dir": wave.root,
+                               "_current_review_tool_name": wave_tool_name(wave.request)})
     return check_review_cycles_ceiling(probe, root_task_id=wave.root_task_id)
 
 
@@ -692,7 +776,7 @@ def _refuse_exhausted(ctx: ToolContext, wave: _Wave, exhausted: Dict[str, Any]) 
     from ouroboros.review_cycles import emit_review_cycles_exhausted
 
     emit_review_cycles_exhausted(
-        getattr(ctx, "event_queue", None), ctx.drive_root, surface=TOOL_NAME,
+        getattr(ctx, "event_queue", None), ctx.drive_root, surface=wave_tool_name(wave.request),
         task_id=str(getattr(ctx, "task_id", "") or ""), cycles_paid=int(exhausted["cycles_paid"]),
         cap=int(exhausted["cap"]), enforcement=wave.enforcement, root_task_id=wave.root_task_id,
         fingerprint=str(wave.frozen.diff_sha), root=str(wave.root))
@@ -780,7 +864,7 @@ def run_system_review(ctx: ToolContext, *, reviewer: str = "", effort: str = "",
     from dataclasses import replace
 
     from ouroboros.deep_self_review import SystemReviewAsk, run_deep_self_review
-    from ouroboros.review_records import new_review_wave_id
+    from ouroboros.review_records import new_review_wave_id, review_failure_facts
     from ouroboros.usage_accounting import UsageScope, current_usage_scope, usage_scope
 
     row = system_review_row(reviewer, effort)
@@ -821,7 +905,10 @@ def run_system_review(ctx: ToolContext, *, reviewer: str = "", effort: str = "",
         "triad_raw": [] if refused else [{
             "slot_id": row.slot_id, "status": "error" if failed else "responded", "raw_text": "" if failed else report,
             "model_id": str(usage.get("resolved_model") or ""), "cost_usd": cost if isinstance(cost, (int, float)) else None,
-            "capability_delta": list(usage.get("capability_delta") or [])}],
+            "capability_delta": list(usage.get("capability_delta") or []),
+            # A failed /review keeps its reason on the row, before the report text can be pruned.
+            **(review_failure_facts({"status": "error", "error": report,
+                                     "failure_code": str(usage.get("reason_code") or "")}) if failed else {})}],
         "dispatch_refusal": {"kind": "reviewer_unavailable", "message": report} if refused else None,
         "degraded_reasons": degraded,
         "composition": "composed", "composition_reason": ask.reason, "chosen_by": "ouroboros" if reviewer else "owner",
@@ -850,21 +937,58 @@ def run_review_change(ctx: ToolContext, **args: Any) -> Dict[str, Any]:
     # In-process callers (the commit gate's look, the contributor lane) hand the test
     # execution they established; the tool surface has no such argument.
     supplied_execution = args.pop("_preflight_execution", None)
+    # The host collecting a running wave it did not start names that wave's recorded round
+    # (its retry key): it rejoins the open operation at $0 and never buys another wave.
+    rejoin_key = str(args.pop("_rejoin_retry_key", "") or "")
+    # The host's delivery step hands the result subject it already froze, so the wave it dispatches or
+    # collects is of exactly that material (a recapture could name a later artifact the seats never saw).
+    frozen_result = args.pop("_frozen_result", None)
+    # ``skill_review`` hands the frozen skill payload it built (``review_skill.skill_subject``): the only
+    # way a skill subject enters this operation; with it, the panel its lifecycle already composed by
+    # its own source (the Skills page composes as the owner, the tool as the mind).
+    frozen_skill = args.pop("_frozen_skill", None)
+    supplied_panel = args.pop("_panel", None)
     request = parse_request(args)
+    if request.subject == SKILL and frozen_skill is None:
+        raise ReviewChangeArgumentError("subject=skill is skill_review's own: call skill_review for a skill payload")
     if request.subject == "system":
         if _assigned_review_root(ctx) is not None:
             raise ReviewChangeArgumentError("review_change is limited to the assigned work; subject=system is unavailable")
         return run_system_review(ctx, reviewer=request.reviewers[0] if request.reviewers else "",
                                  effort=request.reviewer_effort, goal=request.goal,
                                  author_questions=request.author_questions, reason=request.reason)
-    root_kind, root = resolve_review_root(ctx, binding, request)
-    _verify_revisions(root, request)
     governance = _governance_repo(ctx)
-    fact = body_fact(root, system_repo=governance, data_dir=ledger_root(ctx), treat_as_body=request.treat_as_body)
-    layer = layer_for(fact)
-    spec = ReviewSubjectSpec(root_kind=root_kind, root=str(root), kind=request.subject, base=request.base,
-                             head=request.head, governance_root=str(governance), surface=request.surface,
-                             body_fact=str(fact.body), body_how=str(fact.how), layer=layer)
+    if request.subject == RESULT:
+        from ouroboros.tools.review_result import RESULT_LAYER, refuse_when_off, result_subject, running_earlier_request
+
+        refuse_when_off()  # before any subject is built or any seat is paid
+        result = frozen_result if frozen_result is not None else result_subject(ctx, request, governance_root=governance)
+        if frozen_result is None:
+            earlier = running_earlier_request(ctx, result)
+            # Only to collect: the same unchanged call rejoins that round's open operation at $0; any other call
+            # (another brief, a lost operation) reviews the request as it is now.
+            if earlier is not result and pending_round_attempt(
+                    ctx, root=pathlib.Path(earlier.spec.root), tool_name=wave_tool_name(request),
+                    retry_key=review_retry_key(earlier, round_sha=_round_sha(request, earlier))) is not None:
+                result = earlier
+        root = pathlib.Path(result.spec.root)
+        fact = body_fact(root, system_repo=governance, data_dir=ledger_root(ctx), treat_as_body=False)
+        layer, spec = RESULT_LAYER, result.spec
+    elif request.subject == SKILL:
+        from ouroboros.review_body_fact import BodyFact
+        from ouroboros.tools.review_skill import SKILL_LAYER
+
+        result, root, spec = frozen_skill, pathlib.Path(frozen_skill.spec.root), frozen_skill.spec
+        fact = BodyFact(body="false", how="skill_payload", detail="a skill payload is never the body")
+        layer = SKILL_LAYER
+    else:
+        root_kind, root = resolve_review_root(ctx, binding, request)
+        _verify_revisions(root, request)
+        fact = body_fact(root, system_repo=governance, data_dir=ledger_root(ctx), treat_as_body=request.treat_as_body)
+        layer = layer_for(fact)
+        spec = ReviewSubjectSpec(root_kind=root_kind, root=str(root), kind=request.subject, base=request.base,
+                                 head=request.head, governance_root=str(governance), surface=request.surface,
+                                 body_fact=str(fact.body), body_how=str(fact.how), layer=layer)
     # The gate's own subject (the body's staged index against HEAD) is read on its live
     # root exactly as the gate reads it unless its interactive author may leave the wave
     # on an addressed message (``_read_subject``); every other subject is materialized in an
@@ -876,16 +1000,22 @@ def run_review_change(ctx: ToolContext, **args: Any) -> Dict[str, Any]:
     retention: Dict[str, Any] = {}
     task_id = str(getattr(ctx, "task_id", "") or "")
     unfrozen: List[str] = []
-    with _read_subject(ctx, spec, request, retention, task_id, unfrozen) as frozen:
+    reading = (contextlib.nullcontext(result) if request.subject in SINGLE_QUESTION
+               else _read_subject(ctx, spec, request, retention, task_id, unfrozen))
+    with reading as frozen:
         if not str(getattr(frozen, "diff_text", "") or "").strip():
             raise ReviewChangeArgumentError(f"subject={request.subject} of {root} has no change to review")
         # Locate an already-paid round before consulting mutable pool settings.
         # An absent or changed row cannot substitute a new operation for this one.
-        rejoin = pending_round_attempt(ctx, root=root,
-            retry_key=review_retry_key(frozen, round_sha=_round_sha(request, frozen)))
+        rejoin = pending_round_attempt(ctx, root=root, tool_name=wave_tool_name(request),
+            retry_key=rejoin_key or review_retry_key(frozen, round_sha=_round_sha(request, frozen)))
+        if rejoin_key and rejoin is None:
+            raise ReviewChangeArgumentError("the running review named for collection has no open operation left")
         if rejoin is not None:
             from ouroboros.tools.review_change_custody import recorded_change_panel
             panel = recorded_change_panel(ctx, rejoin)
+        elif supplied_panel is not None:
+            panel = single_question_panel(supplied_panel, request.surface)
         else:
             panel = compose_panel(request, body=layer == "body")
         with _panel_in_force(panel):
@@ -895,7 +1025,8 @@ def run_review_change(ctx: ToolContext, **args: Any) -> Dict[str, Any]:
             if rejoin is not None:
                 record_id = str(rejoin.review_record_id or wave.record_id)
                 wave = dataclasses.replace(wave, rejoin=rejoin, record_id=record_id,
-                                           execution=_dispatched_execution(ctx, record_id, rejoin))
+                                           execution=_dispatched_execution(ctx, record_id, rejoin),
+                                           retry_key=rejoin_key or wave.retry_key)
             else:
                 prior = reuse_or_none(ledger_root(ctx), wave.reuse_key, questions=request.author_questions)
                 if prior is not None:
@@ -910,9 +1041,18 @@ def run_review_change(ctx: ToolContext, **args: Any) -> Dict[str, Any]:
                 retention.update(_checkout_custody(ctx, forensic))
                 from ouroboros import review_pause
 
-                review_pause.watch_left_review(ctx, surface="change", retry_key=wave.retry_key, record_id=wave.record_id,
-                                               reissue="the same unchanged review_change call")
-            return _settle(ctx, wave, wave_facts(ctx, wave, outcome=outcome, forensic=forensic), outcome, retention)
+                kind = request.surface if request.surface in SINGLE_QUESTION else "change"
+                left = review_pause.watch_left_review(ctx, surface=kind, retry_key=wave.retry_key,
+                                                      record_id=wave.record_id,
+                                                      reissue=(f"the same unchanged skill_review(skill={wave.root.name!r}) call"
+                                                               if kind == SKILL else "the same unchanged review_change call"))
+            settled = _settle(ctx, wave, wave_facts(ctx, wave, outcome=outcome, forensic=forensic), outcome, retention)
+            if settled.get("state") == "pending" and left is None:
+                # Nobody waits for these seats any more: their record settles once they finish
+                # (at the latest when this task ended), whether or not the call is re-issued.
+                review_pause.owe_unwaited_review(ctx, surface=kind, retry_key=wave.retry_key,
+                                                 record_id=str(settled.get("record_id") or wave.record_id))
+            return settled
 
 
 @contextlib.contextmanager
@@ -949,11 +1089,15 @@ def _handle_review_change(
     base: str = "", head: str = "", surface: str = SURFACE, goal: str = "", scope: str = "",
     author_questions: Optional[List[str]] = None, reviewers: Optional[List[str]] = None, reason: str = "",
     coupling_only: Optional[List[str]] = None, reviewer_effort: str = "", review_rebuttal: str = "",
-    treat_as_body: bool = False, _resolved_binding: Any = None,
+    treat_as_body: bool = False, answer: str = "", _resolved_binding: Any = None,
 ) -> str:
     from ouroboros import review_pause
 
     ctx._left_review_wait = None  # a new review act is the author's explicit next choice
+    if str(subject or "").strip() == SKILL or str(surface or "").strip() == SKILL:
+        return argument_refusal(ctx, "TOOL_ARG_ERROR (review_change)",
+                                ["subject=skill is skill_review's own: call skill_review(skill=...) for a skill payload"],
+                                effect="No reviewer was dispatched.")
     try:
         # The tool's interactive author may leave the wave on an addressed message (the
         # operator script's synchronous entry binds nothing).
@@ -962,11 +1106,11 @@ def _handle_review_change(
                 ctx, root=root, workspace_root=workspace_root, subject=subject, base=base, head=head, surface=surface,
                 goal=goal, scope=scope, author_questions=author_questions, reviewers=reviewers, reason=reason,
                 coupling_only=coupling_only, reviewer_effort=reviewer_effort, review_rebuttal=review_rebuttal,
-                treat_as_body=treat_as_body, _resolved_binding=_resolved_binding)
+                treat_as_body=treat_as_body, answer=answer, _resolved_binding=_resolved_binding)
     except ReviewChangeArgumentError as exc:
         return argument_refusal(ctx, "TOOL_ARG_ERROR (review_change)", [str(exc)], effect="No reviewer was dispatched.")
     result.pop("usage", None)
-    if (getattr(ctx, "_left_review_wait", None) or {}).get("surface") == "change":
+    if (getattr(ctx, "_left_review_wait", None) or {}).get("surface") in {"change", RESULT, SKILL}:
         result["message"] = ("An addressed message reached you while the reviewers ran: this call returned and their "
                              "paid work continues separately; a [Review settled] notice follows the whole wave. "
                              + str(result.get("message") or ""))
@@ -996,7 +1140,12 @@ _DESCRIPTION = (
     "Other repositories allow composed panels. Omitted means the whole pool; an enabled unticked row is an added "
     "critic. surface=preflight seats exactly the ONE enabled catalog row you name (pool member or "
     "not): an optional early look, never the commit panel. subject=system with surface=system is /review: one row "
-    "(default: the Main model) reads the whole system against BIBLE.md and returns a report. The same subject, "
+    "(default: the Main model) reads the whole system against BIBLE.md and returns a report. subject=result "
+    "(surface=result) reviews THIS task's result instead of a change: the reply (answer, default your latest reply), "
+    "the files and effects the task produced, and what was asked; every seat answers one question, whether the "
+    "result does what was asked, judged on the result, never the method. Nobody asks for it in Auto: ask when "
+    "another mind's check could change what you deliver, or when your human asks for a careful check. It is "
+    "unavailable when task review is Off, and it has its own paid-cycle count. The same subject, "
     "surface, rules and panel return the settled record free (reused=true); enforcement is recorded and on another "
     "root never locks anything. Returns JSON {record_id, aggregate, per_question, panel, rows, subject, checklist, "
     "tests, cost, reused, findings} (+ report for subject=system)."
@@ -1016,13 +1165,15 @@ def get_tools() -> List[ToolEntry]:
         "root": _string("The bound repository: the active workspace or the system repository.",
                         enum=list(ROOTS), default="active_workspace"),
         "workspace_root": _string("A registered folder to review instead (schedule_subagent's workspace_root policy)."),
-        "subject": {"type": "string", "enum": list(SUBJECT_KINDS),
+        "subject": {"type": "string", "enum": list(PUBLIC_SUBJECT_KINDS),
                     "description": ("base..head = commits between two revisions; index = staged; worktree = live; "
-                                    "system = the whole installed system (surface=system only).")},
+                                    "system = the whole installed system (surface=system only); result = this "
+                                    "task's result against what was asked.")},
         "base": _string("Base revision (required for base..head; index/worktree default HEAD)."),
         "head": _string("Head revision (base..head only)."),
-        "surface": _string("change = the panel review; preflight = one named row's early look; system = /review.",
-                           enum=list(SURFACES), default=SURFACE),
+        "surface": _string("change = the panel review; preflight = one named row's early look; system = /review; "
+                           "result = goes with subject=result (implied by it).", enum=list(PUBLIC_SURFACES), default=SURFACE),
+        "answer": _string("subject=result only: the reply under review. Omitted = your latest reply in this task."),
         "goal": _string("What the change is meant to achieve."),
         "scope": _string("What the change deliberately covers."),
         "author_questions": _names("Your own questions to the reviewers, passed verbatim."),

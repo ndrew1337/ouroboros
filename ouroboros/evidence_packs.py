@@ -83,10 +83,10 @@ def dict_size_for(raw_total: int) -> int:
     return min(size, MAX_DICT_SIZE)
 
 
-def read_sidecar(path: pathlib.Path) -> Dict[str, Any]:
+def read_sidecar(path: pathlib.Path, *, raw: Optional[bytes] = None) -> Dict[str, Any]:
     """Read the publication authority; a torn or invalid sidecar is never absence."""
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8") if raw is None else raw)
         if (not isinstance(data, dict) or data.get("format_version") != FORMAT_VERSION or data.get("codec") != CODEC
                 or not isinstance(data.get("members"), list) or not data.get("task_id")
                 or any(type(data[key]) is not int for key in ("generation", "raw_total", "packed_total", "dict_size", "preset"))
@@ -116,17 +116,20 @@ def read_sidecar(path: pathlib.Path) -> Dict[str, Any]:
         raise SidecarCorrupt(f"evidence_corrupt: unreadable sidecar {path.name}") from exc
 
 
-def list_sidecars(root: Any, *, errors: Optional[list] = None) -> List[Tuple[pathlib.Path, Dict[str, Any]]]:
-    """One listing of pack authority; only cache builders may collect faults beside healthy rows."""
+def _sidecar_names(root: Any) -> set[str]:
+    try:
+        return {name for name in os.listdir(packs_dir(root))
+                if not name.startswith(".") and name.endswith(".members.json")}
+    except FileNotFoundError:
+        return set()
+
+
+def list_sidecars(root: Any, *, errors: Optional[list] = None,
+                  names: Optional[set[str]] = None) -> List[Tuple[pathlib.Path, Dict[str, Any]]]:
+    """Read pack authority, or a rebuild's filename delta; cache builders may collect faults."""
     out = []
     directory = packs_dir(root)
-    try:
-        names = sorted(os.listdir(directory))
-    except FileNotFoundError:
-        return out
-    for name in names:
-        if name.startswith(".") or not name.endswith(".members.json"):
-            continue
+    for name in sorted(_sidecar_names(root) if names is None else names):
         try:
             out.append((directory / name, read_sidecar(directory / name)))
         except SidecarCorrupt as exc:
@@ -182,10 +185,20 @@ def _reader(path: pathlib.Path) -> _PackReader:
         return reader
 
 
-def member_bytes(pack_path: pathlib.Path, member: Dict[str, Any]) -> bytes:
+def member_bytes(pack_path: pathlib.Path, member: Dict[str, Any], *, anchor: Any = None) -> bytes:
     """One member's exact bytes, verified against the sidecar's size and sha256."""
     parts: List[bytes] = []
-    _reader(pack_path).read_at(int(member["offset"]), int(member["size"]), parts.append)
+    if anchor is None:
+        _reader(pack_path).read_at(int(member["offset"]), int(member["size"]), parts.append)
+    else:
+        from ouroboros.confined_files import open_confined_file
+        handle, _ = open_confined_file(anchor, pack_path.relative_to(anchor).parts)
+        try:
+            with handle, lzma.LZMAFile(handle, "rb") as stream:
+                stream.seek(int(member["offset"]))
+                parts.append(stream.read(int(member["size"])))
+        except (lzma.LZMAError, EOFError) as exc:
+            raise EvidenceCorrupt(f"evidence_corrupt: pack stream unreadable: {pack_path.name}") from exc
     raw = b"".join(parts)
     if len(raw) != int(member["size"]) or hashlib.sha256(raw).hexdigest() != member["sha256"]:
         raise EvidenceCorrupt(f"evidence_corrupt: member {member['sha256'][:12]} of {pack_path.name} failed verification")
@@ -264,52 +277,88 @@ def _index_rows(conn: sqlite3.Connection, pack_path: pathlib.Path, sidecar: Dict
                          (task_id, str(member["path"]), member["sha256"], generation))
 
 
-def _rebuild_index(root: pathlib.Path, path: pathlib.Path, tier: str) -> None:
-    """Rebuild the cache from the sidecars (one listing) into a temp file published by rename."""
+def _index_wait(wait_sec: float = INDEX_WAIT_SEC) -> float:
+    return store.bounded_wait(min(wait_sec, INDEX_WAIT_SEC))
+
+
+def _rebuild_index(root: pathlib.Path, path: pathlib.Path, tier: str, *, wait_sec: float = INDEX_WAIT_SEC) -> None:
+    """Build privately, refresh changed sidecars unlocked, then publish a still-current snapshot."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    def build(tmp):
+    tmp = path.with_name(f".{path.name}.tmp.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex[:8]}")
+    indexed: set[str] = set()
+    names, faults = _sidecar_names(root), {}
+    try:
         with contextlib.closing(store.connect(tmp, tier, create=True)) as conn:
             conn.execute(f"PRAGMA application_id = {_APPLICATION_ID[tier]}")
             conn.executescript(_INDEX_SCHEMA)
             with store.transaction(conn, write=True):
                 conn.execute("INSERT INTO meta VALUES ('schema_version', ?)", (str(INDEX_SCHEMA_VERSION),))
                 conn.execute("INSERT INTO meta VALUES ('built_at', ?)", (utc_now_iso(),))
-                errors: list = []
-                for sidecar_path, sidecar in list_sidecars(root, errors=errors):
-                    _index_rows(conn, sidecar_path.with_name(pack_name(sidecar["task_id"], sidecar["generation"])), sidecar)
-                conn.execute("INSERT INTO meta VALUES ('sidecar_errors', ?)", (json.dumps([str(e) for e in errors]),))
-    _atomic_overwrite(path, build)
-    store.fsync_directory(path.parent)
+        while True:
+            added, removed = names - indexed, indexed - names
+            errors: list = []
+            sidecars = list_sidecars(root, errors=errors, names=added)
+            for name in removed:
+                faults.pop(name, None)
+            failed = sorted(added - {sidecar_path.name for sidecar_path, _ in sidecars})
+            faults.update(zip(failed, map(str, errors)))
+            with contextlib.closing(store.connect(tmp, tier)) as conn:
+                with store.transaction(conn, write=True):
+                    for name in removed:
+                        row = conn.execute("SELECT task_id, generation FROM packs WHERE path=?",
+                                           (name.removesuffix(".members.json") + ".xz",)).fetchone()
+                        if row is not None:
+                            for table in ("packs", "members", "handles"):
+                                conn.execute(f"DELETE FROM {table} WHERE task_id=? AND generation=?", tuple(row))
+                    for sidecar_path, sidecar in sidecars:
+                        _index_rows(conn, sidecar_path.with_name(pack_name(sidecar["task_id"], sidecar["generation"])), sidecar)
+                    conn.execute("INSERT OR REPLACE INTO meta VALUES ('sidecar_errors', ?)",
+                                 (json.dumps(list(faults.values())),))
+            indexed = names
+            with store.name_lock(root, INDEX_LOCK_NAME, timeout_sec=_index_wait(wait_sec)):
+                if _index_valid(path, tier, wait_sec=_index_wait(wait_sec)):
+                    return  # another builder published; keep its subsequent writes too
+                names = _sidecar_names(root)
+                if names == indexed:
+                    with contextlib.suppress(FileNotFoundError):
+                        tmp.chmod(path.stat().st_mode)
+                    replace_atomic(tmp, path)
+                    store.fsync_directory(path.parent)
+                    return
+    finally:
+        for leftover in (tmp, *(tmp.with_name(tmp.name + suffix) for suffix in ("-journal", "-wal", "-shm"))):
+            with contextlib.suppress(FileNotFoundError):
+                leftover.unlink()
+
 
 @contextlib.contextmanager
 def open_index(root: Any, *, write: bool = False, wait_sec: float = INDEX_WAIT_SEC,
                rebuild: bool = True) -> Iterator[sqlite3.Connection]:
-    """One transaction on the index cache under the name lock; a missing, damaged or
-    other-version cache is rebuilt from the sidecars first. ``rebuild=False`` is
-    advisory discovery: unavailable cache raises instead of walking all sidecars.
-    ``store.StoreBusy`` on contention."""
+    """One transaction under the name lock, narrowed by the caller's acquisition budget.
+
+    Missing, damaged or other-version caches rebuild outside the lock. ``rebuild=False``
+    is advisory discovery: unavailable cache raises instead of walking all sidecars.
+    ``store.StoreBusy`` on contention.
+    """
     root = pathlib.Path(root)
     path, tier = packs_dir(root) / INDEX_NAME, index_tier(root)
-    with store.name_lock(root, INDEX_LOCK_NAME, timeout_sec=wait_sec):
-        if not _index_valid(path, tier, wait_sec=wait_sec):
+    wait_sec = _index_wait(wait_sec)
+    while True:
+        with store.name_lock(root, INDEX_LOCK_NAME, timeout_sec=wait_sec):
+            if _index_valid(path, tier, wait_sec=wait_sec):
+                with contextlib.closing(store.connect(path, tier, wait_sec=wait_sec)) as conn:
+                    with store.transaction(conn, write=write):
+                        yield conn
+                return
             if not rebuild:
                 raise sqlite3.DatabaseError("evidence index requires reconstruction")
-            _rebuild_index(root, path, tier)
-        with contextlib.closing(store.connect(path, tier, wait_sec=wait_sec)) as conn:
-            with store.transaction(conn, write=write):
-                yield conn
+        _rebuild_index(root, path, tier, wait_sec=wait_sec)
 
 
 def index_upsert(root: Any, pack_path: pathlib.Path, sidecar: Dict[str, Any]) -> None:
-    """Record one published, verified pack; a cache that cannot take the row is dropped so the
-    next access rebuilds it from the sidecars."""
-    try:
-        with open_index(root, write=True) as conn:
-            _index_rows(conn, pack_path, sidecar)
-    except (store.StoreError, sqlite3.Error):
-        with contextlib.suppress(OSError):
-            (packs_dir(root) / INDEX_NAME).unlink()
-        _VALIDATED.pop(str(packs_dir(root) / INDEX_NAME), None)
+    """Record one verified pack, or defer its caller without destroying a contended cache."""
+    with open_index(root, write=True) as conn:
+        _index_rows(conn, pack_path, sidecar)
 
 
 def _placements(root: pathlib.Path, *, sha256: str = "", kind: str = "", task_id: str = "", rel_path: str = "",
@@ -402,43 +451,48 @@ def blob_bytes(root: Any, ref: Any, *, expected_kind: Optional[str] = None, max_
     if max_bytes is not None and size > max_bytes:
         raise ValueError("blob exceeds byte limit")
     failure: Optional[Exception] = None
-    for candidate in _blob_roots(root, ref, sha256, kind):
-        loose = candidate / "observability" / "blobs" / f"{sha256}.{kind}.gz"
-        if admit is not None:
-            admit(loose)
-        try:
-            raw = read_loose_gzip(loose, max_bytes)
-            if size in (-1, len(raw)) and hashlib.sha256(raw).hexdigest() == sha256:
-                return raw
-            failure = EvidenceCorrupt("evidence_corrupt: observability blob ref failed size or sha256 verification")
-        except FileNotFoundError as exc:
-            failure = failure or exc
-        except ValueError as exc:
-            failure = exc
-        except (OSError, EOFError, zlib.error) as exc:
-            failure = exc  # retention repair distinguishes transient IO from damaged gzip
-        try:
-            placements = _placements(candidate, sha256=sha256, kind=kind)
-        except (OSError, EvidenceCorrupt) as exc:
-            failure = exc
-            continue
-        for located in placements:
+    try:
+        for candidate in _blob_roots(root, ref, sha256, kind):
+            loose = candidate / "observability" / "blobs" / f"{sha256}.{kind}.gz"
             if admit is not None:
-                admit(located[0])
+                admit(loose)
             try:
-                if max_bytes is not None and int(located[1]["size"]) > max_bytes:
-                    raise ValueError("blob exceeds byte limit")
-                raw = member_bytes(*located)
-                if size not in (-1, len(raw)):
-                    raise EvidenceCorrupt(f"evidence_corrupt: packed blob {sha256[:12]} size differs from its ref")
-                return raw
+                raw = read_loose_gzip(loose, max_bytes)
+                if size in (-1, len(raw)) and hashlib.sha256(raw).hexdigest() == sha256:
+                    return raw
+                failure = EvidenceCorrupt("evidence_corrupt: observability blob ref failed size or sha256 verification")
             except FileNotFoundError as exc:
                 failure = failure or exc
             except ValueError as exc:
                 failure = exc
-            except OSError:
-                failure = EvidenceCorrupt(f"evidence_corrupt: unreadable pack {located[0].name}")
-    raise failure or FileNotFoundError(str(root / "observability" / "blobs" / f"{sha256}.{kind}.gz"))
+            except (OSError, EOFError, zlib.error) as exc:
+                failure = exc  # retention repair distinguishes transient IO from damaged gzip
+            try:
+                placements = _placements(candidate, sha256=sha256, kind=kind)
+            except (OSError, EvidenceCorrupt) as exc:
+                failure = exc
+                continue
+            for located in placements:
+                if admit is not None:
+                    admit(located[0])
+                try:
+                    if max_bytes is not None and int(located[1]["size"]) > max_bytes:
+                        raise ValueError("blob exceeds byte limit")
+                    raw = member_bytes(*located)
+                    if size not in (-1, len(raw)):
+                        raise EvidenceCorrupt(f"evidence_corrupt: packed blob {sha256[:12]} size differs from its ref")
+                    return raw
+                except FileNotFoundError as exc:
+                    failure = failure or exc
+                except ValueError as exc:
+                    failure = exc
+                except OSError:
+                    failure = EvidenceCorrupt(f"evidence_corrupt: unreadable pack {located[0].name}")
+        raise failure or FileNotFoundError(str(root / "observability" / "blobs" / f"{sha256}.{kind}.gz"))
+    finally:
+        # The kept error's traceback holds this frame: kept past an exit, it is a cycle retaining the callers'
+        # frames and payloads until a GC pass. Every exit drops it; a raised error keeps its object and traceback.
+        failure = None
 
 
 def _handle_path(root: Any, task_id: str, rel_path: str) -> pathlib.Path:
@@ -447,8 +501,107 @@ def _handle_path(root: Any, task_id: str, rel_path: str) -> pathlib.Path:
     return task_artifact_dir_path(root, task_id, create=False).joinpath(*pathlib.PurePosixPath(rel_path).parts)
 
 
-def handle_bytes(root: Any, task_id: str, rel_path: str) -> bytes:
+def _confined_handle(root: Any, task_id: str, rel_path: str, anchor: Any, *, info_only: bool = False) -> Any:
+    """Preserve admitted roots' placement authority; confine their payload opens.
+
+    Physical scratch custody alone never admits a pathname-opened SQLite index.
+    Such retained sources use confined sidecars without granting store authority.
+    """
+    from ouroboros.confined_files import (
+        confined_directory,
+        open_confined_file,
+        physical_path,
+        relative_parts,
+        root_spellings,
+    )
+    from ouroboros.task_results import validate_task_id
+
+    task_id = validate_task_id(task_id)
+    if not relative_parts(rel_path):
+        raise ValueError("invalid checkpoint path")
+    spellings = root_spellings(anchor)  # ANCHOR as configured; its rows record that spelling
+    anchor, root = spellings[0], physical_path(spellings, pathlib.Path(root).absolute())
+    loose = _handle_path(root, task_id, rel_path)
+    digest, failure = pathlib.PurePosixPath(rel_path).stem.rsplit("-", 1)[-1], None
+    try:
+        handle, _ = open_confined_file(anchor, loose.relative_to(anchor).parts)
+        with handle:
+            raw = handle.read()
+        if hashlib.sha256(raw).hexdigest() == digest:
+            return {"size": len(raw), "sha256": digest, "loose": True} if info_only else raw
+        failure = EvidenceCorrupt("evidence_corrupt: loose handle failed sha256 verification")
+    except FileNotFoundError:
+        pass
+    except OSError as exc:
+        if not info_only:
+            raise
+        failure = exc
+    if info_only and pathlib.PurePosixPath(rel_path).parts[:2] != CHECKPOINTS_REL.parts:
+        if failure is not None:
+            raise failure
+        return None
+    from ouroboros.task_custody import recorded_execution_drive
+    from ouroboros.task_store import read_document
+
+    if root == anchor or recorded_execution_drive(read_document(anchor, task_id) or {}, root, spellings):
+        located = _locate(root, task_id=task_id, rel_path=rel_path)
+        if located is not None:
+            return ({"size": int(located[1]["size"]), "sha256": located[1]["sha256"], "loose": False}
+                    if info_only else member_bytes(*located, anchor=anchor))
+        if failure is not None:
+            raise failure
+        if info_only:
+            return None
+        raise FileNotFoundError(str(loose))
+    try:
+        held = confined_directory(anchor, packs_dir(root).relative_to(anchor).parts)
+        directory = held.__enter__()
+    except FileNotFoundError:
+        directory = None
+    if directory is not None:
+        try:
+            names = sorted(name for name, _ in directory.entries(include_links=True)
+                           if not name.startswith(".") and name.endswith(".members.json"))
+            def own(name):
+                # Exact generation spelling, including task IDs containing dots/digits.
+                prefix = name.removesuffix(".members.json")
+                return prefix == task_id or (prefix.startswith(task_id + ".")
+                                              and prefix[len(task_id) + 1:].isdigit())
+            errors = []
+            for name in [*(name for name in names if own(name)), *(name for name in names if not own(name))]:
+                try:
+                    try:
+                        handle, _ = directory.open(name)
+                        with handle:
+                            sidecar = read_sidecar(packs_dir(root) / name, raw=handle.read())
+                    except OSError as exc:
+                        raise SidecarCorrupt(f"evidence_corrupt: unreadable sidecar {name}") from exc
+                    if sidecar["task_id"] != task_id:
+                        continue
+                    for member in sidecar["members"]:
+                        if member["kind"] != CHECKPOINT or member.get("path") != rel_path:
+                            continue
+                        if info_only:
+                            return {"size": int(member["size"]), "sha256": member["sha256"], "loose": False}
+                        return member_bytes(packs_dir(root) / pack_name(task_id, sidecar["generation"]),
+                                            member, anchor=anchor)
+                except SidecarCorrupt as exc:
+                    errors.append((name, exc))
+            if errors:
+                raise min(errors, key=lambda item: item[0])[1]
+        finally:
+            held.__exit__(None, None, None)
+    if failure is not None:
+        raise failure
+    if info_only:
+        return None
+    raise FileNotFoundError(str(loose))
+
+
+def handle_bytes(root: Any, task_id: str, rel_path: str, *, anchor: Any = None) -> bytes:
     """Verified loose handle bytes, falling back to the pack if the loose digest is wrong."""
+    if anchor is not None:
+        return _confined_handle(root, task_id, rel_path, anchor)
     rel = pathlib.PurePosixPath(str(rel_path))
     loose, failure = _handle_path(root, task_id, rel.as_posix()), None
     try:
@@ -466,8 +619,10 @@ def handle_bytes(root: Any, task_id: str, rel_path: str) -> bytes:
     return member_bytes(*located)
 
 
-def handle_info(root: Any, task_id: str, rel_path: str) -> Optional[Dict[str, Any]]:
+def handle_info(root: Any, task_id: str, rel_path: str, *, anchor: Any = None) -> Optional[Dict[str, Any]]:
     """Verified placement metadata; ``None`` only for absence, corruption stays explicit."""
+    if anchor is not None:
+        return _confined_handle(root, task_id, rel_path, anchor, info_only=True)
     rel = pathlib.PurePosixPath(str(rel_path))
     loose = _handle_path(root, task_id, rel.as_posix())
     failure = None
@@ -609,8 +764,9 @@ def pending_restore_bytes(root: Any) -> int:
 def row_packable(status: Any, review_pending: Any) -> bool:
     """The packing rule over a row's two indexed facts: the status is terminal, and no review of the
     task may still read its loose files (``review_collection_pending`` 1 names an open review
-    operation of any surface or an acceptance not yet collected, whose agent-session reader holds a
-    retained handle's absolute path; NULL is a row no body with the selector ever wrote, so no such
+    operation, whose agent-session reader holds a retained handle's absolute path, or a row an older
+    body flagged for its acceptance collection until the maintenance pass writes it back
+    (``task_store.reclassify_review_collection``); NULL is a row no body with the selector ever wrote, so no such
     reader exists, and the selector stays a derived fact, never a retention duty). No duty, money or
     delivery fact is consulted (packing moves verified bytes, never content: a later write becomes
     the next generation)."""
@@ -764,8 +920,9 @@ def write_pack(root: Any, task_id: str, generation: int, members: List[Dict[str,
             os.fsync(handle.fileno())
         replace_atomic(tmp_pack, pack_path)
         store.fsync_directory(directory)
-        replace_atomic(tmp_sidecar, sidecar_path)  # publication
-        store.fsync_directory(directory)
+        with store.name_lock(root, INDEX_LOCK_NAME, timeout_sec=_index_wait()):
+            replace_atomic(tmp_sidecar, sidecar_path)  # serialize publication with index revalidation
+            store.fsync_directory(directory)
     finally:
         for tmp in (tmp_pack, tmp_sidecar):
             with contextlib.suppress(FileNotFoundError):

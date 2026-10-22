@@ -125,6 +125,25 @@ def test_explicit_prepare_gives_processes_the_candidate_cwd_and_an_isolated_envi
     assert _shell_env_for_cwd(ctx, serving).get("HOME") == os.environ.get("HOME")
 
 
+def test_prepare_names_the_folder_that_stays_active_beside_the_candidate(body, tmp_path):
+    """A root bound to its project folder keeps that folder for default writes, commands
+    without cwd and delegate_start; the receipt said every consumer moved to the candidate,
+    and a delegated run then snapshotted the project folder the author did not expect."""
+    serving, data = body
+    room = tmp_path / "project-folder"
+    room.mkdir()
+    ctx = make_ctx(serving, data, "root-room", workspace_root=str(room), workspace_mode="external")
+    assert ctx.is_workspace_mode()
+    text = _registry(serving, data, ctx).execute("prepare_self_change", {})
+    candidate = body_candidate.descriptor(ctx)["path"]
+    assert "review_change with root='system_repo'" in text and f"workspace_root={candidate}" in text
+    assert f"delegate_start runs still use {room}" in text and "default process cwd" not in text
+    plain = make_ctx(serving, data, "root-plain")
+    text = _registry(serving, data, plain).execute("prepare_self_change", {})
+    assert "Body writes, default process cwd, child copies, review and commit_reviewed now use it" in text
+    assert "still use" not in text
+
+
 def test_acting_body_child_copies_the_candidate_and_returns_into_it(body, monkeypatch):
     serving, data = body
     ctx = make_ctx(serving, data, "root-delegate")
@@ -570,11 +589,11 @@ def _expire_all():
 def test_gc_removes_only_candidates_without_unique_work(body):
     serving, data = body
     clean = body_candidate.prepare(make_ctx(serving, data, "gc-clean"))
-    junk = body_candidate.prepare(make_ctx(serving, data, "gc-junk"))
+    junk_ctx = make_ctx(serving, data, "gc-junk")
+    junk = body_candidate.prepare(junk_ctx)
     (pathlib.Path(junk["path"]) / "ouroboros/__pycache__").mkdir()
     (pathlib.Path(junk["path"]) / "ouroboros/__pycache__/mod_a.cpython-311.pyc").write_bytes(b"\0cache")
-    env_root = pathlib.Path(junk["path"]).with_name(pathlib.Path(junk["path"]).name + ".env")
-    (env_root / "data").mkdir(parents=True)
+    env_root = pathlib.Path(body_candidate.process_environment(junk_ctx, junk_ctx.repo_dir)["HOME"]).parent
 
     kept_fresh = subagent_worktrees.prune_orphans(retention_days=30)
     assert kept_fresh["removed"] == 0 and pathlib.Path(clean["path"]).is_dir()

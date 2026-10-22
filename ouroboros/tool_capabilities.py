@@ -6,7 +6,7 @@ from collections.abc import Iterable
 from typing import Any, Optional
 
 OWNER_DELIVERY_TOOL_NAMES: frozenset[str] = frozenset({
-    "send_user_message", "send_photo", "send_video", "send_file", "send_links",
+    "send_user_message", "send_photo", "send_video", "send_file", "send_links", "show_card",
 })
 
 # One class: an actor's own memory. Reading and revising what I know about my
@@ -74,7 +74,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     "escalate",
     "switch_model",
     "request_restart", "promote_to_stable", "prepare_self_change",
-    "preflight_review", "advisory_review", "review_change", "review_status", "task_acceptance_review",
+    "preflight_review", "advisory_review", "review_change", "review_status",
     "verify_and_record",
     # Skill discovery and review are core capabilities; installing, updating and source changes
     # load on demand (enable_tools) after a search found something worth it.
@@ -242,7 +242,6 @@ UNTRUNCATED_TOOL_RESULTS: frozenset[str] = frozenset({
     "commit_reviewed",
     "vcs_commit_reviewed",
     "plan_task",
-    "task_acceptance_review",
     "preflight_review",
     "advisory_review",
     "review_change",
@@ -464,24 +463,19 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     # skill payload; an orphan capture may belong to an unrelated earlier task,
     # so a read-only-children rule alone does not cover this path
     "integrate_delegated_patch", "integrate_subagent_patch",
-    # pushes docs/evolution.json to the public dashboard through the GitHub API
+    # writes a local task artifact; Observe does not grant general file writes
     "generate_evolution_stats",
     # the world beyond the repository: forms, skills, project notes
     "browser_action", "submit_skill_to_hub", "toggle_skill", "skill_owner_action",
     "skill_install", "skill_update",
     "journal_write", "workpad_write",
-    "create_github_issue", "comment_on_issue", "comment_on_pr", "close_github_issue", "pr_merge",
+    "github_write", "pr_merge",
 })
 
 
-def completion_control_call(name: str, args: object = None) -> bool:
+def completion_control_call(name: str) -> bool:
     """Host-owned local completion identity, independent of presentation or success."""
-    if name in {"finish_task", "presence_finish"}:
-        return True
-    return name == "task_acceptance_review" and isinstance(args, dict) and (
-        args.get("author_action") in {"finish", "stop"}
-        or args.get("agent_disposition") in {"accepted", "rejected", "partial", "deferred"}
-    )
+    return name in {"finish_task", "presence_finish"}
 
 
 def substantive_tool_calls(calls: object) -> list:

@@ -11,6 +11,7 @@ import { stampHistoryNode } from './chat_history_replay.js';
 import { isFileDrag } from './chat_activity.js';
 import { buildAttachmentBlock } from './chat_attachments.js';
 import { createDocumentReader, documentReaderKind } from './document_reader.js';
+import { createChatCards } from './chat_cards.js';
 
 // Player controls draw the house stroke vectors; each button's aria-label names its
 // current action and is rewritten with the icon whenever the state flips.
@@ -99,7 +100,7 @@ export function showTaskIncidentToast(msg) {
     // No tone on the frame (older producers, cancellation_fault) keeps the
     // alarm tone; the text is never parsed for it.
     const text = String(msg?.content || msg?.text || incident);
-    return showToast(hostRowDisplayText({ ...msg, text }), normalizeTone(msg?.toast_tone || 'error', 'error'));
+    return showToast(hostRowDisplayText({ ...msg, text }), normalizeTone(msg?.toast_tone || 'error', 'error'), { haptic: false });
 }
 
 // Best-effort teardown of temporary uploads after a failed send; lives with
@@ -138,8 +139,8 @@ export function safeHttpUrl(value) {
 }
 
 export function bindComposerFileTargets({ page, inputArea, input, stagePendingFiles }) {
-    // The two implicit routes a file takes into the composer beside the
-    // paperclip: an image pasted into the textarea, and a file dropped
+    // The two implicit routes a file takes into the composer beside
+    // "+" → Attach file: an image pasted into the textarea, and a file dropped
     // anywhere on the page. Both end in the caller's local stager, so
     // nothing uploads before Send, and the drop target is the whole page
     // while only the input area shows the active state.
@@ -203,6 +204,8 @@ export function createChatMedia({
     senderLabel,
     stampNodeTimestamp,
     onDomWrite = (mutate) => mutate(),
+    replies = null,
+    composer = () => null,
 }) {
     const disposers = new Set();
     const resourceOwners = new Map();
@@ -217,6 +220,11 @@ export function createChatMedia({
     let dialogFile = null;
     let dialogOwner = null;  // the card's item (buildGallery may move it to an earlier group): releasing it or its holder closes the dialog
     let destroyed = false;
+    // Living cards are delivered rows too: Copy takes their fallback text, Reply their row address (chat_cards.js).
+    const cards = createChatCards({ frameNode: bubbleFrameNode, composer, onDomWrite, decorate(bubble, msg, text) {
+        attachCopyControl(bubble, () => bubble.dataset.rowWords ?? text);  // a replaced card's words are its new ones
+        replies?.decorate(bubble, msg);
+    } });
 
     // A disposer owned like a listener (a late answer's end too): its owner's release, reset or destroy runs it.
     function own(dispose, owner) { disposers.add(dispose); resourceOwners.set(dispose, owner); return dispose; }
@@ -274,10 +282,19 @@ export function createChatMedia({
         return bubble;
     }
 
-    function bubbleFrameNode(msg, node) {
+    // A Main question's Project reference joins `Ouroboros` on the voice line (DESIGN "Quiz card").
+    function bubbleFrameNode(msg, node, { voice = [] } = {}) {
         const bubble = bubbleFrame(msg, '');
+        // The frame's own sender and time, read before the node joins them.
+        const sender = bubble.querySelector('.sender');
         const time = bubble.querySelector('.msg-time');
-        if (time) bubble.insertBefore(node, time); else bubble.append(node);
+        if (time) time.before(node); else bubble.append(node);
+        if (voice.length) {
+            const wrap = document.createElement('div');
+            wrap.className = 'chat-bubble-voice';
+            if (sender) { sender.before(wrap); wrap.append(sender); } else bubble.append(wrap);
+            wrap.append(...voice);
+        }
         return bubble;
     }
 
@@ -499,14 +516,38 @@ export function createChatMedia({
             play.innerHTML = media.paused ? MEDIA_ICONS.play : MEDIA_ICONS.pause;
             play.setAttribute('aria-label', media.paused ? tr('media.play', 'Play') : tr('media.pause', 'Pause'));
         };
-        const toggle = async () => {
+        let playIntent = 0;
+        const isCurrentPlay = (intent) => intent === playIntent && playerRegistry.has(media);
+        const requestPlay = async (restart = false) => {
+            const intent = ++playIntent;
             try {
-                if (media.paused) await media.play();
-                else media.pause();
-                syncPlay();
+                if (media.error) {
+                    const position = restart ? 0 : media.currentTime;
+                    const rate = media.playbackRate;
+                    // A failed resource stays failed until explicitly reloaded. Keep
+                    // load and play in this user gesture, never in an error retry loop.
+                    media.load();
+                    media.playbackRate = rate;
+                    if (Number.isFinite(position) && position > 0) media.currentTime = position;
+                }
+                if (restart) media.currentTime = 0;
+                await media.play();
+                if (isCurrentPlay(intent)) syncPlay();
             } catch (error) {
-                showToast(`Could not play media: ${error?.message || error}`, 'error');
+                if (isCurrentPlay(intent)) {
+                    // WebKit can leave a rejected play unpaused; restore the
+                    // control without initiating another attempt.
+                    if (media.error) media.pause();
+                    syncPlay();
+                    showToast(`Could not play media: ${error?.message || error}`, 'error');
+                }
             }
+        };
+        const toggle = () => {
+            if (media.paused || media.error) return requestPlay();
+            playIntent += 1;
+            media.pause();
+            syncPlay();
         };
         listen(play, 'click', toggle);
         if (!audio) listen(media, 'click', toggle);
@@ -533,11 +574,7 @@ export function createChatMedia({
             media.playbackRate = Number(rates.value) || 1;
             speed.textContent = `×${media.playbackRate}`;
         });
-        if (repeat) listen(repeat, 'click', async () => {
-            media.currentTime = 0;
-            try { await media.play(); } catch {}
-            syncPlay();
-        });
+        if (repeat) listen(repeat, 'click', () => requestPlay(true));
         if (mute) listen(mute, 'click', () => {
             media.muted = !media.muted;
             mute.innerHTML = media.muted ? MEDIA_ICONS.muted : MEDIA_ICONS.volume;
@@ -570,29 +607,29 @@ export function createChatMedia({
             ? `<audio preload="metadata" src="${escapeHtmlAttr(src)}"></audio>`
             : `<video preload="metadata" src="${escapeHtmlAttr(src)}" playsinline></video>`;
         const videoControls = audio ? '' : `
-            <button type="button" data-media-action="speed" aria-label="${escapeHtmlAttr(tr('media.cycle_speed', 'Cycle playback speed'))}">×1</button>
+            <button type="button" class="btn btn-default btn-sm" data-media-action="speed" aria-label="${escapeHtmlAttr(tr('media.cycle_speed', 'Cycle playback speed'))}">×1</button>
             <select class="chat-media-rate-menu" aria-label="${escapeHtmlAttr(tr('media.playback_speed', 'Playback speed'))}">
                 ${SPEEDS.map((rate) => `<option value="${rate}">×${rate}</option>`).join('')}
             </select>
-            <button type="button" data-media-action="repeat" aria-label="${escapeHtmlAttr(tr('media.repeat', 'Repeat'))}">↻</button>
-            <button type="button" data-media-action="mute" aria-label="${escapeHtmlAttr(tr('media.mute', 'Mute'))}">${MEDIA_ICONS.volume}</button>
-            <button type="button" data-media-action="fullscreen" aria-label="${escapeHtmlAttr(tr('media.enter_fullscreen', 'Enter fullscreen'))}">${MEDIA_ICONS.fullscreen}</button>`;
+            <button type="button" class="btn btn-default btn-sm" data-media-action="repeat" aria-label="${escapeHtmlAttr(tr('media.repeat', 'Repeat'))}">↻</button>
+            <button type="button" class="btn btn-default btn-sm" data-media-action="mute" aria-label="${escapeHtmlAttr(tr('media.mute', 'Mute'))}">${MEDIA_ICONS.volume}</button>
+            <button type="button" class="btn btn-default btn-sm" data-media-action="fullscreen" aria-label="${escapeHtmlAttr(tr('media.enter_fullscreen', 'Enter fullscreen'))}">${MEDIA_ICONS.fullscreen}</button>`;
         return `<div class="chat-media-player${audio ? ' is-audio' : ''}">
             ${title ? `<div class="chat-media-title">${escapeHtml(title)}</div>` : ''}
             <div class="chat-media-stage">${media}</div>
             <div class="chat-media-controls">
-                <button type="button" data-media-action="play" aria-label="${escapeHtmlAttr(tr('media.play', 'Play'))}">${MEDIA_ICONS.play}</button>
+                <button type="button" class="btn btn-default btn-sm" data-media-action="play" aria-label="${escapeHtmlAttr(tr('media.play', 'Play'))}">${MEDIA_ICONS.play}</button>
                 <input class="chat-media-progress" type="range" min="0" max="100" value="0" step="0.1" aria-label="${escapeHtmlAttr(tr('media.progress', 'Media progress'))}">
                 <span class="chat-media-time">0:00 / 0:00</span>
                 ${videoControls}
-                <button type="button" data-media-action="download" aria-label="${escapeHtmlAttr(tr('media.download_media', 'Download media'))}">↓</button>
+                <button type="button" class="btn btn-default btn-sm" data-media-action="download" aria-label="${escapeHtmlAttr(tr('media.download_media', 'Download media'))}">↓</button>
             </div>
         </div>`;
     }
 
     function photoActionsHtml() {
         return `<details class="chat-photo-actions">
-            <summary aria-label="${escapeHtmlAttr(tr('media.photo_actions', 'Photo actions'))}" aria-haspopup="menu" aria-expanded="false">•••</summary>
+            <summary class="btn btn-float btn-sm" aria-label="${escapeHtmlAttr(tr('media.photo_actions', 'Photo actions'))}" aria-haspopup="menu" aria-expanded="false">•••</summary>
             <div class="chat-photo-menu ui-popup" role="menu" aria-label="${escapeHtmlAttr(tr('media.photo_actions', 'Photo actions'))}" hidden>
                 <button type="button" role="menuitem" data-photo-action="view">${escapeHtml(tr('media.view', 'View'))}</button>
                 <button type="button" role="menuitem" data-photo-action="open">${escapeHtml(tr('media.open_in_new_tab', 'Open in new tab'))}</button>
@@ -712,7 +749,7 @@ export function createChatMedia({
             const preview = mime.startsWith('image/') && source.src
                 ? `<img class="chat-file-thumb" src="${escapeHtmlAttr(source.src)}" alt="">`
                 : '<span class="chat-file-glyph" aria-hidden="true">▤</span>';
-            content = `<button type="button" class="chat-file-card" aria-haspopup="dialog" ${source.src ? '' : 'disabled'}>
+            content = `<button type="button" class="btn btn-default chat-file-card" aria-haspopup="dialog" ${source.src ? '' : 'disabled'}>
                 ${preview}
                 <span class="chat-file-copy">
                     <span class="chat-file-name">${escapeHtml(filename)}</span>
@@ -857,7 +894,8 @@ export function createChatMedia({
         + '<path d="M10.5 2.5h-6a2 2 0 0 0-2 2v6"></path></svg>';
 
     function attachCopyControl(bubble, rawText) {
-        if (!bubble || !String(rawText || '')) return null;
+        const words = () => String((typeof rawText === 'function' ? rawText() : rawText) || '');
+        if (!bubble || !words()) return null;
         const button = document.createElement('button');
         button.type = 'button';
         button.className = 'chat-message-copy ui-hit-area';
@@ -869,7 +907,7 @@ export function createChatMedia({
             const owner = document.activeElement;
             const area = document.createElement('textarea');
             area.className = 'chat-copy-fallback';
-            area.value = String(rawText);
+            area.value = words();
             area.setAttribute('readonly', '');
             document.body.appendChild(area);
             try {
@@ -886,7 +924,7 @@ export function createChatMedia({
             let ok = true;
             try {
                 if (navigator.clipboard?.writeText) {
-                    try { await navigator.clipboard.writeText(String(rawText)); }
+                    try { await navigator.clipboard.writeText(words()); }
                     catch { writeFallback(); }
                 } else writeFallback();
             } catch {
@@ -951,6 +989,7 @@ export function createChatMedia({
     // keep their listeners, playback, focus and outstanding user actions.
     function release(root) {
         reader.release(root);
+        cards.release(root);
         const owns = (node) => node === root || root?.contains?.(node);
         if (dialogOwner && owns(dialogOwner)) closeFileDialog();  // no actions on a released message's file
         for (const [dispose, owner] of resourceOwners) if (owns(owner)) {
@@ -976,6 +1015,7 @@ export function createChatMedia({
     function destroy() {
         if (destroyed) return;
         reset();
+        cards.destroy();
         reader.destroy();
         destroyed = true;
     }
@@ -985,7 +1025,6 @@ export function createChatMedia({
         isMyThread,
         hideTypingIndicatorOnly,
         syncChatStatus,
-        incrementUnreadIfNeeded,
         seenMessageKeys,
         rememberMessageKey,
         chatMediaMessageKey,
@@ -1053,19 +1092,42 @@ export function createChatMedia({
             rememberBubble(bubble, keys);
             return insertMessageNode(bubble) !== false;
         }
+        function appendCardMessage(msg) {
+            const keys = keysFor(msg, `card:${msg.card?.card_id || ''}`);
+            if (alreadyRendered(msg, keys)) return false;
+            const bubble = cards.buildCard(msg);
+            if (!bubble) return false;
+            rememberBubble(bubble, keys);
+            return insertMessageNode(bubble) !== false;
+        }
+        // One replayed delivery row (a file, photo, video, link card, question or living card), drawn before final
+        // handling: a mid-task delivery cannot finish its task card. False for any other row.
+        const replayed = { document: appendDocumentBubble, links: appendLinksMessage, quiz: appendQuizMessage,
+            card: appendCardMessage, photo: appendMediaBubble, video: appendMediaBubble };
+        function appendDelivery(msg) {
+            const append = Object.hasOwn(replayed, msg?.msg_type || '') ? replayed[msg.msg_type] : null;
+            if (append) append(msg);
+            return Boolean(append);
+        }
         // Media frames carry no activity identity: hide the dots row but keep
         // the authoritative active set intact; sync derives the header from it.
         const deliver = (append) => (msg) => {
             if (!isMyThread(msg)) return;
             hideTypingIndicatorOnly();
             syncChatStatus();
-            if (deliverContentMutation(() => append(msg))) incrementUnreadIfNeeded(msg);
+            deliverContentMutation(() => append(msg));
         };
         for (const type of ['photo', 'video']) onWs(type, deliver(appendMediaBubble));
         onWs('document', deliver(appendDocumentBubble));
         onWs('links', deliver(appendLinksMessage));
         const question = deliver(appendQuizMessage);
         onWs('quiz', (msg) => { question(msg); if (isMyThread(msg)) onQuestionFrame(msg); });
+        onWs('card', deliver(appendCardMessage));
+        // A shown card changed (a new body or a recorded press): the existing row only, no unread bump.
+        onWs('card_state', (msg) => deliverContentMutation(() => cards.applyCardState(msg)));
+        onWs('extension_lifecycle', cards.lifecycle);
+        onWs('open', cards.reconnect);
+        onWs('message', cards.relay);
         if (applyQuizStateFrame && messagesRoot) {
             // Lifecycle updates address an EXISTING card by quiz_id — no
             // thread routing, no unread bump, never a new bubble.
@@ -1074,7 +1136,7 @@ export function createChatMedia({
                 onQuestionFrame(msg);
             });
         }
-        return { appendMediaBubble, appendDocumentBubble, appendLinksMessage, appendQuizMessage };
+        return { appendDelivery, appendMediaBubble, appendDocumentBubble, appendLinksMessage, appendQuizMessage, appendCardMessage };
     }
 
     return {

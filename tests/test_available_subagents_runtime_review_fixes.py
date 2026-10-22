@@ -327,11 +327,13 @@ def test_custody_debt_task_stores_as_done_with_warnings(tmp_path):
 
 @pytest.mark.parametrize("mode", ["local_readonly_subagent", "acting_subagent"])
 def test_descendant_forwarding_is_visible_and_executable_for_both_subagent_profiles(
-    tmp_path, mode,
+    tmp_path, monkeypatch, mode,
 ):
     from ouroboros.contracts.task_constraint import TaskConstraint
     from ouroboros.task_results import STATUS_RUNNING, write_task_result
     from ouroboros.tools.registry import ToolContext, ToolRegistry
+
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
 
     repo = tmp_path / "repo"
     canonical = tmp_path / "canonical"
@@ -484,7 +486,7 @@ def test_delegate_start_recipes_match_the_fresh_start_schema():
     schema = next(
         entry.schema for entry in delegate.get_tools() if entry.name == "delegate_start"
     )["parameters"]
-    assert schema["required"] == ["prompt"]
+    assert schema["required"] == []  # retry_of may omit prompt (#1614); recipes below still name it
     assert not ({"anyOf", "oneOf", "allOf"} & schema.keys())
     assert "required for direct starts including continue_from" in schema["properties"]["subagent_id"]["description"]
     assert "Omit subagent_id or receive a typed conflict" in (

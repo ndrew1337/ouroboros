@@ -41,7 +41,6 @@ _PASSIVE_SEAMS = (
     ("ouroboros.gateway.extensions", "discover_skills"),
     ("ouroboros.gateway.extensions", "find_skill"),
     ("ouroboros.skill_review_runner", "reconcile_stale_review_jobs"),
-    ("supervisor.queue", "sync_skill_schedules"),
 )
 
 
@@ -95,8 +94,9 @@ def test_api_widgets_projects_live_tabs_without_discovery(tmp_path, monkeypatch)
         assert len(payload["ui_tabs"]) == 1
         tab = payload["ui_tabs"][0]
         # Exact contract shape: the TypedDict keys, nothing else (the dead
-        # two-phase flags are gone; framed geometry is covered below).
-        assert set(tab) == set(WidgetTab.__annotations__)
+        # two-phase flags are gone; framed geometry is covered below). Only a
+        # pinned living card carries the optional pinned_card marker.
+        assert set(tab) == set(WidgetTab.__annotations__) - {"pinned_card"}
         assert tab == {
             "key": "ext_widget:weather",
             "skill": "ext_widget",

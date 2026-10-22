@@ -183,7 +183,7 @@ def test_review_exception_restores_previous_without_waiting_for_restart(release)
 def test_owner_skip_during_review_keeps_new_bytes(release, edited):  # noqa: F811
     from ouroboros.skill_lifecycle_actions import run_skill_action
     from ouroboros.skill_lifecycle_queue import lend_lifecycle_lane
-    from ouroboros.skill_review import _persist_reviewed_outcome
+    from ouroboros.skill_review import _persist_projection
 
     drive, _folder, _row, item = release
     _pending(release)
@@ -194,10 +194,9 @@ def test_owner_skip_during_review_keeps_new_bytes(release, edited):  # noqa: F81
         with lend_lifecycle_lane():
             waiting.set()
             assert finish.wait(60)
-        return _persist_reviewed_outcome(
-            ctx, reviewed, drive,
-            SkillReviewOutcome(skill_name=name, status="blockers", content_hash=item["digest"]),
-            history=[], review_rebuttal="", contract_fp="", rebuttal_sha="")
+        outcome = SkillReviewOutcome(skill_name=name, status="blockers", content_hash=item["digest"])
+        _persist_projection(ctx, reviewed, drive, outcome)
+        return outcome
     ctx = SimpleNamespace(drive_root=drive, repo_dir=drive.parent, messages=[])
     def run():
         try:
@@ -391,7 +390,7 @@ def test_registry_landing_failure_restores_with_landing_reason(registry_release,
             result.provenance["install_specs"]["auto"] = [{"kind": "pip", "package": "demo"}]
             return result
         monkeypatch.setattr(storage, "adapt_openclaw_skill", with_deps)
-        monkeypatch.setattr(storage, "install_isolated_dependencies", fail)
+        monkeypatch.setattr("ouroboros.marketplace.isolated_deps.install_isolated_dependencies", fail)
     elif failure == "record":
         from ouroboros.skill_install_record import write_install_record
         def write(drive, name, record):
@@ -410,7 +409,7 @@ def test_registry_landing_failure_restores_with_landing_reason(registry_release,
 def test_dependency_failure_after_review_restores_with_landing_reason(release, monkeypatch):  # noqa: F811
     drive, _folder, _row, _item = release
     previous, _ = _pending(release)
-    monkeypatch.setattr("ouroboros.skill_review_runner._reconcile_deps_after_pass_review",
+    monkeypatch.setattr("ouroboros.skill_dependencies.ensure_skill_dependencies",
                         lambda *a, **kw: ("failed", "injected dependency failure"))
     result = _review(drive, "clean")
     assert result["deps_status"] == "failed"

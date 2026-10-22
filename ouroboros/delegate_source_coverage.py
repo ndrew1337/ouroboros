@@ -296,6 +296,7 @@ def record_started_custody(
     snapshot_id: str, execution_binding_fingerprint: str, target_root: str,
     baseline_sha: str, authority_source: str,
     resource_ref: Dict[str, Any], capture_mode: str, processing: Mapping[str, Any] | None = None,
+    prompt_cache_ttl: Mapping[str, Any] | None = None,
     continuation_of: str = "", capture_id: str = "", snapshot_task_id: str = "", max_seconds_basis: str = "",
     row_effort: Optional[str] = None,
 ) -> bool:
@@ -322,6 +323,7 @@ def record_started_custody(
         profile_id=route.profile_id,
         effort=route.effort,
         processing_preference=(processing or {}).get("requested"),
+        prompt_cache_ttl=dict(prompt_cache_ttl) if isinstance(prompt_cache_ttl, Mapping) and prompt_cache_ttl else None,
         project_id=project_id,
         project_owned=project_owned,
         project_persistent=project_persistent,

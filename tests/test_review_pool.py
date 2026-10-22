@@ -1,7 +1,7 @@
 """The review pool (PR-3, contract §1.1–1.3, §2 F4/F5/F8): the catalog's marked rows ARE the panel.
 
 `OUROBOROS_REVIEWER_SLOTS` lanes are gone as a review surface: every surface — the
-commit gate, plan review, skill review, task acceptance, the author's own wave —
+commit gate, plan review, skill review, the result review, the author's own wave —
 reads ONE builder (``review_pool_slots``) over the enabled catalog rows the owner
 marked ``review_eligible``. A row rides its own identity (``slot_id`` is its
 stored ``subagent_id``), its own delivery (an api row's ``delivery`` field, a
@@ -381,14 +381,13 @@ def test_commit_triad_delivery_projects_aligned_vectors_from_the_pool(clean_env)
     assert [rsc.row_plan_retrieves(legacy, i) for i in range(4)] == [False, False, True, False]
 
 
-def test_the_skill_fingerprint_names_native_delivery_only_where_a_row_reads(clean_env):
-    from ouroboros.skill_review_cycles import skill_review_contract_fingerprint
+def test_the_shared_contract_fingerprint_names_native_delivery_only_where_a_row_reads(clean_env):
+    """One contract identity for every wave (commit, change, result, skill): a row's delivery is part of it."""
+    from ouroboros.tools.commit_gate import commit_review_contract_fingerprint
 
     def fingerprint(roster):
         clean_env.setenv(SUBAGENTS_SETTING, roster)
-        delivery = rsc.commit_triad_delivery()
-        return skill_review_contract_fingerprint(delivery["models"], delivery=delivery,
-                                                 required_items=("a",), review_profile="p")
+        return commit_review_contract_fingerprint()
 
     bare = fingerprint(_roster(_row("t", "m/one")))  # the catalog default is native
     native = fingerprint(_roster(_row("t", "m/one", delivery="native")))
@@ -422,7 +421,6 @@ def test_a_declared_plan_effort_decides_auto_rows_clamped_and_leaves_pins_and_na
     name, unclamped. The commit gate, acceptance and skill-review identities are
     byte-identical around it."""
     from ouroboros import config
-    from ouroboros.skill_review_cycles import skill_review_contract_fingerprint
     from ouroboros.tools import plan_review_runtime
     from ouroboros.tools.commit_gate import commit_review_contract_fingerprint
 
@@ -432,16 +430,14 @@ def test_a_declared_plan_effort_decides_auto_rows_clamped_and_leaves_pins_and_na
         _row("plain-row", "codex=gpt-5.6-sol", kind="agent_session"),
         _row("pinned-row", "openai/gpt-5.6-sol", effort="low"),
     ))
-    before = (rsc.commit_triad_delivery(), commit_review_contract_fingerprint(),
-              skill_review_contract_fingerprint(["m"], delivery=rsc.commit_triad_delivery()))
+    before = (rsc.commit_triad_delivery(), commit_review_contract_fingerprint())
     declared = plan_review_runtime.plan_review_slots(default_effort="max")
     assert [s.effort for s in declared] == ["xhigh", "high", "low"]  # Auto row: the order clamped to the top
     assert [s.declared_effort for s in declared] == ["", "max", ""]
     assert [s.effort for s in plan_review_runtime.plan_review_slots(default_effort="none")] == ["xhigh", "low", "low"]
     assert [s.effort for s in plan_review_runtime.plan_review_slots()] == ["xhigh", "high", "low"]
     assert [s.slot_id for s in declared] == ["cursor-row", "plain-row", "pinned-row"]
-    after = (rsc.commit_triad_delivery(), commit_review_contract_fingerprint(),
-             skill_review_contract_fingerprint(["m"], delivery=rsc.commit_triad_delivery()))
+    after = (rsc.commit_triad_delivery(), commit_review_contract_fingerprint())
     assert before == after and before[0]["efforts"] == ["xhigh", "high", "low"]
     monkeypatch.setattr(config, "_BOOT_RUNTIME_MODE", "cyber_pro")
     cyber = plan_review_runtime.plan_review_slots(default_effort="max")
@@ -449,12 +445,10 @@ def test_a_declared_plan_effort_decides_auto_rows_clamped_and_leaves_pins_and_na
 
 
 def test_compound_effort_stabilizes_replay_identity_against_global_drift(clean_env):
-    from ouroboros.skill_review_cycles import skill_review_contract_fingerprint
+    from ouroboros.tools.commit_gate import commit_review_contract_fingerprint
 
     def fingerprint():
-        delivery = rsc.commit_triad_delivery()
-        return delivery["efforts"], skill_review_contract_fingerprint(
-            delivery["models"], required_items=("manifest_schema",), delivery=delivery)
+        return rsc.commit_triad_delivery()["efforts"], commit_review_contract_fingerprint()
 
     clean_env.setenv(SUBAGENTS_SETTING, _roster(_row("c", "cursor=cursor-grok-4.6-xhigh", kind="agent_session")))
     clean_env.setenv("OUROBOROS_EFFORT_REVIEW", "low")
@@ -467,28 +461,6 @@ def test_compound_effort_stabilizes_replay_identity_against_global_drift(clean_e
 
 
 # --- the surfaces -------------------------------------------------------------------------
-
-
-def test_root_acceptance_runs_every_pool_row_in_order_and_a_child_takes_one(clean_env):
-    """A session row beside api rows: acceptance carries them ALL, in the owner's
-    order, each with its own delivery — no row is filtered out and no API
-    default is substituted. A child task names at most one, by id or handle."""
-    clean_env.setenv(SUBAGENTS_SETTING, _MIXED)
-    slots = rsc.triad_delivery_slots(role_hint="task acceptance")
-    assert [(s.slot_id, s.route.value, s.retrieves) for s in slots] == [
-        ("api-critic", "api_chat", True), ("packet-critic", "api_chat", False), ("session-critic", "agent_session", True),
-    ]
-    assert rsc.child_acceptance_slots(slots)[1]["reason"] == "reviewer_selection_required"
-    handles = _handles()
-    for slot in slots:
-        for selector in (slot.slot_id, handles[slot.slot_id]):
-            chosen, refusal = rsc.child_acceptance_slots(slots, selector)
-            assert not refusal and [s.slot_id for s in chosen] == [slot.slot_id]
-    _, refusal = rsc.child_acceptance_slots(slots, "ghost")
-    assert refusal["reason"] == "reviewer_slot_unknown"
-    assert [row["delivery"] for row in refusal["reviewer_rows"]] == ["native", "packet", "agent_session"]
-    only, none = rsc.child_acceptance_slots(slots[:1])
-    assert [s.slot_id for s in only] == ["api-critic"] and none == {}
 
 
 def test_plan_review_rows_are_the_pool_rows_and_duplicate_models_stay_distinct(tmp_path, clean_env):

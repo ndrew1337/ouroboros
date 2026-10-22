@@ -13,7 +13,7 @@ boundary instead of the whole line of thought:
   by the task's own Stop/Panic/deadline); no unrecorded effect starts;
 - ``post_batch`` — the completed batch and its results;
 - ``candidate`` — a no-tool answer published as the delivery candidate, before
-  acceptance, review or delivery;
+  its review or delivery;
 - ``resumed`` — an exact Resume's restored continuation and its budget tail,
   written before the grant is consumed (``save_resumed``): the pause retired
   this file, and consumption ends the pause's own recovery ownership.
@@ -42,6 +42,8 @@ delivery registry) is not answered twice — that task is not recovered here.
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import contextvars
 import json
 import logging
 import pathlib
@@ -58,6 +60,7 @@ SOURCE_WORKING = "working"
 SOURCE_OWNER_WAIT = "owner_wait"
 BOUNDARIES = ("ready", "pre_effect", "post_batch", "candidate")
 RESUMED = "resumed"
+_MODEL_CALL = contextvars.ContextVar("working_model_call", default=None)
 HOLD_UNWRITABLE = "working_checkpoint_unwritable"
 _TRANSIENT_USAGE = ("execution_status", "reason_code", "_best_effort_extracted", "budget_pause_hold",
                     "_llm_round_started", "working_checkpoint")
@@ -187,6 +190,31 @@ def save_before_effects(limit_ctx: Any) -> None:
                 lambda: save_round(limit_ctx, "pre_effect"), rail="working_checkpoint")
 
 
+@contextlib.contextmanager
+def model_call_scope(limit_ctx: Any):
+    """Bind the loop's existing checkpoint writer for write-ahead call allowances."""
+    token = _MODEL_CALL.set(limit_ctx)
+    try:
+        yield
+    finally:
+        _MODEL_CALL.reset(token)
+
+
+def save_model_call() -> None:
+    """Usage-only transition: bypass ready's cognition signature, hold on write failure.
+
+    The accepted-response checkpoint later replaces this ready state. Until then
+    recovery sees an unconfirmed dispatch, even if the live receiver got an answer.
+    Direct calls without a recoverable loop have no working checkpoint.
+    """
+    from ouroboros.budget_pause import _hold_until
+
+    limit = _MODEL_CALL.get()
+    if limit is not None:
+        _hold_until(limit.tools._ctx, limit.accumulated_usage, HOLD_UNWRITABLE,
+                    lambda: _write(limit.tools._ctx, limit, "ready"), rail="working_checkpoint")
+
+
 def defer_content_ack(ctx: Any, ack: Any) -> None:
     """Keep a drained content entry's ACK until a saved state holds it."""
     pending = getattr(ctx, "_pending_content_acks", None)
@@ -261,7 +289,10 @@ def live_park(root: Any, task_id: str, attempt: Optional[int] = None, *, verify_
     """A park naming a source at least as new as the working attempt, or ``""``.
 
     With ``attempt``, a park recorded by an OLDER attempt (already continued by
-    this one) does not dominate this attempt's working state.
+    this one) does not dominate this attempt's working state. A wait a stop
+    ``retained`` into an exact pause is that pause's own source: it parks only
+    while that pause is live. Its Resume continues the SAME attempt, so after the
+    consumption the attempt's newer working state is the source, not the old wait.
     """
     from ouroboros.budget_pause import LIVE_PAUSE_STATES
     from ouroboros.task_results import load_task_result
@@ -272,9 +303,11 @@ def live_park(root: Any, task_id: str, attempt: Optional[int] = None, *, verify_
     row = load_task_result(pathlib.Path(root), str(task_id), strict=True) or {}
     wait = row.get("owner_wait") if isinstance(row.get("owner_wait"), dict) else {}
     pause = row.get("budget_pause") if isinstance(row.get("budget_pause"), dict) else {}
-    kind = ("owner_wait" if wait.get("state") in {"waiting", "retained"} and wait.get("source_ref") and current(wait)
-            else "budget_pause" if pause.get("state") in LIVE_PAUSE_STATES and pause.get("source_ref")
-            and current(pause) else "")
+    live_pause = pause.get("state") in LIVE_PAUSE_STATES
+    retained = (wait.get("state") == "retained" and live_pause and bool(wait.get("wait_id"))
+                and pause.get("retained_owner_wait_id") == wait.get("wait_id"))
+    kind = ("owner_wait" if (wait.get("state") == "waiting" or retained) and wait.get("source_ref") and current(wait)
+            else "budget_pause" if live_pause and pause.get("source_ref") and current(pause) else "")
     if kind and verify_source:
         from ouroboros.artifacts import read_actor_source_bytes
 
@@ -668,10 +701,10 @@ def resume_from_working(tools: Any, state: Dict[str, Any], messages: list, trace
                         usage: dict, seen: set) -> tuple:
     """Restore a frozen working checkpoint; ``(model, effort, local, mode, round, plan, tool_tail)``.
 
-    Same ID: the whole continuation (usage, delivery candidate, acceptance
-    evidence) continues. A NEW execution ID (an idle retry) restores the
+    Same ID: the whole continuation (usage, delivery candidate, review and
+    owner-source state) continues. A NEW execution ID (an idle retry) restores the
     transcript, route and cumulative execution clock: its own accounting starts
-    here (spend stays on the ledger's tree), and it borrows no acceptance or delivery authority
+    here (spend stays on the ledger's tree), and it borrows no review or delivery authority
     from the attempt it continues. Nothing is re-executed; runs are disclosed.
     """
     from ouroboros.budget_pause import observe_task_runs
@@ -685,18 +718,30 @@ def resume_from_working(tools: Any, state: Dict[str, Any], messages: list, trace
             if key in {"_delivery_candidate_revision", "_delivery_evidence_revision", "_delivery_evidence_fingerprint",
                        "_delivery_effective_criteria", "_delivery_material_tool_indices"}},
         "acceptance": {}}, messages, trace, usage, seen)
-    # Saved prose is evidence, never permission to skip today's finalization.
-    # Same-ID panels can still be collected/replayed by the ordinary gate.
-    ctx._task_acceptance_reviewed = False
-    ctx._task_acceptance_reviewed_subject = ""
+    # Retry lineage carries the remaining allowance, never a fresh grant or old money. A new ID keeps
+    # each failure row's own owner (its sources stay the predecessor's) and the captions its request had.
+    from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY
+    if record := (state.get("usage") or {}).get(TIMEOUT_REPEAT_KEY):
+        source = str(handoff.get("source_task_id") or ctx.task_id)
+        usage[TIMEOUT_REPEAT_KEY] = {**record, "recovered": True, **({} if same_id else {
+            row: {"task_id": source, **record[row]} for row in ("first", "repeat") if isinstance(record.get(row), dict)})}
+        if not same_id:
+            usage.setdefault("_vision_caption_memo", dict(state["usage"].get("_vision_caption_memo") or {}))
+    # Saved prose is evidence, never permission to skip today's finalization:
+    # a restored attempt holds no seal of the interrupted one.
     ctx._task_acceptance_sealed_fence_token = None
     ctx._task_acceptance_sealed_fence_generation = None
     if ctx._delivery_candidate is not None:
-        ctx._delivery_candidate.acceptance_binding = {}
+        # It holds no verdict and says so explicitly: an empty binding let a superseded PASS stay current.
+        from ouroboros.loop_delivery import _unaccepted_delivery_binding
+
+        ctx._delivery_candidate.acceptance_binding = _unaccepted_delivery_binding(
+            tools, ctx._delivery_candidate.content_sha256)
     if not same_id:
         for run in trace.get("review_runs") or []:
             if isinstance(run, dict) and run.get("authority") == "host_root":
                 run.update(superseded_by_revision=True, superseded_reason="working_recovery_new_execution")
+        # ``acceptance_decision`` is written no more; a pre-fold checkpoint's own does not carry over.
         for key in ("acceptance_decision", "review_decision", "root_phase_checkpoint", "task_completion"):
             trace.pop(key, None)
     from ouroboros.task_pacing import restore_cost_ceiling
@@ -727,7 +772,7 @@ def resume_from_working(tools: Any, state: Dict[str, Any], messages: list, trace
         f"[SYSTEM NOTICE]\nThis task continued from its working checkpoint ({boundary}, saved "
         f"{handoff.get('saved_at') or 'earlier'}) because {_CAUSES.get(str(handoff.get('cause') or ''), 'it was interrupted')}"
         + ("" if same_id else f"; this is a new execution of task {handoff.get('source_task_id')} — its earlier "
-           "acceptance/review state does not carry over")
+           "review state does not carry over")
         + ". Work after that point may be lost. Cumulative spend, rounds and elapsed time were NOT reset; prior "
         "tool results remain recorded; do not repeat completed effects. The previous browser process and "
         "task-local services ended; their recorded results are evidence, not proof they still run. Re-read "

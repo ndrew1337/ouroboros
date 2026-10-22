@@ -1,4 +1,4 @@
-"""Model-free source-address reconstruction after a real context refusal.
+"""Model-free source-address reconstruction during context-size recovery.
 
 The compactor owns exact checkpoints, units and capsules. This leaf owns only
 which complete sources an emergency view represents and the facts it shows.
@@ -18,9 +18,9 @@ from ouroboros.tool_result_record import read_tool_result_record
 
 EmergencyRung = Literal["host_copies", "bodies", "unseen_bodies"]
 _EMERGENCY_LABELS = {  # the record's honest heading: no summary, exact rows retained by checkpoint
-    "host_copies": ("Emergency host record after the provider's context refusal: obsolete host rows "
+    "host_copies": ("Emergency host record during context-size recovery: obsolete host rows "
                     "replaced by typed state and exact addresses; nothing summarized; exact rows retained by checkpoint"),
-    "bodies": ("Emergency host record after the provider's context refusal: tool bodies previously exposed to a "
+    "bodies": ("Emergency host record during context-size recovery: tool bodies previously exposed to a "
                "usable Main turn replaced by typed facts and exact addresses; exposure proves no understanding; "
                "nothing summarized; exact rows retained by checkpoint"),
     "unseen_bodies": ("Late source-only rescue after other same-model recovery: tool bodies replaced by typed facts "

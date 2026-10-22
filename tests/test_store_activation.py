@@ -131,7 +131,7 @@ def test_pause_door_answers_migrating_inside_the_window_and_proceeds_outside(tmp
     ensure_current_store(root)
     calls = []
     monkeypatch.setattr(owner_pause_control, "request_owner_pause",
-                        lambda task_id, *, request_id: calls.append((task_id, request_id)) or {"ok": True})
+                        lambda task_id, *, request_id, by=None: calls.append((task_id, request_id, by)) or {"ok": True})
     app = Starlette(routes=[Route("/api/tasks/{task_id}/pause", task_pause.api_task_pause, methods=["POST"])])
     app.state.drive_root = root
     with TestClient(app) as client:
@@ -139,13 +139,15 @@ def test_pause_door_answers_migrating_inside_the_window_and_proceeds_outside(tmp
             _migrating_body(client.post("/api/tasks/t1/pause", json={"request_id": "r1"}))
         assert calls == []
         outside = client.post("/api/tasks/t1/pause", json={"request_id": "r1"})
-    assert outside.status_code == 200 and calls == [("t1", "r1")]
+    assert outside.status_code == 200 and calls == [("t1", "r1", None)], "a bare body declares nobody"
 
 
-def test_presence_door_answers_migrating_inside_the_window_and_proceeds_outside(tmp_path):
+def test_presence_door_answers_migrating_inside_the_window_and_proceeds_outside(tmp_path, monkeypatch):
     from ouroboros.gateway.host_service import create_host_service_app
     from tests.test_host_service_api import _seed_presence_behavior, _seed_token
 
+    monkeypatch.setattr("ouroboros.presence_admission.focus_enabled", lambda _root: True)
+    monkeypatch.setattr("ouroboros.presence_admission.focus_allowance", lambda _root: {"status": "available", "remaining_usd": 10})
     _seed_token(tmp_path, skill="telegram-bot", token="presence-token", permissions=["presence"],
                 manifest_permissions=["presence"])
     binding_id = _seed_presence_behavior(tmp_path)

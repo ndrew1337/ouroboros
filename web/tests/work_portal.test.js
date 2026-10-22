@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test, { after } from 'node:test';
 import { createChatInstance } from '../modules/chat.js';
 import { createWorkPortals } from '../modules/work_portal.js';
+import { clock } from '../modules/work_status.js';
 import { ElementStub, installDom, restoreDom, walkCard } from './chat_dom_fixture.js';
 import { projection, room as serverRoom, work } from './work_fixture.js';
 
@@ -232,7 +233,7 @@ function assertFollowed(f, node) {
     assert.deepEqual(controls(f, 'w-1-c1'), ['Stop…'], 'its own controls: Stop… while the room runs it');
     const episodes = f.part('w-1-c1', 'live-episodes');
     assert.equal(episodes.hidden, false);
-    assert.match(episodes.innerHTML, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="error">Failed<\/span>/,
+    assert.match(episodes.innerHTML, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="failed">Failed<\/span>/,
         'the ended episode is one meta line on the same card');
     assert.match(episodes.innerHTML, /data-episode="2" data-current="1"/);
 }
@@ -344,8 +345,10 @@ test('an admitted successor paused in the room carries Resume as its one primary
         details['w-1'] = failedDetail(continuedBy());
         const paused = successorRow({ phase: 'budget_paused', pause_cause: 'owner', can_resume: true, last_line: '' });
         // The work runs in its Project room (chat 7): the portal's card in Main still reads that work's controls.
-        const pausedWork = (controls) => projection(7, [work(paused, { activity: 'paused', paused_by: 'owner',
-            because: [{ code: 'paused_by_owner', text: 'Paused by you' }], controls })], serverRoom('paused'));
+        const pressed = '2026-09-15T10:00:00Z';
+        const pausedWork = (controls) => projection(7, [work(paused, { activity: 'paused', because: [{ code: 'paused_by_owner',
+            text: 'You paused it', since: pressed, by: { actor: 'owner', text: '', at: pressed } }], controls })],
+        serverRoom('paused'));
         f.state({ task_bindings: bindings, active_chat_activities: [paused],
             ...pausedWork([{ action: 'stop', target: 'w-1-c1' }]) });
         await settle();
@@ -355,7 +358,8 @@ test('an admitted successor paused in the room carries Resume as its one primary
             ...pausedWork([{ action: 'resume', target: 'w-1-c1' }, { action: 'stop', target: 'w-1-c1' }]) });
         await settle();
         assert.deepEqual(controls(f, 'w-1-c1'), ['Resume', 'Stop…'], 'paused: Resume beside Stop…');
-        assert.equal(f.part('w-1-c1', 'live-phase').textContent, 'Paused · by you', 'the portal says the work\'s word');
+        assert.deepEqual([f.part('w-1-c1', 'live-phase').textContent, f.part('w-1-c1', 'live-phase-secondary').textContent],
+            ['Paused', `You paused it · ${clock(pressed)}`], 'the portal says the work\'s word, its line beside it');
         const primary = f.card('w-1-c1').querySelector('.chat-live-actions').children.filter((b) => b.classList.contains('btn-primary'));
         assert.deepEqual(primary.map((b) => b.textContent), ['Resume']);
         // Released in the room: the next body says working, and the card's controls follow its work.
@@ -413,7 +417,7 @@ function assertRoomFollowed(f, node) {
     assert.ok(!controls(f, 'w-1-c1').includes('Continued'));
     const episodes = f.part('w-1-c1', 'live-episodes');
     assert.equal(episodes.hidden, false);
-    assert.match(episodes.innerHTML, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="error">Failed<\/span>/,
+    assert.match(episodes.innerHTML, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="failed">Failed<\/span>/,
         'the ended episode is one meta line on the same card');
     assert.match(episodes.innerHTML, /data-episode="2" data-current="1"/);
 }
@@ -518,7 +522,7 @@ function assertSettledFollow(f, folded, { id = 'w-1-c1', episodes = 2 } = {}) {
     assert.ok(!controls(f, id).includes('Stop…') && !controls(f, id).includes('Continued'), 'a settled work offers no Stop');
     const lines = f.part(id, 'live-episodes').innerHTML;
     assert.equal((lines.match(/data-episode="/g) || []).length, episodes);
-    assert.match(lines, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="error">Failed<\/span>/);
+    assert.match(lines, /Episode 1<\/span> · <span class="chat-live-episode-name">Audit the projects<\/span> · <span class="chat-live-episode-span">[^<]+<\/span> · <span class="chat-live-episode-outcome" data-tone="failed">Failed<\/span>/);
     assert.match(lines, new RegExp(`data-episode="${episodes}" data-current="1"><span class="chat-live-episode-label">Episode ${episodes}</span> · (?:<span class="chat-live-episode-name">[^<]+</span> · )?<span class="chat-live-episode-span">[^<]+–[^<]+</span></div>`),
         'the finished current episode carries its own span; the chip is its outcome');
 }

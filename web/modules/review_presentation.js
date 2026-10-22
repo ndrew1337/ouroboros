@@ -59,13 +59,11 @@ export function setReviewAnchor(record, enabled, writePhase) {
     setInertCardPresentation(record, enabled);
     if (enabled) {
         record.titleEl.textContent = record.suggestedName || 'Reviews';
-        record.inlineTypingEl.style.display = 'none';
     } else {
         writePhase(record, 'working');
         if (!record.suggestedName && !record.lastHumanHeadline) {
             record.titleEl.textContent = '';  // the chip says Working; the title waits for a name (#1369)
         }
-        record.inlineTypingEl.style.display = '';
     }
     return true;
 }
@@ -161,6 +159,7 @@ function normalizeSkillAttempt(attempt, defaults = {}, ordinal = 0) {
     if (!attempt || typeof attempt !== 'object') return null;
     const skill = text(attempt.skill || defaults.skill);
     const jobId = text(attempt.job_id || attempt.jobId);
+    const recordId = text(attempt.record_id || attempt.recordId);
     const id = attemptIdentity(attempt, [
         text(attempt.content_hash), text(attempt.review_round),
         text(attempt.snapshot_attempt), String(ordinal + 1),
@@ -208,7 +207,7 @@ function normalizeSkillAttempt(attempt, defaults = {}, ordinal = 0) {
         executions: normalizedExecutions(attempt.executions, attempt.execution),
         execution: attempt.execution && typeof attempt.execution === 'object' ? attempt.execution : null,
         lifecycleOnly,
-        detailRef: skill && jobId ? { surface: 'skill', skill, jobId } : null,
+        detailRef: skill && jobId ? { surface: 'skill', skill, jobId, ...(recordId ? { recordId } : {}) } : null,
         detailText: '',
     };
 }
@@ -783,6 +782,7 @@ function authorDispositionText(author, label = '') {
     ].filter(Boolean).join(' · ');
 }
 
+/** Read-only: a task-acceptance record stored before the result review replaced that machine. */
 export function taskAcceptanceGroupFromTaskDetail(detail, ownerTaskId = '') {
     const owner = text(ownerTaskId || detail?.task_id);
     const projection = detail?.review_projection;
@@ -861,8 +861,8 @@ export function reviewRecordGroupFromTaskDetail(detail, ownerTaskId = '') {
             // NOT_PERFORMED, QUORUM_FAILED and NOT_DISPATCHED reached no verdict: a warning, never a quiet neutral.
             tone: { PASS: 'done', FAIL: 'error' }[verdict] || 'warn', verdict, timestamp: text(panel.ts), ordinal: index,
             label: `${text(panel.surface) || 'review'} record ${text(panel.record_id)}`, summary: text(panel.reason),
-            superseded: false, replayed: false, revised: false, initiatorTaskId: owner, executions: [], execution: null,
-            detailRef: null,
+            superseded: false, replayed: false, revised: false, initiatorTaskId: owner,
+            executions: executionsFromReviewRecord(panel), execution: null, detailRef: null,
             detailText: [formatReviewProjection({ panels: [panel] }), text(panel.source_ref?.path) ? `Full record: ${text(panel.source_ref.path)}` : ''].filter(Boolean).join('\n'),
         };
     });
@@ -1360,6 +1360,7 @@ export function renderReviewsSection(groupsInput, disclosure = {}) {
             const skillRef = attempt.detailRef?.surface === 'skill' ? attempt.detailRef : null;
             const detailAttrs = skillRef
                 ? ` data-skill-review-skill="${escapeHtmlAttr(skillRef.skill)}" data-skill-review-job="${escapeHtmlAttr(skillRef.jobId)}"`
+                    + (skillRef.recordId ? ` data-skill-review-record="${escapeHtmlAttr(skillRef.recordId)}"` : '')
                 : '';
             const source = attempt.detailRef?.surface === 'task_acceptance' ? attempt.detailRef : null;
             const fullSource = source ? (source.url
@@ -1426,7 +1427,7 @@ export function renderReviewsSection(groupsInput, disclosure = {}) {
     const hydrateHtml = hydrateStatus === 'loading'
         ? '<div class="skill-review-loading" data-review-hydrate-status role="status" aria-live="polite"><span>Loading review details…</span></div>'
         : (hydrateStatus === 'error'
-            ? '<div class="skill-review-error" data-review-hydrate-status role="alert"><span>Review details failed to refresh — shown data may be incomplete. </span><button type="button" class="skill-review-retry" data-review-hydrate-retry>Retry</button></div>'
+            ? '<div class="skill-review-error" data-review-hydrate-status role="alert"><span>Review details failed to refresh — shown data may be incomplete. </span><button type="button" class="btn btn-default btn-sm" data-review-hydrate-retry>Retry</button></div>'
             : '');
     // The status node sits OUTSIDE the collapsible groups container: a failed
     // refresh stays visible on a collapsed section and the keyed node survives

@@ -101,58 +101,6 @@ def calibrated_input_token_limit(
     )
 
 
-def review_row_call_usd(row: Any, *, allow_live_fetch: bool = True) -> Optional[float]:
-    """The price of ONE full call of a review row: the number Settings → Agents shows for a
-    catalog row and ``## Review`` for its pool seat. ``row`` is a pool slot, or a mapping with
-    its ``slot_id``, ``model``, ``profile_id`` and ``processing_preference``.
-
-    A full call is the row's calibrated input cap inside its reviewer window (the fit ladder's
-    bound, at most ``REVIEW_PROMPT_TOKEN_BUDGET``) plus the review output reservation within the
-    route's known maximum response, priced by the reservation math a review wave is admitted with.
-    A packet reviewer makes one such call per review; a reading reviewer makes several, each
-    reserved as it is sent, so this never bounds a whole review. ``None`` is unknown, never zero;
-    a local route is the known zero (``pricing.estimate_cost_optional`` prices route ``local`` at ``0.0``).
-
-    ``allow_live_fetch=False`` keeps the whole measurement in this process: the tariff AND
-    the reviewer window are read as already held (an unevidenced window prices at the full
-    window), so a context-assembly reader never waits on a provider catalog."""
-    get = row.get if isinstance(row, dict) else lambda key, default=None: getattr(row, key, default)
-    model = str(get("model", "") or "")
-    if not model:
-        return None
-    try:
-        from ouroboros.provider_models import review_model_uses_local
-
-        use_local = get("use_local", None)
-        if review_model_uses_local(model) if use_local is None else use_local:
-            return 0.0
-        from ouroboros.reviewer_window import reviewer_context_window, reviewer_window_binding, window_scaled_reserves
-        from ouroboros.tools.review_multi_model import review_output_allowance
-        from ouroboros.usage_admission import review_wave_admission
-
-        window = reviewer_context_window(model, allow_fetch=allow_live_fetch, **(binding := reviewer_window_binding(row)))
-        output = review_output_allowance(model, window, **binding)
-        reserve, margin = window_scaled_reserves(window, output_reserve=output, tokenizer_margin=50_000)
-        prompt = max(0, calibrated_input_token_limit(
-            model, context_window=window, output_reserve=reserve, tokenizer_margin=margin))
-        bounds = review_wave_admission(
-            root_task_id="review-row-price", models=[model], prompt_chars=prompt * 4, max_completion_tokens=output,
-            remaining_usd_override=0.0, processing_preferences=str(get("processing_preference", "") or ""),
-            allow_live_fetch=allow_live_fetch,
-        ).get("slot_bounds") or [None]
-    except Exception:
-        logger.debug("review row price estimate failed open", exc_info=True)
-        return None
-    return bounds[0]
-
-
-SKILL_HOST_CONTEXT_FILES = (
-    ("docs/CREATING_SKILLS.md", "markdown"),
-    ("ouroboros/contracts/plugin_api.py", "python"),
-    ("ouroboros/extension_ui_validation.py", "python"),
-)
-
-
 def review_drive_root(ctx: Any) -> pathlib.Path:
     """Resolve the drive root for review surfaces (ctx → DATA_DIR → ../data)."""
     if ctx is not None:
@@ -207,9 +155,12 @@ def emit_review_usage(
     """
     try:
         from ouroboros.event_usage import event_token_counts
+        from ouroboros._usage_response import _normalized_input_token_usage
         from ouroboros.pricing import infer_api_key_type, infer_model_category, infer_provider_from_model
 
         usage_data = dict(usage or {})
+        split = _normalized_input_token_usage(usage_data.get("input_token_usage"))
+        session = isinstance(usage_data.get("claudexor"), dict) and usage_data["claudexor"].get("run_id")
         prompt_cache_ttl = str(usage_data.get("prompt_cache_ttl") or "")
         ledger_attempt_ids = [str(value) for value in (usage_data.get("ledger_attempt_ids") or []) if value]
         routed_provider = provider or str(usage_data.get("provider") or "") or infer_provider_from_model(model)
@@ -238,11 +189,12 @@ def emit_review_usage(
             "task_id": getattr(ctx, "task_id", "") or "",
             "root_task_id": root_task_id,
             "parent_task_id": parent_task_id,
-            "model": model,
+            "model": "" if session and split is not None else model,
             "api_key_type": infer_api_key_type(model, routed_provider),
             "model_category": infer_model_category(model),
             "usage": {
                 **event_token_counts(usage_data),
+                **({"input_token_usage": split} if split is not None else {}),
                 "prompt_cache_ttl": prompt_cache_ttl,
                 "cost": cost,
                 "cost_known": cost is not None,
@@ -405,22 +357,6 @@ def cached_prompt_blocks(stable_text: str, dynamic_text: str = "", *, ttl: str |
     if str(dynamic_text or "").strip():
         blocks.append({"type": "text", "text": dynamic_text})
     return blocks
-
-
-def build_skill_host_context(repo_dir: Path | None = None) -> str:
-    """Return compact host-side skill/widget contract context for reviewers."""
-    root = Path(repo_dir) if repo_dir is not None else REPO_ROOT
-    parts = [
-        "## Host skill/widget contract context\n",
-        (
-            "These files are host-side contracts and guidelines used to judge the "
-            "skill payload. They are not part of the reviewed skill package.\n"
-        ),
-    ]
-    for rel_path, language in SKILL_HOST_CONTEXT_FILES:
-        text = load_governance_doc(root, rel_path, on_missing="explicit")
-        parts.append(f"### {rel_path}\n\n{format_prompt_code_block(text, language)}")
-    return "\n\n".join(parts)
 
 
 # The canonical governance corpus a packed review surface owes IN FULL. Two of

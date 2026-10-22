@@ -88,7 +88,7 @@ def test_a_pool_rows_delivery_is_native_unless_the_row_says_packet(monkeypatch, 
     monkeypatch.setenv("OUROBOROS_SUBAGENTS", stored)  # the applied settings plane the pool reads
     monkeypatch.setattr(rsc, "reviewer_slot_last_executions", lambda: {})
     monkeypatch.setattr(server_maintenance, "review_pool_migration_records", lambda: {})
-    monkeypatch.setattr(settings_mod, "_review_pool_costs", lambda items, env: {})
+    monkeypatch.setattr(settings_mod, "_review_pool_costs", lambda items: {})
     body = json.loads(asyncio.run(settings_mod.api_review_pool(None)).body)
     assert [(row["subagent_id"], row["delivery"]) for row in body["pool"]] == [
         ("bare", "native"), ("packed", "packet"), ("session", "session")]
@@ -204,8 +204,9 @@ def test_startup_notice_matches_loaded_runtime_bounds_and_raw_presence(
     if launch_env is not None:
         monkeypatch.setenv(key, launch_env)
     monkeypatch.setenv(other, "unlimited")
-    if document is not None:
-        path.write_text(json.dumps({other: "unlimited", **document}), encoding="utf-8")
+    if document is not None:  # an install that already carries the consciousness level (no one-time copy)
+        path.write_text(json.dumps({other: "unlimited", "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE": "full", **document}),
+                        encoding="utf-8")
     before = path.read_bytes() if path.exists() else None
     for name, value in {"DRIVE_ROOT": tmp_path, "STATE_PATH": tmp_path / "state/state.json",
                         "STATE_LAST_GOOD_PATH": tmp_path / "state/state.last_good.json",

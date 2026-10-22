@@ -19,7 +19,10 @@ retrieves (a pool seat, a session, a native inspection episode) is asked the ``c
 question in the same brief; a ``coupling_only`` seat answers only that. ``seat_parts``
 is the one place the vector is derived, ``reduce_verdict`` the one aggregate the gate and
 the record share (order: NOT_DISPATCHED, pending, QUORUM_FAILED, coupling NOT_PERFORMED,
-FAIL, PASS).
+FAIL, PASS). A single-question wave (``SINGLE_QUESTION_PARTS``: a task result, a skill
+payload) asks its one part of every seat and reduces in the same order without the
+coupling step; a declared per-item severity policy (``apply_severity_policy``) decides
+which of its findings are critical before the verdict is read.
 """
 from __future__ import annotations
 
@@ -50,8 +53,13 @@ VERDICT_PASS, VERDICT_FAIL = "PASS", "FAIL"
 VERDICT_NOT_PERFORMED, VERDICT_QUORUM_FAILED, VERDICT_NOT_DISPATCHED = "NOT_PERFORMED", "QUORUM_FAILED", "NOT_DISPATCHED"
 AGGREGATE_VERDICTS = frozenset({VERDICT_PASS, VERDICT_FAIL, VERDICT_NOT_PERFORMED, VERDICT_QUORUM_FAILED, VERDICT_NOT_DISPATCHED})
 QUESTION_NOT_PERFORMED, QUESTION_UNANSWERED = "not_performed", "unanswered"
-PART_CHANGE, PART_COUPLING = "change", "coupling"
-PARTS = (PART_CHANGE, PART_COUPLING)
+PART_CHANGE, PART_COUPLING, PART_RESULT, PART_SKILL = "change", "coupling", "result", "skill"
+PARTS = (PART_CHANGE, PART_COUPLING)  # a change wave's two questions
+# A single-question wave asks ONE question of every seat and never the change or coupling
+# question: a result wave (``review_change(subject="result")``: does this task result do what
+# was asked) or a skill wave (``skill_review``: may this payload run, by the Skill Review Checklist).
+SINGLE_QUESTION_PARTS = (PART_RESULT, PART_SKILL)
+ALL_PARTS = (*PARTS, *SINGLE_QUESTION_PARTS)
 SURFACES = frozenset({"commit_gate", "change", "intention", "result", "skill", "system", "preflight"})
 ANSWERED_STATUSES = frozenset({"responded", "partial"})  # a readable answer arrived
 HEAVY_VERDICT_FIELDS = ("critical_findings", "advisory_findings", "additional_findings")
@@ -364,7 +372,9 @@ def index_row(drive_root: Any, payload: Dict[str, Any]) -> Dict[str, Any]:
         "record_id": payload["record_id"], "revision": payload["revision"], "state": payload.get("state"),
         "ts": payload.get("ts"), "task_id": payload.get("task_id"), "root_task_id": payload.get("root_task_id"),
         "review_wave_id": payload.get("review_wave_id"), "surface": payload.get("surface"),
-        "subject": {k: subject.get(k) for k in ("root_kind", "kind", "base", "head", "tree_sha", "diff_sha")},
+        # A skill record is found by its skill name (``subject.skill``) in the hot index, never by its path.
+        "subject": {**{k: subject.get(k) for k in ("root_kind", "kind", "base", "head", "tree_sha", "diff_sha")},
+                    **({"skill": subject["skill"]} if subject.get("skill") else {})},
         "enforcement": payload.get("enforcement"),
         "verdict": {k: verdict.get(k) for k in ("aggregate", "per_question", "quorum", "degraded_reasons")},
         "panel": {k: panel.get(k) for k in ("seats", "additional_seats", "distinct_models", "distinct_engines", "single_model_panel")},
@@ -424,15 +434,34 @@ def archived_segments_exist(drive_root: Any) -> bool:
     return bool(_index_segments(drive_root))
 
 
-def recent_records(drive_root: Any, task_id: str = "", limit: int = 20, *, hot_only: bool = False,
-                   surface: str = "") -> List[Dict[str, Any]]:
-    """Newest-first index rows (junction for context assembly): the hot index, then
-    archived segments newest-first, one row per record at its highest revision.
-    ``task_id`` matches the record's task OR root task; empty matches all; ``surface``
-    keeps one surface's records. ``hot_only`` reads the bounded hot index alone
-    (``INDEX_MAX_BYTES``) and never opens an archived segment: the read a per-task
-    context capture can afford."""
-    wanted = max(1, int(limit))
+def index_stamp(drive_root: Any) -> tuple:
+    """The identity of the index's current bytes: ``(name, mtime_ns, size)`` of the hot index and of every
+    archived segment (a directory listing and stats, no row read); a written row or a rotation changes it,
+    so a reader may memoize one parse of the index under it."""
+    stamps = []
+    for path in [index_path(drive_root), *_index_segments(drive_root)]:
+        try:
+            stat = path.stat()
+            stamps.append((path.name, stat.st_mtime_ns, stat.st_size))
+        except OSError:
+            stamps.append((path.name, 0, 0))
+    return tuple(stamps)
+
+
+def newest_rotation_ts(drive_root: Any) -> str:
+    """When the hot index last rotated, read off the newest archived segment's name (``index.<stamp>.jsonl``;
+    a directory listing, no row read) as an ISO timestamp, "" when none: rows written before it may live in
+    an archived segment, rows written after it are all in the hot index."""
+    stamps = [m.group(1) for path in _index_segments(drive_root)
+              if (m := re.fullmatch(r"index\.(\d{8}T\d{6})(?:_\d+)?\.jsonl", path.name))]
+    if not stamps:
+        return ""
+    s = max(stamps)
+    return f"{s[0:4]}-{s[4:6]}-{s[6:8]}T{s[9:11]}:{s[11:13]}:{s[13:15]}+00:00"
+
+
+def _index_rows(drive_root: Any, *, task_id: str = "", surface: str = "", limit: Optional[int] = None,
+                hot_only: bool = False) -> List[Dict[str, Any]]:
     seen: Dict[str, int] = {}
     out: List[Dict[str, Any]] = []
     paths = [index_path(drive_root)] + ([] if hot_only else [*reversed(_index_segments(drive_root))])
@@ -448,9 +477,28 @@ def recent_records(drive_root: Any, task_id: str = "", limit: int = 20, *, hot_o
             out.append(row)
         elif int(row.get("revision") or 0) > int(out[prior].get("revision") or 0):
             out[prior] = row  # a revision row appended out of order still wins by number
-        if len(out) >= wanted:
+        if limit is not None and len(out) >= limit:
             break
-    return out[:wanted]
+    return out
+
+
+def recent_records(drive_root: Any, task_id: str = "", limit: int = 20, *, hot_only: bool = False,
+                   surface: str = "") -> List[Dict[str, Any]]:
+    """Newest-first index rows (junction for context assembly): the hot index, then
+    archived segments newest-first, one row per record at its highest revision.
+    ``task_id`` matches the record's task OR root task; empty matches all; ``surface``
+    keeps one surface's records. ``hot_only`` reads the bounded hot index alone
+    (``INDEX_MAX_BYTES``) and never opens an archived segment: the read a per-task
+    context capture can afford."""
+    wanted = max(1, int(limit))
+    return _index_rows(drive_root, task_id=task_id, surface=surface, limit=wanted, hot_only=hot_only)[:wanted]
+
+
+def surface_records(drive_root: Any, surface: str) -> List[Dict[str, Any]]:
+    """Every index row of one surface, newest first, one per record at its highest revision: the whole index
+    (hot and archived) in ONE read. A reader that answers many lookups memoizes the result under
+    ``index_stamp`` instead of reading the index once per lookup."""
+    return _index_rows(drive_root, surface=str(surface or ""))
 
 
 def latest_preflight_record(drive_root: Any, *, repo_key: str = "") -> Optional[Dict[str, Any]]:
@@ -571,25 +619,53 @@ def seat_parts(slot: Any, *, coupling_only: bool = False) -> tuple:
     return PARTS if retrieves else (PART_CHANGE,)
 
 
+def answer_keys(parts: Iterable[str]) -> tuple:
+    """The answer block a seat carries: a single-question seat (result, skill) its one
+    question alone, every other seat both change-wave questions (one it was not asked
+    stays ``not_asked``)."""
+    asked = tuple(parts)
+    for part in SINGLE_QUESTION_PARTS:
+        if part in asked:
+            return (part,)
+    return PARTS
+
+
+def single_question_part(rows: Iterable[Dict[str, Any]]) -> str:
+    """The one question a single-question wave asks (``result`` / ``skill``), "" for a change wave."""
+    for part in SINGLE_QUESTION_PARTS:
+        if any(part in (seat.get("parts") or []) for seat in rows):
+            return part
+    return ""
+
+
 def _answered(seat: Dict[str, Any]) -> bool:
     return str(seat.get("status") or "") in ANSWERED_STATUSES
 
 
-def counted_pending(rows: List[Dict[str, Any]], *, pending: bool = False) -> bool:
-    """Physical adviser custody survives, but never keeps the counted wave open."""
-    opened = [row for row in rows if row.get("late_result_pending") or row.get("status") == "pending"
-              or row.get("operation_state") in {"in_flight", "custody_lost", "pending_dispatch"}]
+def counted_pending(rows: List[Dict[str, Any]], *, pending: bool = False, lost_is_terminal: bool = False) -> bool:
+    """Physical adviser custody survives, but never keeps the counted wave open. ``lost_is_terminal`` (a
+    ``review_change`` wave, which no gate holds): a seat whose custody is lost is a failed seat of a settled
+    record (outcome unknown, never re-sent), never open."""
+    opened = [row for row in rows if not (lost_is_terminal and row.get("operation_state") == "custody_lost") and (
+              row.get("late_result_pending") or row.get("status") == "pending"
+              or row.get("operation_state") in {"in_flight", "custody_lost", "pending_dispatch"})]
     return any(not (row.get("additional") or (row.get("review_plan") or {}).get("additional"))
                for row in opened) if opened else pending
 
 
-def panel_not_reached(rows: List[Dict[str, Any]]) -> List[Dict[str, str]]:
-    """Terminal absences with an observed cause; seats still awaiting are not failures."""
+def panel_not_reached(rows: List[Dict[str, Any]], *, lost_is_terminal: bool = False) -> List[Dict[str, str]]:
+    """Terminal absences with an observed cause; seats still awaiting are not failures (``lost_is_terminal``, as in
+    ``counted_pending``: a ``review_change`` wave's lost seat is such an absence, never awaiting)."""
+    def awaiting(row: Dict[str, Any]) -> bool:
+        if lost_is_terminal and row.get("operation_state") == "custody_lost":
+            return False
+        return bool(row.get("late_result_pending")) or row.get("operation_state") in {"in_flight", "custody_lost", "pending_dispatch"}
+
     return [{"seat_id": str(row.get("seat_id") or row.get("slot_id") or ""),
              "cause": str(row.get("failure_code") or row.get("error") or row.get("reported_cause") or (row.get("intention") or {}).get("error")
                           or row.get("operation_state") or row.get("status") or "unknown")}
             for row in rows if row.get("status") not in {*ANSWERED_STATUSES, "answered", "unparseable", "pending", "in_flight", "pending_dispatch"}
-            and not row.get("late_result_pending") and row.get("operation_state") not in {"in_flight", "custody_lost", "pending_dispatch"}]
+            and not awaiting(row)]
 
 
 def _answer(seat: Dict[str, Any], part: str) -> Dict[str, Any]:
@@ -651,6 +727,11 @@ def reduce_verdict(rows: List[Dict[str, Any]], *, gate_blocked: bool = False, ga
     PASS when both parts PASS and the gate did not block for another reason (a blocked
     gate never reads PASS). ``reason`` names the branch that decided."""
     per_row = {str(seat.get("seat_id") or ""): row_verdict(seat) for seat in rows}
+    single = single_question_part(rows)
+    if single:
+        return _reduce_single_question_wave(rows, per_row, single, gate_blocked=gate_blocked, gate_reason=gate_reason,
+                                            dispatch_refusal=dispatch_refusal, pending=pending,
+                                            quorum_required=quorum_required)
     assigned_of = {part: sum(1 for s in rows if part in (s.get("parts") or [])) for part in PARTS}
     parts = {PART_CHANGE: {"required": _quorum_for(assigned_of[PART_CHANGE]), "assigned": assigned_of[PART_CHANGE],
                            "responded": sum(1 for s in rows if _part_verdict(s, PART_CHANGE))},
@@ -680,6 +761,62 @@ def reduce_verdict(rows: List[Dict[str, Any]], *, gate_blocked: bool = False, ga
     return {"aggregate": aggregate, "quorum": quorum, "per_row": per_row, "per_question": per_question, "reason": reason}
 
 
+def _reduce_single_question_wave(rows: List[Dict[str, Any]], per_row: Dict[str, str], part: str, *,
+                                 gate_blocked: bool, gate_reason: str, dispatch_refusal: Optional[Dict[str, Any]],
+                                 pending: bool, quorum_required: Optional[int]) -> Dict[str, Any]:
+    """A single-question wave (a result, a skill) in the same order as a change wave, with
+    its one question in place of the two: NOT_DISPATCHED → pending → QUORUM_FAILED → FAIL →
+    PASS. No coupling question is asked, so none can leave the wave unperformed."""
+    assigned = sum(1 for seat in rows if part in (seat.get("parts") or []))
+    required_part = _quorum_for(assigned)
+    parts = {part: {"required": required_part, "assigned": assigned,
+                    "responded": sum(1 for seat in rows if _part_verdict(seat, part))}}
+    per_question = {part: question_verdict(rows, part, required=required_part)}
+    responded = sum(1 for seat in rows if _answered(seat))
+    required = int(quorum_required) if quorum_required is not None else _quorum_for(len(rows))
+    quorum = {"required": required, "responded": responded, "assigned": len(rows), "parts": parts}
+    if dispatch_refusal is not None or not rows or all(v == VERDICT_NOT_DISPATCHED for v in per_row.values()):
+        aggregate, reason = VERDICT_NOT_DISPATCHED, "dispatch_refusal" if dispatch_refusal is not None else "nothing_dispatched"
+    elif pending:
+        aggregate, reason = VERDICT_NOT_PERFORMED, "review_late_result_pending"
+    elif responded < max(1, required):
+        aggregate, reason = VERDICT_QUORUM_FAILED, "review_quorum"
+    elif per_question[part] == VERDICT_FAIL:
+        aggregate, reason = VERDICT_FAIL, "critical_findings"
+    elif gate_blocked:
+        aggregate, reason = VERDICT_NOT_PERFORMED, f"gate_block:{gate_reason}" if gate_reason else "gate_block"
+    elif per_question[part] == VERDICT_PASS:
+        aggregate, reason = VERDICT_PASS, "pass"
+    else:
+        aggregate, reason = VERDICT_NOT_PERFORMED, f"{part}_unanswered"
+    return {"aggregate": aggregate, "quorum": quorum, "per_row": per_row, "per_question": per_question, "reason": reason}
+
+
+def apply_severity_policy(answer: Dict[str, Any], policy: Any) -> Dict[str, Any]:
+    """One answered part under a declared per-item severity policy (``brief.checklist.severity_policy``:
+    item → ``critical`` | ``advisory`` | ``seat``; the ``*`` key is the rule for an item the policy does
+    not name, else ``seat``): each finding's severity follows its item (``seat`` keeps the reviewer's own;
+    a missing or unknown severity reads ``critical``), and the answer's verdict and critical count follow
+    the findings. The policy is context of the brief, applied before the verdict is read: a reviewer
+    never decides which item blocks. Without a policy or without findings the answer is returned as it is."""
+    if not policy or not isinstance(policy, dict) or not isinstance(answer, dict) or not answer.get("findings"):
+        return answer
+    findings = []
+    for item in answer.get("findings") or []:
+        if isinstance(item, dict):
+            rule = str(policy.get(str(item.get("item") or ""), policy.get("*", "seat")) or "seat")
+            given = str(item.get("severity") or "").strip().lower()
+            severity = rule if rule in ("critical", "advisory") else (
+                "advisory" if given in ("advisory", "warning", "warn") else "critical")
+            item = {**item, "severity": severity}
+        findings.append(item)
+    critical = sum(1 for item in findings if isinstance(item, dict) and item.get("severity") == "critical")
+    changed = {**answer, "findings": findings, "critical": critical}
+    if str(answer.get("status") or "") == ANSWER_RESPONDED:
+        changed["verdict"] = VERDICT_FAIL if critical else VERDICT_PASS
+    return changed
+
+
 # The gate's own words for a wave that reduced to NOT_PERFORMED, keyed by the
 # ``reason`` above; the commit gate's block message and ``review_status``'s
 # reason line say the same thing about the same code.
@@ -687,6 +824,8 @@ NOT_PERFORMED_PHRASES: Dict[str, str] = {
     "coupling_not_performed": "the coupling question (Part 2) was answered by no seat",
     "change_unanswered": "no seat answered the change (Part 1) with a PASS/FAIL verdict",
     "review_late_result_pending": "physical review operation(s) remain unresolved",
+    "result_unanswered": "no seat answered the result question with a PASS/FAIL verdict",
+    "skill_unanswered": "no seat answered the skill question with a PASS/FAIL verdict",
 }
 
 
@@ -698,20 +837,21 @@ def _seat_from_plan(seat_id: str, parts: Iterable[str], plan: Dict[str, Any]) ->
                  "processing_preference": str(plan.get("processing_preference") or ""),
                  "subagent_id": str(plan.get("subagent_id") or "")}
     effective = {k: requested[k] for k in ("route", "model", "effort", "profile", "delivery")}
-    parts = [part for part in PARTS if part in tuple(parts)]
+    parts = [part for part in ALL_PARTS if part in tuple(parts)]
     return {"seat_id": seat_id, "subagent_id": requested["subagent_id"], "parts": parts,
             "additional": bool(plan.get("additional")),
             "requested": requested, "effective": {**effective, "verdict_method": "", "source": "requested"},
             "observed_model": UNKNOWN, "status": "not_dispatched", "operation_state": "not_dispatched",
             "answers": {part: _blank_answer(part, ANSWER_NOT_ASKED if part not in parts else "not_dispatched")
-                        for part in PARTS},
+                        for part in answer_keys(parts)},
             "parts_answered": [], "coverage": "not_asked", "capability_delta": [], "usd": None,
             "critical_count": 0, "raw_text": "", "brief_sha": str(plan.get("brief_sha") or ""), "source_refs": []}
 
 
 def _blank_answer(part: str, status: str) -> Dict[str, Any]:
     return {"status": status, "verdict": "", "findings": [], "critical": 0,
-            "coverage": "n/a" if part == PART_CHANGE else COVERAGE_NOT_ASKED if status == ANSWER_NOT_ASKED else COVERAGE_MISSING}
+            "coverage": ("n/a" if part != PART_COUPLING
+                         else COVERAGE_NOT_ASKED if status == ANSWER_NOT_ASKED else COVERAGE_MISSING)}
 
 
 def _legacy_change_answer(raw: Dict[str, Any], answered: bool, status: str) -> Dict[str, Any]:
@@ -734,7 +874,7 @@ def _apply_raw(seat: Dict[str, Any], raw: Dict[str, Any]) -> None:
     status = str(raw.get("status") or "") or seat["status"]
     answered = status in ANSWERED_STATUSES
     answers = raw.get("answers") if isinstance(raw.get("answers"), dict) else {}
-    for part in PARTS:
+    for part in answer_keys(seat["parts"]):
         if part not in seat["parts"]:
             continue
         given = answers.get(part)
@@ -751,6 +891,14 @@ def _apply_raw(seat: Dict[str, Any], raw: Dict[str, Any]) -> None:
                 critical_count=sum(int(seat["answers"][p].get("critical") or 0) for p in seat["parts"]),
                 operation_state=str(raw.get("operation_state") or ("settled" if answered else status)))
     seat.update({key: raw[key] for key in TYPED_FAILURE_FACT_KEYS if key in raw})
+    if not answered and not seat_open(seat) and not seat.get("reported_cause"):
+        # The row outlives the raw answer and the side files: a failed seat keeps its producer's own
+        # words here (no code or sentence is invented for a seat whose producer said nothing).
+        from ouroboros.review_records import review_failure_facts
+
+        cause = review_failure_facts({**raw, "status": status, "failure_code": "x"})["reported_cause"]
+        if cause:
+            seat["reported_cause"] = cause
     coverage = raw.get("coverage")
     if isinstance(coverage, dict):
         seat["coverage"] = str(coverage.get("status") or coverage.get("state") or "unobserved")
@@ -964,7 +1112,7 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
     if drive_root is not None:
         _retain_wave_sources(drive_root, task_id, record_id, rows, structured)
     refusal = facts.get("dispatch_refusal")
-    pending = counted_pending(rows, pending=bool(facts.get("pending")))
+    pending = counted_pending(rows, pending=bool(facts.get("pending")), lost_is_terminal=bool(facts.get("lost_seat_terminal")))
     assigned_rows = [seat for seat in rows if not seat.get("additional")]
     verdict = reduce_verdict(assigned_rows, gate_blocked=bool(facts.get("blocked")),
                              gate_reason=str(facts.get("block_reason") or ""), dispatch_refusal=refusal, pending=pending)
@@ -1008,14 +1156,15 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
         root_task_id=str(facts.get("root_task_id") or ""), review_wave_id=str(facts.get("review_wave_id") or ""),
         surface=surface, subject=subject,
         brief={"goal": str(facts.get("goal") or ""), "scope": str(facts.get("scope") or ""),
-               "parts": [part for part in PARTS if any(part in (seat.get("parts") or []) for seat in rows)],
+               "parts": [part for part in ALL_PARTS if any(part in (seat.get("parts") or []) for seat in rows)],
                "author_questions": list(facts.get("author_questions") or []), "checklist": checklist,
                "dispute_input": dispute_input},
         enforcement=enforcement, mode=str(facts.get("mode") or ""),
         enforcement_blocks=bool(facts.get("enforcement_blocks")),
         panel={**panel_facts(rows, composition=str(facts.get("composition") or "full_pool"),
                           reason=str(facts.get("composition_reason") or ""), chosen_by=str(facts.get("chosen_by") or "owner")),
-               **dict(facts.get("panel") or {}), "not_reached": panel_not_reached(rows)},
+               **dict(facts.get("panel") or {}),
+               "not_reached": panel_not_reached(rows, lost_is_terminal=bool(facts.get("lost_seat_terminal")))},
         rows=rows, verdict=verdict,
         tests=dict(facts.get("tests") or {"policy": "NOT_RUN", "result": UNKNOWN}),
         preflight=dict(facts.get("preflight") or {"status": "not_performed", "record_id": ""}),
@@ -1067,6 +1216,101 @@ def settle_pending_payload(prior: Dict[str, Any], fresh: Dict[str, Any]) -> Dict
     settled["rows"] = rows
     settled["panel"] = {**settled.get("panel", {}), "not_reached": panel_not_reached(rows)}
     return settled
+
+
+def seat_findings(triad_raw: Iterable[Dict[str, Any]],
+                  additional: set) -> tuple:
+    """(critical, advisory, additional) FAIL items, each attributed to its seat
+    and the PART it answered (``answers`` by part; a record without ``answers``
+    is a packet seat whose ``parsed_items`` are the change's)."""
+    critical, advisory, extra = [], [], []
+
+    def _severity(item: Dict[str, Any]) -> str:
+        return "critical" if str(item.get("severity") or "").lower() == "critical" else "advisory"
+
+    for raw in triad_raw:
+        seat = str(raw.get("slot_id") or "")
+        answers = raw.get("answers") if isinstance(raw.get("answers"), dict) else None
+        if answers:
+            items = [(part, item) for part in ALL_PARTS for item in (answers.get(part) or {}).get("findings") or []
+                     if isinstance(item, dict)]
+        else:
+            items = [(PART_CHANGE, item) for item in raw.get("parsed_items") or []
+                     if isinstance(item, dict) and str(item.get("verdict") or "FAIL").upper() == "FAIL"]
+        for part, item in items:
+            severity = _severity(item)
+            finding = {**item, "seat_id": seat, "part": part, "severity": severity}
+            (extra if seat in additional else critical if severity == "critical" else advisory).append(finding)
+    return critical, advisory, extra
+
+
+_OPEN_SEAT_STATES = frozenset({"in_flight", "pending_dispatch"})
+
+
+def seat_open(seat: Dict[str, Any]) -> bool:
+    """A seat whose answer may still arrive: a live controller holds it in flight or has not
+    dispatched it yet. ``custody_lost`` is terminal ("outcome unknown, never re-sent"), so it
+    never keeps a record pending."""
+    return str(seat.get("status") or "") == "pending" or str(seat.get("operation_state") or "") in _OPEN_SEAT_STATES
+
+
+def settle_from_collected(drive_root: Any, record_id: str, raws: Iterable[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Settle a pending record from its seats' collected answers when its author no longer waits
+    for it (``review_pause``: a left or unwaited wave, collected at $0 from its recorded
+    assignments). ``raws`` are parsed seat rows (``triad_review.parse_seat_answers`` →
+    ``ReviewActorRecord.to_dict``) keyed by ``slot_id``; only seats the record still holds open
+    take an answer, the dispatch provenance stays, their FAIL items (``seat_findings``) join
+    the ones already recorded, and the verdict is reduced over the assigned seats. A seat still in flight keeps the record pending. ``None`` when no
+    such record exists; a settled record is returned as it is."""
+    try:
+        prior = load_record(drive_root, record_id)
+    except ValueError:
+        return None
+    if prior is None or prior.get("state") != STATE_PENDING:
+        return prior
+    by_slot = {str(raw.get("slot_id") or ""): raw for raw in raws if isinstance(raw, dict)}
+    task_id = str(prior.get("task_id") or "")
+    # The record's own severity policy (a skill wave's checklist rule) decides a late answer's
+    # critical findings exactly as it decided the dispatching attempt's.
+    policy = ((prior.get("brief") or {}).get("checklist") or {}).get("severity_policy")
+    rows, applied = [], []
+    for row in prior.get("rows") or []:
+        seat = json.loads(json.dumps(row, default=str))
+        raw = by_slot.get(str(seat.get("seat_id") or ""))
+        if raw is not None and seat_open(seat):
+            if isinstance(policy, dict) and isinstance(raw.get("answers"), dict):
+                raw = {**raw, "answers": {part: apply_severity_policy(answer, policy)
+                                          for part, answer in raw["answers"].items()}}
+            _apply_raw(seat, raw)
+            applied.append(raw)
+            if seat.get("raw_text"):
+                seat.setdefault("source_refs", []).append(retain_text_source(
+                    drive_root, task_id, record_id=record_id, seat_id=str(seat["seat_id"]), role="response",
+                    part=",".join(seat.get("parts") or []), text=seat["raw_text"]))
+        seat.pop("raw_text", None)
+        rows.append(seat)
+    still_open = any(seat_open(seat) for seat in rows)
+    verdict = reduce_verdict([seat for seat in rows if not seat.get("additional")],
+                             dispatch_refusal=prior.get("dispatch_refusal"), pending=still_open)
+    verdict["per_row"].update({str(seat.get("seat_id") or ""): row_verdict(seat) for seat in rows if seat.get("additional")})
+    before = dict(prior.get("verdict") or {})
+    found = dict(zip(HEAVY_VERDICT_FIELDS, seat_findings(
+        applied, {str(seat.get("seat_id") or "") for seat in rows if seat.get("additional")})))
+    verdict.update({key: [*(before.get(key) or []), *found[key]] for key in HEAVY_VERDICT_FIELDS},
+                   degraded_reasons=list(before.get("degraded_reasons") or []))
+    known = [float(seat["usd"]) for seat in rows if isinstance(seat.get("usd"), (int, float))]
+    settled = {"rows": rows, "verdict": verdict, "state": STATE_PENDING if still_open else STATE_SETTLED,
+               "cost": {"usd": round(sum(known), 6), "unknown": len(known) < len(rows)}}
+
+    def _mutate(current: Dict[str, Any]) -> Dict[str, Any]:
+        # Another settlement (the author's own re-issue) may have landed meanwhile: it wins. A settled record
+        # can await nothing, so its lost seats join the seats never reached, with their cause.
+        if current.get("state") != STATE_PENDING:
+            return current
+        return {**current, **settled, "panel": {**dict(current.get("panel") or {}),
+                                                "not_reached": panel_not_reached(rows, lost_is_terminal=not still_open)}}
+
+    return revise_record(drive_root, record_id, _mutate)
 
 
 def mark_provenance_unknown(record: ReviewLedgerRecord) -> ReviewLedgerRecord:
@@ -1151,10 +1395,14 @@ def coupling_outcome(verdict: dict, rows: list) -> CouplingOutcome:
 
 
 __all__ = [
-    "REVIEW_LEDGER_SCHEMA_VERSION", "ReviewLedgerRecord", "build_commit_gate_record", "build_rows", "build_wave_record",
+    "ALL_PARTS", "PART_RESULT", "PART_SKILL", "REVIEW_LEDGER_SCHEMA_VERSION", "SINGLE_QUESTION_PARTS", "ReviewLedgerRecord",
+    "answer_keys", "apply_severity_policy", "build_commit_gate_record",
+    "newest_rotation_ts", "index_stamp", "surface_records",
+    "build_rows", "build_wave_record",
     "distinct_model_facts", "find_reusable", "index_path", "index_row", "ledger_dir", "ledger_root", "load_record",
     "mark_provenance_unknown", "new_record_id", "normalize_model_name", "note_author_decision", "panel_facts", "read_source",
     "recent_records", "record_path", "record_sources_resolvable", "reduce_verdict", "retain_text_source", "reuse_key_digest",
-    "revise_record", "row_verdict", "rows_from_plan", "settle_pending_payload", "CouplingOutcome", "coupling_outcome",
-    "seat_parts", "source_ref_resolvable", "write_record",
+    "revise_record", "row_verdict", "rows_from_plan", "seat_findings", "seat_open", "settle_from_collected",
+    "settle_pending_payload", "single_question_part",
+    "CouplingOutcome", "coupling_outcome", "seat_parts", "source_ref_resolvable", "write_record",
 ]

@@ -194,8 +194,8 @@ def test_skill_review_classification_and_canned_verdict():
     """The skill-review branch classifies BEFORE every other marker branch (its
     pack can quote them), and the canned all-PASS verdict covers the tree's own
     checklist and aggregates to ``clean`` under the tree's own policy."""
-    from ouroboros.skill_review_prompt import _SKILL_REVIEW_ITEMS
-    from ouroboros.skill_review_status import aggregate_skill_review_status
+    from ouroboros.skill_review_status import status_from_findings
+    from ouroboros.tools.review_skill import SKILL_REVIEW_ITEMS
 
     body = {"messages": [{"role": "user", "content":
                           SKILL_REVIEW_MARKER + "\npack quoting: " + TRIAD_USER_MARKER
@@ -204,9 +204,9 @@ def test_skill_review_classification_and_canned_verdict():
     kind, message = scripted_completion(body, 1, lambda _b: None, "x")
     assert kind == "skill_review"
     items = json.loads(message["content"])
-    assert {row["item"] for row in items} == set(_SKILL_REVIEW_ITEMS)
+    assert {row["item"] for row in items} == set(SKILL_REVIEW_ITEMS)
     assert all(row["verdict"] == "PASS" and row["reason"].strip() for row in items)
-    assert aggregate_skill_review_status(items, "extension") == "clean"
+    assert status_from_findings(items, "extension") == "clean"
 
 
 # ===========================================================================

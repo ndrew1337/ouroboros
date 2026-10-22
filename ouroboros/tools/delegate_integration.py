@@ -188,7 +188,10 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
 
     Six ways a token is not replayable, each answered by name: no record, another
     task's, already bound, definitely refused (its id is retired — replaying wedges a
-    permanent 409), no canonical body, prompt disagrees. One author for all six.
+    permanent 409), no canonical body or prompt (a legacy_gap included), prompt
+    disagrees. One author for all six. Empty text asserts nothing, so the recorded
+    prompt is replayed (#1614); any other text, whitespace included, must be what the
+    original call was given.
     """
     record = custody.invocation_record(drive, retry_token)
     if record is None:
@@ -197,7 +200,8 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "drive. Start a new run with a plain "
                            "delegate_start(subagent_id=..., prompt=...).",
                            retry_of=retry_token)
-    if record["task_id"] != task_id:
+    # A legacy_gap proves neither its owner nor its body: it stays unrecorded below, never replayed.
+    if record["state"] != "legacy_gap" and record["task_id"] != task_id:
         return None, _fail("delegate_start", "invocation_not_owned",
                            "retry_of names another task's invocation. A delegated start "
                            "may only be retried by the task that requested it.",
@@ -213,8 +217,9 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "id is retired. Start a new run with a plain "
                            "delegate_start(subagent_id=..., prompt=...).",
                            retry_of=retry_token)
-    body = record["request"]
-    if not isinstance(body, dict) or not body:
+    body = record.get("request")
+    prompt = body.get("prompt") if isinstance(body, dict) else None
+    if not isinstance(prompt, str) or not prompt:
         return None, _fail("delegate_start", "invocation_request_unrecorded",
                            "That invocation's durable row carries no canonical request "
                            "body, so it cannot be replayed byte-identically. Its outcome "
@@ -222,11 +227,11 @@ def _validated_invocation(drive: Any, retry_token: str, task_id: str,
                            "the original invocation before starting a replacement.",
                            retry_of=retry_token)
     from ouroboros.delegate_continuation import retry_matches_caller_text
-    if str(body.get("prompt") or "") != text and not retry_matches_caller_text(record, text):
+    if text and prompt != text and not retry_matches_caller_text(record, text):
         return None, _fail("delegate_start", "retry_prompt_mismatch",
                            "retry_of replays the RECORDED invocation, but the prompt "
-                           "you passed differs from the one it sent. Pass the original "
-                           "prompt to retry, or drop retry_of to start a new run.",
+                           "you passed differs from the one it sent. Omit prompt (or pass "
+                           "'') to replay it, or drop retry_of to start a new run.",
                            retry_of=retry_token)
     return record, None
 
@@ -250,19 +255,26 @@ class _RetryBinding(NamedTuple):
     resource_ref: Dict[str, Any]
     processing: Dict[str, Any]
     execution_binding_fingerprint: str
+    max_seconds_basis: str
+    continuation: Any   # delegate_continuation.ContinuationStart: the recorded lineage
+    prompt_cache_ttl: Dict[str, Any]
 
 
-def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token: str,
-                              text: str) -> Tuple[Optional[_RetryBinding], Optional[ToolResult]]:
+def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token: str, text: str, *,
+                              max_seconds: Any = None, geometry: Tuple[Any, Any] = (None, None),
+                              ) -> Tuple[Optional[_RetryBinding], Optional[ToolResult]]:
     """Rebuild a retried start from its stored invocation, or refuse it typed.
 
     The stored invocation is the SINGLE SOURCE of EVERY retry fact (route, shape,
-    root, project, key), validated BEFORE any daemon call so a refused token
-    registers nothing. A MUTATING replay additionally re-proves its C1 binding:
-    the row must carry the snapshot/baseline binding (pre-C1 rows refused), the
-    task's PRESENT workspace must still resolve to the recorded authority
-    target, and the recorded snapshot must still exist on disk.
+    root, project, key, cap and its basis, continuation lineage), validated BEFORE
+    any daemon call so a refused token registers nothing. A MUTATING replay
+    additionally re-proves its C1 binding: the row must carry the snapshot/baseline
+    binding (pre-C1 rows refused), the task's PRESENT workspace must still resolve
+    to the recorded authority target, and the recorded snapshot must still exist on
+    disk. Last, the call's own request arguments may not contradict the replay: new
+    geometry refuses, and an explicit ``max_seconds`` must equal the recorded cap.
     """
+    from ouroboros.delegate_continuation import replayed_custody
     from ouroboros.subagents import DelegatedRunShape, DelegationRoute
 
     record, refusal = _validated_invocation(
@@ -343,6 +355,18 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
                     "delegate_start(subagent_id=..., prompt=...) (it will take a "
                     "fresh snapshot).",
                     retry_of=retry_token, snapshot_id=snapshot_id)
+    if geometry != (None, None):
+        return None, _fail("delegate_start", "retry_selector_conflict",
+                           "A retry replays its recorded directory strategy and scope; omit new geometry arguments.")
+    seconds = int(request_body.get("maxSeconds") or 0)
+    try:  # read as bounded_max_seconds reads it: zero, negative or malformed means omitted
+        asked = max(0, int(max_seconds)) if max_seconds is not None else 0
+    except (TypeError, ValueError):
+        asked = 0
+    if asked and asked != seconds:
+        return None, _fail("delegate_start", "retry_selector_conflict",
+                           f"A retry replays its recorded max_seconds={seconds}; omit max_seconds to retry.",
+                           retry_of=retry_token, recorded_max_seconds=seconds)
     return _RetryBinding(
         request_body=request_body,
         route=route,
@@ -352,7 +376,7 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
         project_id=project_id,
         owned_project_id=(project_id if record.get("project_owned") else ""),
         project_persistent=_record_persistent(record),
-        seconds=int(request_body.get("maxSeconds") or 0),
+        seconds=seconds,
         snapshot_id=snapshot_id,
         target_root=target_root,
         baseline_sha=str(record.get("baseline_sha") or ""),
@@ -361,6 +385,11 @@ def _resolve_retry_invocation(ctx: ToolContext, drive: pathlib.Path, retry_token
                       if isinstance(record.get("resource_ref"), dict) else {}),
         processing=deepcopy(record.get("processing") if isinstance(record.get("processing"), dict) else {}),
         execution_binding_fingerprint=str(record.get("execution_binding_fingerprint") or ""),
+        # The replayed body is byte-identical, so its cap basis is the recorded one
+        # too, never re-derived from today's clocks.
+        max_seconds_basis=str(record.get("max_seconds_basis") or ""),
+        continuation=replayed_custody(record),
+        prompt_cache_ttl=deepcopy(record.get("prompt_cache_ttl") if isinstance(record.get("prompt_cache_ttl"), dict) else {}),
     ), None
 
 
@@ -410,6 +439,36 @@ def _provision_snapshot(ctx: ToolContext, drive: pathlib.Path, target_root: str,
     _record_baseline_manifest(drive, task_id, invocation_id, handle,
                               **({"start_folder": folder.as_posix()} if folder.parts else {}))
     return (replace(handle, path=str(pathlib.Path(handle.path) / folder)) if folder.parts else handle), None
+
+
+_NESTED_REPOSITORIES_SHOWN = 20
+
+
+def _snapshot_facts(handle: Any) -> Dict[str, Any]:
+    """Disclosure on the start receipt: how big the private snapshot is, how long it
+    took to provision (#1241) and which nested Git repositories it left out, so an
+    empty snapshot says why. Facts only — nothing refuses or truncates on them."""
+    if handle is None:
+        return {}
+    if getattr(handle, "adopted_from", ""):  # a continuation's predecessor snapshot
+        facts: Dict[str, Any] = {"reused_from_run": handle.adopted_from}
+    else:
+        file_baseline = getattr(handle, "file_baseline", {}) or {}
+        facts = {"entries": int(getattr(handle, "entry_count", 0) or 0),
+                 "untracked_files": len(getattr(handle, "untracked_baseline", {}) or {}) + len(file_baseline),
+                 "file_input_bytes": sum(int(item.get("size", 0) or 0) for item in file_baseline.values()),
+                 "provisioning_sec": float(getattr(handle, "provisioning_sec", 0.0) or 0.0)}
+    nested = sorted(str(row.get("path") or "") for row in getattr(handle, "excluded_untracked", ()) or ()
+                    if isinstance(row, dict) and row.get("reason") == "nested_repository")
+    if nested:
+        facts["nested_repositories_excluded"] = nested[:_NESTED_REPOSITORIES_SHOWN]
+        if len(nested) > _NESTED_REPOSITORIES_SHOWN:
+            facts["nested_repositories_excluded_count"] = len(nested)
+        facts["nested_repositories_note"] = (
+            "Untracked Git repositories (paths relative to the snapshot's repository root) are not in this snapshot: "
+            "the run neither works in them nor captures changes there. A child whose workspace is one of them can."
+            + (" The full list is in this snapshot's baseline manifest." if len(nested) > _NESTED_REPOSITORIES_SHOWN else ""))
+    return facts
 
 
 def _record_baseline_manifest(drive: pathlib.Path, task_id: str, invocation_id: str,
@@ -574,10 +633,10 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
     retry point stays open), and a pre-R3 row over a failed manifest falls through to a fresh capture.
     """
     from ouroboros.delegate_directory import is_directory_run, capture_directory_result, directory_capture_block
-    from ouroboros.tools.subagent_integration_delegated import retain_investigation_evidence
+    from ouroboros.tools.subagent_integration_delegated import retain_run_evidence
 
     def finish(block, transport=None):
-        return retain_investigation_evidence(drive, entry, block, transport) if retain_investigation else block
+        return retain_run_evidence(drive, entry, block, transport) if retain_investigation else block
 
     if is_directory_run(entry):
         owned_gateway = None
@@ -643,14 +702,22 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             # The preflight-head shape pins the capture BASE to the snapshot's baseline
             # commit (never a moved HEAD), reusing the one existing capture primitive —
             # sensitive veto, binary handling, sha256 manifest and all.
+            from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME
             from ouroboros.subagent_worktrees import find_execution_snapshot
             snapshot = find_execution_snapshot(entry.snapshot_id) or {}
             # A Git-subdirectory investigation runs in a folder of its clone; the
-            # capture always diffs the whole registered clone.
+            # capture always diffs the whole registered clone. The run's untracked
+            # named evidence is retained beside the capture, never carried in it (#2070).
+            clone = pathlib.Path(str(snapshot.get("path") or exec_root))
+            try:
+                evidence = (exec_root.resolve().relative_to(clone.resolve()) / EVIDENCE_DIRNAME).as_posix()
+            except ValueError:
+                evidence = ""
             _, manifest = write_workspace_patch_artifacts(
-                pathlib.Path(str(snapshot.get("path") or exec_root)), cap_dir,
+                clone, cap_dir,
                 task={"metadata": {"workspace_preflight": {"git": {"head": entry.baseline_sha}},
-                                   "file_baseline": snapshot.get("file_baseline") or {}}},
+                                   "file_baseline": snapshot.get("file_baseline") or {},
+                                   "host_evidence": evidence}},
             )
     except Exception as exc:
         log.warning("Delegated run patch capture failed for %s", entry.run_id, exc_info=True)
@@ -808,12 +875,12 @@ def _payload_selector_refusal(selector_root: str, retry_of: Any, bucket: Any,
 def payload_host_instructions(text: str, skill_name: str) -> str:
     """The payload-run variant of the host instructions (gate fix 3).
 
-    The generic text bans touching the host's "skills" — for a payload run that
+    The generic text bans modifying the host's skills — for a payload run that
     blanket ban would contradict the assignment itself, so it is narrowed and an
     explicit, truthful permission block is appended.
     """
     adjusted = text.replace(
-        "do not touch the host's runtime controls, skills, or memory",
+        "do not touch the host's runtime controls or memory, or modify its skills",
         "do not touch the host's runtime controls or memory")
     return adjusted + (
         "\nPAYLOAD ASSIGNMENT: this working tree is a PRIVATE standalone copy of "

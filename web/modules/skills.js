@@ -4,7 +4,7 @@
 // default and never waits for a source or GitHub: it reads the local listing and
 // the serialized lifecycle queue, and every owner action keeps its own words,
 // confirmation and refusal. Browse and Sources live in their own modules.
-import { bindTabStrip, renderPageHeader, renderTabStrip } from './page_header.js';
+import { bindPageHeader, bindTabStrip, renderPageHeader, renderTabStrip } from './page_header.js';
 import { bindMenu } from './ui_interactions.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { showToast } from './toast.js';
@@ -102,6 +102,7 @@ export function mergeLifecycleEvents(skills, events) {
             if (existing) {
                 existing.lifecycle_status = event.status;
                 existing.lifecycle_kind = event.kind || existing.lifecycle_kind || '';
+                existing.lifecycle_message = event.message || '';
                 existing.lifecycle_pending = event.status !== 'failed';
                 if (event.status === 'failed' && event.error) existing.lifecycle_error = event.error;
             }
@@ -255,7 +256,7 @@ export function buildHealPrompt(skill) {
 async function postWithFeedback(url, body) {
     const resp = await apiFetch(url, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Prefer: 'respond-async' },
         body: JSON.stringify(body || {}),
     });
     const payload = await resp.json().catch(() => ({}));
@@ -368,6 +369,7 @@ export function initSkills(ctx = {}) {
         if (!snapshot?.rawSkills || destroyed) return;
         const skills = projected();
         const cards = new Map(Array.from(container.querySelectorAll(':scope > .skills-card')).map((card) => [card.dataset.skill, card]));
+        let replacementFocus = null;
         if (replace) {
             closeMenus();
             container.innerHTML = skills.map((skill) => renderInstalledSkillCard(skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions())).join('');
@@ -375,8 +377,22 @@ export function initSkills(ctx = {}) {
             for (const skill of [...skills].reverse()) {
                 const card = cards.get(skill.name);
                 if (card) {
-                    patchInstalledSkillEnrichment(card, skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions(),
-                        activeMenu?.card === card ? activeMenu.popover : card);
+                    // A queue placeholder has no controls to enrich. Replace only this
+                    // structural transition; real cards retain drafts and disclosures.
+                    if (card.hasAttribute('data-lifecycle-virtual') !== Boolean(skill.lifecycle_virtual)) {
+                        const ownsMenu = activeMenu?.card === card;
+                        const focused = card.contains(document.activeElement)
+                            || (ownsMenu && activeMenu.popover.contains(document.activeElement));
+                        if (ownsMenu) closeMenus();
+                        const template = document.createElement('template');
+                        template.innerHTML = renderInstalledSkillCard(skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions());
+                        const fresh = template.content.firstElementChild;
+                        card.replaceWith(fresh);
+                        if (focused) replacementFocus = fresh;
+                    } else {
+                        patchInstalledSkillEnrichment(card, skill, reviewingSkills, repairingSkills, snapshot.live, cardOptions(),
+                            activeMenu?.card === card ? activeMenu.popover : card);
+                    }
                     cards.delete(skill.name);
                 } else {
                     const template = document.createElement('template');
@@ -392,6 +408,9 @@ export function initSkills(ctx = {}) {
         emptyEl.hidden = skills.length > 0;
         paintChrome();
         applyInstalledFilter();
+        if (replacementFocus && !replacementFocus.hidden) {
+            replacementFocus.querySelector('.skills-card-name')?.focus({ preventScroll: true });
+        }
         browse?.repaintStates();
         schedulePoll();
     }
@@ -495,7 +514,7 @@ export function initSkills(ctx = {}) {
         return skill;
     }
 
-    async function requestMissingKeyGrants(name, items, expectedContentHash = '') {
+    async function requestMissingKeyGrants(name, items, expectedContentHash = '', enableAfterGrant = false) {
         const cleanItems = (items || []).map((k) => String(k || '').trim()).filter(Boolean);
         if (!cleanItems.length) return null;
         const revision = expectedContentHash || (await currentSkill(name)).content_hash;
@@ -507,30 +526,48 @@ export function initSkills(ctx = {}) {
         });
         if (!ok) throw Object.assign(new Error('Skill grant cancelled.'), { cancelled: true });
         // The desktop shell asks once more in a native dialog it owns.
-        const bridge = window.pywebview?.api?.request_skill_key_grant;
-        const result = bridge ? await bridge(name, cleanItems) : await apiClient.skillGrants(name, cleanItems, revision);
+        const nativeApi = window.pywebview?.api;
+        // A named bridge capability opts in; older UI calling the old method still gets a terminal result.
+        const result = nativeApi?.request_skill_key_grant_with_job
+            ? await nativeApi.request_skill_key_grant_with_job(name, cleanItems, enableAfterGrant)
+            : nativeApi?.request_skill_key_grant
+                ? await nativeApi.request_skill_key_grant(name, cleanItems)
+                : await apiClient.skillGrants(name, cleanItems, revision, enableAfterGrant);
         if (!result?.ok) throw new Error(result?.error || 'Skill grant was cancelled.');
         return result;
     }
 
+    // A slow owner action answers its running job: the toast is the job's own message, the card follows the queue.
+    function stillWorking(name, result) {
+        if (!result?.pending) return false;
+        showToast(`${name}: ${result.message || 'still working…'} It finishes in the background; you can leave this page.`, 'muted');
+        readInstalled({ quiet: true });
+        return true;
+    }
+
+    const missingGrantItems = (grants) => [...(grants.missing_keys || grants.requested_keys || []), ...(grants.missing_permissions || grants.requested_permissions || [])];
+
     async function toggleSkillEnabled(name, wantsEnabled) {
         const result = await postWithFeedback(`/api/skills/${encodeURIComponent(name)}/toggle`, { enabled: wantsEnabled });
-        showToast(`${name} ${wantsEnabled ? 'is on' : 'is off'}${result.extension_action === 'extension_load_error' ? ' — it couldn’t start' : ''}`,
-            result.extension_action === 'extension_load_error' ? 'warn' : 'ok');
+        if (stillWorking(name, result)) return result;
+        const failed = result.extension_action === 'extension_load_error';
+        showToast(`${name} ${wantsEnabled ? 'is on' : 'is off'}${failed ? ' — it couldn’t start' : ''}`, failed ? 'warn' : 'ok');
         emitSkillLifecycle(wantsEnabled ? 'enable' : 'disable', name, result);
         return result;
     }
 
+    // The server's typed refusal says why a skill cannot turn on; nothing is pre-judged here.
     async function turnOn(name) {
         const skill = await currentSkill(name);
-        if ((skill.review_status === 'blockers' && !reviewReady(skill)) || (skill.load_error && grantReady(skill))) {
-            throw new Error('Ask Ouroboros to fix it before turning it on.');
-        }
-        if (!reviewReady(skill)) throw new Error('It turns on after a review passes. Review it, or skip the review.');
         if (!grantReady(skill)) {
-            const grants = skill.grants || {};
-            await requestMissingKeyGrants(name, [...(grants.missing_keys || grants.requested_keys || []),
-                ...(grants.missing_permissions || grants.requested_permissions || [])], skill.content_hash);
+            const granted = await requestMissingKeyGrants(name, missingGrantItems(skill.grants || {}), skill.content_hash, true);
+            if (stillWorking(name, granted)) return granted;  // its single job also owns the requested Enable
+            if (granted?.setup_error) throw new Error(`Access granted, but ${granted.setup_error}`);
+            if (granted?.enabled === true) {
+                showToast(`${name} is on`, 'ok');
+                emitSkillLifecycle('enable', name, granted);
+                return granted;
+            }
         }
         return toggleSkillEnabled(name, true);
     }
@@ -565,6 +602,7 @@ export function initSkills(ctx = {}) {
         if (ok !== true) return false;
         // Skip review skips only the model review: the deterministic file check still runs server-side.
         const result = await postWithFeedback(`/api/owner/skills/${encodeURIComponent(name)}/attest-review`, { expected_content_hash: skill.content_hash });
+        if (stillWorking(name, result)) return true;
         showToast(`${name}: ${blocked ? 'turned on anyway' : 'review skipped'}. Your choice is recorded.`, 'warn');
         emitSkillLifecycle('attest_review', name, result);
         return true;
@@ -654,6 +692,7 @@ export function initSkills(ctx = {}) {
         });
         if (!ok) return false;
         const result = await apiClient.deleteSkill(name, payloadRoot || skill.payload_root, skill.content_hash);
+        if (stillWorking(name, result)) return true;
         showToast(result.ok ? `${name} deleted` : `${name}: delete failed — ${result.error}`, result.ok ? 'ok' : 'danger');
         if (result.ok) emitSkillLifecycle('delete', name, result);
         return true;
@@ -751,13 +790,12 @@ export function initSkills(ctx = {}) {
         if (action === 'turn_on') return turnOn(name);
         if (action === 'grant') {
             const skill = await currentSkill(name);
-            const grants = skill.grants || {};
             const keys = String(options.keys || '').split(',').map((k) => k.trim()).filter(Boolean);
-            const missing = keys.length ? keys : [...(grants.missing_keys || grants.requested_keys || []), ...(grants.missing_permissions || grants.requested_permissions || [])];
-            const result = await requestMissingKeyGrants(name, missing, skill.content_hash);
-            if (result) {
+            const result = await requestMissingKeyGrants(name, keys.length ? keys : missingGrantItems(skill.grants || {}), skill.content_hash);
+            if (result && !stillWorking(name, result)) {
                 const loaded = result.extension_action === 'extension_loaded';
-                showToast(`${name}: access granted${loaded ? ' and it started' : ''}${result.load_error ? `, but it couldn’t start: ${result.load_error}` : ''}`, result.load_error ? 'warn' : 'ok');
+                const problem = result.setup_error || result.load_error;
+                showToast(`${name}: access granted${loaded ? ' and it started' : ''}${problem ? `, but it couldn’t start: ${problem}` : ''}`, problem ? 'warn' : 'ok');
                 emitSkillLifecycle('grant', name, result);
             }
             return true;
@@ -799,14 +837,6 @@ export function initSkills(ctx = {}) {
         if (goto) { selectTab(goto.dataset.skillsGoto); return; }
         const chip = event.target.closest('[data-installed-filter]');
         if (chip) { filter = chip.dataset.installedFilter; paintFilters(snapshot?.rawSkills ? projected() : null); applyInstalledFilter(); return; }
-        const resetRuntime = event.target.closest('[data-presence-runtime-reset]');
-        if (resetRuntime) {
-            const form = resetRuntime.closest('[data-presence-runtime-form]');
-            resetRuntime.disabled = true;
-            try { await savePresenceRuntime(form, true); } catch (err) { showToast(`${form?.dataset?.skillName || 'Skill'}: ${err.message || err}`, 'danger'); }
-            finally { resetRuntime.disabled = false; readInstalled({ quiet: true }); }
-            return;
-        }
         const menuTrigger = event.target.closest('[data-skill-menu-trigger]');
         if (menuTrigger) { openSkillMenu(menuTrigger); return; }
         const actionTarget = event.target.closest('[data-skill-action]');
@@ -829,26 +859,6 @@ export function initSkills(ctx = {}) {
             if (refresh) await readInstalled({ quiet: true });
         }
     };
-
-    async function savePresenceRuntime(form, reset = false) {
-        const name = String(form?.dataset?.skillName || '');
-        const expected = String(form?.dataset?.stateFingerprint || '');
-        if (!name || !expected) throw new Error('Presence runtime state is unavailable. Refresh and retry.');
-        const modelValue = reset ? '' : String(form.elements.model_slot?.value || '').trim();
-        const roundsValue = reset ? '' : String(form.elements.inline_max_rounds?.value || '').trim();
-        const rounds = roundsValue === '' ? null : Number(roundsValue);
-        if (rounds !== null && (!Number.isInteger(rounds) || rounds < 1)) throw new Error('Inline rounds must be a positive whole number.');
-        const result = await apiClient.savePresenceRuntime(name, {
-            expected_state_fingerprint: expected,
-            runtime_overrides: { model_slot: modelValue || null, inline_max_rounds: rounds },
-            ...(!reset ? { workspace_root: String(form.elements.workspace_root?.value || '').trim() } : {}),
-        });
-        // Cards are patched in place, so the open form takes the saved state's fingerprint from the answer;
-        // a later re-read never touches it, and a change made elsewhere still refuses this form's next save.
-        const saved = String(result?.presence_runtime?.state_fingerprint || '');
-        if (saved) form.dataset.stateFingerprint = saved;
-        showToast(`${name}: Presence runtime ${reset ? 'reset' : 'saved'} for new turns`, 'ok');
-    }
 
     // The switch: change, so keyboard and pointer activation match.
     const onChange = async (event) => {
@@ -874,15 +884,6 @@ export function initSkills(ctx = {}) {
             delete target.dataset.skillPending;
             if (refresh) readInstalled({ quiet: true });
         }
-    };
-    const onSubmit = async (event) => {
-        const form = event.target.closest?.('[data-presence-runtime-form]');
-        if (!form) return;
-        event.preventDefault();
-        const submit = form.querySelector('button[type="submit"]');
-        if (submit) submit.disabled = true;
-        try { await savePresenceRuntime(form); } catch (err) { showToast(`${form.dataset.skillName || 'Skill'}: ${err.message || err}`, 'danger'); }
-        finally { if (submit) submit.disabled = false; readInstalled({ quiet: true }); }
     };
     // A findings block is rendered collapsed; its list is built on first open
     // from the row already in memory (`toggle` does not bubble: capture).
@@ -954,6 +955,8 @@ export function initSkills(ctx = {}) {
         dataAttr: 'data-tab', activeClass: 'is-active',
         onChange(tabName) { closeMenus(); activeTab = tabName; activateTab(tabName); paintChrome(); showActive(); },
     });
+    // On a desk Installed, Browse and Sources start the bar that Update all and Refresh end (DESIGN "Page header").
+    const disposeBar = bindPageHeader(root.querySelector('.app-page-header'));
 
     const onRefresh = async () => {
         refreshBtn.disabled = true;
@@ -990,9 +993,29 @@ export function initSkills(ctx = {}) {
     searchInput.addEventListener('input', onSearch);
     root.addEventListener('click', onClick);
     container.addEventListener('change', onChange);
-    container.addEventListener('submit', onSubmit);
     container.addEventListener('toggle', onToggle, true);
     window.addEventListener('ouro:page-shown', onPageShown);
+
+    // Another surface asks for one installed skill's entry ({skill}), a Browse search ({query}) or a Browse category
+    // ({category}): the dictation chooser's engines (dictation_chooser.js), a place's connector (place_sheet.js).
+    const onOpenSkills = async (event) => {
+        const { skill = '', query = '', category = '' } = event?.detail || {};
+        closeMenus();
+        if (!await ctx.showPage?.('skills')) return;
+        if (!skill && category) { selectTab('browse'); await browse?.showCategory(category); return; }
+        if (!skill) { selectTab('browse'); await browse?.searchFor(query); return; }
+        selectTab('installed');
+        const found = () => container.querySelector(`.skills-card[data-skill="${CSS.escape(skill)}"]`);
+        if (found()) return found().scrollIntoView({ block: 'nearest' });
+        const observer = new MutationObserver(() => {
+            if (!found()) return;
+            observer.disconnect();
+            found().scrollIntoView({ block: 'nearest' });
+        });
+        observer.observe(document.getElementById('page-skills'), { childList: true, subtree: true });
+        setTimeout(() => observer.disconnect(), 10000);  // an entry that never comes leaves the page as it is
+    };
+    window.addEventListener('ouro:open-skills', onOpenSkills);
     paintFilters(null);
 
     return { destroy() {
@@ -1005,14 +1028,15 @@ export function initSkills(ctx = {}) {
         browse.destroy();
         sourcesView.destroy();
         tabs.destroy();
+        disposeBar();
         unsubscribe?.();
         refreshBtn.removeEventListener('click', onRefresh);
         updateAllBtn.removeEventListener('click', updateAll);
         searchInput.removeEventListener('input', onSearch);
         root.removeEventListener('click', onClick);
         container.removeEventListener('change', onChange);
-        container.removeEventListener('submit', onSubmit);
         container.removeEventListener('toggle', onToggle, true);
         window.removeEventListener('ouro:page-shown', onPageShown);
+        window.removeEventListener('ouro:open-skills', onOpenSkills);
     } };
 }

@@ -146,7 +146,7 @@ def test_reworded_host_rows_live_and_after_reload(subscription_ui, tmp_path, mon
     from supervisor import events_chat_delivery, message_bus
     from supervisor.events_runtime_controls import _drive_cancel_task_event
     from supervisor.events_schedule_task import _reject_schedule_task
-    from supervisor.terminal_delivery import build_unreviewed_salvage_event
+    from supervisor.terminal_delivery import build_unreviewed_salvage_event, deliver_miss_lane_outcome
 
     ui, out = subscription_ui, _evidence(tmp_path)
     page = ui["page"]
@@ -165,21 +165,31 @@ def test_reworded_host_rows_live_and_after_reload(subscription_ui, tmp_path, mon
         write_task_result(tmp_path, tid, STATUS_RUNNING, chat_id=1, result="working")
         message_bus.send_with_budget(1, f"Working on {tid}.", is_progress=True, task_id=tid, narration=True)
 
-    # 1. Delegated custody: the owner's card row lists only what holds something.
+    # 1. Delegated custody: the owner's card row lists only what holds something. The delivery reads the task's
+    # current custody (the pipeline's disclosure, handed over as custody_audit), not a stored copy.
+    custody = {"audit_status": "ok", "open_run_ids": [], "pending_invocation_ids": [],
+               "undisposed_patch_run_ids": [], "terminal_runs": [
+                   {"run_id": "run-7c1", "state": "failed", "model": "leaf-model"}]}
     write_task_result(tmp_path, "t-custody", "completed", chat_id=1, result="Report done.",
-                      delegate_terminal_reconciliation={
-                          "audit_status": "ok", "open_run_ids": [], "pending_invocation_ids": [],
-                          "undisposed_patch_run_ids": [], "terminal_runs": [
-                              {"run_id": "run-7c1", "state": "failed", "model": "leaf-model"}]})
+                      delegate_terminal_reconciliation=custody)
     event = prepare_terminal_send_event(
         tmp_path, {"id": "t-custody", "chat_id": 1}, "Report done.", {"terminal_origin": "model_final"},
         {"type": "send_message", "task_id": "t-custody", "chat_id": 1, "text": "Report done.",
-         "progress_meta": {"task_terminal_status": "completed"}}, presence=False)
+         "progress_meta": {"task_terminal_status": "completed"}}, presence=False, custody_audit=custody)
     events_chat_delivery._handle_send_message(event, sender)
     # 2. A cancellation receipt without a saved message promises nothing below.
     write_task_result(tmp_path, "t-cancel", "cancelled", chat_id=1, result="stopped")
     events_chat_delivery._handle_send_message(build_unreviewed_salvage_event(
         tmp_path, {"chat_id": 1}, "t-cancel", outcome="stopped", settled_status="cancelled"), sender)
+    # A restore-fenced cancellation names the host cause, not an apparent owner Stop.
+    from supervisor import terminal_delivery
+
+    restored = {"status": "cancelled", "chat_id": 1, "cancel_origin": {
+        "source": "snapshot_restore", "reason": "server_shutdown"}}
+    write_task_result(tmp_path, "t-restore", "cancelled", **{k: v for k, v in restored.items() if k != "status"})
+    monkeypatch.setattr(terminal_delivery, "enqueue_terminal_delivery",
+                        lambda _root, event, **_kw: events_chat_delivery._handle_send_message(event, sender))
+    deliver_miss_lane_outcome(tmp_path, tmp_path, restored, "t-restore", "cancelled")
     # 3. A helper the pool refused: the parent's card reads the owner sentence.
     _reject_schedule_task(sender, tid="kid12345", chat_id=1, delegation_role="subagent", parent_id="t-parent",
                           root_task_id="t-parent", role="researcher", result_fields={},
@@ -202,6 +212,7 @@ def test_reworded_host_rows_live_and_after_reload(subscription_ui, tmp_path, mon
     texts = {
         "custody": "Confirmed delegated terminal receipts: run-7c1: failed on leaf-model.",
         "cancel": "Task t-cancel was stopped.",
+        "restore": "Task t-restore was stopped. The server stopped while this task was still running.",
         "helper": "Task kid12345 not scheduled: worker pool unavailable.",
     }
     for text in texts.values():
@@ -224,7 +235,7 @@ def test_reworded_host_rows_live_and_after_reload(subscription_ui, tmp_path, mon
     def check(phase):
         page.evaluate(FRAMES)
         for card in page.locator(".chat-live-card").all():
-            # A card opens by its own Show details (a portal has none: its room holds the details).
+            # A card opens by its own Details button (a portal has none: its room holds the details).
             disclosure = card.locator(":scope > [data-live-summary-button] [data-live-disclosure]")
             if card.get_attribute("data-expanded") != "1" and disclosure.is_visible():
                 disclosure.click()

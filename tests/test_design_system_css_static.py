@@ -37,7 +37,7 @@ MAX_WIDTH_DEBT = {
     'web/onboarding.css': {'1100px': 1, '900px': 1, '760px': 1, '720px': 1},  # wizard
     'web/room_work.css': {'900px': 1},  # existing Shade height recipe (L1)
     'web/settings.css': {'980px': 2, '760px': 1, '640px': 1, '600px': 1},  # existing form/MCP layout debt
-    'web/style.css': {'980px': 2, '900px': 1, '640px': 2, '620px': 2},  # legacy content only: the shell's queries are gone (L1)
+    'web/style.css': {'980px': 2, '640px': 2, '620px': 2},  # legacy content only: the shell's queries are gone (L1)
     'web/ui.css': {'640px': 1},  # native field font-size/zoom recipe
 }
 
@@ -53,7 +53,7 @@ def media_widths(css):
 
 
 def test_viewport_width_queries_match_the_shrinking_debt_inventory():
-    actual = {str(path.relative_to(ROOT)): dict(counts) for path in first_party_sheets()
+    actual = {path.relative_to(ROOT).as_posix(): dict(counts) for path in first_party_sheets()
               if (counts := media_widths(path.read_text(encoding='utf-8')))}
     assert actual == MAX_WIDTH_DEBT, (
         'New raw viewport breakpoints are forbidden; components follow their container. '

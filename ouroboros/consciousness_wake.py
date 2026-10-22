@@ -6,7 +6,7 @@ message (system prompt, memory and tools are Main's own, owner decision В15).
 no count cut or category priority: positions in the append-only chat chain (owner and
 Presence-correspondent input by producer provenance, runner failures, and the chat rows that
 announce a transition) and, by identity, the transitions the task results themselves record —
-a task's terminal, a card's closed state, a late acceptance settlement — whether or not any
+a task's terminal, a card's closed state — whether or not any
 chat row announced them (an orphan sweep, a lost ``task_done``, an expired card) — and the
 memory journal records written after the accepted sequence (``memory_inventory.memory_changes``:
 pages, parts, drafts, notes, corrections, decisions, marks, mark releases; one line of text, its
@@ -33,6 +33,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ouroboros.consciousness_authority import (
     CONSCIOUSNESS_CATEGORY,
     CONSCIOUSNESS_INITIATOR,
+    WAKE_CAUSE_OWN_CLOCK,
+    WORK_KIND_CONSCIOUSNESS,
     disabled_tools_for,
     is_consciousness_origin,
     normalize_level,
@@ -46,11 +48,11 @@ WAKE_OBSERVATION_KEY = "wake_observation"  # task metadata: the bound observatio
 OBSERVATION_BOUNDARY_VERSION = 1
 TRANSITIONS_VERSION = 2  # complete per-task transition inventory, including closed tasks
 PLACEHOLDERS = ("reason", "last_wake_ago", "events", "level", "level_line", "withheld_tools",
-                "spent_usd", "daily_usd", "running", "max_tasks", "interval")
+                "spent_usd", "daily_usd", "running", "max_tasks", "interval", "spend_by_cause", "counted_roots", "places")
 LEVEL_LINES = {
-    "observe": "research and internal work, memory, project notes, your own children and schedules, owner delivery; no shell, user-file, source, skill/settings or publication changes",
-    "act": "everything your runtime mode allows except editing your own code/prompts, evolution, restart and settings",
-    "full": "everything your runtime mode allows, including evolution",
+    "observe": "On its own it studies, keeps its memory and tells you; it changes nothing outside.",
+    "act": "Also acts on its own: starts work, runs commands, speaks and acts in places. It does not change itself.",
+    "full": "Also changes itself: its own code, its settings, connecting new places.",
 }
 _FALLBACK_TEMPLATE = "[Wake-up · {reason}] No one wrote to you: this turn is yours. Wake context (last wake {last_wake_ago}): {events}"
 
@@ -67,6 +69,8 @@ def wake_task_metadata(level: Any, reason: str, *, root_cost_ceiling_usd: Option
     normalized = normalize_level(level)
     metadata: Dict[str, Any] = {
         "initiator": CONSCIOUSNESS_INITIATOR, "usage_category": CONSCIOUSNESS_CATEGORY,
+        "wake_cause": WAKE_CAUSE_OWN_CLOCK, "consciousness_cause": "own",
+        "work_kind": WORK_KIND_CONSCIOUSNESS,
         "wake_reason": str(reason or "heartbeat"), "consciousness_autonomy": normalized,
         "model_role": "consciousness", "disabled_tools": disabled_tools_for(normalized),
         "runtime_mode_cap": runtime_mode_cap_for(normalized),
@@ -218,8 +222,10 @@ def _chat_window(drive_root: pathlib.Path, boundary: Any, since: float,
     return collected, {"lower": lower, "upper": upper, "basis": basis, "boundary": accepted}
 
 
+# A pre-fold ``acceptance_late_settlement`` row (the deleted task-acceptance machine's late
+# verdict) is no wake event: it stays ordinary history of the chat it was written to.
 _SYSTEM_ROW_KINDS = {"task_summary": "task_terminal", "quiz_answer": "card_answer", "quiz_closed": "card_state",
-                     "acceptance_late_settlement": "late_review", "task_error": "task_error"}
+                     "task_error": "task_error"}
 
 
 def _row_kind(row: Dict[str, Any]) -> str:
@@ -256,7 +262,7 @@ _KIND_WORDS = {  # (one, many)
     "card_answer": ("card answer", "card answers"), "task_terminal": ("task terminal", "task terminals"),
     "direct_turn": ("own direct turn ended (counted, not listed: its exchange is the dialogue itself)",
                     "own direct turns ended (counted, not listed: their exchange is the dialogue itself)"),
-    "late_review": ("late review", "late reviews"), "task_error": ("task runner failure", "task runner failures"),
+    "task_error": ("task runner failure", "task runner failures"),
     "card_state": ("card closed unanswered", "cards closed unanswered"),
     "outstanding_card": ("outstanding card", "outstanding cards"),
     "memory_change": ("memory change", "memory changes"),
@@ -289,9 +295,6 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     if kind == "card_state":
         block = row.get("quiz") if isinstance(row.get("quiz"), dict) else {}
         return _closed_card_line(task_id, str(block.get("quiz_id") or "?"), block, now=now)
-    if kind == "late_review":
-        # A chat row whose canonical fact was not found: only what the row itself says.
-        return f"- late review announced for task {task_id}, {when}: {_clip_preview(row.get('text'), 240)}"
     if kind == "task_error":
         return f"- task {task_id} runner failed, {when}: {_clip_preview(row.get('text'), 160)}"
     if kind == "presence_observation":
@@ -335,14 +338,12 @@ def _transition_facts(row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
     """Every transition one task result records, by identity.
 
     ``key -> fact`` for a terminal of one attempt (the terminal-publication fence's
-    own attempt facts), each card's closed state, each late acceptance settlement
-    (``acceptance_settlement.late_acceptance_facts``, its exact source ref consumed
-    as published). Stamps ride along for display and the first (time-bootstrapped)
-    window only: a terminal's is its publication instant when recorded, else the
-    last update, never presented as the completion time. Closed tasks remain in
-    the inventory: a new panel or a late owner answer can still add evidence.
+    own attempt facts) and each card's closed state. Stamps ride along for display
+    and the first (time-bootstrapped) window only: a terminal's is its publication
+    instant when recorded, else the last update, never presented as the completion
+    time. Closed tasks remain in the inventory: a late owner answer can still add
+    evidence.
     """
-    from ouroboros.acceptance_settlement import late_acceptance_facts
     from ouroboros.task_status import SETTLED_STATUSES
     from ouroboros.terminal_projection import _attempt
 
@@ -365,14 +366,6 @@ def _transition_facts(row: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
             facts[f"card:{task_id}:{quiz_id}:{state}"] = {
                 "kind": "card_answer" if state == "answered" else "card_state", "task_id": task_id,
                 "quiz_id": str(quiz_id), "block": block, "stamp": stamp, "proven": stamp is not None}
-    try:
-        late = late_acceptance_facts(row)
-    except Exception:  # a malformed projection is a gap of that task, not of the wake
-        late = []
-    for fact in late:
-        stamp = _parse_iso(fact.get("settled_at") or "")
-        facts[f"late:{task_id}:{fact.get('panel_id')}:{fact.get('settled_at')}"] = {
-            "kind": "late_review", "task_id": task_id, "fact": fact, "stamp": stamp, "proven": stamp is not None}
     return facts
 
 
@@ -382,9 +375,11 @@ def _transitions_since(transitions: Dict[str, Dict[str, Dict[str, Any]]], accept
 
     Keep every observed task's keys, including closed tasks. Absence from a
     complete accepted inventory then proves a newly observed result even if its
-    first write copied an old timestamp. A new panel on an old task is likewise
-    a new identity. The existing wake boundary owns this state, with no new
-    store or count cutoff. Cost is one fact extraction per result per scan.
+    first write copied an old timestamp. A key an earlier inventory holds and no
+    task records any more (a pre-fold late-review key) is simply never fresh again.
+    The existing wake boundary owns this state, with no new
+    store or count cutoff. Unchanged tasks retain their accepted keys; their
+    bodies are not needed for comparison.
 
     V1 recorded only open tasks. Unknown keys in that incomplete inventory are
     conservatively replayed once, with coverage disclosed by the caller.
@@ -410,31 +405,10 @@ def _transitions_since(transitions: Dict[str, Dict[str, Dict[str, Any]]], accept
 
 
 def _transition_line(fact: Dict[str, Any], results: Dict[str, Dict[str, Any]], rooms: Any,
-                     drive_root: pathlib.Path, now: float, projects: Dict[str, str]) -> Tuple[str, str]:
-    """``(kind, line)`` for one canonical transition; a late review names its exact published source."""
+                     now: float, projects: Dict[str, str]) -> Tuple[str, str]:
+    """``(kind, line)`` for one canonical transition."""
     kind, task_id, stamp = fact["kind"], fact["task_id"], fact["stamp"]
     ago = _ago(now - stamp) if stamp is not None else "at an unknown time"
-    if kind == "late_review":
-        from ouroboros.evidence_packs import handle_info
-        from ouroboros.task_finalization import review_source_reader
-
-        record = fact["fact"]
-        late = record.get("late_settlement") if isinstance(record.get("late_settlement"), dict) else {}
-        emitted = late.get("emitted_answer") if isinstance(late.get("emitted_answer"), dict) else {}
-        parts = [f"panel {record.get('panel_id') or '?'}", f"signal {record.get('aggregate_signal') or 'unknown'}",
-                 f"reviewed version {late.get('reviewed_revision') or 'unknown'}",
-                 f"emitted answer {emitted.get('state') or 'unknown'}",
-                 f"{len(late.get('reviewer_outputs') or [])} reviewer outputs"]
-        ref = record.get("source_ref") if isinstance(record.get("source_ref"), dict) else {}
-        try:  # loose or a verified pack member (the packer moves a settled task's handles); corrupt is absent
-            present = bool(ref.get("path")) and handle_info(drive_root, task_id, str(ref["path"])) is not None
-        except (ValueError, OSError):
-            present = False
-        read = review_source_reader(task_id, ref)
-        parts.append(f"exact source {json.dumps(read, sort_keys=True)} sha256 {ref.get('sha256')}" if present else
-                     "exact source unavailable" + (f" ({ref.get('path')})" if ref.get("path") else ""))
-        first = str(late.get("note") or "").splitlines()[0] if late.get("note") else ""
-        return kind, f"- late review settled for task {task_id}, {ago}: {_clip_preview(first, 240)}; " + "; ".join(parts)
     if kind == "card_answer":
         return kind, _answered_card_line(task_id, fact["quiz_id"], fact["block"], now=now)
     if kind == "card_state":
@@ -560,6 +534,33 @@ class WakeObservation:
 _CHAT_BOUNDARY_KEYS = ("version", "upper", "segment_start", "segment_sha256")
 
 
+def _task_window(root, prior, chat_rows):
+    """Capture typed signatures and only changed/question/chat-addressed bodies together.
+
+    The accepted inventory already owns unchanged transition identities. Old
+    boundaries without signatures scan once; timestamps alone cannot prove that
+    a result carrying an old date is unchanged. NULL question flags are unknown.
+    """
+    from ouroboros import task_store
+
+    complete = (isinstance(prior, dict) and prior.get("version") == TRANSITIONS_VERSION
+                and isinstance(prior.get("inventory"), dict) and isinstance(prior.get("signatures"), dict))
+    previous = prior["signatures"] if complete else {}
+    with task_store.open_store(root, write=False) as txn:
+        signatures = {tid: list(stamp) for tid, stamp in txn.write_seqs().items()}
+        selected = {tid for tid, stamp in signatures.items()
+                    if not complete or tid not in prior["inventory"] or previous.get(tid) != stamp}
+        selected.update(str(row.get("task_id") or "") for _offset, row in chat_rows)
+        selected.update(row[0] for row in txn.conn.execute(
+            "SELECT task_id FROM tasks WHERE has_owner_questions=1 OR has_owner_questions IS NULL"))
+        fetched = task_store._fetch(txn, "t.task_id IN (SELECT value FROM json_each(?))",
+                                   (json.dumps(sorted(selected)),))
+    rows = task_store._decode(*fetched)
+    retained = {tid: {key: None for key in prior["inventory"][tid]}
+                for tid in signatures if complete and tid not in selected}
+    return rows, signatures, retained
+
+
 def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, reason: str = "") -> WakeObservation:
     """Capture every fact since the accepted boundary, plus outstanding cards.
 
@@ -573,7 +574,6 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
     """
     from ouroboros.dialogue_provenance import RoomLabelResolver
     from ouroboros.owner_quiz import STATE_EXPIRED_TERMINAL, STATE_OPEN
-    from ouroboros.task_results import list_task_results
     from ouroboros.projects_registry import list_reserved_projects, PROJECT_ACTIVE
 
     root, gaps = pathlib.Path(drive_root), set()
@@ -602,21 +602,6 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
             source_unreadable = True
             gaps.add(f"unreadable_transition_source: {type(exc).__name__}")
     try:
-        rows, scanned = list_task_results(root, strict=True), True
-    except Exception as exc:  # a disclosed gap beats a missing wake
-        rows, scanned = [], False
-        gaps.add(f"task_results unreadable: {type(exc).__name__}")
-    results = {str(row.get("task_id") or ""): row for row in rows}
-    transitions = {task_id: _transition_facts(row) for task_id, row in results.items()}
-
-    if source_unreadable:
-        fresh, known, state, basis = {}, set(), None, "unreadable_transition_source"
-    elif scanned:
-        fresh, known, state, basis = _transitions_since(
-            transitions, prior, since=since, scan_at=now)
-    else:  # nothing was read: the accepted state stays, so the next wake finds the same transitions
-        fresh, known, state, basis = {}, set(), prior, "unreadable_task_results"
-    try:
         chat_rows, window = _chat_window(root, accepted or None, since, gaps)
     except Exception as exc:
         chat_rows, window = [], {"lower": None, "upper": None, "basis": "chat_chain_unreadable", "boundary": None}
@@ -624,6 +609,23 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
         from ouroboros.store import StoreError
         if isinstance(exc, StoreError):
             gaps.add(str(exc))
+    try:
+        rows, signatures, transitions = _task_window(root, prior, chat_rows)
+        scanned = True
+    except Exception as exc:  # a disclosed gap beats a missing wake
+        rows, signatures, transitions, scanned = [], {}, {}, False
+        gaps.add(f"task_results unreadable: {type(exc).__name__}")
+    results = {str(row.get("task_id") or ""): row for row in rows}
+    transitions.update({task_id: _transition_facts(row) for task_id, row in results.items()})
+
+    if source_unreadable:
+        fresh, known, state, basis = {}, set(), None, "unreadable_transition_source"
+    elif scanned:
+        fresh, known, state, basis = _transitions_since(
+            transitions, prior, since=since, scan_at=now)
+        state["signatures"] = signatures
+    else:  # nothing was read: the accepted state stays, so the next wake finds the same transitions
+        fresh, known, state, basis = {}, set(), prior, "unreadable_task_results"
     window["transitions_basis"] = basis
     try:
         registry = list_reserved_projects(root)
@@ -643,13 +645,10 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
         # The canonical transition this row announces, when its task result records it.
         facts = transitions.get(str(row.get("task_id") or ""), {})
         quiz = row.get("quiz") if isinstance(row.get("quiz"), dict) else {}
-        retry = str(row.get("card_row_id") or "").removeprefix("acceptance-late:")
         key = next((key for key, fact in facts.items() if (
             kind == "task_terminal" and fact["kind"] == "task_terminal")
             or (kind == "card_answer" and key == f"card:{row.get('task_id')}:{quiz.get('quiz_id')}:answered")
-            or (kind == "card_state" and key == f"card:{row.get('task_id')}:{quiz.get('quiz_id')}:closed")
-            or (kind == "late_review" and fact["kind"] == "late_review" and retry and retry == str(
-                ((fact["fact"].get("late_settlement") or {}).get("reviewed_subject") or {}).get("retry_key") or ""))),
+            or (kind == "card_state" and key == f"card:{row.get('task_id')}:{quiz.get('quiz_id')}:closed")),
             None)
         if key is not None:
             if key in announced or (key in known and key not in fresh):
@@ -658,7 +657,7 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
             # written late under an older stamp) is still new to this position: at least once.
             fact = fresh.setdefault(key, facts[key])
             announced.add(key)
-            kind, line = _transition_line(fact, results, rooms, root, now, projects)
+            kind, line = _transition_line(fact, results, rooms, now, projects)
             events.append((kind, offset, line))
             continue
         result = results.get(str(row.get("task_id") or "")) or {}
@@ -667,7 +666,7 @@ def observe_wake(drive_root: Any, *, boundary: Any, since: float, now: float, re
         events.append((kind, offset, _event_line(kind, row, results, rooms, projects, now)))
     for key, fact in sorted(((key, fact) for key, fact in fresh.items() if key not in announced),
                             key=lambda item: (item[1]["stamp"] is None, item[1]["stamp"] or 0.0, item[0])):
-        kind, line = _transition_line(fact, results, rooms, root, now, projects)
+        kind, line = _transition_line(fact, results, rooms, now, projects)
         events.append((kind, None, line))
     memory_boundary = accepted.get("memory")
     if not source_unreadable:
@@ -736,9 +735,11 @@ def bind_wake_observation(drive_root: Any, task: Dict[str, Any], observation: Wa
 
 def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now: float, level: Any,
                         disabled_tools: List[str], spent_usd: Any, daily_usd: Any, running: int,
-                        max_tasks: int, interval: int, events: str, spent_is_floor: bool = False) -> str:
+                        max_tasks: int, interval: int, events: str, spent_is_floor: bool = False,
+                        spend_by_cause=None, counted_roots=None, places=None) -> str:
     """Fill ``prompts/CONSCIOUSNESS.md`` for one wake; every placeholder is substituted."""
     template = safe_read(pathlib.Path(repo_dir) / PROMPT_REL) or _FALLBACK_TEMPLATE
+    from ouroboros.consciousness_view import places_text, roots_text, spend_text
     normalized = normalize_level(level)
     spent = f"{float(spent_usd):.2f}" if isinstance(spent_usd, (int, float)) else "unknown"
     if spent_is_floor and spent != "unknown":
@@ -747,10 +748,13 @@ def render_wake_message(repo_dir: Any, *, reason: str, last_wake_at: float, now:
         "reason": str(reason or "heartbeat"),
         "last_wake_ago": _ago(now - last_wake_at) if last_wake_at else "no wake since this process started",
         "events": events or "nothing new",
-        "level": normalized, "level_line": LEVEL_LINES[normalized],
+        "level": {"observe": "Advises", "act": "Acts", "full": "Evolves"}[normalized],
+        "level_line": LEVEL_LINES[normalized],
         "withheld_tools": ", ".join(disabled_tools) if disabled_tools else "none",
         "spent_usd": spent, "daily_usd": f"{float(daily_usd):.2f}",
         "running": str(int(running)), "max_tasks": str(int(max_tasks)), "interval": str(int(interval)),
+        "spend_by_cause": spend_text(spend_by_cause), "counted_roots": roots_text(counted_roots),
+        "places": places_text(places),
     }
     # One pass: a fact (a task title inside {events}) that happens to contain "{daily_usd}"
     # is never substituted again.

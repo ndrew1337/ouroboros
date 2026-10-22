@@ -131,6 +131,13 @@ test('reset applied and failed readback remain separate; already_used is not own
     const unconfirmed = { request: fixture.receipt.request, receipt: { ...fixture.receipt, outcome: 'already_used' } };
     assert.equal(resetOutcome(unconfirmed).tone, 'warn');
     assert.match(resetOutcome(unconfirmed).body, /does not confirm/);
+    // In flight or unconfirmed goes on by itself: a quiet message, never amber.
+    for (const receipt of [{ ...fixture.receipt, outcome: 'pending', state: 'running' }, { ...fixture.receipt, outcome: 'unknown' }]) {
+        const outcome = resetOutcome({ request: fixture.receipt.request, receipt });
+        assert.equal(outcome.tone, 'neutral', receipt.outcome);
+    }
+    assert.equal(resetOutcome({ request: fixture.receipt.request, receipt: { ...fixture.receipt, outcome: 'pending',
+        state: 'running' } }).title, 'Reset is in progress');
 });
 
 test('a refresh or reset envelope replaces only the addressed subject, including named default', () => {
@@ -585,4 +592,28 @@ test('a full refresh preceding a queued reset cannot freshen its failed readback
     assert.equal(resourceReadGap(store.resourceAction(target)), true);
     assert.match(accountResourcesMarkup(row, store.snapshot, { action: store.resourceAction(target) }), /Last known · 100% used/);
     store.dispose();
+});
+
+test('a temporary model mark is one escaped line per model, only beside a successful account read', async () => {
+    const { capabilityMarkup } = await import('../modules/account_resources.js');
+    const { capabilityMarksReadFailedAt } = await import('../modules/claudexor_status_store.js');
+    const now = Date.now();
+    const mark = (model, state, expiresIn) => ({ harness_id: row.harness, profile_id: row.profile_id,
+        requested_model: model, provider_reason: `<b>${model}</b> is not supported`, state,
+        observed_at: new Date(now - 25 * 60000).toISOString(), expires_at: new Date(now + expiresIn).toISOString() });
+    const payload = { ...snapshot(), profiles: { routing_evidence: { refusals: [], lastService: [], capabilities: [
+        mark('gpt-6.1-sol', 'provisional', 4 * 3600000), mark('gpt-6-astra', 'probe_due', -60000),
+        { ...mark('other', 'confirmed', 3600000), profile_id: 'someone-else' }] } } };
+    const html = capabilityMarkup(row, payload);
+    assert.equal(html.match(/data-model-capability/g).length, 2);
+    assert.match(html, /Cannot serve gpt-6\.1-sol: &lt;b&gt;gpt-6\.1-sol&lt;\/b&gt; is not supported · temporary mark set 25m ago; may be retried in 4h/);
+    assert.match(html, /Cannot serve gpt-6-astra: .* the next request may recheck it/);
+    assert.doesNotMatch(html, /<b>/);
+    // A stale roster cannot assert a current mark; a failed read is one section fact, never "no marks".
+    assert.equal(capabilityMarkup(row, { ...payload, reads: { ...payload.reads, accounts: 'failed' } }), '');
+    assert.equal(capabilityMarksReadFailedAt(payload), '');
+    const failed = { ...snapshot(), profiles: { routing_evidence_read: { state: 'failed', observed_at: '2026-10-21T02:00:00Z' } } };
+    assert.equal(capabilityMarksReadFailedAt(failed), '2026-10-21T02:00:00Z');
+    assert.equal(capabilityMarkup(row, failed), '');
+    assert.equal(capabilityMarksReadFailedAt({ ...failed, reads: { ...failed.reads, accounts: 'failed' } }), '');
 });

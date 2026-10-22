@@ -597,26 +597,26 @@ def _auto_tag_on_version_bump(
         log.warning("Auto-tag check failed: %s", e)
         return ""
 
-def _auto_push(repo_dir: pathlib.Path) -> str:
+def _auto_push(repo_dir: pathlib.Path, *, created_tag: str = "", expected_commit_sha: str = "") -> str:
     try:
         from supervisor.git_ops import push_to_remote
-        ok, msg = push_to_remote()
+        ok, msg = push_to_remote(created_tag=created_tag, expected_commit_sha=expected_commit_sha)
         if ok:
             return f" [pushed: {msg}]"
         return f" [push skipped: {msg}]"
     except Exception as e:
         log.debug("Auto-push failed (non-fatal): %s", e)
-        return " [push failed — will retry later]"
+        return " [push failed — no automatic retry]"
 
 
-def _auto_push_after_review(ctx: ToolContext, *, publication_paused: bool = False) -> str:
+def _auto_push_after_review(ctx: ToolContext, *, publication_paused: bool = False, created_tag: str = "", expected_commit_sha: str = "") -> str:
     """A completed commit remains completed when Pause refuses its later push."""
     from ouroboros.owner_pause import OwnerPauseRefused, run_operation
 
     try:
         if publication_paused:
             raise OwnerPauseRefused("owner_pause")
-        return run_operation(ctx, _auto_push, ctx.repo_dir)
+        return run_operation(ctx, _auto_push, ctx.repo_dir, created_tag=created_tag, expected_commit_sha=expected_commit_sha)
     except OwnerPauseRefused as exc:
         return f" [push not started: owner pause ({exc})]"
 
@@ -653,7 +653,7 @@ def _run_pre_push_tests(ctx: ToolContext, force: bool = False) -> Optional[str]:
         return run_hermetic_pytest(
             pathlib.Path(ctx.repo_dir),
             max_output=MAX_TEST_OUTPUT,
-            ctx=ctx, **commit_test_options(ctx, force=force),
+            ctx=ctx, **commit_test_options(ctx, force=force, post_commit=True),
         )
     except Exception as e:
         log.warning(f"Pre-push tests failed with exception: {e}", exc_info=True)
@@ -833,7 +833,7 @@ def _check_ci_status_after_push(repo_dir: pathlib.Path) -> str:
         if not red:
             if all(state in settled for state in states.values()):
                 return f"\n\n✅ CI: registered push runs passed for this commit — {summary}."
-            return f"\n\n⏳ CI: push runs in progress — {summary}. Read the results later: get_github_checks(sha='{local_sha}', repo='{repo}')."
+            return f"\n\n⏳ CI: push runs in progress — {summary}. Read the results later: github_read(method='checks', target='{local_sha}', repo='{repo}')."
         broken = [name for name in red if states[name] == "failure"]
         first = latest[(broken or red)[0]]  # The run whose number, jobs and URL the note carries.
         headline = f"{', '.join(broken)} FAILED" if broken else f"{red[0]} {states[red[0]].upper()}"
@@ -1367,7 +1367,7 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
             if receipt_error:
                 return receipt_error
         if not _managed_tx and not publication_paused:
-            # Evolution publication requires full even when the author skipped preflight.
+            # Evolution always runs this gate, full outside a body candidate, even after skip_tests.
             try:
                 run_operation(ctx, _post_commit_result, ctx, commit_message, skip_tests, test_warning_ref, force=bool(evolution_claim))
             except OwnerPauseRefused as exc:
@@ -1382,9 +1382,9 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
             if publication_error:
                 return publication_error
             push_status = (_evolution_test_publication_stop(ctx, commit_sha, test_warning_ref[0])
-                           or (_auto_push_after_review(ctx, publication_paused=publication_paused) if not body_candidate.is_bound(ctx) else body_candidate.publication_note(ctx)))
+                           or (_auto_push_after_review(ctx, publication_paused=publication_paused, created_tag=created_tag, expected_commit_sha=commit_sha) if not body_candidate.is_bound(ctx) else body_candidate.publication_note(ctx)))
         ctx.last_reviewed_commit_sha = commit_sha
-        body_candidate.record_reviewed_commit(ctx, commit_sha)
+        body_candidate.record_reviewed_commit(ctx, commit_sha, created_tag=created_tag)
         if attribution_binding is not None:
             # The task's own commit moved HEAD: open the next attributed-staging
             # epoch so a follow-up commit does not read as ``baseline_stale``.
@@ -1408,7 +1408,7 @@ def _repo_commit_push(ctx: ToolContext, commit_message: str,
             ctx, _managed_tx, commit_sha, commit_message, _commit_start, test_warning_ref,
             (pre_fingerprint, post_fingerprint))
     if not evolution_claim:
-        push_status = _auto_push_after_review(ctx, publication_paused=publication_paused) if not body_candidate.is_bound(ctx) else body_candidate.publication_note(ctx)
+        push_status = _auto_push_after_review(ctx, publication_paused=publication_paused, created_tag=created_tag, expected_commit_sha=commit_sha) if not body_candidate.is_bound(ctx) else body_candidate.publication_note(ctx)
     return _publish_reviewed_commit(
         ctx, commit_message, commit_sha, tag_info, test_warning_ref[0], paths, push_status,
     )

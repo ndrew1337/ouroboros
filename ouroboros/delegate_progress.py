@@ -577,13 +577,13 @@ def executor_observation(
     identify a later live/reviewer attempt. Current live detail supplies no
     per-attempt observed model; the requested model stays labelled as such.
     """
+    from ouroboros.delegate_custody_usage import names_another_run
     from ouroboros.subagent_messages import executor_observation_meta
 
     task_id = str(getattr(ctx, "task_id", "") or "")
-    summary = detail.get("summary") or {}
     if (getattr(entry, "task_id", None) != task_id
             or getattr(entry, "run_id", None) != run_id
-            or summary.get("runId", run_id) != run_id
+            or names_another_run(detail, run_id)
             or detail.get("lastSeq") != advance.seq):
         return {}
     actor = next((row for row in reversed(_rows(detail))

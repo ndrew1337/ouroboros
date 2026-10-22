@@ -39,7 +39,9 @@ coordinates are the store's; ``store_switch`` calls it before a root is handed t
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import logging
 import os
@@ -48,7 +50,7 @@ import time
 from typing import Any, Callable, Dict, Iterator, List, NamedTuple, Optional, Tuple
 
 from ouroboros import dialogue_store as ds
-from ouroboros import store
+from ouroboros import store, store_journal
 from ouroboros.store import StoreBusy
 from ouroboros.utils import jsonl_append_lock_path, utc_now_iso
 
@@ -113,10 +115,13 @@ def rotate_final(root: pathlib.Path, stream: str) -> Optional[pathlib.Path]:
 
 
 def _gen(data: bytes) -> str:
-    """The generation signature a legacy address carries (``utils.jsonl_generation_signature``)."""
-    for line in data.decode("utf-8", errors="replace").splitlines():
-        if line.strip():
-            return hashlib.sha256(line.strip().encode("utf-8", errors="replace")).hexdigest()
+    """The generation signature a legacy address carries (``utils.jsonl_generation_signature``): the
+    first non-blank line as that text-mode reader ends it, at ``\\n``/``\\r`` only. A row ``append_jsonl``
+    wrote keeps U+2028, U+2029 and U+0085 raw, and ``str.splitlines`` would cut it there."""
+    with io.TextIOWrapper(io.BytesIO(data), encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            if line.strip():
+                return hashlib.sha256(line.strip().encode("utf-8", errors="replace")).hexdigest()
     return ""
 
 
@@ -154,14 +159,21 @@ def segment_rows(data: bytes, base: int) -> Iterator[Line]:
 
 # --- the cutover ------------------------------------------------------------------------------
 
-def cutover(root: Any) -> Dict[str, Any]:
-    """Files -> store, once per root; afterwards the cheap re-check described above. Returns a report."""
+def cutover(root: Any, *, initialize_journal: bool = False) -> Dict[str, Any]:
+    """Files -> store, once per root; afterwards the cheap re-check described above. Returns a report.
+    ``initialize_journal`` is the boot's (``server._dialogue_cutover``): after any retier it brings an
+    existing file to this runtime's journal (``store_journal``); a child root's lazy cutover keeps it."""
     root = pathlib.Path(root)
     report: Dict[str, Any] = {"created": False}
     if ds.present(root):
         former = ds.retier(root)
         if former:
             report["retiered_from"] = former
+        if initialize_journal:
+            tier = ds._tier(root)
+            with store.name_lock(root, ds.LOCK_NAME, timeout_sec=ds.WAIT_SEC) if tier == store.TIER_NAME \
+                    else contextlib.nullcontext():
+                report["journal_selected"] = store_journal.configure_journal(ds.path(root), tier, wait_sec=ds.WAIT_SEC)
         if ds.meta(root, "cutover") is not None and not _replan_owed(root):
             report.update(first=False, replanned=False)  # the steady boot: two stats and one job fact
             return report
@@ -634,7 +646,9 @@ def _export_stream(root: pathlib.Path, stream: str) -> Dict[str, Any]:
                                              "from": int(marks["files_seq"])})
                 remainder = data
             if remainder:
-                handle = os.open(str(live), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+                # Byte-exact: a Windows descriptor is text mode without O_BINARY and would write each
+                # LF as CRLF, so the exported lines would no longer be the stored rows at their coordinates.
+                handle = os.open(str(live), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
                 try:
                     view = memoryview(remainder)
                     while view:

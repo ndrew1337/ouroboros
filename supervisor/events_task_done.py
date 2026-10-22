@@ -20,7 +20,7 @@ from ouroboros.outcomes import (
     normalize_outcome_axes,
 )
 from ouroboros.post_task_checkpoint import post_task_synthesis_is_open
-from ouroboros.task_finalization import send_provider_death_notice
+from ouroboros.task_finalization import send_provider_death_notice, terminal_host_notice_text
 from ouroboros.task_results import (
     STATUS_CANCELLED,
     STATUS_COMPLETED,
@@ -606,15 +606,6 @@ def _finish_task_done_dispatch(
             except Exception:
                 log.warning("Owner pause/continue settlement check failed for %s", tree_root, exc_info=True)
     ctx.persist_queue_snapshot(reason="task_done")
-    # The early answer may already be receipted when split-drive copyback
-    # finishes. Normal and recovered publication converge here after releasing
-    # author custody; the existing ReviewOperation owns preparation and payment.
-    debt = final_task_result.get("acceptance_debt") or {}
-    delivery_id = (debt.get("delivery") or {}).get("delivery_id")
-    if task_id and delivery_id:
-        from supervisor.events_chat_delivery import _handoff_delivered_review
-
-        _handoff_delivered_review(ctx, str(task_id), str(delivery_id))
     try:
         ctx.bridge.push_log(task_done_event)
     except Exception:
@@ -797,6 +788,8 @@ def _resolve_lifecycle_fault(
             default=HIDDEN_CHAT_ID,
         ),
         "status": status,
+        "wake_silent": stored.get("wake_silent") is True,
+        "quiet_effective": stored.get("wake_silent") is True and not terminal_host_notice_text(stored),
         "reason_code": str(stored.get("reason_code") or ""),
         "outcome_axes": normalize_outcome_axes(stored),
     }
@@ -1064,6 +1057,8 @@ def _handle_task_done(evt: Dict[str, Any], ctx: Any) -> None:
             default=HIDDEN_CHAT_ID,
         ),
         "status": str(final_task_result.get("status") or evt.get("status") or ""),
+        "wake_silent": known_result.get("wake_silent") is True,
+        "quiet_effective": known_result.get("wake_silent") is True and not terminal_host_notice_text(known_result),
         # The direct-turn fact rides the rebuilt terminal so the chat block keys
         # its chrome on host truth: the worker frame carries it, the durable
         # result carries it, and a reaper-delivered terminal reads the result.

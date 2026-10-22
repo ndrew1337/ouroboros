@@ -175,8 +175,9 @@ def test_skill_preflight_reports_python_syntax_error(tmp_path, monkeypatch):
 
 def test_skill_preflight_file_limit_omission_is_degraded_not_blocked(tmp_path, monkeypatch):
     # A file count beyond the syntax-check headroom is a DEGRADED note, NOT a hard block:
-    # the skill-review pass now reads every file under a pack-level token budget (chunked
-    # when oversized), so preflight must not re-introduce an arbitrary file-count gate.
+    # the skill review judges every file (a packet seat gets the whole payload when it fits,
+    # else its index; retrieving seats read the frozen copy), so preflight must not
+    # re-introduce an arbitrary file-count gate.
     ctx = _make_ctx(tmp_path)
     skills_root = tmp_path / "skills"
     skills_root.mkdir()
@@ -193,7 +194,8 @@ def test_skill_preflight_file_limit_omission_is_degraded_not_blocked(tmp_path, m
     assert result["ok"] is True  # proceeds to the authoritative token-budgeted review
     assert result["omitted_count"] > 0
     assert result.get("degraded") is True
-    assert "token budget" in result.get("degraded_note", "")
+    note = result.get("degraded_note", "")
+    assert "the skill review still judges every file" in note and "NOT delivered" in note, note
 
 
 def test_skill_preflight_missing_validator_runtime_is_tolerated(tmp_path, monkeypatch):
@@ -341,7 +343,7 @@ def test_skill_preflight_reports_missing_pluginapi_permissions(tmp_path, monkeyp
 @pytest.mark.serial
 def test_run_shell_writes_a_self_authored_marker_example(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
-    monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
     ctx = _make_ctx(tmp_path)
     marker = ctx.repo_dir / "example" / ".self_authored.json"
     marker.parent.mkdir()
@@ -971,12 +973,9 @@ def test_skill_exec_allows_warnings_under_blocking(tmp_path, monkeypatch):
     assert "hello from skill" in payload["stdout"]
 
 
-def test_toggle_skill_blocks_stale_dependency_fingerprint(tmp_path, monkeypatch):
-    from ouroboros.marketplace.isolated_deps import (
-        DEPS_STATE_FILENAME,
-        FINGERPRINT_FILENAME,
-        isolated_env_dir,
-    )
+def test_toggle_skill_refreshes_a_stale_dependency_fingerprint(tmp_path, monkeypatch):
+    """Inverted pin: a stale fingerprint used to refuse Enable; the enable owner now refreshes it."""
+    from ouroboros.marketplace.isolated_deps import DEPS_STATE_FILENAME, FINGERPRINT_FILENAME, isolated_env_dir
     from ouroboros.skill_loader import skill_state_dir
 
     skills_root = tmp_path / "skills"
@@ -998,11 +997,14 @@ def test_toggle_skill_blocks_stale_dependency_fingerprint(tmp_path, monkeypatch)
     env_dir = isolated_env_dir(skill_dir)
     env_dir.mkdir(parents=True)
     (env_dir / FINGERPRINT_FILENAME).write_text(json.dumps(stale_state), encoding="utf-8")
+    installs = []
+    monkeypatch.setattr("ouroboros.marketplace.isolated_deps._install_python_packages",
+                        lambda packages, *args, **kwargs: installs.append(list(packages)) or [])
 
     resp = skill_exec_mod._handle_toggle_skill(ctx, skill="alpha", enabled=True)
 
-    assert json.loads(resp.split(": ", 1)[1])["deps_status"] == "stale"
-    assert not (state_dir / "enabled.json").exists()
+    assert json.loads(resp)["enabled"] is True and installs == [["wheel"]]
+    assert (state_dir / "enabled.json").exists()
 
 
 def test_skill_exec_refuses_missing_manifest_permission_grant(tmp_path, monkeypatch):
@@ -1601,9 +1603,9 @@ def test_toggle_skill_rejects_stale_pass_review(tmp_path, monkeypatch):
 
     resp = skill_exec_mod._handle_toggle_skill(ctx, skill="alpha", enabled=True)
     assert "SKILL_TOGGLE_ERROR" in resp
-    # Default Advisory: the stale verdict no longer counts; the gate names both authorities it admits.
-    assert ("cannot enable until the review gate permits the current bytes: a current executable reviewer "
-            "verdict or a qualified Advisory author acceptance of these exact bytes") in resp
+    # Default Advisory: the stale verdict no longer counts; the typed refusal's detail names both authorities.
+    assert '"error": "It turns on after a review passes."' in resp and ('"detail": "a current executable reviewer '
+            'verdict or a qualified Advisory author acceptance of these exact bytes"') in resp
     assert '"blocking_reason": "review_stale"' in resp
 
 

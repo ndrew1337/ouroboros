@@ -34,7 +34,8 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
-from ouroboros.effort_evidence import validated_effort_resolution
+from ouroboros.gateways import claudexor_metadata as metadata
+from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
 from ouroboros.observability import timed_phase
 
 from ouroboros.config import (
@@ -138,12 +139,10 @@ class ClaudexorUnavailable(RuntimeError):
 
 
 # Cross-repo contract (B1): the engine's window-exhausted RunFailure codes. A
-# newer engine (rotation PR-A) reports a spent credential POOL under its own
-# code. A spent subscription window always heals on a timer (the engine always
-# dates it); a pool heals on a timer only when the engine DATED it (`resetsAt`),
-# an undated pool (every enabled account refused the model, every account
-# disabled) is structural. `_window_exhausted_refusal` is the one reader; the
-# ORIGINAL code is preserved either way. Any other code stays a generic
+# spent window always heals on a timer (the engine dates it); a pool maps only
+# when dated (`resetsAt`): an undated pool (every enabled account refused the
+# model, or every account is disabled) is structural. `_window_exhausted_refusal`
+# is the one reader; original codes stay intact. Any other code stays a generic
 # ClaudexorUnavailable: fail-open, old engines emitting code:null included.
 WINDOW_EXHAUSTED_CODES = ("subscription_window_exhausted", "credential_pool_exhausted")
 
@@ -221,6 +220,8 @@ class DaemonEndpoint:
     host: str
     port: int
     token: str
+    descriptor_path: str = ""
+    descriptor_identity: tuple = ()
 
 
 def engine_at_least(version: str, minimum: str) -> bool:
@@ -288,6 +289,7 @@ def discover_daemon_at(config_dir: pathlib.Path) -> DaemonEndpoint:
 
 
 def _endpoint_from_descriptor(control_path: pathlib.Path) -> DaemonEndpoint:
+    stamp = metadata.descriptor_stamp(control_path)
     try:
         raw = json.loads(control_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
@@ -314,16 +316,7 @@ def _endpoint_from_descriptor(control_path: pathlib.Path) -> DaemonEndpoint:
             "control-api.json is missing host/port/tokenPath",
         )
     try:
-        # The SAME set as the descriptor read four lines up, and for the same reason: a
-        # path out of a JSON descriptor can carry an embedded null and a token file can
-        # hold bytes that are not UTF-8, both of which `read_text` raises as `ValueError`
-        # (`UnicodeDecodeError` is one), and either escaping here is a traceback where a
-        # typed refusal belongs. `RuntimeError` is deliberately NOT in this set, and the
-        # v6.87.44 comment claiming it covered a symlink loop was wrong: `read_text` on a
-        # loop raises `OSError` (ELOOP) — `resolve()` is what raises `RuntimeError`, which
-        # is why `_resolved` in delegate.py catches it and this does not. It was also a
-        # hazard, since `ClaudexorUnavailable` IS a `RuntimeError`: the moment this block
-        # grew a call that refuses typed, the catch would re-wrap it under this code.
+        # Invalid paths/UTF-8 remain typed; never catch RuntimeError and rewrap our own refusal.
         token = pathlib.Path(token_path).read_text(encoding="utf-8").strip()
     except (OSError, ValueError) as exc:
         raise ClaudexorUnavailable(
@@ -345,7 +338,10 @@ def _endpoint_from_descriptor(control_path: pathlib.Path) -> DaemonEndpoint:
             f"daemon control token grants the whole /v2 surface and is only ever sent to "
             f"the local daemon; refusing rather than shipping it off-host.",
         )
-    return DaemonEndpoint(host=host, port=port, token=token)
+    if stamp != metadata.descriptor_stamp(control_path):
+        raise ClaudexorUnavailable("daemon_descriptor_changed", "Daemon descriptor changed during discovery")
+    return DaemonEndpoint(host=host, port=port, token=token,
+                          descriptor_path=str(control_path), descriptor_identity=stamp or ())
 
 
 def _is_loopback(host: str) -> bool:
@@ -438,6 +434,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         self._endpoint = endpoint if endpoint is not None else discover_daemon(home)
         self._engine_version = ""
         self._engine_build_sha = ""
+        self._store_identity = ""
         # trust_env=False: a shell HTTP(S)_PROXY must never be able to intercept the
         # loopback control plane (the bearer token rides these requests).
         self._client = httpx.Client(
@@ -472,6 +469,10 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
     @property
     def engine_build_sha(self) -> str:
         return self._engine_build_sha
+
+    @property
+    def store_identity(self) -> str:
+        return self._store_identity if metadata.endpoint_generation(self._endpoint) is not None else ""
 
     # -- transport -------------------------------------------------------------
 
@@ -524,6 +525,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
             raise ClaudexorUnavailable(
                 "malformed_response",
                 f"Claudexor returned a non-JSON body for {method} {path}: {exc}",
+                status_code=response.status_code,
             ) from exc
 
     def _problem(self, response: httpx.Response, method: str = "") -> ClaudexorUnavailable:
@@ -584,8 +586,8 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         holding a clamped window pays for the OPENING round trip out of that window,
         so an unbounded handshake could spend it before the window began.
         """
-        body = self._request(
-            "POST", "/v2/handshake", timeout_sec=timeout_sec,
+        body = self._request(  # the store identity is an opt-in extension of the handshake
+            "POST", "/v2/handshake", timeout_sec=timeout_sec, headers={"X-Claudexor-Store-Identity": "1"},
             json_body={"protocolMajor": CLAUDEXOR_PROTOCOL_MAJOR, "client": "ouroboros"},
         )
         if not isinstance(body, dict):
@@ -604,6 +606,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
             )
         self._engine_version = version
         self._engine_build_sha = str(engine.get("sha") or "")
+        metadata.remember_handshake(self, body)
         return body
 
     def agent_capabilities(self, *, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
@@ -811,7 +814,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         return [row for row in (rows or []) if isinstance(row, dict)]
 
     def quota_state(self, *, view: Optional[str] = None, model: Optional[str] = None,
-                    request_kind: Optional[str] = None) -> Dict[str, Any]:
+                    request_kind: Optional[str] = None, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         """GET one quota epoch; pass resource or freshness selectors to the engine.
 
         Old engines may ignore/refuse a selector; claudexor_observations owns fallback.
@@ -819,7 +822,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         query = {key: value for key, value in (
             ("view", view), ("model", model), ("requestKind", request_kind),
         ) if value is not None}
-        body = self._request("GET", "/v2/quota" + (f"?{urlencode(query)}" if query else ""))
+        body = self._request("GET", "/v2/quota" + (f"?{urlencode(query)}" if query else ""), timeout_sec=timeout_sec)
         return body if isinstance(body, dict) else {}
 
     def refresh_quota(self, *, target: Optional[Dict[str, str]] = None,
@@ -1177,14 +1180,14 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
     # -- account surfaces (D30: read/translate only; the daemon owns ALL auth
     # logic — profiles, login jobs, device-code custody, verification) ---------
 
-    def credential_profiles(self) -> Dict[str, Any]:
+    def credential_profiles(self, *, timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         """GET /v2/credential-profiles — profiles + per-harness native rows.
 
         The daemon's payload already distinguishes the two verification
         truths the UI must show honestly (Q2-а): ``verification_source``
         ``local_store`` (material present, liveness UNPROVEN) vs ``vendor``
         (the vendor answered a request with this credential)."""
-        body = self._request("GET", "/v2/credential-profiles")
+        body = self._request("GET", "/v2/credential-profiles", timeout_sec=timeout_sec)
         return body if isinstance(body, dict) else {}
 
     def create_credential_profile(self, harness_id: str, profile_id: str,
@@ -1291,14 +1294,8 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         return body if isinstance(body, dict) else {}
 
     def operations(self, *, timeout_sec: Optional[float] = None) -> List[Dict[str, Any]]:
-        """GET /v2/operations — the engine's own implemented-route catalog.
-
-        The handshake advertises this path (``operationsPath``); the catalog is
-        how a caller discovers a capability structurally instead of branching
-        on version folklore (verified live: ``{protocolMajor, operations:[{id,
-        method, path, ...}]}``).
-        """
-        body = self._request("GET", "/v2/operations", timeout_sec=timeout_sec)
+        """The engine's implemented-route catalog, immutable per descriptor generation."""
+        body = metadata.operations(self, lambda: self._request("GET", "/v2/operations", timeout_sec=timeout_sec), timeout_sec=timeout_sec)
         ops = body.get("operations") if isinstance(body, dict) else None
         return [row for row in (ops or []) if isinstance(row, dict)]
 
@@ -1553,13 +1550,14 @@ def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     if not isinstance(run_dir, str) or not run_dir.strip():
         return {}
     import yaml  # type: ignore
+    from ouroboros.delegate_custody_usage import held_run_names
 
     try:
         record = yaml.safe_load(
             (pathlib.Path(run_dir) / "final" / "telemetry.yaml").read_text(encoding="utf-8"))
     except (OSError, ValueError, RuntimeError, yaml.YAMLError):
         return {}
-    if not isinstance(record, dict) or record.get("run_id") != run_id:
+    if not isinstance(record, dict) or str(record.get("run_id") or "") not in held_run_names(detail, run_id):
         return {}
     final_id, attempts = record.get("final_attempt_id"), record.get("attempts")
     if not isinstance(final_id, str) or not final_id.strip() or not isinstance(attempts, list):
@@ -1577,6 +1575,8 @@ def final_attempt_facts(detail: Dict[str, Any], run_id: str) -> Dict[str, Any]:
     }
     if "effort_resolution" in row:
         facts["effort_resolution"] = validated_effort_resolution(row["effort_resolution"])
+    if "prompt_cache_ttl" in row:
+        facts["prompt_cache_ttl"] = validated_prompt_cache_ttl(row["prompt_cache_ttl"])
     return facts
 
 

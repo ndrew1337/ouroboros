@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Union
 
 from ouroboros.gateway.widgets import ExtensionLiveSnapshot
+from ouroboros.gateway.contributions import UiContributionsResponse
 
 try:  # Python 3.11+
     from typing import Literal, NotRequired, Required, TypedDict  # type: ignore[attr-defined]
@@ -36,6 +37,7 @@ class InstalledSkill(TypedDict, total=False):
     content_hash: Required[str]  # the revision every expected_content_hash names
     payload_root: Required[str]  # skills/<bucket>/<dir>, or ""
     installed_at: Required[str]
+    removal: str  # uninstall | delete | "": the server's available removal action
     review_status: str  # clean | warnings | blockers | pending
     review_stale: bool
     review_gate: Dict[str, Any]
@@ -74,7 +76,7 @@ class InstalledSkill(TypedDict, total=False):
     category: List[str]  # the source's category ids for this skill, [] when it has none
 
 
-class ExtensionsIndexResponse(TypedDict):
+class ExtensionsIndexResponse(UiContributionsResponse):
     """``GET /api/extensions``: every installed skill and what the extension loader has live.
     A passive read: no network, no repair."""
 
@@ -132,6 +134,7 @@ class SkillGrantRequest(TypedDict, total=False):
     keys: List[Any]
     granted_keys: List[Any]
     expected_content_hash: str
+    enable_after_grant: bool  # explicit Enable intent stays in this same lifecycle job
 
 
 class SkillDeleteRequest(TypedDict, total=False):
@@ -144,10 +147,17 @@ class SkillDeleteRequest(TypedDict, total=False):
 
 class SkillToggleResponse(TypedDict, total=False):
     """``POST /api/skills/{skill}/toggle`` success. A refusal answers ``SkillActionRefusal``; a
-    toggle with an ``extension_action`` also broadcasts ``extension_lifecycle``."""
+    toggle with an ``extension_action`` also broadcasts ``extension_lifecycle`` when its job ends.
+    Enabling installs missing packages; when that outlasts the answer bound the body is
+    ``{skill, ok, pending: true, job_id, message}`` with no ``enabled`` yet: follow the job on
+    ``GET /api/skills/lifecycle-queue``."""
 
     skill: Required[str]
-    enabled: Required[bool]
+    ok: bool
+    pending: bool
+    job_id: str
+    message: str
+    enabled: bool
     review_status: str
     review_stale: bool
     review_gate: Dict[str, Any]
@@ -169,6 +179,8 @@ class SkillActionRefusal(TypedDict, total=False):
     error: Required[str]
     status_code: int
     skill: str
+    code: str
+    detail: str
     source: str
     content_hash: str
     review_status: str
@@ -244,6 +256,8 @@ class SkillReviewResponse(TypedDict, total=False):
     error: str
     ok: bool  # attest only
     status_code: int  # attest refusal only
+    pending: bool  # attest: the job outlasted the answer bound; review: the wave is still open (author left)
+    message: str  # attest only, with pending
     reviewer_models: List[str]
     review_profile: str
     findings: List[Dict[str, Any]]
@@ -264,7 +278,11 @@ class SkillReviewResponse(TypedDict, total=False):
     extension_server_reconcile: str
     extension_load_error: Optional[str]
     extension_live_loaded: Optional[bool]
-    convergence_hint: Any
+    record_id: str  # the review's ledger record
+    reused: bool  # a settled record of the same subject answered at $0
+    paid: bool
+    seats: List[Dict[str, Any]]
+    governance: Dict[str, Any]
     job_id: str
     job_status: str
     group_id: str
@@ -457,10 +475,12 @@ class ClaudexorProblem(TypedDict):
 
 
 class ClaudexorMaintenanceProblem(TypedDict):
-    """Maintenance refusals carry the engine's ControlProblem object, not a sentence:
-    ``{code, message, retryable?, requiredActions?, context?}``. 503 with
-    ``context.acceptance: "unknown"`` means the request may have been accepted: send the same body
-    with the same Idempotency-Key again."""
+    """Engine or host preparation problem: ``{code, message, retryable?, requiredActions?, context?}``.
+    POST may prepare Node/npm: 409 ``maintenance_restart_required`` asks for chat-header Restart;
+    409/503 ``maintenance_preparation_failed`` reports failure. Both use
+    ``context.acceptance=not_submitted, scope=this_attempt``. Optional inspection failure still
+    permits POST. A 503 ``acceptance=unknown`` may have been accepted: retain its body and
+    Idempotency-Key even after a later preparation-only reply, then resend both."""
 
     error: Dict[str, Any]
 
@@ -699,6 +719,15 @@ class LocalModelTestResponse(TypedDict):
     tokens_per_sec: Any
 
 
+class McpListingAttempt(TypedDict):
+    """The latest listing attempt, independent of any retained successful listing."""
+
+    at: str
+    ok: bool
+    error: str
+    partial: bool
+
+
 class McpServerStatus(TypedDict, total=False):
     """One configured MCP server. A configuration error row has only ``id``, ``enabled``,
     ``tool_count``, ``last_error`` and ``code`` (MCP_CONFIG_ERROR or MCP_ID_AMBIGUOUS)."""
@@ -721,6 +750,10 @@ class McpServerStatus(TypedDict, total=False):
     last_error: Required[Optional[str]]
     last_refreshed: Any
     last_attempted: Any
+    listed_at: Optional[str]
+    latest_attempt: Optional[McpListingAttempt]
+    complete: bool
+    publication_error: str
     code: str
 
 
@@ -747,6 +780,8 @@ class McpRefreshResponse(TypedDict, total=False):
 
     server_id: str
     ok: bool
+    published: bool
+    publication_error: str
     tool_count: int
     configuration_warnings: List[str]
     tool_name_collisions: List[Dict[str, Any]]
@@ -781,11 +816,17 @@ class McpTestResponse(TypedDict, total=False):
 # --- Updates and core control ------------------------------------------------------------------
 
 class UpdateProgress(TypedDict, total=False):
-    """The update this process is applying, kept in memory only; ``{}`` when there is none. It is an
-    observation, never proof that the update finished: compare ``running_sha`` after reconnecting."""
+    """The last admitted apply attempt, kept across restarts; ``{}`` when there is none, a named ``unknown``
+    when it cannot be read. An observation, never authority. ``active`` is true only while THIS server
+    executes it. ``outcome`` stays empty until concluded: ``applied`` only after a later server's startup
+    checks passed while serving the landed commit; ``not_applied``, ``rolled_back``, ``failed`` or
+    ``unknown`` (``reason`` names the missing evidence). ``work_stop`` appears only on the executor's own
+    conclusion; ``none`` means it reached no worker or service teardown. A version, SHA or reconnect
+    alone proves nothing."""
 
     operation_id: str
     generation: str
+    current_generation: bool
     stage: str
     started_at: str
     stage_started_at: str
@@ -793,6 +834,19 @@ class UpdateProgress(TypedDict, total=False):
     result: str
     error: str
     restart_required: bool
+    outcome: Literal["", "applied", "not_applied", "rolled_back", "failed", "unknown"]
+    outcome_at: str
+    concluded_by: Literal["executor", "boot"]
+    reason: str
+    blockers: List[str]
+    work_stop: Literal["", "none", "invoked"]
+    base_sha: str
+    target_sha: str
+    tx_attempt_id: str
+    keep_branch: str
+    stash_note: str
+
+    retention_unconfirmed: bool  # live only: saving this observation failed, not the update itself
 
 
 class UpdateLetter(TypedDict):
@@ -874,13 +928,14 @@ class CommandRequest(TypedDict):
     adds a system row; the same ``visible_task_id`` within 5 seconds is answered as deduped."""
 
     cmd: str
+    client_surface: NotRequired[Dict[str, Any]]
     visible_text: NotRequired[str]
     visible_task_id: NotRequired[str]
     task_constraint: NotRequired[Dict[str, Any]]
 
 
 class CommandResponse(TypedDict, total=False):
-    """``{status: "ok"}``: queued, not done. ``{ok, deduped, task_id}`` for a deduped repeat."""
+    """``{status: "ok"}``: queued, except Panic acknowledges its latch. ``{ok, deduped, task_id}`` for a deduped repeat."""
 
     status: str
     ok: bool
@@ -956,7 +1011,7 @@ __all__ = [
     "ClaudexorProfileEnabledResponse", "ReviewPoolResponse",
     "ModelCatalogItem", "ModelCatalogResponse", "OpenAICompatibleModelsRequest", "LocalModelStartRequest",
     "LocalModelStartResponse", "LocalModelRuntimeMissingResponse", "LocalModelStatusResponse",
-    "LocalModelTestResponse", "McpServerStatus", "McpStatusResponse", "McpRefreshRequest",
+    "LocalModelTestResponse", "McpListingAttempt", "McpServerStatus", "McpStatusResponse", "McpRefreshRequest",
     "McpRefreshResponse", "McpTestRequest", "McpTestResponse",
     "UpdateProgress", "UpdateLetter", "UpdateTransactionState", "UpdateStatusResponse",
     "CommandRequest", "CommandResponse", "GitRollbackRequest", "GitRollbackResponse", "GitPromoteResponse",

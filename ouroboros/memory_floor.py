@@ -133,7 +133,7 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
     ``MODE_TARGET_STEPS``, also to ``budget``. Each element saves its known difference;
     the view is measured once, in full, and never rendered again to choose. ``kept`` (a level a
     shown view already has) stays addressed and the walk goes on from it; ``saving`` is what the
-    walk must save beyond it (an actual size refusal's deficit). Every step stays a prefix of its
+    walk must save beyond it (a predicted or provider-refused size deficit). Every step stays a prefix of its
     elements, so a floor fact's counts name the level (``kept_level``).
     """
     elements = degradable_elements(snapshot)

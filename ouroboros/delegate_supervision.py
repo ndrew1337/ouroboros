@@ -95,6 +95,11 @@ def _load_state(ctx: Any, run_id: str) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         data = {}
+    return supervision_state_for_run(data, run_id)
+
+
+def supervision_state_for_run(data: Any, run_id: str) -> dict[str, Any]:
+    """Share task-scoped facts, never another run's cursor or wake, on wait and recovery."""
     if not isinstance(data, dict) or (
         str(run_id) and str(data.get("run_id") or "") != str(run_id)
     ):
@@ -107,10 +112,14 @@ def _load_state(ctx: Any, run_id: str) -> dict[str, Any]:
         # not re-announce every already-acknowledged child terminal/beacon. Only
         # the acked cursor rides; an unacked ``pending_wake`` (and its uncommitted
         # cursor) stays run-scoped, so an undelivered child event re-emits once.
-        carried = {key: data[key] for key in ("unknown_provider_hold", "coordination_cursor")
-                   if isinstance(data, dict) and isinstance(data.get(key), dict)}
-        data = {"schema": 1, "run_id": str(run_id), "journal_cursor": 0, **carried}
+        data = {"schema": 1, "run_id": str(run_id), "journal_cursor": 0, **task_scoped_supervision(data)}
     return data
+
+
+def task_scoped_supervision(data: Any) -> dict[str, Any]:
+    """The facts every run of one task shares; all a holder without its own wait inherits."""
+    return {key: data[key] for key in ("unknown_provider_hold", "coordination_cursor")
+            if isinstance(data, dict) and isinstance(data.get(key), dict)}
 
 
 def _save_state(ctx: Any, state: dict[str, Any]) -> None:
@@ -176,8 +185,8 @@ def _time_fact(ctx: Any) -> dict[str, Any]:
 
     Disclosed consequence: a metadata-poor task (no ``created_at``/
     ``started_at`` and no anchor latched yet) reports ``state: "not_set"``
-    until a path that OWNS a mutation — the acceptance launch — latches the
-    anchor. A poll answering the same question twice never changes its own
+    until a path that OWNS a mutation — the loop's time-budget notice — latches
+    the anchor. A poll answering the same question twice never changes its own
     next answer."""
     try:
         from ouroboros.task_pacing import observe_budget_profile, observe_budget_snapshot
@@ -325,17 +334,6 @@ def coordination_live_context(ctx: Any) -> dict[str, Any]:
     """
 
     root_task_id = _coordination_root_id(ctx)
-    try:
-        from ouroboros.task_pacing import project_task_acceptance_review_capacity
-
-        review_capacity = project_task_acceptance_review_capacity(ctx)
-    except Exception as exc:
-        review_capacity = {
-            "state": "unknown", "reason": type(exc).__name__,
-            "root_task_id": root_task_id, "cap_cycles": None,
-            "claimed_cycles": None, "remaining_cycles": None,
-            "binding_seen": False, "dedupe": "task_acceptance_binding_sha256",
-        }
     return {
         "observed_at": utc_now_iso(),
         "root_task_id": root_task_id,
@@ -343,7 +341,6 @@ def coordination_live_context(ctx: Any) -> dict[str, Any]:
         "time": _time_fact(ctx),
         "settled_spend": _settled_spend_fact(ctx, root_task_id),
         "active_descendants": _active_descendants_fact(ctx),
-        "review_capacity": review_capacity,
     }
 
 
@@ -735,8 +732,29 @@ def _pending_payload(ctx: Any, state: dict[str, Any]) -> dict[str, Any]:
                 state["status"] = "awake"
                 _save_state(ctx, state)
                 return {}
-        return replay
+        # A pending invocation can bind after this attempt already drained its
+        # mail. Replay the wake's other facts without delivering that mail twice.
+        return unseen_wake_view(replay, getattr(ctx, "_loop_mailbox_seen_ids", None))
     return {}
+
+
+def unseen_wake_view(payload: dict[str, Any], seen: Any) -> dict[str, Any]:
+    """The delivered wake without text mail this attempt's transcript already holds.
+
+    Only the view narrows; the pending wake keeps every mailbox id for its ACK.
+    """
+    events = payload.get("wake_events")
+    if not seen or not isinstance(events, list):
+        return payload
+    kept = [event for event in events if not any(item in seen for item in _text_mailbox_ids([event]))]
+    return payload if len(kept) == len(events) else {**payload, "wake_events": kept}
+
+
+def _text_mailbox_ids(events: Any) -> set[str]:
+    """Only text carried by the delivered view, never omitted mail or controls."""
+    return {str(item["msg_id"]) for item in events if isinstance(item, dict)
+            and item.get("msg_id") and "text" in item
+            and str(item.get("kind") or "owner_text") not in _LOOP_CONTROL_KINDS}
 
 
 def _record_terminal_acknowledged(ctx: Any, state: dict[str, Any], pending: dict[str, Any],
@@ -757,8 +775,41 @@ def _record_terminal_acknowledged(ctx: Any, state: dict[str, Any], pending: dict
         })
 
 
+def stage_pending_wake_exposure(ctx: Any, delivered: Any) -> None:
+    """Stage shown questions and mail in this attempt before saving their transcript.
+
+    No mailbox/wake ACK or run answer occurs here. If the save fails but the
+    transcript remains, exposure remains with it; cold replay is at least once.
+    """
+    try:
+        payload = json.loads(delivered) if isinstance(delivered, str) else delivered
+    except (TypeError, ValueError):
+        return
+    if not _wake_ids(payload):
+        return
+    state = _load_state(ctx, "")
+    pending = state.get("pending_wake") or {}
+    if not pending.get("wake_id") or pending["wake_id"] not in _wake_ids(payload):
+        return
+    _record_exposure(ctx, payload, pending, str(state.get("run_id") or ""))
+
+
+def _record_exposure(ctx: Any, payload: Any, pending: dict[str, Any], run_id: str) -> None:
+    wake = payload.get("wake", payload) if isinstance(payload, dict) else {}
+    if isinstance(wake, dict) and isinstance(wake.get("wake_events"), list):
+        seen_mail = getattr(ctx, "_loop_mailbox_seen_ids", None)
+        if seen_mail is None:
+            seen_mail = ctx._loop_mailbox_seen_ids = set()
+        seen_mail.update(_text_mailbox_ids(wake["wake_events"]))
+    shown = _interaction_ids(payload) & set(pending.get("interaction_ids") or [])
+    if shown and run_id:
+        seen = dict(getattr(ctx, "_sleep_interaction_seen", None) or {})
+        seen[run_id] = sorted(set(seen.get(run_id) or ()) | shown)
+        ctx._sleep_interaction_seen = seen
+
+
 def acknowledge_pending_wake(ctx: Any, delivered: Any = None) -> bool:
-    """Ack only after the exact wake or its verified source handle was delivered."""
+    """Ack the exact delivered wake; incorporated loop callers defer this until save."""
 
     state = _load_state(ctx, "")
     pending = state.get("pending_wake") if isinstance(state.get("pending_wake"), dict) else {}
@@ -840,11 +891,6 @@ def acknowledge_pending_wake(ctx: Any, delivered: Any = None) -> bool:
         _REPORTED_INTERACTIONS[run_id] = frozenset(
             set(_REPORTED_INTERACTIONS.get(run_id, frozenset())) | set(interaction_ids)
         )
-        # Unlike the latest-run checkpoint, this map survives alternating A/B
-        # waits and travels with the transcript through a cold continuation.
-        seen = dict(getattr(ctx, "_sleep_interaction_seen", None) or {})
-        seen[run_id] = sorted(set(seen.get(run_id) or ()) | (set(interaction_ids) & _interaction_ids(payload)))
-        ctx._sleep_interaction_seen = seen
     prior_mailbox_ids = (
         state.get("mailbox_acknowledged_ids") or []
         if str(state.get("mailbox_acknowledged_attempt_key") or "") == attempt
@@ -867,6 +913,11 @@ def acknowledge_pending_wake(ctx: Any, delivered: Any = None) -> bool:
     state["pending_wake"] = {}
     state["status"] = "awake"
     _save_state(ctx, state)
+    # Compatibility for direct ACK consumers (the UNKNOWN hold): only a saved receipt
+    # records exposure, since the hold drops a receipt whose ACK failed (#2142).
+    # Loop/startup consumers stage BEFORE saving.
+    if expected:
+        _record_exposure(ctx, payload, pending, str(state.get("run_id") or ""))
     return True
 
 
@@ -1113,6 +1164,9 @@ def supervised_wait(
         from functools import partial
 
         wait_once = partial(_delegate_wait, observation_only=True)
+    from ouroboros.delegate_recovery import restore_bound_handoff
+
+    restore_bound_handoff(ctx, run_id)
     state = _load_state(ctx, run_id)
     replay = _pending_payload(ctx, state)
     if replay:
@@ -1401,6 +1455,6 @@ def delegate_wait_entry(
 
 
 __all__ = [
-    "acknowledge_pending_wake", "delegate_wait_entry", "supervised_wait",
-    "supervision_checkpoint", "coordination_live_context",
+    "acknowledge_pending_wake", "stage_pending_wake_exposure", "delegate_wait_entry", "supervised_wait",
+    "supervision_checkpoint", "coordination_live_context", "unseen_wake_view",
 ]

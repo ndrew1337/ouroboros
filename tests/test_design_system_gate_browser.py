@@ -40,10 +40,9 @@ TG_STUB = """(() => {
         HapticFeedback:{impactOccurred(){}}, openLink(){}}};
 })()"""
 
-# Deliberate wide content owns a local scroller. Never exempt a page scroll body
-# merely because it happens to contain a table or pre somewhere below it.
-MEASURE = """root => {
-    const shown = e => {
+# What a person sees: a box with a size that nothing hides (an ancestor invisible or transparent, or a closed
+# <details> other than at its summary: an engine may keep layout boxes for a closed <details>' content).
+SHOWN = """e => {
         if (!e.getClientRects().length || !e.getBoundingClientRect().width ||
             !e.getBoundingClientRect().height || e.closest('[hidden], [inert]')) return false;
         for (let p=e; p; p=p.parentElement) {
@@ -52,7 +51,12 @@ MEASURE = """root => {
             if (p.matches('details:not([open])') && !p.querySelector(':scope > summary')?.contains(e)) return false;
         }
         return true;
-    };
+    }"""
+
+# Deliberate wide content owns a local scroller. Never exempt a page scroll body
+# merely because it happens to contain a table or pre somewhere below it.
+MEASURE = """root => {
+    const shown = """ + SHOWN + """;
     const name = e => e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') +
         [...e.classList].slice(0,3).map(c=>'.'+c).join('');
     const local = e => e.matches('.app-tab-strip, pre, .md-table-wrap, .widget-table-wrap, ' +
@@ -152,6 +156,18 @@ def settle(page):
     page.evaluate('() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))')
 
 
+# The shell at rest (shell_motion.js): no room still leaving and no animation or transition running that ends (the
+# moving marks' wave loops for good). A place picked in the phone drawer changes inside the room card over a beat and
+# the drawer's close, so what a test reads next is read once that motion is over.
+AT_REST = """() => !document.querySelector('[data-leaving]') && document.getAnimations().every((a) =>
+    a.playState !== 'running' || a.effect?.getComputedTiming?.().iterations === Infinity)"""
+
+
+def rest(page, timeout=5000):
+    page.wait_for_function(AT_REST, timeout=timeout)
+    settle(page)
+
+
 def nav_pages(page):
     # The one registry of places (web/modules/pages.js): a new page is gated here with no further edit.
     ids = page.evaluate("async () => (await import('/static/modules/pages.js')).PAGES.map(p => p.id)")
@@ -163,11 +179,12 @@ def nav_pages(page):
 def open_nav(page, name):
     row = page.locator(f'[data-nav-page="{name}"]')
     toggle = page.locator('[data-mobile-nav-toggle]:visible').first
-    if toggle.count() and toggle.get_attribute('aria-expanded') != 'true':
+    drawer = bool(toggle.count())
+    if drawer and toggle.get_attribute('aria-expanded') != 'true':
         toggle.click()
     row.click()
     page.locator(f'#page-{name}').wait_for(state='visible')
-    settle(page)
+    rest(page)
 
 
 def sidebar_metrics(page):
@@ -249,6 +266,53 @@ def test_every_page_and_settings_tab_meets_shell_contract(gate_ui, tmp_path, wid
     summary = {key: {kind: len(rows) for kind, rows in value.items()}
                if isinstance(value, dict) and 'small' in value else value for key,value in failures.items()}
     assert not failures, f'{ui["engine"]} {width}x{height}, evidence {path}:\n{json.dumps(summary, indent=2)}'
+
+
+def test_main_header_keeps_one_row_whatever_width_its_words_set(gate_ui, tmp_path):
+    """DESIGN "Page header": one row that never wraps. At the first docked width Main's bar is narrow (Restart and
+    the budget wait in ⋯) and this Mac's face left its commands about ten pixels; a wider face (Linux WebKit set
+    them two rows high) moves nothing onto a second row and nothing out of the bar: the commands keep their place
+    and the status yields, its word dropping whole while its mark stays. A word too wide for its place drops."""
+    page = seed_page(gate_ui, 720, 844)
+    facts = {}
+    try:
+        page.goto(gate_ui['url'] + '/')
+        page.wait_for_selector('#chat-input', state='attached')
+        page.wait_for_selector('#nav-projects-list [data-project-id]', state='attached')
+        # Every word in the bar set wider than any face the shell ships with would set it (a control does not
+        # inherit letter-spacing, so each element takes it); then the status word alone, wider than any bar.
+        for step, rule in (('wide-face', '#page-chat .chat-page-header, #page-chat .chat-page-header *'),
+                           ('wide-word', '#page-chat .chat-page-header .rw-trigger .status-badge')):
+            page.add_style_tag(content=rule + (' { letter-spacing: 0.3em; }' if step == 'wide-face'
+                                               else ' { letter-spacing: 6em; }'))
+            # The word is fitted when its text or the bar's width changes (room_work.js fitWord); a real face is
+            # there at first paint, so the bar is made to fit it again: one pixel wider and back.
+            for width in (721, 720):
+                page.set_viewport_size({'width': width, 'height': 844})
+                settle(page)
+            facts[step] = page.locator('#page-chat .chat-page-header').evaluate("""bar => {
+                const shown = """ + SHOWN + """;
+                const box = bar.getBoundingClientRect();
+                const within = (e) => { const r = e.getBoundingClientRect();
+                    return r.left >= box.left - 1 && r.right <= box.right + 1 && r.top >= box.top - 1
+                        && r.bottom <= box.bottom + 1; };
+                const commands = [...bar.querySelectorAll('.app-page-actions :is(button, summary)')].filter(shown);
+                const status = bar.querySelector('.rw-trigger'), word = status?.querySelector('.status-badge');
+                return {height: box.height, commands: commands.map((node) => node.textContent.trim()),
+                    outside: commands.filter((node) => !within(node)).map((node) => node.textContent.trim()),
+                    mark: Boolean(status && shown(status) && within(status)), dropped: status?.dataset.word === 'off',
+                    wordShown: Boolean(word && shown(word)),
+                    wordClipped: Boolean(word && word.scrollWidth > word.clientWidth + 1)};
+            }""")
+        save_evidence(tmp_path, f'gate-{gate_ui["engine"]}-main-header-wide-words', facts)
+    finally:
+        page.close()
+    for step, fact in facts.items():
+        assert fact['height'] <= 56.1, (step, fact)
+        assert fact['commands'] == ['Panic', 'More'] and not fact['outside'], (step, fact)
+        # The word shows whole or not at all, and its mark stays in the bar either way.
+        assert fact['mark'] and (fact['dropped'] != fact['wordShown']) and not fact['wordClipped'], (step, fact)
+    assert facts['wide-word']['dropped'], facts
 
 
 @pytest.mark.parametrize('width,height', [(390, 844), (844, 320)])

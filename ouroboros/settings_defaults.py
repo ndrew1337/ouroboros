@@ -275,6 +275,9 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     #   off   — no LLM safety calls at all; the deterministic registry sandbox, protected-path
     #           policy and light-mode guards STAY ON. Every non-full mode audits durably.
     "OUROBOROS_SAFETY_MODE": "full",
+    "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE": "full",
+    "OUROBOROS_MODEL_SAFETY": "",
+    "OUROBOROS_SAFETY_OWNER_RULES": "",
     # Safety-supervisor LLM call shaping (v6.54.3 parse-bug fix): a tight output
     # budget + no reasoning keeps the light model from spending its whole budget on
     # hidden reasoning and returning a 1-token/empty body that fails JSON parse and
@@ -291,13 +294,9 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # wait ceiling is min(configured ceiling, remaining/4); below this floor plan_task SKIPS
     # with a typed reason + telemetry rather than eat the tail of the budget.
     "OUROBOROS_PLAN_TASK_DEADLINE_MIN_SEC": 300,
-    # Acceptance-review budget layer (task_pacing SSOT): the configurable
-    # acceptance admission floor, clamped to >=200 s by task_pacing.
-    "OUROBOROS_ACCEPTANCE_REVIEW_EST_SEC": 200,
     # Shared paid-review-cycle cap (SSOT + per-gate meaning: ouroboros/review_cycles.py):
-    # STRING "N"|"unlimited": paid plan/acceptance/commit/skill waves; final feedback still permits author response. Explicit task-local author limits and free identical-material replay remain separate.
+    # STRING "N"|"unlimited": paid result/commit/skill waves (plan asks stand outside it); final feedback still permits author response. Explicit task-local author limits and free identical-material replay remain separate.
     "OUROBOROS_REVIEW_MAX_CYCLES": "2",
-    "OUROBOROS_ACCEPTANCE_RESERVE_PCT": 5,
     # Prompt-cache TTL, one honest GLOBAL override (owner decision 2026-08-08, batch #2 Q2=A): applied to
     # EVERY cache_control breakpoint on the Anthropic-normalizing family — main loop, review lanes, safety
     # supervisor alike — at the ONE send-time finalizer (llm._normalize_payload_cache_ttl). 'default' = bare
@@ -351,7 +350,7 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
 RETIRED_SETTING_KEYS: tuple[str, ...] = (
     # v6.87.7: the depth cap conflated how DEEP delegation nests with how STRONG a descendant is.
     "OUROBOROS_SUBAGENT_CAPABILITY_DEPTH_LIMIT",
-    # knobs are retired (the review-cycle cap OUROBOROS_REVIEW_MAX_CYCLES bounds plan review).
+    # The acceptance improvement-pass and plan-swarm knobs are retired (the cap bounds result/commit/skill waves).
     "OUROBOROS_ACCEPTANCE_MAX_IMPROVEMENT_PASSES",
     "OUROBOROS_PLAN_TASK_SWARM_TIMEOUT_SEC",
     "OUROBOROS_PLAN_TASK_SWARM_MAX_WAIT_SEC",
@@ -406,6 +405,10 @@ RETIRED_SETTING_KEYS: tuple[str, ...] = (
     "OUROBOROS_EFFORT_SCOPE_REVIEW",
     "OUROBOROS_EFFORT_DEEP_SELF_REVIEW",
     "OUROBOROS_MODEL_DEEP_SELF_REVIEW",
+    # Task acceptance folded into review_change(subject="result"): its launch floor and default reserve are gone (a
+    # budget profile's reserve_finalization_pct still applies; a review is bounded by the deadline less the grace).
+    "OUROBOROS_ACCEPTANCE_REVIEW_EST_SEC",
+    "OUROBOROS_ACCEPTANCE_RESERVE_PCT",
 )
 
 
@@ -507,7 +510,9 @@ def retired_setting_keys_notice(dropped: tuple[str, ...]) -> str:
 # ordinary load->save round-trip in a process whose env says low/off would launder that value onto disk
 # unauthorised — or, once the guard reads disk, raise a PermissionError nobody authored. Owner endpoints
 # write BOTH disk and env, so the owner path is unaffected. Keep-running is consent: absent means not asked yet.
-_DISK_AUTHORED_SETTINGS = ("OUROBOROS_CONTEXT_MODE", "OUROBOROS_CONTEXT_MODE_AUTO_LOW", "OUROBOROS_SAFETY_MODE", "OUROBOROS_DESKTOP_KEEP_RUNNING")
+_DISK_AUTHORED_SETTINGS = ("OUROBOROS_CONTEXT_MODE", "OUROBOROS_CONTEXT_MODE_AUTO_LOW", "OUROBOROS_SAFETY_MODE",
+                          "OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "OUROBOROS_SAFETY_OWNER_RULES",
+                          "OUROBOROS_MODEL_SAFETY", "OUROBOROS_DESKTOP_KEEP_RUNNING")
 
 # ENDPOINT-AUTHORED, DISK-ONLY: install-time facts POST /api/onboarding/complete alone writes. The ratchets above are
 # disk-authored yet DO project once the file carries them; these never leave disk in EITHER direction — an env timestamp alone closed the onboarding window on a fresh install, and an env marker was then persisted by a save.

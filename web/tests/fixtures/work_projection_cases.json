@@ -13,7 +13,7 @@
      },
      "activity": "working",
      "transition": "none",
-     "call": "working",
+     "call": "",
      "because": [
       {
        "code": "earlier_attempt_finishing",
@@ -26,21 +26,73 @@
        ]
       }
      ],
+     "tails": [],
+     "live": true,
      "turn": [],
      "release": "self",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 3,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "c",
        "h0",
        "h1",
        "h2"
-      ]
+      ],
+      "states": {
+       "c": {
+        "activity": "waiting",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "earlier_work_unconfirmed",
+          "text": "Continue starts when the earlier attempt's work is confirmed finished"
+         }
+        ],
+        "tails": []
+       },
+       "h0": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       },
+       "h1": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       },
+       "h2": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "moving",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -67,7 +119,7 @@
     "42": {
      "activity": "working",
      "transition": "none",
-     "call": "working",
+     "call": "",
      "turn": [],
      "amber": false,
      "mark": "moving",
@@ -105,18 +157,32 @@
      "transition": "none",
      "call": "sending",
      "because": [],
+     "tails": [],
+     "live": true,
      "turn": [],
      "release": "self",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "w"
-      ]
+      ],
+      "states": {
+       "w": {
+        "activity": "working",
+        "transition": "none",
+        "call": "sending",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "moving",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -188,6 +254,8 @@
        "text": "Waiting for your answer"
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [
       {
        "kind": "question",
@@ -196,16 +264,39 @@
       }
      ],
      "release": "owner",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "d"
-      ]
+      ],
+      "states": {
+       "d": {
+        "activity": "waiting",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "owner",
+        "confirmed": true,
+        "turn": [
+         {
+          "kind": "question",
+          "task_id": "d",
+          "quiz_id": "q1"
+         }
+        ],
+        "because": [
+         {
+          "code": "owner_answer",
+          "text": "Waiting for your answer"
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "still",
      "kind": "direct",
      "project_id": "",
      "since": 100.0,
@@ -237,7 +328,7 @@
       }
      ],
      "amber": true,
-     "mark": "dot",
+     "mark": "still",
      "confirmed": true,
      "works": [
       "d"
@@ -274,22 +365,64 @@
      "because": [
       {
        "code": "paused_by_owner",
-       "text": "Paused by you",
-       "since": "2026-10-17T15:00:00Z"
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [],
-     "release": "owner",
-     "paused_by": "owner",
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "o"
-      ]
+      ],
+      "states": {
+       "o": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "pause",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -313,7 +446,7 @@
      "call": "",
      "turn": [],
      "amber": false,
-     "mark": "dot",
+     "mark": "pause",
      "confirmed": true,
      "works": [
       "o"
@@ -350,22 +483,63 @@
      "because": [
       {
        "code": "paused_by_mind",
-       "text": "Paused by Ouroboros",
-       "since": 100.0
+       "text": "Ouroboros paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "ouroboros",
+        "text": "pause before the update you asked for",
+        "at": "2026-10-17T15:00:00Z"
+       }
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [],
      "release": "mind",
-     "paused_by": "mind",
+     "stop": {
+      "state": "paused",
+      "requested_by": "owner",
+      "actor": "mind",
+      "actor_task_id": "mind-1",
+      "reason": "pause before the update you asked for",
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "m"
-      ]
+      ],
+      "states": {
+       "m": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_mind",
+          "text": "Ouroboros paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "ouroboros",
+           "text": "pause before the update you asked for",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "pause",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -389,7 +563,7 @@
      "call": "",
      "turn": [],
      "amber": false,
-     "mark": "dot",
+     "mark": "pause",
      "confirmed": true,
      "works": [
       "m"
@@ -426,10 +600,11 @@
      "because": [
       {
        "code": "spending_limit",
-       "text": "Spending limit reached",
-       "since": 100.0
+       "text": "Spending limit reached"
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [
       {
        "kind": "action",
@@ -438,16 +613,45 @@
       }
      ],
      "release": "owner",
-     "paused_by": null,
+     "stop": {
+      "reason": "budget",
+      "cause": "money",
+      "release": "resume",
+      "ui_code": "budget_paused",
+      "scope": "member"
+     },
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "s"
-      ]
+      ],
+      "states": {
+       "s": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [
+         {
+          "kind": "action",
+          "task_id": "s",
+          "code": "spending_limit"
+         }
+        ],
+        "because": [
+         {
+          "code": "spending_limit",
+          "text": "Spending limit reached"
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "pause",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -478,7 +682,7 @@
       }
      ],
      "amber": true,
-     "mark": "dot",
+     "mark": "pause",
      "confirmed": true,
      "works": [
       "s"
@@ -521,6 +725,8 @@
        ]
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [
       {
        "kind": "action",
@@ -530,16 +736,43 @@
       }
      ],
      "release": "owner",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "a"
-      ]
+      ],
+      "states": {
+       "a": {
+        "activity": "waiting",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "owner",
+        "confirmed": true,
+        "turn": [
+         {
+          "kind": "action",
+          "task_id": "a",
+          "wait_id": "w1",
+          "code": "model_access"
+         }
+        ],
+        "because": [
+         {
+          "code": "model_access",
+          "text": "The model needs you: sign in or restore access",
+          "ids": [
+           "w1"
+          ]
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "still",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -571,7 +804,7 @@
       }
      ],
      "amber": true,
-     "mark": "dot",
+     "mark": "still",
      "confirmed": true,
      "works": [
       "a"
@@ -608,22 +841,64 @@
      "because": [
       {
        "code": "paused_by_owner",
-       "text": "Paused by you",
-       "since": 100.0
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
       }
      ],
+     "tails": [],
+     "live": true,
      "turn": [],
-     "release": "self",
-     "paused_by": null,
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "z"
-      ]
+      ],
+      "states": {
+       "z": {
+        "activity": "working",
+        "transition": "pausing",
+        "call": "",
+        "live": true,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "moving",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -656,18 +931,37 @@
        "text": "Waiting for a free worker"
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [],
      "release": "self",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "q"
-      ]
+      ],
+      "states": {
+       "q": {
+        "activity": "queued",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "queued",
+          "text": "Waiting for a free worker"
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "still",
      "kind": "task",
      "project_id": "",
      "since": 90.0,
@@ -713,6 +1007,582 @@
    "works_complete": true,
    "works_gaps": []
   },
+  "pausing_with_queued_helper": {
+   "works": [
+    {
+     "work_id": "pr",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "pr",
+      "live": true
+     },
+     "activity": "working",
+     "transition": "pausing",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_by_owner",
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
+      }
+     ],
+     "tails": [
+      {
+       "code": "helpers_running",
+       "text": "1 helper still working",
+       "count": 1,
+       "ids": [
+        "pc-run"
+       ],
+       "kind": "helper",
+       "state": "live"
+      }
+     ],
+     "live": true,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "pr",
+       "pc-run",
+       "pc-new"
+      ],
+      "states": {
+       "pr": {
+        "activity": "working",
+        "transition": "pausing",
+        "call": "",
+        "live": true,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       },
+       "pc-run": {
+        "activity": "working",
+        "transition": "pausing",
+        "call": "",
+        "live": true,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       },
+       "pc-new": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "moving",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "pause",
+       "target": "pr"
+      },
+      {
+       "action": "stop",
+       "target": "pr",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "working",
+     "transition": "pausing",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "moving",
+     "confirmed": true,
+     "works": [
+      "pr"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 1,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 0,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "two_works_one_pausing": {
+   "works": [
+    {
+     "work_id": "wa",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "wa",
+      "live": true
+     },
+     "activity": "working",
+     "transition": "pausing",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_by_owner",
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
+      }
+     ],
+     "tails": [],
+     "live": true,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "wa"
+      ],
+      "states": {
+       "wa": {
+        "activity": "working",
+        "transition": "pausing",
+        "call": "",
+        "live": true,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "moving",
+     "kind": "task",
+     "project_id": "",
+     "since": 200.0,
+     "controls": [
+      {
+       "action": "pause",
+       "target": "wa"
+      },
+      {
+       "action": "stop",
+       "target": "wa",
+       "scope": "cascade"
+      }
+     ]
+    },
+    {
+     "work_id": "wb",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "wb",
+      "live": true
+     },
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "because": [],
+     "tails": [],
+     "live": true,
+     "turn": [],
+     "release": "self",
+     "stop": {},
+     "refusal": {},
+     "members": {
+      "ids": [
+       "wb"
+      ],
+      "states": {
+       "wb": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "moving",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "wrap_up",
+       "target": "wb"
+      },
+      {
+       "action": "hurry",
+       "target": "wb"
+      },
+      {
+       "action": "pause",
+       "target": "wb"
+      },
+      {
+       "action": "stop",
+       "target": "wb",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "turn": [],
+     "amber": false,
+     "mark": "moving",
+     "confirmed": true,
+     "works": [
+      "wa",
+      "wb"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 2,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 0,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "working_with_review": {
+   "works": [
+    {
+     "work_id": "wr",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "wr",
+      "live": true
+     },
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "because": [],
+     "tails": [],
+     "live": true,
+     "turn": [],
+     "release": "self",
+     "stop": {},
+     "refusal": {},
+     "members": {
+      "ids": [
+       "wr"
+      ],
+      "states": {
+       "wr": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "moving",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "wrap_up",
+       "target": "wr"
+      },
+      {
+       "action": "hurry",
+       "target": "wr"
+      },
+      {
+       "action": "pause",
+       "target": "wr"
+      },
+      {
+       "action": "stop",
+       "target": "wr",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "turn": [],
+     "amber": false,
+     "mark": "moving",
+     "confirmed": true,
+     "works": [
+      "wr"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 1,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 0,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "paused_stop_unknown": {
+   "works": [
+    {
+     "work_id": "so",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "so",
+      "live": true
+     },
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_by_owner",
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
+      }
+     ],
+     "tails": [
+      {
+       "code": "external_runs_unconfirmed",
+       "text": "1 external run may still be running",
+       "count": 1,
+       "ids": [
+        "run-s"
+       ],
+       "kind": "run",
+       "state": "unknown"
+      }
+     ],
+     "live": false,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "so"
+      ],
+      "states": {
+       "so": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "pause",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "resume",
+       "target": "so"
+      },
+      {
+       "action": "stop",
+       "target": "so",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "ring",
+     "confirmed": true,
+     "works": [
+      "so"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 0,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 1,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
   "finalizing_failed": {
    "works": [
     {
@@ -727,18 +1597,32 @@
      "transition": "finalizing",
      "call": "",
      "because": [],
+     "tails": [],
+     "live": true,
      "turn": [],
      "release": "self",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "f"
-      ]
+      ],
+      "states": {
+       "f": {
+        "activity": "working",
+        "transition": "finalizing",
+        "call": "",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "moving",
      "outcome": "failed",
      "kind": "task",
      "project_id": "",
@@ -808,22 +1692,40 @@
      "because": [
       {
        "code": "sleeping",
-       "text": "Sleeping until it is woken",
-       "since": 100.0
+       "text": "Sleeping until it is woken"
       }
      ],
+     "tails": [],
+     "live": false,
      "turn": [],
-     "release": "owner",
-     "paused_by": null,
+     "release": "self",
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "sl"
-      ]
+      ],
+      "states": {
+       "sl": {
+        "activity": "waiting",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "sleeping",
+          "text": "Sleeping until it is woken"
+         }
+        ],
+        "tails": []
+       }
+      }
      },
      "confirmed": true,
+     "mark": "still",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -843,7 +1745,7 @@
      "call": "",
      "turn": [],
      "amber": false,
-     "mark": "dot",
+     "mark": "still",
      "confirmed": true,
      "works": [
       "sl"
@@ -878,18 +1780,32 @@
      "transition": "none",
      "call": "",
      "because": [],
+     "tails": [],
+     "live": false,
      "turn": [],
      "release": "self",
-     "paused_by": null,
+     "stop": {},
+     "refusal": {},
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 0,
       "ids": [
        "u"
-      ]
+      ],
+      "states": {
+       "u": {
+        "activity": "unknown",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "self",
+        "confirmed": false,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
      },
      "confirmed": false,
+     "mark": "ring",
      "kind": "task",
      "project_id": "",
      "since": 100.0,
@@ -943,28 +1859,40 @@
      "activity": "working",
      "transition": "none",
      "call": "",
-     "because": [
+     "because": [],
+     "tails": [
       {
        "code": "delegated_running",
        "text": "2 external runs still working",
-       "count": 2
+       "count": 2,
+       "ids": [
+        "run-1",
+        "run-2"
+       ],
+       "kind": "run",
+       "state": "live"
       }
      ],
+     "live": true,
      "turn": [],
      "release": "self",
-     "paused_by": null,
      "members": {
-      "working": 0,
-      "waiting": 0,
-      "delegated": 2,
-      "ids": []
+      "ids": [],
+      "states": {}
      },
      "confirmed": true,
+     "mark": "moving",
      "outcome": "done",
      "kind": "task",
      "project_id": "",
      "since": null,
-     "controls": []
+     "controls": [
+      {
+       "action": "stop",
+       "target": "r",
+       "scope": "cascade"
+      }
+     ]
     }
    ],
    "rooms": {
@@ -994,9 +1922,593 @@
    },
    "works_complete": true,
    "works_gaps": []
+  },
+  "helper_after_parent": {
+   "works": [
+    {
+     "work_id": "p",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "p",
+      "live": false
+     },
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "because": [],
+     "tails": [
+      {
+       "code": "helpers_running",
+       "text": "1 helper still working",
+       "count": 1,
+       "ids": [
+        "h"
+       ],
+       "kind": "helper",
+       "state": "live"
+      }
+     ],
+     "live": true,
+     "turn": [],
+     "release": "self",
+     "members": {
+      "ids": [
+       "h"
+      ],
+      "states": {
+       "h": {
+        "activity": "working",
+        "transition": "none",
+        "call": "working",
+        "live": true,
+        "release": "self",
+        "confirmed": true,
+        "turn": [],
+        "because": [],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "moving",
+     "outcome": "completed",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "pause",
+       "target": "p"
+      },
+      {
+       "action": "stop",
+       "target": "p",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "working",
+     "transition": "none",
+     "call": "working",
+     "turn": [],
+     "amber": false,
+     "mark": "moving",
+     "confirmed": true,
+     "works": [
+      "p"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 1,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 0,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "paused_review_finishing": {
+   "works": [
+    {
+     "work_id": "rv",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "rv",
+      "live": true
+     },
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_by_owner",
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
+      }
+     ],
+     "tails": [
+      {
+       "code": "review_work_finishing",
+       "text": "Review work finishing",
+       "ids": [
+        "run-review"
+       ],
+       "kind": "review",
+       "state": "live"
+      }
+     ],
+     "live": true,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "rv"
+      ],
+      "states": {
+       "rv": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "pause",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "resume",
+       "target": "rv"
+      },
+      {
+       "action": "stop",
+       "target": "rv",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "moving",
+     "confirmed": true,
+     "works": [
+      "rv"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 0,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 1,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "unconfirmed_run": {
+   "works": [
+    {
+     "work_id": "x",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "x",
+      "live": false
+     },
+     "activity": "unknown",
+     "transition": "none",
+     "call": "",
+     "because": [],
+     "tails": [
+      {
+       "code": "external_runs_unconfirmed",
+       "text": "1 external run may still be running",
+       "count": 1,
+       "ids": [
+        "run-u"
+       ],
+       "kind": "run",
+       "state": "unknown"
+      }
+     ],
+     "live": false,
+     "turn": [],
+     "release": "none",
+     "members": {
+      "ids": [],
+      "states": {}
+     },
+     "confirmed": true,
+     "mark": "ring",
+     "outcome": "failed",
+     "kind": "task",
+     "project_id": "",
+     "since": null,
+     "controls": [
+      {
+       "action": "stop",
+       "target": "x",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "unknown",
+     "transition": "none",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "ring",
+     "confirmed": true,
+     "works": [
+      "x"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 0,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 0,
+     "unknown": 1
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "paused_unattributed": {
+   "works": [
+    {
+     "work_id": "n",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "n",
+      "live": true
+     },
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_unattributed",
+       "text": "",
+       "since": "2026-10-17T15:00:00Z"
+      }
+     ],
+     "tails": [],
+     "live": false,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "requested_by": "owner",
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "n"
+      ],
+      "states": {
+       "n": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_unattributed",
+          "text": "",
+          "since": "2026-10-17T15:00:00Z"
+         }
+        ],
+        "tails": []
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "pause",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "resume",
+       "target": "n"
+      },
+      {
+       "action": "stop",
+       "target": "n",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "pause",
+     "confirmed": true,
+     "works": [
+      "n"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 0,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 1,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
+  },
+  "paused_model_handoff": {
+   "works": [
+    {
+     "work_id": "mh",
+     "room": 42,
+     "name": "",
+     "episode": {
+      "task_id": "mh",
+      "live": true
+     },
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "because": [
+      {
+       "code": "paused_by_owner",
+       "text": "You paused it",
+       "since": "2026-10-17T15:00:00Z",
+       "by": {
+        "actor": "owner",
+        "text": "",
+        "at": "2026-10-17T15:00:00Z"
+       }
+      }
+     ],
+     "tails": [
+      {
+       "code": "model_handoff",
+       "text": "a model request has no recorded result",
+       "count": 1,
+       "ids": [
+        "attempt-mh"
+       ],
+       "kind": "model",
+       "state": "unknown"
+      }
+     ],
+     "live": false,
+     "turn": [],
+     "release": "mind",
+     "stop": {
+      "state": "paused",
+      "by": {
+       "actor": "owner",
+       "text": "",
+       "at": "2026-10-17T15:00:00Z"
+      },
+      "requested_at": "2026-10-17T15:00:00Z",
+      "cause": "pause",
+      "release": "resume",
+      "ui_code": "owner_paused",
+      "scope": "tree"
+     },
+     "refusal": {},
+     "members": {
+      "ids": [
+       "mh"
+      ],
+      "states": {
+       "mh": {
+        "activity": "paused",
+        "transition": "none",
+        "call": "",
+        "live": false,
+        "release": "mind",
+        "confirmed": true,
+        "turn": [],
+        "because": [
+         {
+          "code": "paused_by_owner",
+          "text": "You paused it",
+          "since": "2026-10-17T15:00:00Z",
+          "by": {
+           "actor": "owner",
+           "text": "",
+           "at": "2026-10-17T15:00:00Z"
+          }
+         }
+        ],
+        "tails": [
+         {
+          "code": "model_handoff",
+          "text": "a model request has no recorded result",
+          "count": 1,
+          "ids": [
+           "attempt-mh"
+          ],
+          "kind": "model",
+          "state": "unknown"
+         }
+        ]
+       }
+      }
+     },
+     "confirmed": true,
+     "mark": "pause",
+     "kind": "task",
+     "project_id": "",
+     "since": 100.0,
+     "controls": [
+      {
+       "action": "resume",
+       "target": "mh"
+      },
+      {
+       "action": "stop",
+       "target": "mh",
+       "scope": "cascade"
+      }
+     ]
+    }
+   ],
+   "rooms": {
+    "42": {
+     "activity": "paused",
+     "transition": "none",
+     "call": "",
+     "turn": [],
+     "amber": false,
+     "mark": "ring",
+     "confirmed": true,
+     "works": [
+      "mh"
+     ]
+    }
+   },
+   "work_summary": {
+    "counts": {
+     "working": 0,
+     "queued": 0,
+     "waiting": 0,
+     "paused": 1,
+     "unknown": 0
+    },
+    "turn": 0,
+    "confirmed": true
+   },
+   "works_complete": true,
+   "works_gaps": []
   }
  },
  "reasons": {
+  "paused_by_owner": {
+   "": "You paused it"
+  },
+  "paused_by_mind": {
+   "": "Ouroboros paused it"
+  },
+  "paused_unattributed": {
+   "": ""
+  },
+  "saved_on_stop": {
+   "": "Saved when the app stopped"
+  },
+  "after_restart": {
+   "": "Held after a restart"
+  },
+  "after_panic": {
+   "": "Stopped by Panic"
+  },
+  "spending_limit": {
+   "": "Spending limit reached"
+  },
+  "technical_pause": {
+   "": "After a technical problem"
+  },
+  "awaiting_selection": {
+   "": "Waiting for Ouroboros or you to resume it"
+  },
+  "restore_failed": {
+   "": "Its saved state could not be restored"
+  },
+  "held": {
+   "": "Held"
+  },
+  "sleeping": {
+   "": "Sleeping until it is woken"
+  },
+  "earlier_work_unconfirmed": {
+   "": "Continue starts when the earlier attempt's work is confirmed finished"
+  },
+  "model_handoff": {
+   "": "a model request has no recorded result"
+  },
   "earlier_attempt_finishing": {
    "1": "Continue starts when the helper of the earlier attempt finishes",
    "3": "Continue starts when 3 helpers of the earlier attempt finish"
@@ -1004,9 +2516,6 @@
   "earlier_runs_finishing": {
    "1": "Continue starts when the external run of the earlier attempt finishes",
    "3": "Continue starts when 3 external runs of the earlier attempt finish"
-  },
-  "earlier_work_unconfirmed": {
-   "": "Continue starts when the earlier attempt's work is confirmed finished"
   },
   "helpers_running": {
    "1": "1 helper still working",
@@ -1031,44 +2540,12 @@
   "queued": {
    "": "Waiting for a free worker"
   },
-  "sleeping": {
-   "": "Sleeping until it is woken"
-  },
-  "paused_by_owner": {
-   "": "Paused by you"
-  },
-  "paused_by_mind": {
-   "": "Paused by Ouroboros"
-  },
-  "paused_by_host": {
-   "": "Paused while the app stopped"
-  },
-  "saved_on_stop": {
-   "": "Saved when the app stopped; Resume continues it"
-  },
-  "after_restart": {
-   "": "Held after a restart; Resume continues it"
-  },
-  "after_panic": {
-   "": "Stopped by Panic; Resume continues it"
-  },
-  "spending_limit": {
-   "": "Spending limit reached"
-  },
-  "technical_pause": {
-   "": "Paused after a technical problem; Resume continues it"
-  },
-  "awaiting_selection": {
-   "": "Waiting for Ouroboros or you to resume it"
-  },
-  "restore_failed": {
-   "": "Its saved state could not be restored"
-  },
   "review_work_finishing": {
    "": "Review work finishing"
   },
-  "held": {
-   "": "Held"
+  "external_runs_unconfirmed": {
+   "1": "1 external run may still be running",
+   "3": "3 external runs may still be running"
   }
  }
 }

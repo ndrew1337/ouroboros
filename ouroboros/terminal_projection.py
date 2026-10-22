@@ -76,6 +76,8 @@ def _open(row: dict) -> bool:
 
 @contextmanager
 def _publication_lock(root: Any, tid: str):
+    from ouroboros.install_identity import require_owned_root
+    require_owned_root(root)
     path = task_result_path(root, tid, create=False).with_suffix(".projection.lock")
     fd = acquire_exclusive_file_lock(path, timeout_sec=0.01, poll_sec=0.005)
     try:
@@ -120,6 +122,8 @@ def _prepare(root: Any, tid: str, task: dict, event: dict) -> tuple[dict, bool]:
     Returns ``(stored, minted)``: ``minted`` says THIS call recorded the readiness,
     so no chat row can carry its token yet and the duplicate scan is skipped.
     """
+    from ouroboros.install_identity import require_owned_root, require_task_roots
+    require_owned_root(root)
     minted = False
 
     def prepare(current: dict, _patch: dict):
@@ -158,6 +162,7 @@ def _prepare(root: Any, tid: str, task: dict, event: dict) -> tuple[dict, bool]:
     stored = load_task_result(root, tid, strict=True)
     if not stored or not _settled(stored):
         return stored or {}, False
+    require_task_roots({**task, **stored})
     return write_task_result(root, tid, stored["status"], strict_existing_dict=True,
                              _field_projector=prepare), minted
 
@@ -169,7 +174,6 @@ def completion_notice(record: dict) -> dict:
     never success or reviewer approval. Unknown/partial rows retain their causes.
     """
     from ouroboros import project_dialogue as dialogue
-
     axes = record.get("outcome_axes") or {}
     execution, objective = axes.get("execution") or {}, axes.get("objective") or {}
     delivery = record.get("terminal_delivery") or {}
@@ -210,7 +214,9 @@ def completion_event_view(root: Any, event: dict, record: dict) -> dict:
 def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dict | None = None) -> dict:
     from ouroboros import project_dialogue as dialogue
     from ouroboros.project_facts import resolve_project_id
+    from ouroboros.task_finalization import terminal_host_notice_text
 
+    quiet = row.get("wake_silent") is True and not terminal_host_notice_text(row)
     lineage = _lineage(tid, row)
     is_root = lineage["is_root_task"]
     role = str(row.get("role") or ("root" if is_root else "child"))
@@ -242,7 +248,7 @@ def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dic
     ])
     notice = completion_notice({**event, **row, "terminal_delivery": delivery})
     excerpt = dialogue._completion_excerpt(row, chat_id=chat_id, salvage_only=True)
-    text += "".join(f" {part}" for part in (verdict, excerpt) if part)
+    text = dialogue.QUIET_RUN_HEADLINE if quiet else text + "".join(f" {part}" for part in (verdict, excerpt) if part)
     from ouroboros.dialogue_provenance import presence_provenance_fields
 
     result = {
@@ -256,6 +262,7 @@ def _project_row(tid: str, row: dict, event: dict, ready: dict, *, delivery: dic
         "project_id": resolve_project_id(row), "chat_id": chat_id,
         "delegation_role": str(row.get("delegation_role") or ""), "role": role,
         "status": row["status"], "outcome": outcome, "outcome_phase": phase, "outcome_final": True,
+        "wake_silent": row.get("wake_silent") is True, "quiet_effective": quiet,
         "outcome_authority": "canonical_task_result_after_finalization",
         "outcome_axes": row.get("outcome_axes") or {}, "reason_code": str(row.get("reason_code") or ""),
         "result_ref": {"kind": "task_result", "task_id": tid, "reader": "get_task_result"}, "text": text,
@@ -325,7 +332,8 @@ def _append_project(root: Any, tid: str, task: dict, event: dict, *,
     if existing_row:
         row = existing_row  # append/receipt crash: retain actual publication time
     else:
-        appended = dialogue.append_canonical_task_summary(root, row)
+        # A child mints no readiness, so nothing settles it again: its row waits in the retry buffer.
+        appended = dialogue.append_canonical_task_summary(root, row, **({} if is_root else {"retained": True}))
         if not appended:
             return False
 
@@ -543,6 +551,8 @@ def settle_terminal_projection(drive_root: Any, task_id: str, *, task: dict | No
     """
     from ouroboros import project_dialogue as dialogue
 
+    from ouroboros.install_identity import StoreForeign, require_task_roots
+
     tid = str(task_id or "").strip()
     waits = {} if waits is None else waits
     if not tid:
@@ -555,6 +565,7 @@ def settle_terminal_projection(drive_root: Any, task_id: str, *, task: dict | No
                 stored, minted_now = _prepare(drive_root, tid, task or {}, event or {})
             else:
                 stored, minted_now = load_task_result(drive_root, tid, strict=True) or {}, False
+                require_task_roots({**(task or {}), **stored})
             if (not isinstance(stored.get("canonical_terminal_projection_ready"), dict)
                     or is_reconciled_presence_placeholder(stored)):  # readiness an earlier release recorded
                 waits["on"] = "nothing_owed"
@@ -578,15 +589,22 @@ def settle_terminal_projection(drive_root: Any, task_id: str, *, task: dict | No
                 return SETTLEMENT_DEFERRED
             effective = {**(task or {}), **stored, "id": tid}
             done = {**(event or {}), **stored, "ts": ready["task_done_ts"], "chat_id": ready["chat_id"]}
-            disposition, _queued = dialogue.project_completion_delivery_outcome(
-                drive_root, done, tid, effective, stored, done, event_queue=event_queue,
-                source_delivery=source_delivery)
+            from ouroboros.task_finalization import terminal_host_notice_text
+
+            if stored.get("wake_silent") is True and not terminal_host_notice_text(stored):
+                disposition = dialogue.MAIN_MIRROR_INELIGIBLE
+            else:
+                disposition, _queued = dialogue.project_completion_delivery_outcome(
+                    drive_root, done, tid, effective, stored, done, event_queue=event_queue,
+                    source_delivery=source_delivery)
             if clear_terminal_projection_obligation(drive_root, tid, stored, disposition):
                 return SETTLEMENT_SETTLED
             # Owed remains discoverable until the strict sender acknowledges it.
             if main_delivery_recorded(drive_root, f"project-completion:{tid}", task_id=tid):
                 return SETTLEMENT_SETTLED
             return SETTLEMENT_DEFERRED
+    except StoreForeign:
+        raise
     except Exception:
         log.warning("Terminal projection deferred for %s", tid, exc_info=True)
         return SETTLEMENT_DEFERRED
@@ -620,6 +638,7 @@ def reconcile_terminal_projections(drive_root: Any) -> int:
     rests (``rest_deferral``) until its row or the delivery registry changes.
     """
     from ouroboros.obligations import DutyRest, result_rows
+    from ouroboros.install_identity import StoreForeign, rest_foreign_member
 
     rest = DutyRest(drive_root, "terminal_projection", name="terminal_projection",
                     inputs={"terminal_deliveries": delivery_registry_stamp(drive_root)})
@@ -630,6 +649,9 @@ def reconcile_terminal_projections(drive_root: Any) -> int:
             if terminal_projection_owed(row["task_id"], row):
                 waits = {}
                 settled += settle_terminal_projection(drive_root, row["task_id"], waits=waits) == SETTLEMENT_SETTLED
+        except StoreForeign as exc:
+            rest_foreign_member(rest, row["task_id"], row, exc)
+            continue
         except Exception:
             waits = {}
             log.warning("Terminal projection reconciliation deferred for %s", row["task_id"], exc_info=True)

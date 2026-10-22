@@ -119,9 +119,10 @@ def _drain_incoming_messages(
     def ack_saved(entry: Dict[str, Any]) -> None:
         if not acknowledge_transcript_entry(drive_root, task_id, entry) or event_queue is None:
             return
-        if entry.get("relay") or entry.get("quiz_delivery"):
+        if entry.get("relay") or entry.get("quiz_delivery") or entry.get("card_delivery"):
             event_queue.put_nowait({"type": "owner_message_injected", "task_id": task_id,
-                                   "relay_ack": entry.get("relay"), "quiz_ack": entry.get("quiz_delivery")})
+                                   "relay_ack": entry.get("relay"), "quiz_ack": entry.get("quiz_delivery"),
+                                   "card_ack": entry.get("card_delivery")})
 
     def ack_content(entry: Dict[str, Any]) -> None:
         if defer_content_ack and owner_ctx is not None:
@@ -171,7 +172,7 @@ def _drain_incoming_messages(
             break
 
     if drive_root is not None and task_id:
-        from ouroboros.owner_mailbox import CONTEXT_ONLY_TASK_PROVENANCES, KIND_FINALIZE_NOW, KIND_HURRY, KIND_OWNER_PAUSE, KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED, KIND_TASK_MESSAGE, acknowledge_transcript_entry, deliver_quiz_answer, deliver_task_message, drain_owner_entries
+        from ouroboros.owner_mailbox import CONTEXT_ONLY_TASK_PROVENANCES, KIND_CARD_INPUT, KIND_FINALIZE_NOW, KIND_HURRY, KIND_OWNER_PAUSE, KIND_OWNER_TEXT, KIND_QUIZ_ANSWER, KIND_QUIZ_CLOSED, KIND_TASK_MESSAGE, acknowledge_transcript_entry, deliver_quiz_answer, deliver_task_message, drain_owner_entries
 
         if owner_ctx:
             owner_ctx._loop_mailbox_seen_ids = _owner_msg_seen
@@ -216,6 +217,8 @@ def _drain_incoming_messages(
                 # owner's messages supersede a reviewed answer). The typed provenance
                 # and the sender id ride the row, the injected event and the ack.
                 provenance = str(entry.get("provenance") or "ancestor_task")
+                if provenance == "place_event":
+                    controls["place_event"] = True  # accepted context, never owner authority
                 if provenance not in CONTEXT_ONLY_TASK_PROVENANCES:
                     _loop()._record_owner_directive(
                         owner_ctx, content=dmsg, msg_id=str(entry.get("msg_id") or ""),
@@ -233,7 +236,7 @@ def _drain_incoming_messages(
                     messages[-1].setdefault("review_feedback", []).append(dict(entry["review_feedback"]))
                 ack_content(entry)
                 continue
-            if kind == KIND_QUIZ_CLOSED:
+            if kind in (KIND_QUIZ_CLOSED, KIND_CARD_INPUT):  # host frames around the owner's own act
                 _loop()._record_owner_directive(owner_ctx, source="owner_mailbox",
                     content=dmsg, msg_id=str(entry.get("msg_id") or ""))
                 _loop()._append_or_merge_user_message(messages, dmsg, slot=owner_ctx, kind=OWNER_WORDS_KIND)
@@ -268,6 +271,11 @@ def _drain_incoming_messages(
                     str(getattr(owner_ctx, "budget_drive_root", "") or "") or drive_root,
                     entry.get("late_answer"), dmsg,
                 )
+            elif entry.get("card_press") is not None:  # a press on a finished author's card: its card frame
+                from ouroboros.gateway.card_decision import card_press_model_text
+
+                model_msg = card_press_model_text(str(getattr(owner_ctx, "budget_drive_root", "") or "") or drive_root,
+                                                  entry.get("card_press"), dmsg)
             owner_content = _owner_content({**entry, "text": model_msg}, drive_root, task_id)
             _loop()._record_owner_directive(
                 owner_ctx,
@@ -971,7 +979,7 @@ def _finalize_limit_ctx(
 
 
 # ---------------------------------------------------------------------------
-# Model-free rungs of the refusal ladder (owner decision 7A; walked by
+# Model-free rungs of size recovery (provider refusal or a known-window prediction; walked by
 # ``loop_model_call._recover_context_overflow`` on the round-call context).
 # ---------------------------------------------------------------------------
 
@@ -1043,7 +1051,7 @@ def _run_emergency_address_pass(ctx: Any, disposition: Any, *, rung: str, goal_t
 def _coarsen_memory_view(ctx: Any, fit: Any, *, saving: Optional[int] = None) -> bool:
     """Narrow memory beside the actual transcript without inventing a smaller route window.
 
-    The refusal is the evidence: the view saves the refusal's measured ``saving`` (else the capacity
+    The view saves the measured ``saving`` (else the capacity
     deficit, else at least one element) from the level it shows (no target or working margin
     reapplied, nothing addressed unfolds)."""
     plan = ctx.context_fit_plan
@@ -1055,7 +1063,7 @@ def _coarsen_memory_view(ctx: Any, fit: Any, *, saving: Optional[int] = None) ->
     capacity = measurement.capacity_total_tokens
     rebound = plan.reproject_for_route(
         window_tokens=int(capacity or 0), known_window=capacity is not None,
-        ratio=float(plan.projection(mode).calibration_ratio or 1.0),
+        ratio=measurement.measurement_density,
         output_reserve=int(plan.output_reserve_tokens), tool_schemas=ctx.tool_schemas, start_mode=mode,
         current_messages=ctx.messages,
         refused_tokens=max(1, int(saving or measurement.capacity_deficit_tokens or 0)),

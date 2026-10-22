@@ -361,14 +361,16 @@ LARGE_CONTEXT_SECTION_CHARS = 200_000
 # Char-equivalent for ONE image block in chars/4 token estimates (~1.1K tokens):
 # vision models bill per tile, not per base64 char.
 IMAGE_BLOCK_CHAR_EQUIVALENT = 4_400
-# Live image blocks kept in the transcript (single counter across owner
-# uploads, browser screenshots, and transport injections). Older images are
-# replaced by a caption placeholder pointing to the re-view path.
+# Initial image cap and batch-eviction target, across owner uploads, browser
+# screenshots and transport injections. Running history grows to the high-water
+# mark, then replaces oldest images with caption/re-view placeholders down to 5.
 # 3 -> 5 (v6.81.1, owner decision 2026-07-29): with tool-result images now
 # auto-attached (screenshots arrive every observation round), 3 kept too little
 # visual history for compare-two-screens reasoning; 5 costs at most ~2.2K extra
 # estimated tokens per request and only when that many images are actually live.
 MAX_LIVE_IMAGE_BLOCKS = 5
+# Owner decision 2026-10-21: batch eviction above 10 back to the 5-image floor of 2026-07-29.
+LIVE_IMAGE_BLOCKS_HIGH_WATER = 10
 
 # --- Scratchpad size thresholds (SSOT; previously scattered literals) -------
 # Context-section soft budget for the rendered scratchpad (warn-only).

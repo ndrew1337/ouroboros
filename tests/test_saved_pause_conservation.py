@@ -13,6 +13,7 @@ from ouroboros import budget_pause, store, task_results
 from ouroboros.artifacts import read_actor_source_bytes
 from supervisor import queue_snapshot
 from tests._budget_pause_exact_helpers import _install_queue, _pause
+from tests._store_journal_shared import exclusive_hold
 from tests._store_shared import unreadable_result
 from tests.test_owner_wait_restart import restart_case  # noqa: F401
 
@@ -51,9 +52,8 @@ def _result_gap(root, monkeypatch, kind, *, task_id="saved"):
                         return original(drive, tid, **kwargs)
                     temporary_root = Path(os.environ.get("OUROBOROS_TEST_TEMP_ROOT") or tempfile.gettempdir())
                     assert root.resolve().is_relative_to(temporary_root.resolve())
-                    conn = store.connect(store.store_path(root), store.TIER_ENFORCED)
+                    conn = exclusive_hold(store.store_path(root))  # under WAL too, the read is busy
                     try:
-                        conn.execute("BEGIN EXCLUSIVE")
                         with store.acquisition_budget(0):
                             return original(drive, tid, **kwargs)
                     except store.StoreBusy as exc:
@@ -91,7 +91,7 @@ def test_saved_technical_pause_survives_result_gap_then_explicit_resume(tmp_path
                 assert workers._drop_cancelled_pending()
         [kept] = workers.PENDING
         assert kept["id"] == "saved" and kept["_attempt"] == 1
-        assert kept["_budget_pause"] == original_marker
+        assert {k: v for k, v in kept["_budget_pause"].items() if k != "refusal"} == original_marker
         assert not kept.get("_terminalization_retry")
         assert not kept.get("_project_admission_restore_hold")
         assert not kept.get("_budget_pause_resume")
@@ -190,7 +190,8 @@ def test_native_warm_handoff_survives_result_gap_until_explicit_resume(tmp_path,
             with queue._queue_lock:
                 assert workers._drop_cancelled_pending()
         [kept] = workers.PENDING
-        assert kept["_owner_wait_resume"] == carrier and kept["_attempt"] == 1
+        assert {k: v for k, v in kept["_owner_wait_resume"].items() if k != "refusal"} == carrier
+        assert kept["_attempt"] == 1
         assert not kept.get("_terminalization_retry") and not kept.get("_budget_pause_resume")
         assert not kept.get("_project_admission_restore_hold")
     with queue._queue_lock:
@@ -212,6 +213,7 @@ def test_native_warm_handoff_survives_result_gap_until_explicit_resume(tmp_path,
 @pytest.mark.parametrize("entry", ["live", "restore"])
 def test_native_project_handoff_keeps_its_verification_owner(restart_case, monkeypatch, entry):  # noqa: F811
     from types import SimpleNamespace
+    from ouroboros.work_stop import continuation_refusal
     from supervisor import queue, workers
     from tests.test_owner_wait_restart import restore_project_wait
     from tests.test_project_hold_recovery import worker
@@ -230,7 +232,7 @@ def test_native_project_handoff_keeps_its_verification_owner(restart_case, monke
             with queue._queue_lock:
                 assert workers._drop_cancelled_pending()
         [kept] = workers.PENDING
-        assert kept["_owner_wait_resume"] == carrier
+        assert {k: v for k, v in kept["_owner_wait_resume"].items() if k != "refusal"} == carrier
         assert kept["_project_admission_restore_hold"]["reason"] == "project_routing_fence_lookup_failed"
         assert not kept.get("_terminalization_retry")
     sent = worker(SimpleNamespace(root=case.root), monkeypatch)
@@ -239,9 +241,10 @@ def test_native_project_handoff_keeps_its_verification_owner(restart_case, monke
     if entry == "restore":
         # Project verification does not erase boot's separate saved-source hold.
         # This test proves conservation and that each existing owner still runs.
-        assert not sent and kept["_budget_pause_hold"]
+        assert not sent and continuation_refusal(kept)
         assert not kept.get("_project_admission_restore_hold")
-        assert kept["_owner_wait_resume"] == carrier and not kept.get("_terminalization_retry")
+        assert {k: v for k, v in kept["_owner_wait_resume"].items() if k != "refusal"} == carrier
+        assert not kept.get("_terminalization_retry")
         assert read_actor_source_bytes(case.root, case.task_id, carrier["source_ref"]) == source
         return
     assert [row["id"] for row in sent] == [case.task_id]

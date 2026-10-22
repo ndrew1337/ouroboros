@@ -223,11 +223,17 @@ def test_continuable_owned_project_never_pays_the_full_chain_read(tmp_path, monk
     sweep(tmp_path, gateway, set())
     sweep(tmp_path, gateway, set())
     assert gateway.removed == [] and calls == []
+    assert custody.replay(tmp_path)['run'].output_source, 'terminal collection still runs'
+    result(tmp_path, 'owner')  # Closing the Continue offer makes retirement eligible.
+    sweep(tmp_path, gateway, set())
+    assert gateway.removed == ['project'] and calls
 
 
 def test_shared_project_kept_by_a_settled_sharer_reads_the_full_chain_once(tmp_path, monkeypatch):
     # The production sweep reads the held rows; a settled sharer that does not
     # own the registration is reached by one indexed read of the project's runs.
+    from ouroboros import delegate_custody_current as current
+
     gateway = Gateway()
     owner = seed(tmp_path, task_id='a')
     sharer = custody.RunCustody(run_id='run-b', task_id='b', route_id='route', model='model',
@@ -237,6 +243,10 @@ def test_shared_project_kept_by_a_settled_sharer_reads_the_full_chain_once(tmp_p
     result(tmp_path, 'b', status='failed', reason_code='worker_crash_signal')
     settle(tmp_path, gateway, owner)
     settle(tmp_path, gateway, sharer)
+    # Settlement now retains an observation: finish collection so the unowned
+    # sharer really is outside the held projection whose lookup this measures.
+    sweep(tmp_path, gateway, set())
+    assert set(current.runs(tmp_path, 'state=?', ('held',))) == {owner.run_id}
     calls = _counting_full_reads(monkeypatch)
     sweep(tmp_path, gateway, set())
     first = len(calls)

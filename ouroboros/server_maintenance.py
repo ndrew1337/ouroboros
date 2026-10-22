@@ -38,6 +38,7 @@ def _installed_skill_names():
 _LAST_CANCEL_INTENT_SWEEP = [0.0]
 _CANCEL_INTENT_SWEEP_LOCK = threading.Lock()
 _DELIVERY_SWEEP_LOCK = threading.Lock()
+_DELIVERY_WAKE = threading.Event()
 _QUESTION_SWEEP_LOCK = threading.Lock()
 _PAUSE_NOTICE_SWEEP_LOCK = threading.Lock()
 _USAGE_SWEEP_LOCK = threading.Lock()
@@ -153,7 +154,11 @@ def _run_terminal_duty(drive_root: pathlib.Path, step: str, latch: Any,
             if outcomes:
                 log.info("Cancel-intent watchdog settled: %s", outcomes)
         elif step == "terminal_delivery_replay":
+            from ouroboros.dialogue_retry import drain, _requested
             from supervisor.terminal_delivery import replay_pending_deliveries
+            _requested.clear()
+            _DELIVERY_WAKE.clear()
+            drain()
             replay_pending_deliveries(drive_root)
         elif step == "question_delivery_replay":
             import asyncio
@@ -322,6 +327,14 @@ def _periodic_supervisor_maintenance(
         return
     now = time.time()
     from supervisor import queue
+    from ouroboros.dialogue_retry import bind_wake
+
+    bind_wake(_DELIVERY_WAKE.set)
+    if (now - _LAST_CANCEL_INTENT_SWEEP[0] <= BODY_MAINTENANCE_INTERVAL_SEC
+            and _DELIVERY_WAKE.is_set() and _DELIVERY_SWEEP_LOCK.acquire(blocking=False)):
+        _DELIVERY_WAKE.clear()
+        _start_maintenance_thread(_DELIVERY_SWEEP_LOCK, "terminal_delivery_replay", _run_terminal_duty,
+                                  (pathlib.Path(DATA_DIR), "terminal_delivery_replay", _DELIVERY_SWEEP_LOCK, stop_event))
     if now - _LAST_CANCEL_INTENT_SWEEP[0] > BODY_MAINTENANCE_INTERVAL_SEC:
         # One existing cadence, independent single-flight operations: its stamp
         # advances on dispatch, never on a slow duty's completion.
@@ -1074,9 +1087,10 @@ def _run_periodic_reconcile_sweep(marker: list, stop_event: Any = None, latch: A
         if _stop_requested(stop_event):
             return
         from ouroboros.late_review_marks import replay_owed_late_reviews
-        from ouroboros.review_operation import collect_orphaned_operations_softly
+        from ouroboros.review_operation import retire_dead_review_pointers_softly
 
-        collect_orphaned_operations_softly(DATA_DIR, stop=lambda: _stop_requested(stop_event))
+        # This process's closed operations retry a failed final pointer; a dead controller's open one goes.
+        retire_dead_review_pointers_softly(DATA_DIR, stop=lambda: _stop_requested(stop_event))
         replay_owed_late_reviews(DATA_DIR, stop=lambda: _stop_requested(stop_event))  # owed rows only
         if _stop_requested(stop_event):
             return

@@ -77,6 +77,47 @@ _SETTLE_RESTORE_FRAMES = """() => new Promise(resolve => {
 })"""
 
 
+# web/theme.js switches the shell's layout (html[data-layout]) from a media query's change event, which an engine may
+# run frames after the new size is in place (WebKit does): a resize ends once the layout is the new width's.
+_LAYOUT_FOR_WIDTH = """width => document.documentElement.dataset.layout
+    === (width >= window.ouroLayout.dockedMinWidth ? 'docked' : 'stack')"""
+
+
+# A feed lays its rows out at a new width once the width holds (chat_reading_position.js marks a width still moving
+# [data-resizing] and re-applies the reading place when it stops): every feed keeps one unmarked width for 16 frames.
+_FEEDS_HOLD_WIDTH = """() => {
+    const now = [...document.querySelectorAll('#chat-messages, .chat-messages')]
+        .map(feed => feed.hasAttribute('data-resizing') ? 'moving' : feed.offsetWidth).join();
+    const seen = window.__feedsHoldWidth;
+    window.__feedsHoldWidth = { now, frames: seen?.now === now && !now.includes('moving') ? seen.frames + 1 : 0 };
+    return window.__feedsHoldWidth.frames >= 16;
+}"""
+
+
+def set_viewport(page, width, height, timeout=10_000):
+    """Resize the page, then wait for the shell to take the layout of the new width and its feeds to hold it."""
+    page.set_viewport_size({"width": width, "height": height})
+    page.wait_for_function(_LAYOUT_FOR_WIDTH, arg=width, timeout=timeout)
+    page.evaluate("() => { window.__feedsHoldWidth = null; }")
+    page.wait_for_function(_FEEDS_HOLD_WIDTH, polling="raf", timeout=timeout)
+
+
+# On a phone (the stack layout) the closed drawer lies under the room, a step to the left (style.css), so its own box
+# no longer says whether it is closed. Closed is the drawer's own state (no nav-drawer-open, the sidebar inert: app.js)
+# with every room (Main, a Project open over it) back at the screen's left edge, its motion finished.
+_DRAWER_CLOSED = """() => {
+    const side = document.getElementById('primary-sidebar');
+    const rooms = [document.getElementById('content'), document.querySelector('#project-panel.open')].filter(Boolean);
+    return !document.body.classList.contains('nav-drawer-open') && side.inert
+        && rooms.every((room) => Math.abs(room.getBoundingClientRect().left) < 0.5 && !room.getAnimations().length);
+}"""
+
+
+def wait_drawer_closed(page, timeout=None):
+    """On a phone, wait until the drawer is closed and the room has settled back over it (the page's default timeout)."""
+    page.wait_for_function(_DRAWER_CLOSED, timeout=timeout)
+
+
 def _emit_ws_frame(page, frame):
     page.evaluate(
         """frame => {
@@ -805,9 +846,11 @@ def run_chat_viewport_smoke(
                     raise AssertionError(f"Late child did not grow its parent: {geometry}") from exc
                 assert parent.evaluate("card => card.getBoundingClientRect().height") > parent_before_mount + 30
                 assert abs(card_top(page, anchor_id) - anchor_before) <= 6
+                # The row's own sleep mark (chat_row_sleep.js `data-laid`) is the browser's rendering hint, not a write of
+                # the card: a no-op frame writes nothing else.
                 parent.evaluate("""card => { window.__subagentNoopMutations = []; window.__subagentNoopObserver = new MutationObserver(records => window.__subagentNoopMutations.push(...records)); window.__subagentNoopObserver.observe(card, {attributes: true, attributeOldValue: true, childList: true, characterData: true, subtree: true}); }""")
                 assert_noop_frame(page, late_child_frame)
-                noop_mutations = page.evaluate("""() => { window.__subagentNoopObserver.disconnect(); return window.__subagentNoopMutations.map(record => `${record.type}:${record.target.dataset?.taskId || record.target.dataset?.subagentsFor || record.target.className}:${record.attributeName || ''}:${record.oldValue || ''}->${record.target.getAttribute?.(record.attributeName) || ''}`); }""")
+                noop_mutations = page.evaluate("""() => { window.__subagentNoopObserver.disconnect(); return window.__subagentNoopMutations.filter(record => record.attributeName !== 'data-laid').map(record => `${record.type}:${record.target.dataset?.taskId || record.target.dataset?.subagentsFor || record.target.className}:${record.attributeName || ''}:${record.oldValue || ''}->${record.target.getAttribute?.(record.attributeName) || ''}`); }""")
                 assert noop_mutations == [], noop_mutations
                 put_at_viewport_top(page, anchor_selector)
                 enriched_child = {
@@ -1012,7 +1055,8 @@ def run_chat_viewport_smoke(
 
                 # Repeating the exact applied revision consumes the frame but
                 # changes no projection, so it must not manufacture activity
-                # (the census poll waits, as in every no-op window).
+                # (the census poll waits, as in every no-op window). The row's own sleep
+                # mark (chat_row_sleep.js) may change between the reads: it is no write of the card.
                 page.route("**/api/state", hold_census)
                 button.click()
                 page.evaluate(_SETTLE_TWO_FRAMES)
@@ -1021,7 +1065,7 @@ def run_chat_viewport_smoke(
                     """() => {
                         const card = document.querySelector('.chat-live-card[data-task-id="vp-review"]');
                         const messages = document.querySelector('#chat-messages');
-                        return {html: card.outerHTML, height: card.getBoundingClientRect().height,
+                        return {html: card.outerHTML.replace(/ data-laid=""/g, ''), height: card.getBoundingClientRect().height,
                             scrollHeight: messages.scrollHeight};
                     }"""
                 )
@@ -1030,7 +1074,7 @@ def run_chat_viewport_smoke(
                     """() => {
                         const card = document.querySelector('.chat-live-card[data-task-id="vp-review"]');
                         const messages = document.querySelector('#chat-messages');
-                        return {html: card.outerHTML, height: card.getBoundingClientRect().height,
+                        return {html: card.outerHTML.replace(/ data-laid=""/g, ''), height: card.getBoundingClientRect().height,
                             scrollHeight: messages.scrollHeight};
                     }"""
                 )

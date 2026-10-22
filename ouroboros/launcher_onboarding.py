@@ -29,6 +29,10 @@ def setup_recovery_menu(window, read_port: Callable[[], int | None]) -> list:
     pywebview 5.4 retains its application menu across GUI loops. Each normal
     window gets a fresh binding; a retained action cannot navigate a successor
     (including Startup Failed) or use an endpoint the launcher no longer owns.
+    Foreign code that froze the page is not this menu's to rescue: a hung web view
+    commits no new load until the loop ends, so the way out is Quit and reopen, and
+    the start ledger (web/modules/holds.js) keeps the code that did not finish its
+    start from running again by itself.
     """
     if sys.platform != "darwin":
         return []
@@ -38,17 +42,17 @@ def setup_recovery_menu(window, read_port: Callable[[], int | None]) -> list:
         return []
     from webview.menu import Menu, MenuAction
 
-    def open_builtin_setup() -> None:
+    def open_page(path: str) -> None:
         try:
             if window not in webview.windows or webview.active_window() is not window:
                 return
             port = read_port()
             if port:
-                window.load_url(f"http://127.0.0.1:{port}/onboarding?builtin=1")
+                window.load_url(f"http://127.0.0.1:{port}{path}")
         except Exception:
-            log.warning("Could not open built-in setup in this window.", exc_info=True)
+            log.warning("Could not open %s in this window.", path, exc_info=True)
 
-    return [Menu("Help", [MenuAction("Open built-in setup", open_builtin_setup)])]
+    return [Menu("Help", [MenuAction("Open built-in setup", lambda: open_page("/onboarding?builtin=1"))])]
 
 
 def prepare_first_run_settings() -> tuple[dict, bool]:

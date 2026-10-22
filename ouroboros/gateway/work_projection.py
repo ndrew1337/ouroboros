@@ -19,6 +19,8 @@ from ouroboros.gateway import work_status as ws
 log = logging.getLogger(__name__)
 
 _CONTINUE_PREFIX = "Continue: "
+# The census's execution facts for a member (gateway/state.py), never a work's identity.
+_EXECUTION_FACTS = frozenset({"running", "owner_pause_warm"})
 
 
 def _strip_continue(name: str) -> str:
@@ -44,7 +46,9 @@ class _Observations:
         self.drive_root = drive_root
         self.results: Dict[str, Optional[dict]] = {}
         self.fences: Dict[str, dict] = {}
+        self.stops: Dict[str, frozenset] = {}
         self.reviews: Dict[str, bool] = {}
+        self.models: Dict[str, list] = {}
         self.gaps: List[Dict[str, Any]] = []
 
     def result(self, task_id: str) -> Optional[dict]:
@@ -59,19 +63,6 @@ class _Observations:
                 self.results[task_id] = None
         return self.results[task_id]
 
-    def review_live(self, task_id: str) -> bool:
-        """The task's own live review operation (an acceptance review after its answer), read from its result."""
-        if task_id not in self.reviews:
-            try:
-                from ouroboros.review_operation import task_has_live_review_operation
-
-                self.reviews[task_id] = task_has_live_review_operation(
-                    self.drive_root, task_id, result_loader=lambda tid: self.result(tid) or {})
-            except Exception:
-                log.debug("Work projection could not read the review operation of %s", task_id, exc_info=True)
-                self.reviews[task_id] = False
-        return self.reviews[task_id]
-
     def fence(self, root_id: str, drive_root: Any = None) -> dict:
         if root_id not in self.fences:
             try:
@@ -81,6 +72,58 @@ class _Observations:
             except Exception:
                 self.fences[root_id] = {}
         return self.fences[root_id]
+
+    def sent_review(self, task_id: str) -> bool:
+        """Whether a review the task already sent still runs (``review_operation``), read from its stored result."""
+        if task_id not in self.reviews:
+            try:
+                from ouroboros.review_operation import task_has_live_review_operation
+
+                self.reviews[task_id] = bool(task_has_live_review_operation(
+                    self.drive_root, task_id, sent_only=True, result_loader=lambda tid: self.result(tid) or {}))
+            except Exception:
+                log.debug("Work projection could not read the review of %s", task_id, exc_info=True)
+                self.reviews[task_id] = False  # an unreadable operation proves no review
+        return self.reviews[task_id]
+
+    def model_handoffs(self, root_id: str, drive_root: Any = None) -> list:
+        if root_id not in self.models:
+            from supervisor.continuation_admission import model_handoffs
+            self.models[root_id] = model_handoffs(drive_root or self.drive_root, root_id)
+        return self.models[root_id]
+
+    def stop_unknown(self, task_id: str, drive_root: Any = None, owner: Optional[Mapping[str, Any]] = None
+                     ) -> frozenset:
+        if task_id not in self.stops:
+            self.stops[task_id] = unconfirmed_stops(drive_root or self.drive_root, task_id, owner)
+        return self.stops[task_id]
+
+
+def unconfirmed_stops(drive_root: Any, task_id: str, owner: Optional[Mapping[str, Any]] = None) -> frozenset:
+    """The runs whose stop ``task_id``'s live Pause could not confirm (``external_runs.EXTERNAL_STOP_UNKNOWN``): its
+    cold park's pause row, or the record its warm park keeps on its stored result (``owner``, waiting under the
+    owner's Pause). The server's and the roster's one reading; an unreadable record proves no trouble, so those
+    runs read as before."""
+    from ouroboros.external_runs import EXTERNAL_STOP_UNKNOWN
+    from supervisor.owner_pause_control import warm_paused_member
+
+    def unknown(external: Any) -> set:
+        runs = (external.get("runs") or ()) if isinstance(external, dict) else ()
+        return {str(run["run_id"]) for run in runs
+                if isinstance(run, dict) and run.get("run_id") and run.get("state") == EXTERNAL_STOP_UNKNOWN}
+
+    stops = set()
+    if isinstance(owner, Mapping) and warm_paused_member({"owner_wait": owner.get("owner_wait")}):
+        stops |= unknown((owner["owner_wait"].get("owner_pause") or {}).get("external_runs"))
+    try:
+        from ouroboros.budget_pause import LIVE_PAUSE_STATES, budget_pause_row
+
+        row = budget_pause_row(pathlib.Path(drive_root), str(task_id)) if task_id else {}
+        if row.get("state") in LIVE_PAUSE_STATES:
+            stops |= unknown(row.get("external_runs"))
+    except Exception:
+        log.debug("Work projection could not read the pause of %s", task_id, exc_info=True)
+    return frozenset(stops)
 
 
 def _continuation(source: Mapping[str, Any]) -> dict:
@@ -103,7 +146,9 @@ def _work_of(root_id: str, raw: Mapping[str, Mapping[str, Any]], obs: _Observati
         if current in memo:
             work_id, name = memo[current]
             break
-        source = raw.get(current) or obs.result(current) or {}
+        facts = raw.get(current) or {}
+        # A census entry that only says whether the episode runs carries no identity: its stored result does.
+        source = facts if set(facts) - _EXECUTION_FACTS else obs.result(current) or {}
         continuation = _continuation(source)
         if continuation.get("work_id"):
             work_id, name = str(continuation["work_id"]), str(continuation.get("work_name") or "")
@@ -144,11 +189,21 @@ def _root_of(row: Mapping[str, Any], raw: Mapping[str, Any]) -> str:
 def _member_raw(row: Mapping[str, Any], raw: Mapping[str, Any], obs: _Observations, root_id: str) -> dict:
     hold = raw.get("_budget_pause_hold") if isinstance(raw.get("_budget_pause_hold"), dict) else {}
     pause = raw.get("_budget_pause") if isinstance(raw.get("_budget_pause"), dict) else {}
-    facts: Dict[str, Any] = {"hold": hold, "paused_at": pause.get("paused_at") or pause.get("requested_at")}
-    if row.get("pause_cause") == "owner" and row.get("phase") in {"budget_paused", "budget_pausing"}:
+    facts: Dict[str, Any] = {"hold": hold, "paused_at": pause.get("paused_at") or pause.get("requested_at"),
+                             "running": bool(raw.get("running", row.get("live"))), **dict(raw)}
+    if row.get("phase") in {"budget_pausing", "budget_paused"} and (raw.get("owner_pause_warm") or row.get("kind") == "direct_chat"):
+        # Parked warm under a Pause still settling: the review it already sent still runs beside it.
+        facts["sent_review"] = obs.sent_review(str(row.get("activity_id") or ""))
+    if row.get("phase") in {"budget_paused", "budget_pausing"}:
+        from ouroboros.control_actor import pause_author
+
         fence = obs.fence(root_id, raw.get("budget_drive_root"))
-        facts["fence"] = fence
-        facts["paused_at"] = fence.get("paused_at") or fence.get("requested_at") or facts["paused_at"]
+        # The Pause is dated from its press: a settling fence restamps ``paused_at``.
+        facts["paused_at"] = fence.get("requested_at") or fence.get("paused_at") or facts["paused_at"]
+        facts["pause_by"] = pause_author(fence)
+        facts["fences"] = {"owner": fence}
+        facts["model_handoffs"] = obs.model_handoffs(root_id, raw.get("budget_drive_root"))
+        facts["parked"] = [str(task) for task in fence.get("parked_members") or () if task]
     return facts
 
 
@@ -165,17 +220,28 @@ def _inflight_upkeep(drive_root: Any, known: set) -> List[Dict[str, Any]]:
     return rows
 
 
-def _open_runs(drive_root: Any) -> Dict[str, List[str]]:
-    """Delegated runs with a durable start and no settlement, by root: live members of that root's work.
-    A settled run custody still holds (an undisposed patch) runs nothing and is not a member."""
-    from ouroboros.delegate_custody_reconcile import open_runs
+def _open_runs(drive_root: Any) -> Dict[str, List[Any]]:
+    """Delegated runs with a durable start and no settlement, by their tree's root: members of that root's work,
+    which the cascade Stop of that root cancels. A settled run custody still holds (an undisposed patch) runs
+    nothing and is not a member; nor is a run the engine already reported finished while its settlement is owed."""
+    from ouroboros.delegate_custody_reconcile import open_runs, run_tree_id
 
-    live: Dict[str, List[str]] = {}
+    held: Dict[str, List[Any]] = {}
     for entry in open_runs(drive_root):
-        root_id = str(entry.root_task_id or entry.task_id or "")
-        if root_id:
-            live.setdefault(root_id, []).append(str(entry.run_id))
-    return live
+        root_id = run_tree_id(entry)
+        if root_id and not str(getattr(entry, "terminal_state", "") or ""):
+            held.setdefault(root_id, []).append(entry)
+    return held
+
+
+def _typed_run(entry: Any, obs: _Observations, raw: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
+    """One open run as a work tail (``work_status.run_tail``): review work, a live run, or a run nobody can confirm,
+    from the run's ``source``, its own task's stored outcome and that task's live Pause."""
+    task_id = str(entry.task_id or "")
+    owner = obs.result(task_id) if task_id else None
+    stops = obs.stop_unknown(task_id, (raw.get(task_id) or {}).get("budget_drive_root"), owner) if task_id else frozenset()
+    kind, state = ws.run_tail(getattr(entry, "source", ""), owner, stop_unknown=str(entry.run_id) in stops)
+    return {"run_id": str(entry.run_id), "kind": kind, "state": state}
 
 
 def _since(row: Mapping[str, Any]) -> Optional[float]:
@@ -230,7 +296,7 @@ def _snapshot(drive_root: Any, owners: List[Mapping[str, Any]], raw: Dict[str, M
     groups: Dict[str, Dict[str, Any]] = {}
 
     def group(work_id: str) -> Dict[str, Any]:
-        return groups.setdefault(work_id, {"rows": [], "roots": set(), "delegated": 0, "name": ""})
+        return groups.setdefault(work_id, {"rows": [], "roots": set(), "runs": [], "name": ""})
 
     for task_id, row in rows.items():
         facts = raw.get(task_id) or {}
@@ -240,10 +306,10 @@ def _snapshot(drive_root: Any, owners: List[Mapping[str, Any]], raw: Dict[str, M
         entry["rows"].append((row, facts, root_id))
         entry["roots"].add(root_id)
         entry["name"] = entry["name"] or name
-    for root_id, run_ids in held.items():
+    for root_id, runs in held.items():
         work_id, name = _work_of(root_id, raw, obs, memo)
         entry = group(work_id)
-        entry["delegated"] += len(run_ids)
+        entry["runs"].extend(_typed_run(run, obs, raw) for run in runs)
         entry["roots"].add(root_id)
         entry["name"] = entry["name"] or name
     works: List[Dict[str, Any]] = []
@@ -255,7 +321,6 @@ def _snapshot(drive_root: Any, owners: List[Mapping[str, Any]], raw: Dict[str, M
             owners_by_root.setdefault(root_id, []).append(member)
             if _episode_row(row, facts, root_id):
                 live_roots.append((row, facts, member, root_id))
-        delegated = entry["delegated"] if not any(member["activity"] == "working" for member in members) else 0
         current_row = current_state = None
         current_root = ""
         if live_roots:
@@ -270,28 +335,30 @@ def _snapshot(drive_root: Any, owners: List[Mapping[str, Any]], raw: Dict[str, M
             outcome = ws._outcome(stored)
             room_row = next((item[0] for item in entry["rows"]), stored)
             facts = raw.get(episode_id) or stored
-        if not members and not entry["delegated"]:
+        if not members and not entry["runs"]:
             continue
         name = entry["name"] or _first_name(facts)
         work = ws.roll_up_work(work_id, members, episode=episode, name=name, room=room_row.get("chat_id"),
-                               focus=(facts or {}).get("focus"), delegated=delegated, outcome=outcome)
-        # Working helpers say the reason and keep the call's word; the count of runs is still the work's fact.
-        work["members"]["delegated"] = int(entry["delegated"])
+                               focus=(facts or {}).get("focus"), runs=entry["runs"], outcome=outcome)
         current_id = str(episode["task_id"])
-
-        def stoppable(root: str) -> bool:
-            # The Stop door's own test for a settled tree (queue_transitions.task_subtree_is_live): a live queue or
-            # direct row of the tree (every member is one) or the root's live review operation. A tree whose only
-            # writer is another delegated run, a handoff or a process answers 404, so no control is offered for it.
-            return bool(owners_by_root.get(root)) or obs.review_live(root)
-
-        # Every other episode root that still owns a live member is the earlier attempt; a retry attempt's own
-        # original stands for the same episode, never an earlier one.
-        earlier = sorted(root for root in entry["roots"] if root not in {current_id, current_root} and stoppable(root))
+        # Every root grouped here owns a live queue or direct row of its tree (each member is one) or an open
+        # delegated run: exactly what the Stop door reaches (queue_transitions.task_subtree_is_live), so each root
+        # takes Stop. A writer the door cannot reach (an unbound start, a handoff, a process) is no member and adds
+        # no root, so no control is offered for it.
+        # Every other root is the earlier attempt; a retry attempt's own original stands for the same episode.
+        earlier = sorted(root for root in entry["roots"] if root not in {current_id, current_root})
         # Stop ends the whole work: a retry's logical original carries its tree too (never an earlier attempt).
-        logical = [current_root] if current_root and current_root != current_id and stoppable(current_root) else []
-        ended = [] if current_state is not None or not stoppable(current_id) else [current_id]
+        logical = [current_root] if current_root and current_root != current_id else []
+        ended = [] if current_state is not None else [current_id]
         controls = ws.controls_for(current_state, current_row, earlier_live=earlier, live_roots=ended + logical + earlier)
+        if current_state is None and members and any(m["activity"] in {"working", "queued", "waiting"} for m in members):
+            controls.insert(0, {"action": "pause", "target": current_id})
+        if current_state is None:
+            # An ended author is never run again. Each held helper has its own
+            # addressed Resume in Activity; a work-level press selects none.
+            controls.extend({"action": "resume", "target": member["task_id"], "scope": "single"}
+                            for member in members if member["activity"] == "paused" and member.get("resumable")
+                            and member.get("stop", {}).get("scope") != "tree")
         work.update(kind="direct" if str(room_row.get("kind") or "") == "direct_chat" else "task",
                     project_id=str(room_row.get("project_id") or ""), since=_since(room_row), controls=controls)
         cmid = str(room_row.get("client_message_id") or "")

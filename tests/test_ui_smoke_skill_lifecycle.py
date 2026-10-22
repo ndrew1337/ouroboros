@@ -32,11 +32,11 @@ def test_installed_repair_reloads_tool_route_widget_and_companion(direct_server_
     from ouroboros.skill_loader import compute_content_hash, load_review_state
     from ouroboros.skill_repair_admission import record_repair_admission
     from ouroboros.project_dialogue import build_owner_message_ref
-    from ouroboros.utils import append_jsonl, utc_now_iso
+    from ouroboros import dialogue_store
+    from ouroboros.utils import utc_now_iso
     from ouroboros.tools.registry import ToolRegistry
     from tests._extension_loader_shared import _write_ext_skill
-    from tests._skill_review_shared import _make_actor, _pass_array_for_script_skill, _patch_review
-    from tests.test_skill_review import _mark_self_authored
+    from tests._skill_review_shared import _mark_self_authored
 
     drive = direct_server_with_data["data_dir"]
     url = direct_server_with_data["url"]
@@ -80,10 +80,22 @@ def test_installed_repair_reloads_tool_route_widget_and_companion(direct_server_
     registry._ctx.task_constraint = TaskConstraint(skill_name=name, payload_root=f"skills/external/{name}", allow_enable=False)
     owner_text = "Repair and run the installed application, leaving it working."
     origin = build_owner_message_ref(chat_id=42, client_message_id="repair-fixture", ts=utc_now_iso(), text=owner_text)
-    append_jsonl(drive / "logs" / "chat.jsonl", {**origin, "direction": "in", "text": owner_text, "source": "web"})
+    # Owner messages live in the dialogue store since #1982; a chat.jsonl line is no owner message.
+    dialogue_store.append(drive, "chat", {**origin, "direction": "in", "text": owner_text, "source": "web"})
     registry._ctx.task_metadata = {"origin_message_ref": origin}
     record_repair_admission(drive, name, task_id="live-repair", base_content_hash=compute_content_hash(payload))
-    canned = json.dumps({"results": [_make_actor(f"reviewer-{n}", _pass_array_for_script_skill()) for n in range(3)]})
+    # The one wave over the golden pool with an offline seam: every seat answers the skill question clean.
+    import ouroboros.review_substrate as substrate
+    from tests import _contributor_packet_shared as shared
+    from tests.review_pool_rosters import set_review_pool
+
+    set_review_pool(monkeypatch, shared.golden_pool())
+
+    def clean(request, slot, actor, *, retry_state, pending_invocation_checkpoint):
+        actor.raw_text = "[]\nNO_FINDINGS"
+        return actor
+
+    monkeypatch.setattr(substrate.ReviewCoordinator, "_run_slot", shared.golden_physical_seam([], answer=clean))
 
     def api(path, body=None):
         request = urllib.request.Request(url + path, data=None if body is None else json.dumps(body).encode(),
@@ -93,7 +105,7 @@ def test_installed_repair_reloads_tool_route_widget_and_companion(direct_server_
 
     playwright = pytest.importorskip("playwright.sync_api")
     pids, revisions = [], []
-    with _patch_review(canned), playwright.sync_playwright() as pw:
+    with playwright.sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
         try:
             page = browser.new_page(viewport={"width": 1280, "height": 850})

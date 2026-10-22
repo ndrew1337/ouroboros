@@ -1,13 +1,8 @@
 # Ouroboros client contract
 
-This document is for anyone writing a complete client of an Ouroboros core: a replacement interface, a script, or a separately hosted copy of the builtin one. It covers setup, sign-in, conversation and history, projects and tasks, questions, Stop, settings, files, skills and widgets, skill sources and the catalog, agent accounts, local models, MCP, updates and Panic. A client needs only this document, [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) for module widgets, and the core's HTTP and WebSocket endpoints. Nothing here requires reading Ouroboros source or importing its packages.
+A complete client needs this contract, [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) for widgets, and the core's HTTP/WebSocket endpoints; no source imports are needed.
 
-There are two sources of truth, and each has its own job:
-
-- **`GET /api/contract`** is the machine-readable part. It lists every route, its path parameters, the query parameters and request headers it reads, its request and response bodies by HTTP status, every WebSocket message type, and a JSON Schema for every named shape. Every route publishes its shapes (`typed: true`). The core derives this document from its route and type declarations. Tests check structural coverage across the catalogue and actual responses for selected handlers, producers and consumers, not every response branch. Fetch it from the core you talk to. A copy taken from another version can be wrong for this one.
-- **This document** explains how to use those shapes: which call comes first, what a status means for whether something happened, which value identifies an operation, and when a retry is safe.
-
-Where the two seem to disagree, the live `GET /api/contract` is right about shapes and this document is right about meaning. Report the disagreement as a defect. §17 lists what is still described only partly.
+`GET /api/contract` publishes routes, parameters, headers, statuses, WebSocket types and named JSON Schemas from the running core. The live API is authoritative about shapes; this document is authoritative about meaning: ordering, outcomes, identities and safe retries. Fetch that core's contract; versions differ. Report disagreements as defects. Tests cover structural completeness and selected producer/consumer behavior; §17 lists gaps.
 
 ## 1. Compatibility rules
 
@@ -217,8 +212,9 @@ On a failed or unknown save, retain the form and follow the existing readback ru
 
 `GET /api/state` (`StateResponse`) contains:
 - **Readiness:** `supervisor_ready` and `supervisor_error`.
-- **Activity:** the work projection — `works` (one row per request with its Continue episodes and live members: `activity` working|queued|waiting|paused|unknown, `transition`, `call`, typed `because` reasons with one English sentence each, `turn` for what waits for the owner, `release`, `paused_by`, member ids and the `controls` its doors accept now), `rooms` (one status per chat id: word inputs, `mark`, `amber`), `work_summary`, `works_complete` and `works_gaps`. A client renders these and derives no state of its own. The frozen root census `active_chat_activities` (`last_line`/`last_line_at`, `tool_calls`, `detached`, `project_id`/`project_name`) and legacy `active_direct_turns` remain for compatibility.
+- **Activity:** the work projection — `works` (one row per request with its Continue episodes and live members: `activity` working|queued|waiting|paused|unknown — the current episode's own word while it lives (a Continue held for its earlier attempt says Working while that attempt's helpers or runs still work), else what still runs —, `transition`, `call`, typed `because` (the episode's own reason with one English sentence; a decided Pause adds its declared author `by` `{actor, text, at}`), `tails` (helpers, external runs, review work beside an episode that is not executing, runs nobody can confirm: said beside the word, never as it), `live` (something executes), `turn` for what waits for the owner, `release`, member ids, the `controls` its doors accept now and `mark`, its shape: `moving` working, `still` queued or waiting on something that ends by itself, `pause` paused, `ring` unconfirmed, `none`), `rooms` (one status per chat id: word inputs, the same `mark`, `amber` while `turn` holds something for the owner), `work_summary`, `works_complete` and `works_gaps`. A client renders these and derives no state of its own. The frozen root census `active_chat_activities` (`last_line`/`last_line_at`, `tool_calls`, `detached`, `project_id`/`project_name`) and legacy `active_direct_turns` remain for compatibility.
 - **Projects:** `projects` (a compact feed that may be capped) and `project_chat_ids` (the complete set).
+- **Main's unread:** `main_visible_revision`, Main's room revision (its standalone messages, the count a Project's `visible_revision` is; `null` while unreadable); the shared read cursor is `main_seen_revision` in `/api/ui/preferences` (`null` until a client first sets it; a write is clamped to the revision and never moves back).
 - **Current decisions:** `current_questions` (outstanding questions independent of the recent history page; Main's own as `native` identity rows without form fields) and `main_attention` (human-required task actions); `*_complete` flags and `*_gaps` tell a complete empty set from unavailable evidence. On incomplete reads keep earlier content without granting stale controls.
 - **Modes and budget:** the access and context modes, and money figures (`null` means unknown).
 - **Checkout:** `sha`, the first 8 characters of the commit on disk (the running core's start commit is `running_sha` in `GET /api/update/status`); `branch`, `null` for a detached HEAD or unknown branch.
@@ -243,9 +239,11 @@ answer through §7.
 
 **Message types.** `ws.messages` in the contract lists every built-in type with each direction's shape:
 - **Client to core:** `chat` and `command`.
-- **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links` and `quiz`.
+- **Core to client, stored as history rows:** `chat` (a message or a progress line), `photo`, `video`, `document`, `links`, `quiz` and `card` (a living card, §5 "Living cards").
 - **Core to client, signals only:**
+  - `panic_accepted` confirms the emergency latch, not process exit (§15).
   - `quiz_state` updates a question card; history shows the merged state.
+  - `card_state` says a shown living card changed: read it again (§5 "Living cards").
   - `log` carries one runtime event row in `data` (`data.type` names the event) for live activity displays; the task's durable facts come from §6.
   - `message_annotation`, the routing outcome shown on an owner message, is that row's `chat_annotation` in history.
   - `task_named` gives a card its title; history rows carry `suggested_name`.
@@ -281,7 +279,7 @@ In a Project response, `window.latest_message` names the latest eligible non-own
 - **Always present:** `text` (live frames call it `content`), `role` (`user`, `assistant` or `system`), `ts`, `is_progress`, `system_type` (the row's kind; `""` for an ordinary message) and `task_id`.
 - **Identity:** stored rows carry `history_id` (`"<chat|progress>:<offset>"`, the same on every re-read), `history_position` (`{source, offset}`) and a stable `row_address` computed before projection (none without a persisted source). `client_message_id` correlates owner messages and some quiz publications; owner authorship follows `role`.
 - **References:** `reply_to` (an owner row's: the row he replied to; an Ouroboros answer's: the owner message its turn answers) is `{address, chat_id, role, author_label, kind, snippet, ts, task_id}` (`snippet`: at most 160 whitespace-collapsed characters) or `{address, unresolved: true}`. A `relay_entry` row's `relay` holds the owner's words passed into the room: `quotes`, every message passed on, each with `text`, `attachments` and `source` (where and when he wrote it), the singular fields repeating the first. A reply to a relay, in its source room, carries `reply_to_relay`.
-- **Deliveries:** `msg_type` is `document`, `photo`, `video`, `links` or `quiz`, with `filename`, `mime`, `download_url`, `caption` and `size_bytes`; `actions` and `title` for links; `quiz` for a question (`quiz.quiz_id`, `quiz.state`, the recorded answer).
+- **Deliveries:** `msg_type` is `document`, `photo`, `video`, `links`, `quiz` or `card`, with `filename`, `mime`, `download_url`, `caption` and `size_bytes`; `actions` and `title` for links; `quiz` for a question (`quiz.quiz_id`, `quiz.state`, the recorded answer); `card` for a living card (`card.card_id`, `card.kind`, `card.title`, `card.revision` as first published; the row's `text` is its plain fallback).
 - **Progress rows** (`is_progress: true`) carry the task-progress facts of live `chat` progress frames (`ChatOutbound`).
 - **Rows that are not messages.** Do not show these as bubbles:
   - replay evidence (`system_type` `quiz_answer`, `quiz_closed` or `task_evidence`, or a row with `summary_kind` and `historical_terminal`), facts for cards whose rows lie on other pages. A `task_evidence` carrier may be an in-room parent's only evidence (zero tool calls included; `task_terminal_status` only when the parent is terminal): mint a parent card only from the parent's own rows, carrier or live state, never from a child's `parent_task_id`; a child whose parent has no such evidence here renders as its own card and re-nests when that evidence arrives.
@@ -299,6 +297,7 @@ The core writes each stored row and its live frame with an identical `ts` string
 | `quiz` | `msg_type: "quiz"` | `task_id` and `quiz_id` (`quiz.quiz_id`) are equal |
 | a Main pointer `chat` with `system_type: "project_question_pointer"` | the pointer row | `task_id` and `quiz_id` are equal |
 | `photo`, `video`, `document` or `links` | `msg_type` equal to the frame's `type` | `task_id` and `ts` are equal |
+| `card` | `msg_type: "card"` | `card.card_id` is equal |
 | any other `chat` | a row with the same `is_progress`, `role` and `system_type` | `task_id`, `ts` and `content` = `text` are all equal |
 
 Only `role:"user"` rows merge by `client_message_id`: on a System frame it only correlates the answered submission and is not persisted, so stored System replies use the other-chat rule. Never match on `ts` or `task_id` alone: one task writes many rows with close timestamps, and the same words can come from different tasks.
@@ -325,6 +324,17 @@ The socket has no resume cursor: frames sent while you were disconnected are not
   - `503 history_source_unavailable` or `migrating`.
 - **Incomplete windows.** `window.complete` is true only when nothing bounded the read; `window.truncated_by` names each cause (`quota`, `page`, `lineage_cap`, a stream gap such as `chat_malformed_jsonl`, or `chat_importing`/`progress_importing`: older rows exist below the archive import's frontier and are not readable yet; the older page that would cross it answers 503 `reason_code: migrating`, retry later). Never treat an incomplete window as an empty conversation. `coverage` reports which stored coordinates were delivered, for clients that page; it says nothing about chronology.
 
+### Living cards
+
+Ouroboros can put an interactive card into its own message: a `card` frame (`CardOutbound`), in history a `msg_type: "card"` row. Both carry only the card's identity `card: {card_id, kind, title, revision}` and its plain `fallback_text` (the row's `text`), which a surface that cannot draw the card shows instead.
+- **Body.** `GET /api/cards/{card_id}` (`CardResponse`) returns the current card with exactly one body: `components`, a declarative tree drawn like a declarative widget (`docs/CREATING_SKILLS.md`) with `data` as the values its path fields read and no skill route; `widget`, `{skill, tab_id, input?}`, that skill's tab from `GET /api/widgets` drawn inline (it may no longer be live); or `app`, `{sha256, size, url}`. A card that is gone answers `404 card_not_found`: show the fallback text.
+- **Apps.** `GET /api/cards/{card_id}/app` returns the app's HTML as `text/plain` with `nosniff` and `no-store`. Run it only inside an opaque-origin sandboxed frame built from those bytes (`srcdoc`, never `allow-same-origin`) whose policy blocks fetch, WebSockets and loads, never as a page of the core's origin; navigation and WebRTC are outside any page policy (`docs/WIDGET_HOST_PROTOCOL.md` §9). What the app produces goes into the owner's draft; only the owner's Send sends it.
+- **Changes.** A `card_state` frame (`CardStateOutbound`) says the card got a new body (`card.revision` grew) or a press was recorded or read (`submissions_summary`); read the card again. History keeps the row as first published; `GET /api/cards/{card_id}` is the current card.
+- **Presses** on a component card's `action` or `form` go to `POST /api/decisions` (§7).
+- **Keeping a card.** `POST /api/cards/{card_id}/pin` keeps a component card on the Widgets page as a snapshot (`CardPinResponse`); an app or widget card answers `409 card_not_pinnable` and the 51st pin `409 pins_full`. `DELETE /api/cards/{card_id}/pin` removes it. Both broadcast `extension_lifecycle` with `skill: "_cards"`. `GET /api/widgets` lists kept cards after the skills' widgets, with `skill: "_cards"`, `pinned_card: true` and the snapshot in `render`; their presses use the same decisions.
+- **Drawing a card (what the builtin client does).** Show the row's `fallback_text` until the body arrives, and whenever it cannot be read (with a retry for a failure, a plain note for `404`); never an empty box. Draw `components` with no skill route (only inline `data:` media), `data` as what path fields read; local components (tabs) never call the core. Each press is a new `request_id` and carries the `revision` it was drawn from; a press that got no answer, a `5xx` or `202 owed` is retried with the same `request_id` and the same values, and after a reload a `once` control's or an action's press recorded `owed` in `submissions_summary` is retried under its `request_id` (a form's next press with values is a new press); a `once` control stays locked after its press was delivered or forwarded (here, from `submissions_summary`, or a `409 card_action_once`); a `409 card_stale` reads the card again (a kept copy says it is out of date). A `widget` card draws the tab `GET /api/widgets` lists for its `{skill, tab_id}`, and says the skill is off when there is none. An `app` runs only as `docs/WIDGET_HOST_PROTOCOL.md` §9 says: an opaque `allow-scripts` frame that cannot fetch or load, whose submit fills the owner's draft and sends nothing; its bridge reports the app's errors, which the card shows. A card's frames in a message are sized and disposed there too.
+- **Starts the page did not outlive.** A frame (and a skill's page module, below) shares the page's thread on WebKit, Android WebView and Firefox, so a start that loops takes the page with it. The builtin client writes each start to a local ledger (this browser's or app's storage) before the code runs and clears it once the page outlived the start: a second after it, or when the page hides. An item whose last start the next page finds is not started by itself (its face, its line, the owner's Open or Start; an app opens without its saved state, which it forgets), and `?hold=all` in a browser's address holds every item for one load (the page drops it from the address). Not held: a stop later than that second, or WebKit's later memory kill; held although nothing stopped: an app quit before the start settled (quitting ends the page without `pagehide`), or a start another tab of the same browser has in flight when this one opens. A running frame has Close, kept on that device until Open. The page then posts what it found, once: `POST /api/ui/holds` (`UiHoldsRequest`: `holds: [{key, rev}]` with `app:<card_id>`, `widget:<skill>:<tab_id>` or `module:<contribution key>`, and the raw `surface` facts `pywebview`, `telegram`) names new holds in one System row (`system_type: "ui_hold"`) per owning chat, the room a card was published in or the owner's chat (`UiHoldsResponse`: `named`); a repeat names nothing; `503 chat_unavailable` and `503 in_flight` (another tab is naming the same hold now) wrote nothing, after `503 not_confirmed` a row may be missing, and after any 503 the page reports again. Another client may keep its own ledger and report the same way.
+
 ## 6. Projects and tasks
 
 **Projects:**
@@ -342,7 +352,7 @@ The socket has no resume cursor: frames sent while you were disconnected are not
 
 **Reading tasks:** `GET /api/tasks` (filters `status`, `limit`, `queue_only`) and `GET /api/tasks/{task_id}`. Records identify `task_id`, `status`, `ts` and `updated_at`; `result`, artifacts and evidence appear when available. List rows omit bulky evidence; read the detail for the result. `status` accepts a comma-separated filter; `limit` defaults to 50, positive values cap at 500, and `0` requests all rows. `queue_only=1` returns `{tasks:[], queue}` without history.
 
-A Project completion frame/history row may carry `completion_notice`: `{neutral: bool, detail: string, phase: string, salvage?: string}`, a compact transport view, not a verdict: neutral means technical caveats stay in task details, never independently approved success. Full outcome/answer fields remain authoritative; `salvage` preserves the existing intermediate excerpt. Older rows may omit it; replay can derive the missing metadata from the canonical result without rewriting retained text, and with no recoverable source transports retain the legacy text rather than assuming it is status-only.
+A Project completion frame/history row may carry `completion_notice`: `{neutral: bool, detail: string, phase: string, salvage?: string, cause?: string, undescribed?: string[]}`, a transport view, not a verdict: neutral means technical caveats stay in task details, never independently approved success. Full outcome/answer fields remain authoritative; `salvage` preserves the labelled intermediate excerpt. Main adds the work's `task_name` and `cause`, a display sentence whose unknown typed reasons read neutrally, with their exact codes in `undescribed` for accessible details. Canonical text and `detail` retain full Project context and codes; authored warning prose stays unchanged. Older rows may omit these fields; replay may derive missing metadata from the canonical result without rewriting retained text. Without recoverable facts, clients retain legacy text rather than parse it into guessed fields.
 
 The terminal lifecycle set is exactly `completed`, `failed`, `cancelled`, `rejected_duplicate`. Other values, including `requested`, `scheduled`, `running`, `interrupted` and a pause or pending cancellation, do not prove completion. Terminal lifecycle alone does not mean objective success.
 
@@ -362,13 +372,13 @@ data: {"seq":12,"type":"task_result","task_id":"…","data":{…}}
 - A v2 deadline emits `cursor_checkpoint`; changed lineage/view emits `cursor_replay` and may replay stored events. Diagnostics/checkpoints can reuse `seq`; replayed stored events can get a new `seq`. Process their cursor and diagnostic information even when that sequence was seen. Deduplicate stored v2 events by nonempty `event_id`; replace `task_result` snapshots with the latest snapshot. Do not assume v2 delivery is timestamp-sorted or `seq` identifies the same stored event across replay.
 
 **Schedules** start ordinary tasks later or repeatedly:
-- **List:** `GET /api/schedules` (`ScheduledTasksResponse`). Each row's `status` is `active`, `disabled`, `suppressed`, `consumed`, `held`, `waiting` or `delete_pending`. An unreadable table answers 503, never an empty list.
+- **List:** `GET /api/schedules` (`ScheduledTasksResponse`). Each row's `status` is `active`, `disabled`, `consumed`, `held`, `waiting` or `delete_pending` (a withdrawn row). Rows also carry `display_name`, `kind` (`note` or `task`), `timezone`, `destination`, `waiting_detail` and, once the schedule has run, the last run's `outcome` (`state`, `quiet`, `notice`, `ended_at`, `line`; `state` is `pending_observation` until the settled result is read). `previous_run_open` appears while the host sees the previous run still open; a withdrawn row carries `withdrawal` (`at`, `by`, `reason`, `work_in_flight`: true, false or null when unknown, `restorable`). An unreadable table answers 503, never an empty list.
 - **Create or edit:** `POST /api/schedules` (`ScheduleUpsertRequest`). An existing `id` edits that schedule; without an `id` a repeat creates another one. `ok` is true only when the audit record landed (`schedule.audit` is `recorded`). A 409 means nothing was written: the schedule table or its audit could not be used safely.
-- **Disable, delete, restore:** `POST /api/schedules/{id}/action` (`ScheduleActionRequest`: `action` and a required `reason`); `DELETE /api/schedules/{id}` also deletes. A refusal is also 200, with `ok: false`: `changed` is the durable fact and `status` says what happened. An action governs future runs only; `running_or_queued` reports a run it already admitted (`null` when unknown).
+- **Disable, delete, restore:** `POST /api/schedules/{id}/action` (`ScheduleActionRequest`: `action` and a required `reason`); `DELETE /api/schedules/{id}` also deletes. Delete withdraws (`status: withdrawn`): the row stays, disabled and restorable, until it is removed after the retention window once its work has settled; Restore cancels the withdrawal once no hold remains on it (`withdrawal.restorable`), and posting the same `id` edits the withdrawn row without restoring it. A refusal is also 200, with `ok: false`: `changed` is the durable fact and `status` says what happened. An action governs future runs only; `running_or_queued` reports a run it already admitted (`null` when unknown).
 
 **Downloading a result file:**
-- **Where:** `GET /api/tasks/{id}/artifacts/{name}` (optionally `relpath`, `archive` or `source`).
-- **Partial downloads:** byte ranges are supported. A `206` response is a byte slice, possibly an incomplete JSON document even when the original file was JSON, so do not parse it as a complete one.
+- **Where:** `GET /api/tasks/{id}/artifacts/{name}` (optionally one of `relpath`, `archive`, `source` or `wrap_up`).
+- **Partial downloads:** `206` is a byte slice, not whole JSON. Wrap up's copy is regenerated per request; never join its ranges across requests.
 - **Checking the bytes:** the `x-ouroboros-artifact-sha256` header gives the checksum when the core verified the bytes.
 - **Changed after recording:** `409 artifact_identity_changed` means the file changed after it was recorded.
 
@@ -387,6 +397,8 @@ data: {"seq":12,"type":"task_result","task_id":"…","data":{…}}
 
 **Removing unknown late delivery from current decisions.** For an answered quiz with unknown late-answer delivery, send `action: "dismiss"` with `decision_id` and `request_id` only (no answer, comment or reason). It removes only the outstanding delivery item, neither resending the answer nor marking it delivered; the recorded answer and unknown outcome stay in history. Another, ineligible state is refused; read the returned facts.
 
+**Pressing a living card's control.** Send the same endpoint with `decision_id` `card:<card_id>:<action_id>` (the control's `submit.id`), a `request_id`, the card `revision` the control was drawn from (`400 revision_required` without it; a card that changed since answers `409 card_stale` with the current `revision`, and nothing is recorded), and for a `form` its field values as `values` (field names to text of at most 4000 characters, numbers, booleans or null; at most 50); other values, or `values` on an `action`, answer `400 values_invalid`. Each press is its own record: the same `request_id` returns the recorded press with `duplicate: true` and retries a delivery still owed, whatever the card became since; a control declared `once` keeps only its first press, and a later one answers `409 card_action_once` with `winner` (its `request_id`, time and `delivery`; a winner still `owed` is retried under its `request_id`). `delivery` says where the press went: `delivered` into the authoring task's mailbox, or its admitted Continue successor's (not proof it was read; a paused, held or queued author keeps it until it continues, `reason_code` `awaiting_recipient_read` on the answer and in `submissions_summary` until it reads it; one that ends first keeps it among its unread mail), `forwarded` as the owner's own message in the card's chat because that task ended (their words only, the pressed label and each value, as a Reply to the card's row; like a late answer it joins the turn an earlier late answer or press of that task started, never another task's turn), or `owed` (`202` with `reason_code`: resend the same `request_id`). `404 card_not_found` or `action_not_found` names a card or control that does not exist now; a replaced card can drop a control.
+
 **Other decisions.** Model-wait choices (`model_wait:<task_id>:<wait_id>`) and persisted routing choices (`routing:<client_message_id>:<token>`; no new routing pickers are produced) use the same endpoint and idempotency rule.
 
 ## 8. Stop, pause, continue, resume
@@ -394,17 +406,17 @@ data: {"seq":12,"type":"task_result","task_id":"…","data":{…}}
 **Stop.** `POST /api/tasks/{id}/cancel` takes an optional `TaskCancelRequest`: `cascade`, `stop_policy` and `stop_action_id`.
 - **Safe retries:** `stop_action_id` names one Stop action. While that action is pending, an identical request joins it and reusing the id with different arguments answers 409. An immediate Stop records the stop first and answers after it drove the teardown; once the task is no longer active, even an identical retry can answer 404. Read task detail to distinguish the recorded outcome.
 - **Stopped:** `200` means the teardown settled (with `cascade: true` when the whole tree was stopped).
-- **Recorded, still stopping:** `202` with `cancel_state: "pending"` means the stop is recorded and the supervisor finishes it: a graceful stop under way, or an immediate one whose teardown is not confirmed yet (`reason_code: "teardown_unconfirmed"`, with the stop's `request_id`). No retry is needed: read `GET /api/tasks/{id}` (`cancel_state`) until it settles; an immediate Stop still hardens a graceful one.
-- **Nothing to stop:** `404` means the task already finished (completion wins), the id names no task, or a repeated Stop already finished. A task that was created but never started is stopped, not 404.
+- **Recorded, still stopping:** `202` with `cancel_state: "pending"` means the stop is recorded and the supervisor finishes it: a graceful stop under way, or an immediate one whose teardown is not confirmed yet (`reason_code: "teardown_unconfirmed"`, with the stop's `request_id`), including an external run whose cancel its engine has not confirmed, or cannot while the engine is unreachable. No retry is needed: read `GET /api/tasks/{id}` (`cancel_state`) until it settles; an immediate Stop still hardens a graceful one.
+- **Nothing to stop:** `404` means the task already finished (completion wins), the id names no task, or a repeated Stop already finished. A task that was created but never started is stopped, not 404, and so is a finished task whose tree a `cascade: true` Stop still finds running (a helper task or an external run).
 - **Nothing recorded:** `503 cancel_intent_write_failed` means nothing was recorded or cancelled, so retry; `503 cancel_intent_projection_corrupt` cannot succeed until the projection file is repaired.
 - **When to offer Stop:** chat frames carry `cancelable` to say when Stop applies. Do not offer it otherwise.
 
 `stop_policy` is `immediate` (also the omitted/empty default) or `finalize_then_cancel`. A graceful request cannot soften a previously recorded immediate Stop. Task detail has `cancel_state:"pending"` while cancellation is owed, otherwise the field is absent; there is no public `cancel_state:"settled"`.
 
-**Partial work.** There is no single `status:"partial"` lifecycle. Read `result`, artifacts and `outcome_axes` separately: the axes distinguish lifecycle, execution, objective, artifacts and review. Graceful wrap-up can produce best-effort output, immediate cancellation salvage, and natural completion wins a race with Stop. Cancellation does not delete recorded results/artifact evidence, but capture can fail or be missing. Artifact states include `pending`, `finalizing`, `ready`, `ready_with_changes`, `ready_no_changes`, `failed`, `missing`, and an inapplicable axis can say `not_applicable`. Read the actual file list rather than treating cancellation as no output.
+**Partial work.** No `status:"partial"` exists; read `result`, artifacts and `outcome_axes` separately. Graceful wrap-up can produce best-effort output, immediate cancellation salvage, and natural completion wins a race with Stop. Wrap up's `delegate_terminal_reconciliation.owner_stop_children` keeps child/run material and readers on any exit; detail `wrap_up_document` names its on-read Markdown; terminal execution is not final accounting; engine continuity grants no session transfer. Cancellation keeps recorded evidence; capture can fail or be missing. Artifact states: `pending`, `finalizing`, `ready`, `ready_with_changes`, `ready_no_changes`, `failed`, `missing`, `not_applicable`; read the file list.
 
 **Pause, continue, resume, hurry:**
-- **Pause:** `POST /api/tasks/{id}/pause` takes exactly `{request_id}`. `202` with `latch_pending` means the pause is recorded and still taking hold; repeat the same `request_id`.
+- **Pause:** `POST /api/tasks/{id}/pause` takes `{request_id}` and may declare who pressed: an interface sends `actor: "owner"` for the owner's own press, and a caller acting for Ouroboros sends `actor: "ouroboros"` with a `reason`, one sentence of at most 400 characters that the owner reads under the work's name. The declaration only names the Pause's author and grants no power; an `actor` the core does not know declares nobody, and a Pause that declared nobody is never shown as the owner's. Any other field answers 400. `202` with `latch_pending` means the pause is recorded and still taking hold; repeat the same `request_id`.
 - **Continue:** `POST /api/tasks/{id}/continue` takes exactly `{action_nonce}`. A timeout does not mean it failed: retry with the same nonce. The successor task's id is derived from the nonce, so it cannot start twice.
 - **Resume:** `POST /api/tasks/{id}/resume` returns saved work from a budget, owner or technical pause (`TaskResumeResponse`), after fresh control and money checks. Unreadable billing conditions refuse with HTTP 409, `code=billing_authority_unavailable`, the cause in `reason_code`, and explanatory `error`; this is not a missing task or exhausted money. It is not idempotent: a repeat is refused (409 or 404). After an unclear answer, read the task.
 - **Hurry:** `POST /api/tasks/{id}/hurry` takes exactly `{request_id}`.
@@ -482,17 +494,17 @@ Files produced by tasks are covered in §6.
 - `GET /api/extensions/{skill}/manifest` and `/settings_section` read one skill.
 - `GET /api/skills/daemons` lists companion processes.
 
-**One lifecycle lane.** Enabling, disabling, granting, deleting, reviewing, attesting and every install, update or uninstall run one at a time in one lane. Most run inside the HTTP request until they settle, so a request can take minutes (a review runs model calls); a catalog install and a replacing update answer at once with the `job_id` they started (§12). Closing the connection does not stop the job. Watch `GET /api/skills/lifecycle-queue` (the running job and the last 80, kept in memory only) or the progress rows with `system_type: "skill_lifecycle"`, and read `GET /api/extensions` again when it settles.
+**One lifecycle lane.** Enabling, disabling, granting, deleting, reviewing, attesting and every install, update or uninstall share one lane. Toggle, grant, delete and attest await their terminal result by default, including for older UI copies and dictation. With `Prefer: respond-async` they answer the result when fast, otherwise `{ok: true, pending: true, job_id, message}` after about ten seconds: accepted work, not completed setup. Catalog install and replacing update answer their job immediately (§12); review may keep the request open for minutes. Closing a connection does not stop its job. Watch `GET /api/skills/lifecycle-queue` (the running job and last 80, in memory) or `system_type: "skill_lifecycle"` progress, then re-read `GET /api/extensions` on settlement. A lost response does not authorize a blind retry.
 
 **The revision guard.** `content_hash` names a skill's revision. An action that sends `expected_content_hash` is refused with 409 when the live revision differs. Re-read `GET /api/extensions` and show the current revision before acting again; that refusal need not include the revision.
 
 **Owner actions on one skill:**
 - **Enable or disable:** `POST /api/skills/{skill}/toggle` (`SkillToggleRequest`). Repeating it is harmless.
-- **Grant keys or permissions:** `POST /api/skills/{skill}/grants` (`SkillGrantRequest`). Only what the current manifest requests can be granted; a repeat merges.
+- **Grant keys or permissions:** `POST /api/skills/{skill}/grants` (`SkillGrantRequest`). Only current manifest requests can be granted; a repeat merges. Optional `enable_after_grant: true` carries an explicit Enable through the same job, even after a pending response. Omission grants only, preserving an existing install-time turn-on request. Terminal `setup_error` means grants succeeded but setup did not; `enabled` reports explicit Enable's result.
 - **Review:** `POST /api/skills/{skill}/review` answers 200 with the review's outcome (`SkillReviewResponse`). A review already running for the same revision answers `status: "pending"` with its `job_id`. `GET /api/skills/{skill}/review-history/{job_id}` renders a finished review.
-- **Attest a review:** `POST /api/owner/skills/{skill}/attest-review` records the owner's verdict: 200 with `ok: true`, otherwise 409.
+- **Attest a review:** `POST /api/owner/skills/{skill}/attest-review` records the owner's verdict: 200 with `ok: true` (possibly pending above), otherwise 409.
 - **Delete:** `POST /api/skills/{skill}/delete` removes an external or self-authored skill and its state; a repeat answers 404.
-- **Presence runtime:** `POST /api/owner/skills/{skill}/presence-runtime` changes a presence profile's runtime choice, compare-and-set on `expected_state_fingerprint`.
+- **Places:** `GET /api/places` returns records and connector declarations; `POST /api/places` (`PlaceConnectRequest`) connects one. `POST /api/places/{place_id}` (`PlaceUpdateRequest`) atomically edits owner choices; `expected_revision` detects concurrent edits. `DELETE /api/places/{place_id}` disconnects it, keeping room history. Records and connector ingress: CREATING_SKILLS, “Places and focus transport ingress”.
 - **Publication check:** `POST /api/skills/{skill}/publish-preflight` is read-only; every status answers the same shape, and `state: "hard_block"` is a refusal. An optional body `{destination: {source_id, mode}}` (`SkillPublishPreflightRequest`; mode `origin`, `entry` or `new_entry`) picks where it would go; the answer's `repository` is that destination (default: where the skill came from, else the hub). Missing publication prerequisites may answer `409` before the skill is looked up; read `reason_code`, not an assumed `404` for an unknown name.
 - **Reconcile:** `POST /api/skills/{skill}/reconcile` brings one extension's live state in line with its saved state.
 
@@ -504,6 +516,73 @@ A refused action answers `SkillActionRefusal`: `error`, the `status_code` it was
   - `declarative`: a component description the interface draws; the components are described in `docs/CREATING_SKILLS.md`.
   - `module`: reviewed JavaScript run in a sandboxed frame. [`WIDGET_HOST_PROTOCOL.md`](WIDGET_HOST_PROTOCOL.md) is the complete host protocol: frame, document policy, message grammar, fetch relay, events, theme, size, downloads, links and the dispose handshake.
 - `GET /api/extensions/{skill}/module/{entry}` serves reviewed module code (never cached, any origin may load it).
+- `POST /api/widgets/fault` (`WidgetFaultRequest`, `WidgetFaultResponse`) keeps one fault a running module widget's card shows as a `widget_fault` row of `GET /api/logs/events`: the card's `skill`, `tab_id` and `revision`, `where` (`board` or `message`) and the frame's `kind`, `message` (at most 500 characters), `source` (200) and `line`. The row has no task and is the page's report, not a verified execution. At most 10 rows per widget and 100 together are written per minute; past that the answer is `logged: false` and the widget's next row carries `suppressed_count`. `400` another shape, `413` a body past 8 KiB, `503` not written. A client may skip reporting.
+
+**Contributions (controls, speech engines and places):** `GET /api/ui/contributions`
+(`UiContributionsResponse`, `Cache-Control: no-store`) returns `contributions`,
+`offers.stt`, `icons`, `problems` (skill → warning strings), `preferences` and
+`voice`. The same fields appear beside `skills`/`live` in `GET /api/extensions`;
+`live.contributions` contains the loaded extensions' captured entries.
+Instruction skills contribute only while enabled and allowed by their current
+review gate; extension entries belong to their loaded publication. Invalid
+semantic entries are dropped individually and reported, also by skill preflight.
+
+Each contribution has `key` (`<skill>:<id>`), `skill`, `skill_label` (manifest name),
+`id`, `label`, `title`, `icon`, `order`, `revision` and `render: {kind, url}`,
+plus either `placement` or `provides`. Placement entries carry `action` and chips
+carry `source: {url, refresh_s}`. For `skill.request`, `action.url` and `route_url`
+name the host-computed absolute route; providers use `route_url`. Optional
+provider fields are `runtime`, `destination`, `languages`, `formats`,
+`install_size`, `max_bytes` and `max_seconds`. Place providers require an extension
+with the `presence` permission, `id`, `label`, and `destination: vendor:<Name>`;
+`scope` defaults to `account` (or `conversation`), `wakes` lists typed wake facts,
+`source` uses the chip contract, `settings` names a section, and `read_only: provider`
+indicates provider support. Their `tools` list carries full names and declared
+`effect`, `target`, `conversation`, `thread` facts. No speech-engine runtime/route
+is required. `icon_spec` is `{kind:"host", name}` or `{kind:"svg", svg}` with
+sanitized geometry, else `{}` for the fallback; the `icon` declaration remains
+a host name or `ui/icon.svg`. SVG assets carry sandbox CSP. Installed and Browse
+rows expose `connects` (boolean) and `icon` (the same spec); absent catalog fields
+remain compatible. `icons` is the host glyph catalog. `offers.stt` lists non-live built-in providers as
+`{skill, skill_label, id, label, destination, install_size, enabled: false, installed}`;
+`installed: false` names a built-in this install has not installed (clients send the
+owner to the Skills page's Browse, where the built-in source installs it).
+There is no marketplace offer until its catalog exposes contribution metadata;
+clients can link to the Skills entry instead.
+
+`render.kind: host` runs trusted same-origin code and requires an extension with
+`page_module` permission and its ordinary hash-bound grant/review authority.
+`GET /api/extensions/{skill}/ui/{revision}/{path}` serves only captured `ui/`
+assets of that live revision: `.js` as `text/javascript`, CSS, JSON and images by
+type, with no-store and nosniff. Example entry:
+`/api/extensions/voice/ui/<revision>/ui/voice.js`; relative imports stay in that
+revision. Missing, non-UI, unsupported, unloaded or stale paths answer 404.
+Like `module/`, a GET under `ui/<revision>/` is host-owned, never the skill's own
+route. These modules are distinct from the opaque-origin widget frame protocol.
+The builtin client records each module's start in its start ledger (Living cards above) and does not import a
+module again by itself after a start of that revision the page did not outlive; one notice names it with Start it.
+
+`GET`/`POST /api/ui/preferences` persist `voice: {stt:"", tts:"", tts_voice:""}`
+(`tts_voice`: the chosen tts provider's voice id, empty for its own pick) and
+`contributions: {hidden:[], order:[]}` in the install-wide preference file.
+POST merges named nested keys, replaces each supplied list, and rejects unknown
+nested keys, non-string keys, strings over 120 characters and lists over 64 items
+with 400. A missing provider never clears or substitutes a saved key.
+The contribution response includes these preferences and `voice[kind]` as
+`{key, available, reason}`: reason is empty when available, `not_selected` for an
+empty choice or `provider_unavailable` for a missing chosen engine. Client API
+availability is a separate browser fact. Re-read on `extension_lifecycle`, WS
+open, the end of a skill lifecycle job (its `chat` row with `system_type:
+"skill_lifecycle"` and `lifecycle.phase` completed, failed or cancelled) and
+`ouro:skill-lifecycle`; owner toggles invalidate instruction entries too.
+
+Server STT uses POST of raw audio to `route_url`, with its recorded `Content-Type`
+and optional `?lang=` (the builtin client sends none). Reply: `{text}`, `{text:"", status:"no_speech"}` or
+`{error:{code,message}}`. The existing 512 KiB extension-route cap is unchanged.
+Optional `max_bytes` is 1..524288 and `max_seconds` 1..600; `formats` is a subset
+of `audio/webm`, `audio/ogg`, `audio/mp4`, `audio/mpeg`, `audio/wav`. The recorder
+honors these limits before upload; 393216 bytes at 32 kbps for 60 seconds is a
+provider declaration, never a host exception by skill name.
 
 **The skill's own routes:** everything else under `/api/extensions/{skill}/` belongs to the skill.
 - A route that does not exist answers 404, and a skill that is not running answers 409.
@@ -552,7 +631,7 @@ The retired hub catalog/preview/install/update/uninstall/publication-clear route
 
 ## 13. Agent accounts
 
-Ouroboros runs connected coding subscriptions through its bundled agent engine, Claudexor. These routes relay the engine. Fields named in the engine's terms (`job`, a maintenance operation, a reset receipt, quota snapshots) are the engine's own API v2 objects, passed through: the core pins the engine release in `ouroboros/claudexor_runtime_pin.json`, and the engine's source is https://github.com/razzant/claudexor. Read the keys the published shapes name, and treat the rest as data.
+Connected coding subscriptions use Claudexor. Its API v2 objects (`job`, maintenance operation, reset receipt, quota snapshots) pass through; Node/npm preparation is host-owned. Pin: `ouroboros/claudexor_runtime_pin.json`; source: https://github.com/razzant/claudexor. Read published shape keys; treat the rest as data.
 
 **Status:**
 - `GET /api/claudexor/status` (`ClaudexorStatusResponse`) is passive: it never starts the engine. `reads.catalog`, `reads.accounts` and `reads.quota` are each `ok` (authoritative, even when empty), `not_read` (never asked) or `failed`. A facet that was not read freshly serves its last value with `facets.<name>.stale: true`. Never read an empty list without `ok` as "no accounts".
@@ -575,10 +654,10 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
 - After a lost answer the outcome is unknown: send the same key and body again, or read the receipt by id.
 
 **Agent tool maintenance:**
-- `GET /api/claudexor/maintenance/harnesses` lists what is installed, tested and available per agent tool, and any operation in progress (rejoin it after a reload). It is passive.
-- `POST /api/claudexor/maintenance/operations` (`{harness, target}`, an `Idempotency-Key` header) installs, updates or rolls back one tool and answers `202` with the operation. It can start the engine. `409` with code `maintenance_already_active` names the running operation in `context.operationId`: follow that one.
-- Poll `GET .../operations/{id}` while `state` is `queued` or `running`, or `termination` is `unconfirmed`. `POST .../operations/{id}/cancel` asks to cancel; the answer is not proof the work stopped.
-- Maintenance refusals are `ClaudexorMaintenanceProblem`: `error` is the engine's problem object (`code`, `message`, `context`), not a sentence. A `503` with `context.acceptance: "unknown"` means the request may have been accepted: send the same key and body again.
+- `GET /api/claudexor/maintenance/harnesses` passively lists installed, tested and available tools and current operations (rejoin after reload).
+- `POST /api/claudexor/maintenance/operations` (`{harness, target}`, `Idempotency-Key` header) installs, updates or rolls back a tool: `202` returns its operation. It can start the engine and prepare Node/npm. `409 maintenance_restart_required` asks for chat-header Restart, then repeat Update; `409/503 maintenance_preparation_failed` reports failure. Optional inspection failure still permits POST.
+- `409 maintenance_already_active`: follow `context.operationId`. Poll `GET .../operations/{id}` while `state` is `queued`/`running` or `termination` is `unconfirmed`. `POST .../operations/{id}/cancel` requests cancellation, without proving termination.
+- `ClaudexorMaintenanceProblem.error` holds engine or host `{code, message, context}`. Preparation's `context.acceptance=not_submitted, scope=this_attempt` cannot resolve an earlier `503 acceptance=unknown`: keep and resend that same key/body.
 
 **The review pool.** `GET /api/review-pool` lists the agent rows that may review work and what one review costs on each. A broken configuration answers a non-empty `config_error` with an empty pool. A readable catalog with no row marked Reviewer also answers an empty pool: the Main model then reviews alone.
 
@@ -604,7 +683,7 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
   - `running_sha`: the commit this core started from; `current_sha`: the checkout's;
   - `available` and `safe_to_apply`;
   - `update_tx`: the update transaction in progress (`{active: false}` when none);
-  - `update_progress`: this process's in-memory progress (`{}` when none);
+  - `update_progress`: the last admitted update attempt (`{}` only when absent; unreadable state is `outcome:unknown`). `operation_id` and `generation` identify it; `current_generation`, `stage`, `active`, `result`, `outcome` and `concluded_by` separate progress from conclusion. `base_sha`, `target_sha`, `keep_branch` and `stash_note` retain exact source/local-work facts when known. `outcome` is applied/not_applied/rolled_back/failed/unknown, empty while unresolved. It is observation, never recovery authority; a pre-admission refusal remains its HTTP answer;
   - `letter`: the written description of the update, when there is one;
   - `check_ok`: null on status.
 - `POST /api/update/check` fetches first, may write the update letter and broadcasts `update_progress_changed`.
@@ -615,9 +694,9 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
 - **Replacement not applied:** 409 `reason: replace_not_applied`, `abandoned: true` means Git refused the first tree-changing command because its index lock was held. The transaction is disarmed without rollback; `rescue` and `keep_branch` disclose retained preparation artifacts. The lock is untouched. Diagnose it before another deliberate attempt; age alone never authorizes removal. Other partial or unknown failures keep fenced recovery and their error.
 - **What `200` means:** inspect `status`, not HTTP success alone. `ok` with `restarting:true` means a restart was requested, not adoption. `assisted_started` means a supervised task owns resolution. `manual` returns a plan without applying or restarting. `restart_required` means the restart that finishes the apply could not be requested (a store-less replace has not moved the checkout yet); show its error and offer the ordinary restart control.
 - **Watching it:**
-  - `update_progress_changed` frames mean "read the status again" (progress is kept in memory only).
+  - `update_progress_changed` frames mean "read the status again"; stages are live; the saved last admitted attempt and conclusion survive restart. `retention_unconfirmed:true` reports a failed or refused save without changing the update result; a never-saved attempt cannot be recovered after process loss. An update check does not erase saved results. The indicator may hide a dismissed terminal attempt locally; the panel retains it until the next attempt.
   - After reconnecting, confirm the executing generation (`running_sha`) against the landed transaction/`merge_commit` identity reported by the update, not blindly against the preflight's official `target_sha`. Preserving local commits can create a distinct two-parent merge. Until the landed identity and completed startup are known, adoption remains unconfirmed.
-  - A core whose startup check fails can roll back and restart again.
+  - A core whose startup check fails can roll back and restart again. An assisted-resolution rollback completed in the same generation may have no retained conclusion and display an unconfirmed outcome.
   - `update_status_ready` arrives after a fresh start.
 - **Retrying:** there is no idempotency key. A non-manual request can answer 409 while an update is active or its expected base/target no longer matches; `manual` may return another plan. When an outcome is unknown, read status and transaction facts before deciding—never infer failure or resend from a dropped connection.
 
@@ -628,8 +707,8 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
 **Reset.** `POST /api/reset` deletes the data folders and the settings, then restarts. It is irreversible: ask the person first, and never resend after a dropped connection.
 
 **Commands, restart and Panic.** `POST /api/command` (`CommandRequest`) or a WebSocket `command` frame sends a slash command (`/restart`, `/panic`, `/review`, `/evolve`, `/bg`, `/status`); any other text becomes an owner message in Main.
-- **What `200` means:** `{status: "ok"}` means the command was queued, not that it ran. The same `visible_task_id` within 5 seconds answers `{ok, deduped, task_id}`. Either `/restart` or `/panic` can end the connection before or after the answer, so a dropped connection is not a failure.
-- **Panic:** it stops the core's work and processes and exits (code 99). The desktop launcher does not start it again.
+- **What `200` means:** `{status: "ok"}` means queued, except Panic acknowledges its immediate emergency latch, not completed shutdown. The same `visible_task_id` within 5 seconds answers `{ok, deduped, task_id}`. Either `/restart` or `/panic` can end the connection before or after the answer, so a dropped connection is not a failure.
+- **Panic:** stops owned work and exits 99; the launcher never restarts it. Never queue, reconnect-flush or offer resend, including chat frames. Desktop uses `pywebview.api.panic_stop()` first, also while the socket reconnects (no veil covers Panic). Panic bypasses confirmations, composer saves/uploads and Telegram command-mode translation. Intercepted typed Panic creates no chat bubble. Only bridge `{status: "stopping"}` or `panic_accepted` clears unchanged sent command text; unknown/refused delivery keeps it. Newer edits, replies and attachments stay. If the room is closed and reopened before acceptance, the replacement field can retain accepted text even after its saved draft is cleared; this remount edge remains unresolved. Browser uses its captured open socket with no buffered output; `panic_accepted` means emergency latch, not exit. Missing acceptance says “Panic was not confirmed”: desktop points to its tray/menu bar, browser to the host computer. No clock agreement or preflight request is required; transmitted bytes can arrive later on that connection. `client_surface` is diagnostic, never owner identity. Unavailable HTTP Panic returns `503:ErrorResponse`; WS sends a declared `log` warning. Unbound external owners never enter ordinary admission. Telegram sends once without an age expiry; its whole-second message date is compared with the host clock at plugin import. Earlier dates are refused, with previous outcome unknown. This assumes aligned clocks: a host ahead rejects fresh Panic until Telegram reaches the import second; a host behind can accept retained commands. Old/fresh messages in the boundary second are indistinguishable and accepted.
 - **Restart:** a restarted core comes back on its own; reconnect and resynchronize (§5).
 
 **Spend.** `GET /api/cost-breakdown` reports spend from the physical-attempt ledger. A `503` means the ledger cannot be read: spend is unknown, not zero.
@@ -639,12 +718,12 @@ Ouroboros runs connected coding subscriptions through its bundled agent engine, 
 - `GET /api/logs/{name}` tails one log (`chat`, `progress`, `events`, `tools` or `supervisor`; `limit` 1 to 2000, default 100; `task_id` filters). An unknown name answers 404 with the allowed names. `chat` and `progress` are read from the dialogue store: `_line` is the row's durable position among every stored object of its stream, and while the archive import has not settled those counts the endpoint answers 503 `reason_code: migrating` (retry shortly), never a guessed number; the file logs' `_line` is a position within the read window.
 - `GET /api/storage` (`StorageResponse`) reads the last finished count of everything Ouroboros owns, a running count's progress, fresh free space and the Temporary space tray, without measuring; `?count=<finished_at>` omits a count the client already holds. `POST /api/storage/measure` starts one complete count in a child process or joins the running one; `POST /api/storage/measure/cancel` kills it and keeps the saved count (202 either way, the same envelope with `started`).
 - **Temporary space.** `POST /api/storage/free/preview` lists, without writes, what the app's own retirers would remove now (finished tasks' work folders, working copies of finished work) under a plan id; a second preview joins the running one. `POST /api/storage/free` with `{plan, groups}` (`StorageFreeRequest`) frees exactly the previewed items of those groups, for good: ask the person first, and never resend after a dropped connection (the plan id makes a repeat harmless: a replaced or missing plan answers `started: false` with `reason`). `POST /api/storage/free/cancel` stops the listing (nothing is kept) or the run (what was freed stays freed). All answer 202 with `StorageResponse`; `free.run` separates removed, still deleting, stuck and kept items.
-- `GET /api/evolution-data` returns the evolution chart's points (`force` recomputes).
+- `GET /api/evolution-data` (`EvolutionDataResponse`) answers at once with the saved version history (`saved_at`, `versions`, this installation's `install` journals) and `refresh` (`idle`, `running` or `failed`; `unmeasured` versions with the first reason): new tags or `force=1` start one background re-measurement, which also retries unmeasured versions, and a failure keeps the saved copy. The earlier `points` (one per tag name; null where unmeasured, memory fields null) and `cached` stay for older clients. Ask again while it runs; a value nobody measured is `null`, never zero.
 
 ## 16. Errors and unknown outcomes
 
 - **Error bodies** are `ErrorResponse`: `{error}` and, when present, `code` or `reason_code`. A route may add facts beside them (for example `schema_errors`, `task_id` or a skill's current facts). An unexpected failure can also answer `500` as plain text. Statuses beyond the ones a route lists are those `500`s, the auth gate's `401`, and the router's own `404` and `405` for an unknown path or method. Agent-engine routes may also pass the engine's own status through (§13).
-- **An error that is an object.** Agent tool maintenance refusals (`ClaudexorMaintenanceProblem`) carry the engine's problem object in `error`, not a sentence. A client that shows errors should accept both forms and show `error.message` for an object.
+- **Object errors.** Maintenance (`ClaudexorMaintenanceProblem`) returns an engine or host problem in `error`. Accept both strings and objects; show `error.message` for objects.
 - **When an outcome is unknown, never resend a change automatically.** The unknown-outcome answers:
   - `POST /api/tasks` → `status: "unconfirmed"` (resending the same `task_id` is safe; a new id is not);
   - settings writers → `saved: null`;

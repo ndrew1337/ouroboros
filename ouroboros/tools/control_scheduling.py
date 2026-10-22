@@ -519,6 +519,29 @@ def _populate_subagent_event_extras(
         evt["parent_task_id"] = parent_task_id
 
 
+_REQUEST_ORIGIN: Dict[str, Any] = {}
+
+
+def _request_origin(ctx: ToolContext) -> Dict[str, Any]:
+    """The REQUESTED row's producer and the process owning the bus its event rides (the supervisor
+    itself for an in-server turn, else this worker's parent), measured once per process. Recovery
+    refuses a request no claim ever marked only once both provably ended
+    (``supervisor/workspace_preparation._request_ended``); while either lives the event may arrive."""
+    import os
+    from ouroboros.platform_layer import process_start_time
+    from supervisor import queue
+
+    host_is_self = bool(getattr(queue, "INITIALIZED", False) or getattr(ctx, "is_direct_chat", False))
+    key = (os.getpid(), host_is_self)
+    if _REQUEST_ORIGIN.get("key") != key:
+        host = os.getpid() if host_is_self else os.getppid()
+        facts = {"pid": os.getpid(), "birth": process_start_time(os.getpid()),
+                 "host_pid": host, "host_birth": process_start_time(host)}
+        _REQUEST_ORIGIN.clear()
+        _REQUEST_ORIGIN.update(key=key, facts=facts)
+    return dict(_REQUEST_ORIGIN["facts"])
+
+
 def _prepare_child_drive(tid, status_drive_root, memory_mode, parent_project_id):
     """Prepare the forked/empty child drive. On failure clean up the drive + the
     task-state dir and return ``(None, error_string)``; otherwise ``(drive, "")``.
@@ -963,7 +986,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
         "write_surface": requested_surface,
         "resource_intent": ({"kind": "explicit_none"} if folderless_scratch_dir(ctx) is not None
                             else dict(metadata.get("resource_intent") or {})),
-        "origin_metadata": {**consciousness_origin_metadata(metadata), **owner_origin},  # tree origin: consciousness label/level + owner words
+        "origin_metadata": {**consciousness_origin_metadata({**metadata, "task_id": str(getattr(ctx, "task_id", "") or "")}), **owner_origin},  # tree origin: consciousness label/level + owner words
         **presence_binding_authority_metadata(metadata, task_contract=getattr(ctx, "task_contract", None)),  # never speaker
     }
     _populate_subagent_event_extras(
@@ -977,6 +1000,7 @@ def _schedule_task(ctx: ToolContext, internal: Dict[str, Any] | None = None, /, 
             tid,
             STATUS_REQUESTED,
             created_at=created_at,
+            requested_by=_request_origin(ctx),
             parent_task_id=parent_task_id or None,
             description=objective,
             context=context,

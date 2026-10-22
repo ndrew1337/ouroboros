@@ -1,28 +1,30 @@
 /**
  * One work, one status in the browser (DESIGN "Room work status"): readers over the `/api/state` work projection
  * (ouroboros/gateway/work_status.py; shapes in work_types.js). The server groups every live member into works, rolls
- * works into rooms and decides each work's controls with their exact targets; this module says those facts in the
- * product's short words, keeps what an incomplete body did not list again, and lays a work's controls on the shared
- * task-control doors. It derives no word, mark or control of its own. Four facts only this client knows stay
- * overlays: the socket closed (Reconnecting…), the owner's own unconfirmed send (Sending), the supervisor not ready
- * yet (Starting…) and the owner's own Stop press on a card (Cancelling… / Finalizing…).
+ * works into rooms, decides each work's controls with their exact targets and names each work's and room's mark
+ * (`mark`: moving | still | pause | ring | none); this module says those facts in the product's short words (a work's
+ * word, and beside it its line: the episode's own reason, then what still runs beside it), keeps what an incomplete
+ * body did not list again (unconfirmed: a ring), and lays a work's controls on the shared task-control doors. It
+ * derives no word, mark or control of its own. Four facts only this client knows stay
+ * overlays, each with its mark: the socket closed (Reconnecting…, a ring), the owner's own unconfirmed send (Sending,
+ * moving), the supervisor not ready yet (Starting…, no mark) and the owner's own Stop press on a card (Cancelling… /
+ * Finalizing…, moving). Whether something waits for the owner (`owner`: the server's `turn`) is a separate fact;
+ * status_mark.js draws the two together.
  */
 import { fmt, tr } from './i18n.js';
 import { taskPresentation, taskTerminalPhase } from './log_events.js';
 import { startingStatus } from './host_starting_status.js';
-import { chipWord, shortReason } from './task_phase_chip.js';
+import { chipWord } from './task_phase_chip.js';
 import {
     ACTION_FINALIZE, ACTION_HURRY, ACTION_PAUSE, ACTION_RESUME, ACTION_STOP_EARLIER, ACTION_STOP_NOW, REUSABLE_TASK_IDS,
     hurryTaskAction, openTaskControlMenu, openTaskControls, requestStop, requestStopAll, resumeTaskAction, taskControlActions,
     taskControlBusy,
 } from './task_control_menu.js';
 
-// The focus line (the episode's own `update_focus` text under a row's state) is built but not shown:
-// the row draws it only while this is on.
-export const SHOW_WORK_FOCUS = false;
-
-// A known outcome keeps its status colour; an unfinished lifecycle (Finalizing…) is said beside it.
-export const OUTCOME_TONES = { done: 'done', warn: 'caution', cancelled: 'caution', error: 'failed', timeout: 'failed',
+// A known outcome keeps its word's tone, its dot beside it (status_mark.js): Done and Done with warnings succeed (the
+// word says the warnings), Stopped was someone's decision, the rest failed. An unfinished lifecycle (Finalizing…) is
+// said beside it.
+export const OUTCOME_TONES = { done: 'done', warn: 'done', cancelled: 'stopped', error: 'failed', timeout: 'failed',
     lifecycle_error: 'failed' };
 const IDLE_ROOM = Object.freeze({ activity: 'idle', transition: 'none', call: '', turn: [], amber: false, mark: 'none',
     confirmed: true, works: [] });
@@ -35,9 +37,10 @@ export function emptyWorkState() {
     return { room: IDLE_ROOM, works: [], episodes: new Map(), members: new Set(), attempts: new Map(), complete: false };
 }
 
-// What an incomplete body did not list again: still shown, never as confirmed work and never with controls.
-const unconfirmedWork = (work) => ({ ...work, activity: 'unknown', transition: 'none', call: '', because: [],
-    turn: [], controls: [], confirmed: false });
+// What an incomplete body did not list again: still shown, never as confirmed work and never with controls or a line;
+// its mark is the ring of unconfirmed state.
+const unconfirmedWork = (work) => ({ ...work, activity: 'unknown', transition: 'none', call: '', because: [], tails: [],
+    live: false, turn: [], controls: [], confirmed: false, mark: 'ring' });
 
 /**
  * One body applied to an instance's work state. `room` and `works` are this chat's (`works[].room`, keyed as the
@@ -99,28 +102,62 @@ const COUNTED_REASONS = {
         : fmt('{count} helpers still working', { count: n, n })),
     delegated_running: (n) => (n === 1 ? tr('work.because.delegated_running', '1 external run still working')
         : fmt('{count} external runs still working', { count: n, n })),
+    external_runs_unconfirmed: (n) => (n === 1 ? tr('work.because.external_runs_unconfirmed', '1 external run may still be running')
+        : fmt('{count} external runs may still be running', { count: n, n })),
 };
+
+// Helpers and external runs still working side by side are said in one sentence, so the line never says it twice.
+function tailWords(tails) {
+    const counted = (code) => tails.find((tail) => tail?.code === code && Number.isInteger(tail.count));
+    const helpers = counted('helpers_running');
+    const runs = counted('delegated_running');
+    if (!helpers || !runs) return tails.map(reasonText);
+    const both = fmt('{helpers} and {runs} still working', {
+        helpers: helpers.count === 1 ? tr('work.because.one_helper', '1 helper')
+            : fmt('{count} helpers', { count: helpers.count, n: helpers.count }),
+        runs: runs.count === 1 ? tr('work.because.one_external_run', '1 external run')
+            : fmt('{count} external runs', { count: runs.count, n: runs.count }),
+    });
+    return tails.flatMap((tail) => (tail === helpers ? [both] : tail === runs ? [] : [reasonText(tail)]));
+}
 
 /** One reason in the owner's words: the server's code read through the catalog, its sentence as the English (a
  *  code this client has never seen still reads its sentence). A count stays a parameter of its template; a counted
- *  code this client does not know keeps the server's sentence as it is. */
+ *  code this client does not know keeps the server's sentence as it is. An empty sentence (a Pause that declared
+ *  nobody) says nothing, and Ouroboros's own sentence is its prose: only the frame around it is translated. */
 export function reasonText(reason) {
     if (!reason || typeof reason !== 'object') return '';
     const code = String(reason.code || '');
-    const text = String(reason.text || code);
-    if (!code) return text;
+    const text = typeof reason.text === 'string' ? reason.text : code;
+    if (!code || !text) return text;
     if (Number.isInteger(reason.count)) return COUNTED_REASONS[code] ? COUNTED_REASONS[code](reason.count) : text;
+    if (code === 'paused_by_mind' && reason.by?.text) return `${tr(`work.because.${code}`, text)}: ${String(reason.by.text)}`;
     return tr(`work.because.${code}`, text);
 }
 
-/** The reason said beside a word: its short word where one exists (Paused · by you), else its sentence. */
-export const reasonBeside = (reason) => shortReason(reason?.code) || reasonText(reason);
+/** A moment in the viewer's clock (epoch seconds or an ISO instant): its time today, its date as well on another day,
+ *  so an old one never reads as today's; '' when there is none. */
+export function clock(at) {
+    const ms = Number.isFinite(Number(at)) ? Number(at) * 1000 : Date.parse(String(at ?? ''));
+    const date = new Date(ms);
+    if (!ms || !Number.isFinite(date.getTime())) return '';
+    return new Date().toDateString() === date.toDateString()
+        ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        : date.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
 
-/** The reason said beside `word`, '' when the word already says it (an answer wait's own words, in any language). */
-export function reasonBesideWord(reason, word) {
-    if (!reason || (reason.code === 'owner_answer' && word === chipWord('ownerWait'))) return '';
-    const said = reasonBeside(reason);
-    return said === word ? '' : said;
+/**
+ * A work's line, said beside its word (the card's quieter line, the Shade row's, the sidebar's name after the word):
+ * the current episode's own sentence (the owner's Pause with the time it was pressed), then what still runs beside
+ * it, one sentence per tail, joined " · ". The line never repeats `word`: an answer wait's own words are compared by
+ * their code, in any language.
+ */
+export function workLine(work = {}, word = activityWord(work)) {
+    const first = list(work.because)[0];
+    const said = first?.code === 'owner_answer' && word === chipWord('ownerWait') ? '' : reasonText(first);
+    const sentence = said === word ? '' : said;
+    const pressed = sentence && first.code === 'paused_by_owner' ? clock(first.since) : '';
+    return [sentence, pressed, ...tailWords(list(work.tails))].filter(Boolean).join(' · ');
 }
 
 /** What waits for the owner in a room ('question' | 'action'), '' when nothing does or its own word says so. */
@@ -133,31 +170,32 @@ export const amberNote = (kind) => (kind === 'question' ? tr('work.amber.questio
 
 /**
  * The room's status in its bar: the server's room in short words, with the client's own facts on top. Tone is the
- * word's ink (live, queued, wait for the owner's own question, held, unknown, starting, offline, online); `dots` the
- * one mark after it (moving, still or one dot); `amber` says what waits for the owner (question | action), which turns
- * the mark amber; `showDots` is the transcript's typing row. `stopping` is the owner's own Stop press on every
- * working work of the room ('finalize' | 'immediate'); until the host is `ready`, an idle room says its start in the
- * words of the host's `boot` phases (host_starting_status.js).
+ * word's ink (live, queued, wait for the owner's own question, held, unknown, starting, offline, online); `mark` the
+ * work's shape after it (the server's room mark under this module's four overlays; the transcript's typing bubble
+ * shows while it is `moving`, whatever waits for the owner); `owner` whether something waits for the owner (the room's
+ * turn: its amber dot takes the mark's place, the word keeps its ink); `amber` what waits (question | action), said in
+ * words where the word does not already say it. `stopping` is the owner's own Stop press on every working work of the
+ * room ('finalize' | 'immediate'); until the host is `ready`, an idle room says its start in the words of the host's
+ * `boot` phases (host_starting_status.js).
  */
 export function roomStatusView(state, { connected = true, ready = true, boot = null, sending = false, stopping = '' } = {}) {
-    const view = (kind, text, tone, dots = 'one', extra = {}) => ({ kind, text, tone, dots, showDots: dots !== 'one',
-        amber: '', mark: '', ...extra });
-    if (!connected) return view('offline', 'Reconnecting…', 'offline');
+    const view = (kind, text, tone, mark, extra = {}) => ({ kind, text, tone, mark, owner: false, amber: '', ...extra });
+    if (!connected) return view('offline', 'Reconnecting…', 'offline', 'ring');
     const room = state?.room || IDLE_ROOM;
     const mark = String(room.mark || 'none');
-    const amber = roomAmber(room);
-    if (room.activity !== 'working' && sending) return view('thinking', chipWord('sending'), 'live', 'moving', { amber });
+    const turn = { owner: list(room.turn).length > 0, amber: roomAmber(room) };
+    if (room.activity !== 'working' && sending) return view('thinking', chipWord('sending'), 'live', 'moving', turn);
     switch (room.activity) {
     case 'working':  // a Pause still settling keeps the neutral ink; its mark moves while work stops
         return view('thinking', stopping ? chipWord(stopping === 'finalize' ? 'finalizing' : 'cancelling') : activityWord(room),
-            room.transition === 'pausing' && !stopping ? 'held' : 'live', mark === 'moving' ? 'moving' : 'one', { amber, mark });
-    case 'queued': return view('thinking', activityWord(room), 'queued', 'still', { amber, mark });
-    // The word itself says the owner's question: its ink is the amber, not a second mark.
-    case 'waiting': return asked(room) ? view('online', activityWord(room), 'wait', 'one', { mark })
-        : view('online', activityWord(room), 'held', 'one', { amber, mark });
-    case 'paused': return view('online', activityWord(room), 'held', 'one', { amber, mark });
-    case 'unknown': return view('online', activityWord(room), 'unknown', 'one', { mark: 'ring' });
-    default: return ready ? view('online', 'Online', 'online') : { ...view('starting', 'Starting…', 'starting'), ...startingStatus(boot) };
+            room.transition === 'pausing' && !stopping ? 'held' : 'live', stopping ? 'moving' : mark, turn);
+    case 'queued': return view('thinking', activityWord(room), 'queued', mark, turn);
+    // The owner's own question says itself: the word takes the amber ink, beside the owner's dot.
+    case 'waiting': return view('online', activityWord(room), asked(room) ? 'wait' : 'held', mark, turn);
+    case 'paused': return view('online', activityWord(room), 'held', mark, turn);
+    case 'unknown': return view('online', activityWord(room), 'unknown', mark, turn);  // a listed turn still waits
+    default: return ready ? view('online', 'Online', 'online', mark)
+        : { ...view('starting', 'Starting…', 'starting', 'none'), ...startingStatus(boot) };
     }
 }
 
@@ -169,29 +207,31 @@ export function ownStopPress(state, records) {
 }
 
 /**
- * One work's row in the room's Shade: its word (an outcome beside Finalizing…), the reason beside it, the row's tone,
- * its dots (moving while it works, a Pause still settling included; still while queued; else one dot) and whether its
- * mark turns amber (something waits for the owner). Paused by the owner or by Ouroboros is not amber. `stopping` is
- * the owner's own Stop press on the work's card ('finalize' | 'immediate'), said at once as the card says it.
+ * One work's row in the room's Shade: its word (an outcome beside Finalizing…), its line beside it, the row's tone
+ * (the word's ink), its `mark` (the work's shape as the server names it; the owner's own Stop press moves it), `owner`
+ * whether something in the work waits for the owner (its turn: the amber dot takes the mark's place; a Pause by the
+ * owner or by Ouroboros is not the owner's move) and `outcome`, the known outcome said beside Finalizing… (its dot in
+ * the outcome's tone). `stopping` is the owner's own Stop press on the work's card ('finalize' | 'immediate'), said
+ * at once as the card says it.
  */
 export function workRowView(work = {}, { stopping = '' } = {}) {
+    const owner = list(work.turn).length > 0;
     if (stopping && work.activity === 'working' && work.confirmed !== false) {
         return { word: chipWord(stopping === 'finalize' ? 'finalizing' : 'cancelling'), secondary: '', tone: 'live',
-            dots: 'moving', amber: list(work.turn).length > 0, focus: '' };
+            mark: 'moving', owner, outcome: '', focus: '' };
     }
     const outcome = work.transition === 'finalizing' && work.outcome
         ? taskPresentation(taskTerminalPhase({ status: work.outcome })) : null;
     const word = outcome ? outcome.headline : activityWord(work);
-    const reason = reasonBesideWord(list(work.because)[0], word);
-    const secondary = [outcome ? chipWord('finalizing') : '', reason].filter(Boolean).join(' · ');
+    const secondary = [outcome ? chipWord('finalizing') : '', workLine(work, word)].filter(Boolean).join(' · ');
     const pausing = work.activity === 'working' && work.transition === 'pausing';
     const tone = outcome ? OUTCOME_TONES[outcome.phase] || 'live'
         : !work.confirmed || work.activity === 'unknown' ? 'unknown'
             : work.activity === 'waiting' && asked(work) ? 'wait'
                 : work.activity === 'working' && !pausing ? 'live' : work.activity === 'queued' ? 'queued' : 'held';
-    const dots = outcome || tone === 'unknown' ? '' : work.activity === 'working' ? 'moving' : work.activity === 'queued' ? 'still' : '';
-    const focus = SHOW_WORK_FOCUS && work.focus && String(work.focus.text || '').trim() ? String(work.focus.text).trim() : '';
-    return { word, secondary, tone, dots, amber: tone !== 'wait' && list(work.turn).length > 0, focus };
+    // The work's own focus line: what its author says it is doing, under the state (update_focus).
+    const focus = String(work.focus?.text || '').trim();
+    return { word, secondary, tone, mark: String(work.mark || 'none'), owner, outcome: outcome?.phase || '', focus };
 }
 
 /** The question a row's View question goes to: the first question in the work's turn, by its exact quiz id. */
@@ -201,36 +241,42 @@ export function workQuestion(work) {
 }
 
 /**
- * What the card of a work's current episode says (one work, one status): the work's word with its short
- * reason in the chip, or its reason sentence beside it. Plain running work, finalizing work (its outcome beside
- * Finalizing…) and unconfirmed work keep the card's own words; so does a card whose episode is not live.
+ * What the card of a work's current episode says (one work, one status): the work's word alone in the chip, and its
+ * line as the chip's quieter second fact (the episode's reason, then what still runs beside it: reviews a Pause lets
+ * finish, helpers, external runs). Plain running work with nothing to say beside it, finalizing work (its outcome
+ * beside Finalizing…) and unconfirmed work keep the card's own words; so does a card whose episode is not live. The
+ * word is the live one only while the work plainly runs; its mark is the work's own (applyCardWorkViews keeps it).
  */
 export function cardWorkView(work) {
     if (!work || !work.confirmed || !work.episode?.live || work.activity === 'unknown' || work.transition === 'finalizing') return null;
-    const first = list(work.because)[0];
-    if (work.activity === 'working' && work.transition === 'none' && !first) return null;
-    // Reviewers already launched finish beside a settled Pause, visibly: the chip keeps saying so.
-    const reviews = work.activity === 'paused' && list(work.because).some((entry) => entry?.code === 'review_work_finishing');
-    const word = [activityWord(work), shortReason(first?.code), reviews ? chipWord('reviewWorkFinishing') : '']
-        .filter(Boolean).join(' · ');
-    const sentence = first && !shortReason(first.code) ? reasonBesideWord(first, activityWord(work)) : '';
+    const word = activityWord(work);
+    const line = workLine(work, word);
+    if (work.activity === 'working' && work.transition === 'none' && !line) return null;
     const running = work.activity === 'working';
-    const tone = list(work.turn).length ? 'warn' : running ? (work.transition === 'pausing' ? 'working waiting' : 'working')
+    const classes = list(work.turn).length ? 'warn' : running ? (work.transition === 'pausing' ? 'working waiting' : 'working')
         : work.activity;
     return {
-        phase: running ? 'working' : work.activity, text: word, secondary: sentence, classes: tone,
-        motion: running && work.transition === 'none', waiting: !running || work.transition !== 'none',
+        phase: running ? 'working' : work.activity, text: word, secondary: line, classes,
+        tone: running && work.transition === 'none' ? 'live' : 'neutral', waiting: !running || work.transition !== 'none',
     };
 }
 
-/** Every card's work view from one state; true when a card's view changed (its chip repaints with its next write). */
+/**
+ * Every card's work view from one state; true when a card's view changed (its chip repaints with its next write).
+ * Apart from the optional word, a work's live current episode keeps the work's look: its mark and whether something
+ * in it waits for the owner (the server takes the turn from every member, a helper's included). A turn the body lists
+ * is a fact even when another member could not be confirmed; a work an incomplete body omitted keeps no look.
+ */
 export function applyCardWorkViews(records, state) {
     let changed = false;
     for (const record of records?.values?.() || []) {
         if (record?.isSubagent) continue;
-        const view = cardWorkView(state?.episodes?.get(String(record.groupId || '')));
-        if (JSON.stringify(view) !== JSON.stringify(record.workView || null)) changed = true;
+        const work = state?.episodes?.get(String(record.groupId || ''));
+        const view = cardWorkView(work);
+        const look = work?.episode?.live ? { mark: String(work.mark || 'none'), owner: list(work.turn).length > 0 } : null;
+        if (JSON.stringify([view, look]) !== JSON.stringify([record.workView || null, record.workLook || null])) changed = true;
         record.workView = view;
+        record.workLook = look;
     }
     return changed;
 }
@@ -246,6 +292,7 @@ export function workControls(work) {
         // A reusable slot (`active`) hosts many cycles: no control reaches one of them by that id.
         const target = String(control?.target || '').trim();
         if (!target || REUSABLE_TASK_IDS.has(target)) continue;
+        if (control.action === 'resume' && control.scope === 'single') continue;
         const many = { stop: out.stop, stop_earlier: out.stopEarlier }[control.action];
         if (many) { if (!many.includes(target)) many.push(target); continue; }
         const one = { pause: 'pause', resume: 'resume', hurry: 'hurry', wrap_up: 'wrapUp' }[control.action];
@@ -261,17 +308,19 @@ export function workOfEpisode(data, taskId) {
         && String(work.episode.task_id || '') === id) || null;
 }
 
+/** The server's state for an individual member, without interpreting queue carriers in the browser. */
+export function memberState(data, taskId) {
+    const id = String(taskId || '');
+    return list(data?.works).find((work) => work?.confirmed !== false && work.members?.states?.[id])
+        ?.members.states[id] || null;
+}
+
 /** Every task a confirmed work's Resume control names in one body: where Activity may offer Resume. */
 export function resumeTargets(data) {
     return new Set(list(data?.works).filter((work) => work?.confirmed !== false)
-        .map((work) => workControls(work).resume).filter(Boolean));
-}
-
-/** Episode task id → the reason a confirmed paused (or pausing) work gives: who or what holds it. */
-export function pauseReasons(data) {
-    return new Map(list(data?.works).filter((work) => work?.confirmed !== false
-        && (work.activity === 'paused' || work.transition === 'pausing') && work.episode?.task_id && work.because?.[0]?.code)
-        .map((work) => [String(work.episode.task_id), String(work.because[0].code)]));
+        .flatMap((work) => list(work.controls).filter((control) => control.action === 'resume')
+            .map((control) => String(control.target || '').trim()))
+        .filter((target) => target && !REUSABLE_TASK_IDS.has(target)));
 }
 
 /** The shared menu's items for a work's controls. Resume is its own button wherever one stands beside the menu;
@@ -284,15 +333,29 @@ export function workMenuActions(grouped, { cancelPending = false, resume = false
 }
 
 /**
- * What a card offers from its work: `work` when the card is a confirmed work's live current episode, `resume` when
- * that work's Resume control targets the card's own task, `menu` when the work offers anything else.
+ * What a card offers from its work: `resume` when the work's Resume control targets the card's own task, `menu` when
+ * the work offers anything else, and `work` when the card is a confirmed work's current episode that is live or
+ * offers something. The server's controls decide, live episode or not: a parent that finished while its helper
+ * works keeps its tree's Stop. A finished card's Stop… is that offer, never its own pending Stop, so every sync of
+ * the card keeps it usable (chat.js syncCancelRunButtonMutation); its own request says a refusal itself.
  */
 export function cardControls(state, taskId) {
     const id = String(taskId || '');
     const work = state?.episodes?.get(id);
-    const grouped = work && work.confirmed !== false && work.episode?.live ? workControls(work) : null;
-    return { work: grouped ? work : null, resume: Boolean(grouped && grouped.resume === id),
-        menu: Boolean(grouped && workMenuActions(grouped).length) };
+    const grouped = work && work.confirmed !== false ? workControls(work) : null;
+    const resume = Boolean(grouped && grouped.resume === id);
+    const menu = Boolean(grouped && workMenuActions(grouped).length);
+    return { work: grouped && (work.episode?.live || resume || menu) ? work : null, resume, menu };
+}
+
+/**
+ * The cards whose work offer (`cardControls` menu or resume) differs between two bodies' states. Their Stop… and
+ * Resume are re-synced: a finished card whose work has left the body drops the Stop… an earlier body gave it.
+ */
+export function changedOffers(records, before, after) {
+    const offer = (state, id) => { const controls = cardControls(state, id); return `${controls.menu}|${controls.resume}`; };
+    return [...(records?.values?.() || [])].filter((record) => record?.root
+        && offer(before, record.groupId) !== offer(after, record.groupId));
 }
 
 /** The items a card's Stop… menu offers now: its work's controls, else the card's own task controls. */
@@ -305,13 +368,15 @@ export function cardMenuActions(state, record, activity = null) {
 
 /**
  * A card's Stop… menu: its work's controls when it is a work's current episode (the card's own target stops through
- * its card path, `stop`), else the card's own task controls, which never offer Resume.
+ * its card path, `stop`, while the card still runs; a finished card's tree stops through the door itself), else the
+ * card's own task controls, which never offer Resume.
  */
 export function openCardControls(anchor, record, work, { activity = null, stop, afterAction = null } = {}) {
     const cancelPending = Boolean(record?.cancelPendingPolicy);
     if (!work) return openTaskControls(anchor, record?.groupId, { activity, cancelPending, stop });
+    const own = (target) => target === String(record?.groupId || '') && !record?.finished;
     return openWorkControls(anchor, work, { cancelPending, afterAction,
-        stopOne: (target, action) => (target === String(record?.groupId || '') ? stop(action) : requestStop(target, action)) });
+        stopOne: (target, action) => (own(target) ? stop(action) : requestStop(target, action)) });
 }
 
 /**

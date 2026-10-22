@@ -227,11 +227,16 @@ def _containment_evidence(detail: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _terminal_payload(run_id: str, detail: Dict[str, Any],
-                      authority: "DelegatedRunShape") -> Dict[str, Any]:
+                      authority: "DelegatedRunShape",
+                      entry: Optional[_RunCustody] = None) -> Dict[str, Any]:
+    from ouroboros.effort_evidence import terminal_prompt_cache_ttl
     from ouroboros.gateways.claudexor import final_attempt_facts
 
     summary = _delegate().custody.summary_of(detail)
     observed = final_attempt_facts(detail, run_id)
+    start_ttl = ((entry.request_event if entry is not None else {}).get("prompt_cache_ttl")
+                 or (entry.prompt_cache_ttl if entry is not None else None))
+    ttl_facts = terminal_prompt_cache_ttl(observed, start_ttl)
     payload = {
         "status": "terminal",
         "run_id": run_id,
@@ -255,6 +260,8 @@ def _terminal_payload(run_id: str, detail: Dict[str, Any],
     }
     if isinstance(detail.get("attemptExecution"), list):
         payload["attempt_execution"] = detail["attemptExecution"]
+    if ttl_facts is not None or "prompt_cache_ttl" in observed:
+        payload["prompt_cache_ttl"] = ttl_facts
     from ouroboros.delegate_continuation import terminal_continuity
 
     # The engine's own continuation facts: `resumable` (why the work stopped, its
@@ -446,7 +453,7 @@ def _retained_terminal_payload(ctx: ToolContext, entry: _RunCustody, *, full=Non
 
 def resolved_terminal_payload(run_id, detail, authority, entry=None, gateway=None):
     """Canonical terminal material, independent of retention and delivery."""
-    full = _terminal_payload(run_id, detail, authority)
+    full = _terminal_payload(run_id, detail, authority, entry=entry)
     if entry is not None:
         _delegate().add_terminal_source_verification(full, entry)
         if entry.superseded_by:  # its snapshot and work belong to that continuation's one capture now
@@ -594,6 +601,20 @@ def collect_and_deliver_terminal(ctx, rid, detail, authority, entry, gateway):
                 full_ok=retained.get("complete") is True, full_note=full.get("primary_output_full"))
             payload["collection"] = {"status": "pending", "reason": "output_publication_unconfirmed"}
             return payload
+        if collection.get("status") == "unavailable":
+            # An unavailable collector is not a contending one.
+            from ouroboros.delegate_shared import _fail, delegate_payload
+            note = (
+                "This run belongs to a review panel. Rejoin the original review operation to collect "
+                "its result; delegate_wait does not collect or settle panel-owned reviews."
+                if entry.review_owned else
+                "The terminal result cannot be collected through this wait. Inspect the recorded "
+                "custody and owning operation before choosing another action."
+            )
+            return delegate_payload(_fail(
+                "delegate_wait", str(collection.get("reason") or "collection_unavailable"), note,
+                run_id=rid, state=str(custody.summary_of(detail).get("state") or ""),
+                collection=collection, answered=True, last_seq=int(detail.get("lastSeq") or 0)))
         return {"status": "observation_pending", "reason": "collection_in_progress", "run_id": rid,
                 "state": str(custody.summary_of(detail).get("state") or ""), "collection": collection,
                 "answered": True, "last_seq": int(detail.get("lastSeq") or 0)}

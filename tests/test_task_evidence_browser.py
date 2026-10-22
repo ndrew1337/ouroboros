@@ -92,10 +92,11 @@ def test_speechless_history_and_direct_resume(direct_server_with_data, engine):
                 assert page.locator(".chat-bubble.assistant:not(.typing-bubble)").count() == 0
                 assert "24 tool calls" in card.inner_text()
                 assert "outcome unknown" not in card.inner_text(), "unrelated archives cannot unsettle known calls"
-                # The running direct turn's Pause is still settling: the work's word and who paused it.
+                # The running direct turn's Pause is still settling: the work's word alone (who paused is its line;
+                # this controlled row's press declared nobody).
                 turn = page.locator(f'.chat-live-card[data-task-id="{turn_id}"]')
                 turn.wait_for(state="visible")
-                page.wait_for_function("id => document.querySelector(`.chat-live-card[data-task-id='${id}'] [data-live-phase]`)?.textContent === 'Pausing… · by you'", arg=turn_id)
+                page.wait_for_function("id => document.querySelector(`.chat-live-card[data-task-id='${id}'] [data-live-phase]`)?.textContent === 'Pausing…'", arg=turn_id)
                 assert turn.locator("[data-resume-run]").count() == 0
                 assert turn.locator("[data-cancel-run]").is_visible()
                 page.screenshot(path=str(diagnostic_directory(root.parent, "task-evidence") / f"task-evidence-{engine}-{width}-pausing.png"), full_page=True)
@@ -105,7 +106,7 @@ def test_speechless_history_and_direct_resume(direct_server_with_data, engine):
                 resume = turn.locator("[data-resume-run]")
                 resume.wait_for(state="visible")
                 assert resume.inner_text() == "Resume"
-                assert turn.locator("[data-live-phase]").inner_text() == "Paused · by you"
+                assert turn.locator("[data-live-phase]").inner_text() == "Paused"
                 assert page.locator("#chat-messages").evaluate("el => el.scrollWidth <= el.clientWidth + 1")
                 assert resume.evaluate("el => { const r=el.getBoundingClientRect(); return r.left>=0 && r.right<=innerWidth; }")
                 turn.locator("[data-cancel-run]").click()
@@ -128,7 +129,7 @@ def test_speechless_history_and_direct_resume(direct_server_with_data, engine):
                 # refuses a turn with no resumable queue/fence authority.
                 resume.click()
                 page.locator(".toast", has_text="Resume refused").wait_for(state="visible")
-                assert turn.locator("[data-live-phase]").inner_text() == "Paused · by you"
+                assert turn.locator("[data-live-phase]").inner_text() == "Paused"
                 assert card.locator("[data-live-phase]").inner_text() == "Done"
                 context.close()
         finally:
@@ -193,13 +194,13 @@ def test_pause_notice_translation_and_historical_wake_status(direct_server_with_
                 page.screenshot(path=str(diagnostic_directory(root.parent, "task-evidence") / f"main-wait-{wait_state}-{quiz_state}.png"), full_page=True)
             page.locator('[data-nav-page="dashboard"]').click()
             page.locator('[data-dashboard-tab="evolution"]').click()
-            pill = page.locator("#evo-bg-pill")
+            sentence = page.locator("#evo-consciousness")
             for next_status, label in (("wake_paused", "приостановлено"), ("wake_outcome_unknown", "исход неизвестен")):
                 status = next_status
-                page.locator("#evo-refresh").click()
-                expect(pill).to_have_text(f"Consciousness {label}")
-                expect(pill).to_have_class("evo-runtime-pill starting")
-                expect(page.locator("#evo-runtime-detail")).to_contain_text(details[status])
+                page.evaluate("() => window.dispatchEvent(new CustomEvent('ouro:dashboard-subtab-shown', {detail: {tab: 'evolution'}}))")
+                expect(sentence).to_have_text(f"Consciousness {label}")
+                expect(sentence).to_have_attribute("data-tone", "neutral")  # goes on by itself: never the owner's amber
+                expect(page.locator("#evo-consciousness-detail")).to_contain_text(details[status])
                 page.screenshot(path=str(diagnostic_directory(root.parent, "task-evidence") / f"evolution-{status}.png"), full_page=True)
         finally:
             browser.close()

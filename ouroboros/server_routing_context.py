@@ -35,6 +35,17 @@ def _task_belongs_to_chat(ctx: Any, task_id: str, task_obj: Dict[str, Any], chat
         return False
 
 
+def _late_input_author(task: Dict[str, Any]) -> Dict[str, str]:
+    """``{"late_input_of": author}`` for a head a late answer, or a press on a finished author's
+    card, started (typed provenance), else empty."""
+    from ouroboros.card_store import late_press_ref
+    from ouroboros.owner_quiz import late_answer_ref
+
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    ref = late_answer_ref(metadata.get("late_answer")) or late_press_ref(metadata.get("card_press"))
+    return {"late_input_of": ref["task_id"]} if ref else {}
+
+
 def _active_direct_roots(ctx: Any) -> list:
     """All addressable native actors, without constructing agents or queue state."""
     from supervisor.active_activity import get_direct_activity_registry
@@ -56,6 +67,7 @@ def _active_direct_roots(ctx: Any) -> list:
                     "objective": _clip_marked(turn.get("text"), 600),
                     "project_id": turn["project_id"], "chat_id": turn["chat_id"],
                     "started_at": turn["_started_at"], "steerable": True, "direct_chat": True, "room_reader": reader,
+                    **_late_input_author(turn),
                 })
     return roots
 
@@ -94,7 +106,7 @@ def _addressable_root_tasks(ctx: Any, chat_id: Optional[int] = None) -> list:
             "objective": _clip_marked(objective, 600),
             "project_id": str(task_obj.get("project_id") or ""),
             "started_at": started_at,
-            "steerable": True, "room_reader": reader,
+            "steerable": True, "room_reader": reader, **_late_input_author(task_obj),
         })
         seen.add(tid)
 

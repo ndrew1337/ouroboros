@@ -139,6 +139,12 @@ def _is_workspace_task_record(record: Optional[Dict[str, Any]]) -> bool:
     return bool(str(record.get("workspace_root") or "").strip() or str(metadata.get("workspace_root") or "").strip())
 
 
+def queued_address(task: Any, existing: Any) -> Dict[str, Any]:
+    """A never-started task's queue address for its first result row; a recorded one stays."""
+    chat = task.get("chat_id") if isinstance(task, dict) else None
+    return {"chat_id": chat} if chat is not None and (existing or {}).get("chat_id") is None else {}
+
+
 def _cancel_result_fields(
     task: Optional[Dict[str, Any]],
     *,
@@ -159,8 +165,12 @@ def _cancel_result_fields(
     shared workspace tree carry ``artifact_attribution: "shared_unproven"`` —
     the tree was not quiesced through the normal patch-capture seam, so the diff
     cannot prove which actor authored it (until the phase-C run isolation).
+
+    A task cancelled before it ever ran has no result row yet, so its queue address
+    is kept: the first terminal publication may run before ``task_done`` and would
+    otherwise read no room at all (an existing address, hidden 0 included, stays).
     """
-    payload: Dict[str, Any] = {**fields, "result": result}
+    payload: Dict[str, Any] = {**fields, "result": result, **queued_address(task, existing)}
     if not (_is_workspace_task_record(task) or _is_workspace_task_record(existing)):
         return payload
     try:
@@ -233,6 +243,15 @@ def shutdown_cancel_text(intent: Dict[str, Any]) -> str:
     ):
         return "Task cancelled: the server stopped while this task was still running."
     return ""
+
+
+def stop_notice_outcome(origin: Any) -> str:
+    """The cancel receipt's outcome words: a restore fence names its cause.
+
+    The owner did not ask for this stop, so "was stopped" alone reads like one.
+    The sentence is the card's own phrase for the same stored ``cancel_origin``.
+    """
+    return f"stopped. {CANCEL_SOURCE_PHRASES['snapshot_restore']}" if shutdown_cancel_text(origin) else "stopped"
 
 
 def _miss_lane_cancel_text(intent: Dict[str, Any]) -> str:
@@ -349,7 +368,7 @@ def _register_owed_terminal_delivery(
         if stored_status == STATUS_CANCELLED:
             event = build_unreviewed_salvage_event(
                 pathlib.Path(q.DRIVE_ROOT), task, task_id,
-                outcome="stopped",
+                outcome=stop_notice_outcome((stored or {}).get("cancel_origin")),
                 salvaged_text=salvage_text, preserved_path=salvage_path,
                 unreconciled_runs=list(unreconciled_runs or []),
                 settled_status=stored_status,
@@ -446,7 +465,7 @@ def _publish_cancelled_task(
             if settled_status == STATUS_CANCELLED:
                 deliver_unreviewed_salvage(
                     pathlib.Path(q.DRIVE_ROOT), task, task_id,
-                    outcome="stopped",
+                    outcome=stop_notice_outcome((stored or {}).get("cancel_origin")),
                     salvaged_text=salvage_text, preserved_path=salvage_path,
                     unreconciled_runs=list(unreconciled_runs or []),
                     settled_status=settled_status,
@@ -648,6 +667,28 @@ def _reconcile_delegated_runs_on_kill(q: Any, task_id: str) -> List[str]:
     return list(_audit_delegated_runs_on_kill(q, task_id).get("unreconciled") or [])
 
 
+def _stop_open_tree_runs(q: Any, task_id: str) -> None:
+    """The cascade's verdict over its tree's open delegated runs, before its postcondition.
+
+    A member killed by the sweep cancels its own runs behind the owner's verdict, but a member that
+    had already settled spared every run its own end was no verdict for (a provider death, a crash),
+    so a settled tree whose only live writer is such a run stays live. The owner's Stop of the tree
+    is that verdict: ``stop_tree_runs`` cancels them attach-only, and the settled owners' stored
+    custody disclosures are refreshed, as the kill path's fast lane does. A failure is logged and
+    judged by the postcondition, which counts every run still open as live.
+    """
+    root = pathlib.Path(q.DRIVE_ROOT)
+    try:
+        from ouroboros.delegate_custody_reconcile import stop_tree_runs
+        from ouroboros.delegate_terminal import refresh_terminal_reconciliation
+
+        outcomes = stop_tree_runs(root, task_id)
+        for owner in sorted({str(row.get("task_id") or "") for row in outcomes} - {""}):
+            refresh_terminal_reconciliation(root, owner, trigger="kill_path_clear")
+    except Exception:
+        log.warning("Cascade could not stop the open delegated runs of %s", task_id, exc_info=True)
+
+
 def _cascade_delivery_row_locked(q: Any, task_id: str) -> Dict[str, Any]:
     """A routing row for a cascade whose ROOT has already left the live maps.
 
@@ -717,29 +758,6 @@ def _finish_captured_chat_turn(
     _settle_intent(q, task_id, outcome=SETTLED_ALREADY,
                    detail=str(stored.get("status") or ""), intent=intent)
     return CANCEL_ALREADY_SETTLED if outcome == DIRECT_TURN_STOP_GONE else CANCEL_CANCELLED
-
-
-def stop_paused_late_review_custody(q: Any, task_id: str, *, intent: Optional[Dict[str, Any]] = None) -> bool:
-    """The owner's Stop of an answered root's late review its Pause deferred.
-
-    An unsent review records ``preparation_refused/owner_stopped``; the delivered
-    answer/status stay. Live work keeps its own owner.
-    """
-    from ouroboros.review_operation import stop_paused_acceptance_preparations
-    from supervisor.owner_pause_control import late_phase_settled
-    from supervisor.task_lifecycle import _settle_intent
-
-    try:
-        if not stop_paused_acceptance_preparations(q.DRIVE_ROOT, task_id):
-            return False
-    except Exception:
-        log.warning("Stop of the deferred late review of %s was not recorded", task_id, exc_info=True)
-        return False
-    _settle_intent(q, task_id, outcome="cancelled", detail="late_phase_owner_stopped", intent=intent)
-    late_phase_settled(q.DRIVE_ROOT, task_id)
-    q.append_jsonl(q.DRIVE_ROOT / "logs" / "events.jsonl",
-                   {"ts": utc_now_iso(), "type": "late_phase_stopped", "task_id": task_id, "owner_visible": True})
-    return True
 
 
 def live_presence_row(row: Any) -> bool:

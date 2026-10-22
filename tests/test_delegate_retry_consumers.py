@@ -25,6 +25,7 @@ def isolated_retry_state(monkeypatch):
     monkeypatch.setattr(delegate, "_CUSTODY", memo)
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "advanced")
     monkeypatch.setenv("OUROBOROS_SAFETY_MODE", "off")
+    monkeypatch.setenv("OUROBOROS_CONSCIOUSNESS_SAFETY_MODE", "off")
 
 
 def retry_context(tmp_path, monkeypatch, *, chain=("retry-a", "retry-b"), split=False,

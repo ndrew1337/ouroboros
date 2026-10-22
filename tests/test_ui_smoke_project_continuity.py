@@ -24,7 +24,9 @@ import json
 
 import pytest
 
+from ouroboros import dialogue_store
 from tests._work_projection_shared import with_work_fields
+from tests.test_reconnect_feed_browser import HISTORY_LANDED
 from tests.test_ui_smoke_playwright import direct_server_with_data  # noqa: F401 - pytest fixture import
 from tests.ui_chat_viewport_smoke import _OBSERVE_STATE_READS, _wait_state_reads_quiescent
 
@@ -235,12 +237,12 @@ def test_ui_smoke_stale_history_rebuild_keeps_owner_bubble(direct_server_with_da
                 assert "Message saved for task" in annotation.inner_text()
 
                 # Reconnect-driven full rebuild replays the STALE response.
+                page.evaluate(HISTORY_LANDED)
                 page.evaluate(
                     "() => window.__ouroWs.emit('open', { previouslyConnected: true })"
                 )
-                page.wait_for_selector(
-                    '.chat-bubble[data-system-type="reconnect"]', timeout=10_000
-                )
+                page.wait_for_function("() => window.historyLanded > 0", timeout=10_000)
+                assert page.locator('[data-system-type="reconnect"]').count() == 0
                 survivor = page.locator(
                     f'.chat-bubble.user[data-client-message-id="{cmid}"]'
                 )
@@ -1103,14 +1105,12 @@ def test_ui_smoke_project_pointer_is_a_main_root_affordance(direct_server_with_d
                 assert page.locator(f"{main_card} .chat-live-bound-pointer").count() == 0
                 # ...then scopes itself into the project (durable binding + project-thread progress).
                 bind_task_to_project(data_dir, "ptr-root", "ptr-panel", project_chat, origin={"absent": "system"})
-                logs_dir = data_dir / "logs"
-                logs_dir.mkdir(parents=True, exist_ok=True)
-                with (logs_dir / "progress.jsonl").open("a", encoding="utf-8") as handle:
-                    handle.write(json.dumps({
-                        "ts": "2026-08-19T10:00:01+00:00", "chat_id": project_chat,
-                        "task_id": "ptr-root", "content": "Continues in the project",
-                        "is_progress": True,
-                    }) + "\n")
+                # Into the running server's own dialogue store (#1982), never a log file written after it started.
+                dialogue_store.append(data_dir, "progress", {
+                    "ts": "2026-08-19T10:00:01+00:00", "chat_id": project_chat,
+                    "task_id": "ptr-root", "content": "Continues in the project",
+                    "is_progress": True,
+                })
                 page.evaluate("() => window.__ouroWs.emit('projects_changed', {})")
                 page.wait_for_selector(f"{main_card} .chat-live-bound-pointer", state="attached", timeout=30_000)
                 assert page.locator(f"{main_card} .chat-live-project-name").inner_text().strip() == "Pointer panel"

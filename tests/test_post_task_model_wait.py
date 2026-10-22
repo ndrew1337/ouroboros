@@ -45,7 +45,7 @@ def phase(tmp_path, monkeypatch):
     events, done, ready = queue.Queue(), threading.Event(), threading.Event()
     engine = Gateway([result(outcome="failed", problem={"code": "subscription_window_exhausted", "message": "quota"}), result()],
                      ["not_started", "response_received"])
-    monkeypatch.setattr(transport, "ensure_owned_gateway", lambda: engine)
+    monkeypatch.setattr(transport, "ensure_owned_gateway", lambda **_kw: engine)
     monkeypatch.setattr(transport, "model_sources", lambda **_kwargs: {"sources": [{"id": "codex", "credentialHarness": "fixture"}]})
     monkeypatch.setattr(transport, "model_catalog", lambda _source, account=None, *, requested_model=None: {
         "source": "codex", "credentialProfileId": account or "account-a",
@@ -214,7 +214,7 @@ def test_real_consolidation_error_controls_remaining_post_task_stages(
         {"model": task["model"], "provider": "openrouter"},
         CapabilityEvidence(100_000, "confirmed", "test", "route-test",
                            model=task["model"], provider="openrouter")))
-    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_: 1.0)
+    monkeypatch.setattr(context_fit, "_route_calibration_ratio", lambda *_, **_kw: 1.0)
     error = BudgetExceeded("root wallet spent") if cause == "budget" else RuntimeError("provider failed")
     if cause == "api_unknown":
         error.physical_attempt_capture = SimpleNamespace(state="unresolved")
@@ -433,7 +433,7 @@ def _controlled_worker(input_queue, output_queue, data_root, repo_root, resume):
             "ouroboros.extension_loader.reload_all": lambda *args, **kwargs: None,
             "supervisor.worker_process._prepare_worker_task_runtime": lambda: None,
             "supervisor.worker_process._adopt_published_extensions": lambda *_: None,
-            "ouroboros.llm_claudexor.ensure_owned_gateway": lambda: engine,
+            "ouroboros.llm_claudexor.ensure_owned_gateway": lambda **_kw: engine,
             "ouroboros.llm_claudexor.model_sources": lambda **_kwargs: {"sources": [{"id": "codex", "credentialHarness": "fixture"}]},
             "ouroboros.llm_claudexor.model_catalog": lambda source, account=None, **kwargs: {
                 "source": source, "credentialProfileId": account or "account-a", "models": [{"id": "exact-model"}] if resume.is_set() else []},

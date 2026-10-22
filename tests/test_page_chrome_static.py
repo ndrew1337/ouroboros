@@ -170,7 +170,8 @@ def test_skills_and_widgets_use_inner_scroll_regions():
     widgets = _read("web/modules/widgets.js")
     css = _read("web/style.css")
     assert 'class="skills-scroll scroll-fade-y"' in skills
-    assert 'class="widgets-scroll scroll-fade-y"' in widgets
+    # The board's live cards keep crisp edges: no shared scroll fade (DESIGN "Widgets board").
+    assert 'class="widgets-scroll"' in widgets and "scroll-fade" not in widgets
     assert ".skills-scroll" in css and "overflow-y: auto" in css
     assert ".widgets-scroll" in css and "overflow-y: auto" in css
 
@@ -193,7 +194,12 @@ def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
     fallback = css.split("@media (max-height: 540px), (pointer: coarse) and (max-height: 600px) {", 1)[1].split("}\n}", 1)[0]
     assert "#primary-sidebar .nav-projects-list { flex: 0 0 auto; overflow-y: visible;" in fallback
     assert "--nav-projects-list-max-height" not in css and "--nav-projects-list-max-height" not in _read("web/ui.css")
-    assert ".sidebar-scroll" not in css and "sidebar-scroll" not in html
+    # A fresh document has no outer wrapper. An older desktop page can keep its pre-three-zone .sidebar-scroll; the
+    # one rule naming it takes its box away, so that page's list scrolls again (test_ui_shell_legacy_browser.py).
+    assert "sidebar-scroll" not in html
+    rules = re.sub(r"/\*.*?\*/", "", css, flags=re.S).splitlines()
+    legacy = [line.strip() for line in rules if "sidebar-scroll" in line]
+    assert legacy == ["#primary-sidebar > .sidebar-scroll { display: contents; }"], legacy
     head = css.split(".sidebar-head {", 1)[1].split("}", 1)[0]
     assert "position: sticky" in head and "top: 0" in head
     assert html.index('class="sidebar-head"') < html.index('id="nav-projects"') < html.index('class="sidebar-foot"')
@@ -203,15 +209,29 @@ def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
     for page in ("files", "skills", "widgets", "dashboard", "settings"):
         assert f"id: '{page}'," in pages_js and "zone: 'foot'" in pages_js.split(f"id: '{page}',", 1)[1].split("}", 1)[0]
     assert "Utilities" not in html and "nav-section-label" not in html
-    # A finger gets 44px rows, ⋯ and +; the version reads at the meta size; unread is a red dot in a soft ring.
+    # A finger gets 44px rows and +; the version reads at the meta size.
     assert "#primary-sidebar { --nav-item-h: 44px; --nav-control-h: 44px; }" in css
     version = css.split("#nav-version {", 1)[1].split("}", 1)[0]
     assert "font-size: var(--type-meta)" in version and "opacity" not in version
-    dot = css.split(".nav-unread-dot {", 1)[1].split("}", 1)[0]
-    assert "background: var(--red)" in dot and "box-shadow: 0 0 0 2px var(--accent-18)" in dot
-    # Working dots take the row's ink, so they never out-shout the name; the row's ⋯ is the shell's one More glyph.
-    assert ".nav-activity-marker.chat-live-typing span { background: currentColor; }" in css
-    assert '.nav-activity-marker[data-state="working"] span { background' not in css
+    # A row's one status mark is the shared one (ui.css "Status marks"), in the row's own ink: no unread dot of its
+    # own, no second painter, and no name ink that changes with unread (new messages are the mark's hue).
+    for retired in (".nav-unread-dot", ".nav-activity-marker", ".nav-project-row.has-unread", ".nav-projects-show-all"):
+        assert retired not in css, retired
+    row = css.split("\n.nav-project-row {\n    min-height", 1)[1].split("}", 1)[0]
+    assert "grid-template-columns: minmax(0, 1fr) 18px;" in row, row
+    assert ".nav-project-row > .nav-mark { grid-column: 2; }" in css
+    # Main's mark lands in the Project rows' column by construction: Main's row ends where theirs does.
+    assert "--nav-kebab-w: var(--nav-control-h);" in css
+    assert "grid-template-columns: minmax(0, 1fr) var(--nav-kebab-w);" in css.split("\n.nav-project-item {", 1)[1].split("}", 1)[0]
+    assert "padding-right: calc(var(--nav-kebab-w) + var(--space-1));" in css.split("\n.nav-row-main {", 1)[1].split("}", 1)[0]
+    # On touch a long press opens a row's menu: the ⋯ keeps no column and no finger, and stays the keyboard's door.
+    touch = css.split("/* Touch: a long press opens the row's menu", 1)[1].split("\n}\n", 1)[0]
+    assert "#primary-sidebar { --nav-kebab-w: 0px; }" in touch
+    assert ".nav-project-item .nav-project-kebab:not(:focus, [aria-expanded=\"true\"]) {" in touch
+    assert "pointer-events: none" in touch
+    assert ".nav-project-item:has(> .nav-project-kebab:is(:focus, [aria-expanded=\"true\"])) {" in touch
+    assert "-webkit-touch-callout: none" in touch and "user-select: none" in touch
+    # The row's ⋯ is the shell's one More glyph.
     app_js = _read("web/app.js")
     assert "kebab.innerHTML = SHELL_ICONS.more;" in app_js and "kebab.textContent = '⋯'" not in app_js
     assert "navProjectsToggle?.classList.toggle('active'" not in _read("web/app.js")
@@ -223,16 +243,17 @@ def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
 # ---------------------------------------------------------------------------
 
 
-def test_evolution_page_supports_refresh_and_runtime_state():
+def test_evolution_page_reads_runtime_and_history_independently():
     source = _read("web/modules/evolution.js")
 
-    assert 'id="evo-refresh"' in source
-    assert "Runtime Status" in source
-    assert "apiFetch(`/api/evolution-data${suffix}`" in source
-    assert "ws.on('open', () => {" in source
+    # Two reads, neither waiting for the other: the campaign paints from the state, the history from its saved copy.
+    assert "apiFetch('/api/state', { cache: 'no-store' })" in source
+    assert "apiFetch(`/api/evolution-data${force ? '?force=1' : ''}`, { cache: 'no-store' })" in source
+    assert "Promise.all" not in source
+    assert "loadHistory({ force: !historyError })" in source  # Try again re-measures after a failed refresh
+    assert "ws.on('open', loadAll)" in source
     assert "window.addEventListener('ouro:page-shown'" in source
     assert "document.addEventListener('visibilitychange'" in source
-    assert "renderRuntimeState(runtime, data.generated_at || '');" in source
     assert "evolution_state" in source
     assert "bg_consciousness_state" in source
 
@@ -254,25 +275,28 @@ def test_server_navigation_and_chat_static_contracts():
     assert '"bg_consciousness_state": bg_state,' in state_source
     assert 'request.query_params.get("force")' in control_source
     assert "window.dispatchEvent(new CustomEvent('ouro:page-shown', { detail: { page: pageName } }));" in app_source
-    assert "evo-runtime-detail" in evo_source
+    assert "evo-consciousness-detail" in evo_source
     assert "data?.evolution_state?.detail" in chat_source
     assert "data?.bg_consciousness_state?.detail" in chat_source
-    assert re.search(r'<input[^>]+id="chat-file-input"[^>]+multiple', chat_source)
+    # The composer's markup and send path live in composer.js, mounted by chat.js.
+    composer_source = _read("web/modules/composer.js")
+    assert "${composerMarkup()}" in chat_source
+    assert re.search(r'<input[^>]+id="chat-file-input"[^>]+multiple', composer_source)
     # The composer's staged files live in chat_attachments.js (DESIGN "Chat attachments");
-    # chat.js uploads through it on Send and names the uploads for the model.
+    # composer.js uploads through it on Send and names the uploads for the model.
     attachments_source = _read("web/modules/chat_attachments.js")
-    assert "createComposerAttachments({" in chat_source
-    assert "composerText(text, uploadedAttachments.map(" in chat_source
+    assert "createComposerAttachments({" in composer_source
+    assert "composerText(text, uploadedAttachments.map(" in composer_source
     assert "attachmentTail(names);" in attachments_source  # every message but the exact /restart command
     assert "list.slice(0, ATTACHMENT_PREVIEW_COUNT)" in attachments_source
     assert "for (const item of [...pending])" in attachments_source
     assert "attachBtn.classList.toggle('uploading', flag)" in attachments_source
     assert "input.readOnly = flag;" in attachments_source
-    assert "cleanupUploadedAttachments" in chat_source
-    assert "await cleanupUploadedAttachments(e.uploaded || []);" in chat_source
-    assert "await cleanupUploadedAttachments(uploadedAttachments);" in chat_source
-    assert "ws.send({" in chat_source and "{ queue: false }" in chat_source
-    assert "result?.status !== 'sent'" in chat_source
+    assert "cleanupUploadedAttachments" in composer_source
+    assert "await cleanupUploadedAttachments(e.uploaded || []);" in composer_source
+    assert "await cleanupUploadedAttachments(uploadedAttachments);" in composer_source
+    assert "ws.send(frame, hasAttachments ? { queue: false } : undefined)" in composer_source
+    assert "result?.status !== 'sent'" in composer_source
     assert "data-attachment-remove" in attachments_source
     media_source = _read("web/modules/chat_media.js")
     assert "export async function cleanupUploadedAttachments" in media_source
