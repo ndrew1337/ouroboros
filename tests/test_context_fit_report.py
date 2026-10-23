@@ -102,3 +102,60 @@ def test_snapshot_includes_committed_wal_without_changing_original(tmp_path):
             assert frozen.execute('SELECT value FROM sample').fetchone() == (123,)
     finally:
         db.close()
+
+
+def test_foreign_work_retains_server_pointer_in_scratch_not_inline_json(tmp_path):
+    from ouroboros.context_health import _foreign_work_line
+    from ouroboros import observability
+    from unittest.mock import patch
+    from dataclasses import replace
+    from ouroboros.section_floor import HostSection
+
+    root = scale.write_root(tmp_path / 'data')
+    foreign = {f'task-{i:03d}': {'results': [f'run-{i}-{j}-' + 'x' * 68 for j in range(4)], 'patches': []}
+               for i in range(66)}
+    expected = _foreign_work_line(root, foreign)
+    before = fingerprint(root)
+    scratch = tmp_path / 'scratch'
+    with readonly_inputs(root, scratch_root=scratch):
+        actual = _foreign_work_line(root, foreign)
+        assert actual == expected and 'retention unavailable' not in actual
+        ref = observability.write_blob(root, foreign)
+        assert observability.read_blob_ref(scratch, ref) == foreign
+        assert str(scratch) in ref['path']
+        from ouroboros import context_health
+        assert context_health._stray_server_note(None) == ''
+        with patch.object(observability, 'write_blob', side_effect=PermissionError('old diagnostic')):
+            old = _foreign_work_line(root, foreign)
+        def measured(line):
+            core = scale.core(tmp_path / 'captures')
+            core = replace(core, dynamic_sections=(*core.dynamic_sections, HostSection('health', line)))
+            return measure_core(core, scale.tools(), root=root, window=92000, reserve=10000)
+        old_fit, new_fit = measured(old), measured(actual)
+    assert fingerprint(root) == before
+    assert len(old) > 24000 and len(actual) < 500
+    assert old_fit['verdict'] == 'MinimumViewUnfit', old_fit
+    assert new_fit['verdict'] == 'fits', new_fit
+    assert new_fit['profile'] == 'task_local_nano'
+    assert new_fit['fit']['measurement']['response_reserve_tokens'] == 10000
+    print('FOREIGN_WORK_COMPARISON ' + json.dumps(dict(old_chars=len(old), new_chars=len(actual),
+        before=old_fit, after=new_fit), sort_keys=True))
+
+
+def test_session_report_uses_real_host_envelope_on_scale_root(tmp_path, monkeypatch):
+    import socket
+
+    def forbidden(*args, **kwargs):
+        pytest.fail('offline session report attempted a provider connection')
+    monkeypatch.setattr(socket.socket, 'connect', forbidden)
+    root = scale.write_root(tmp_path / 'data')
+    before = fingerprint(root)
+    result = report(root, 1, 92000, 10000, session_provider='gemini_live')
+    assert fingerprint(root) == before
+    assert result['phase'] == 'session_candidate' and result['verdict'] == 'fits', result
+    assert result['profile'] == 'task_local_nano'
+    assert result['fit']['measurement']['capacity_total_tokens'] == 92000
+    assert result['work_room_levels'] == 1
+    assert sum(row['tokens'] for row in result['blocks']) == result['input_tokens']
+    assert result['diagnostic_notes'] and result['session_provider'] == 'gemini_live'
+    print('SCALE_SESSION_REPORT ' + json.dumps(result, sort_keys=True))

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
+from dataclasses import asdict, replace
 import json
 import logging
 import os
@@ -19,11 +19,13 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 
-def measure_core(core, schemas, *, root, window, reserve, mode='max'):
+def measure_core(core, schemas, *, root, window, reserve, mode='max', prepared=None, fit=None,
+                 route=None, route_facts=None, response_limit=None):
     """Observe the existing fitter, including the last frame of a typed refusal."""
     from ouroboros import context_budget, context_fit as cf, memory_floor as mf, memory_view as mv
     from ouroboros.section_floor import section_views
     from ouroboros.tool_policy import select_tool_schemas
+    from devtools._context_fit_accounting import declared_evidence, physical_fit, cold_density
     snapshot = mv.snapshot_from_json(core.memory_view_json)
     if not snapshot.active:
         raise ValueError('Memory capture is unavailable; a partial view cannot certify a fit')
@@ -40,16 +42,17 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max'):
         memory.append(result)
         return result
 
-    evidence = SimpleNamespace(window_tokens=window, status='confirmed', stale=False, route_fp='', source='diagnostic',
-        response_limit={}, route_facts={'working_reserve_tokens': reserve, 'basis': 'provider'})
-    failure, plan = None, None
-    with patch.object(cf, '_route_calibration_ratio', lambda *a, **kw: 1.0), patch.object(
+    evidence = declared_evidence(window, reserve, route_facts, response_limit)
+    route = route or {'provider': 'diagnostic', 'model': 'diagnostic'}
+    failure, plan = None, prepared
+    with cold_density(), patch.object(
             cf, '_system_blocks', capture_system), patch.object(mf, 'render_view_for_mode', capture_memory):
         try:
-            plan = cf.build_context_fit_plan(SimpleNamespace(drive_root=root), core,
-                {'id': core.section_task_id or 'context-fit-report', 'chat_id': int(snapshot.spec.room_id), '_is_direct_chat': True},
-                preferred_mode=mode, tool_schemas=schemas,
-                route_resolver=lambda *a, **kw: ({'provider': 'diagnostic', 'model': 'diagnostic'}, evidence))
+            if plan is None:
+                plan = cf.build_context_fit_plan(SimpleNamespace(drive_root=root), core,
+                    {'id': core.section_task_id or 'context-fit-report', 'chat_id': int(snapshot.spec.room_id), '_is_direct_chat': True},
+                    preferred_mode=mode, tool_schemas=schemas,
+                    route_resolver=lambda *a, **kw: (route, evidence))
         except cf.MinimumViewUnfit as exc:
             failure = exc
     selected = plan.initial_mode if plan else frames[-1][0]
@@ -61,8 +64,11 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max'):
         level = mf.kept_level(snapshot, facts)
         addressed = section_views((*core.semi_stable_sections, *core.dynamic_head_sections, *core.dynamic_sections, *governance[0]),
                                   facts.get('host_sections_addressed', ()))
-        input_tokens = projection.calibrated_tokens + cf.tool_schema_tokens(list(
-            select_tool_schemas(schemas, context_mode=selected).schemas))
+        sent = schemas if prepared is not None else list(select_tool_schemas(schemas, context_mode=selected).schemas)
+        if fit is None:
+            with cold_density():
+                fit = physical_fit(plan, plan.messages_for(selected), sent, root=root)
+        input_tokens = fit['measurement']['estimated_input_tokens']
     else:
         facts = memory[-1][2] if memory else {}
         level = mf.kept_level(snapshot, facts) if memory else mv.FloorLevel(tuple(
@@ -86,6 +92,9 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max'):
                                    (core.dynamic_head_sections, core.dynamic_head_text, 'knowledge'),
                                    (core.dynamic_sections, core.dynamic_text, 'host')):
         for part in parts:
+            if selected == 'nano' and part.section_id == 'pattern_register':
+                add('pattern_register', cf.PATTERN_REGISTER_POINTER, 'reader')
+                continue
             add(part.section_id, addressed.get(part.section_id, part.full_text),
                 'operative' if part.section_id in addressed else 'whole')
         if not parts and fallback:
@@ -125,22 +134,43 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max'):
         story_form += '+whole'
     add('story', mv.render_story(snapshot, level), story_form, len(visible))
     add('marks', mv._marks_text(list(snapshot.marks)) if snapshot.marks else '', count=len(snapshot.marks))
-    sent = list(select_tool_schemas(schemas, context_mode=selected).schemas)
+    sent = schemas if prepared is not None else list(select_tool_schemas(schemas, context_mode=selected).schemas)
     blocks.append(dict(block='tools', form='selected', tokens=cf.tool_schema_tokens(sent), count=len(sent)))
     blocks.append(dict(block='headings, floor note and envelope', form='framing',
                        tokens=input_tokens - sum(row['tokens'] for row in blocks)))
-    actual_reserve = failure.response_reserve_tokens if failure else context_budget.context_mode_limits(
-            selected, mode, plan.output_reserve_tokens, working_reserve_tokens=reserve)[1]
-    margin = window - actual_reserve - input_tokens
-    return dict(mode=selected, requested_mode=mode, density=1.0, window=window, reserve=actual_reserve,
+    actual_reserve = failure.response_reserve_tokens if failure else fit['measurement']['response_reserve_tokens']
+    capacity = window if failure else fit['measurement']['capacity_total_tokens']
+    margin = capacity - actual_reserve - input_tokens
+    profile = fit['measurement']['profile'] if fit else ('owner_' if selected == mode else 'task_local_') + selected
+    record = replace(evidence.window_record, reserve=actual_reserve) if failure else cf.resolve_window(
+        plan, actual_reserve, root=root, bound=plan.window_witness_bound)
+    target = context_budget.context_mode_limits(selected, mode, actual_reserve)[0]
+    start_room = context_budget.request_context_budget(window_tokens=capacity, output_reserve_tokens=actual_reserve,
+        non_memory_tokens=0, target_tokens=target, margin_count=snapshot.spec.work_room_levels,
+        boundary_tokens=record.boundary)['working_margin_tokens']
+    result = dict(mode=selected, requested_mode=mode, density=1.0, window=capacity, reserve=actual_reserve,
         input_tokens=input_tokens, total_tokens=input_tokens + actual_reserve, margin_tokens=margin,
-        verdict='MinimumViewUnfit' if failure else 'fits', deficit_tokens=failure.deficit_tokens if failure else 0,
+        verdict='MinimumViewUnfit' if failure else 'context_capacity' if fit.get('refusal') else 'fits',
+        deficit_tokens=failure.deficit_tokens if failure else max(0, -margin),
         work_room_deficit_tokens=failure.work_room_deficit_tokens if failure else 0,
         ladder=dict(level.steps), ladder_basis='selected' if projection or memory else 'minimum bound before ladder',
-        blocks=blocks)
+        blocks=blocks, profile=profile, work_room_levels=snapshot.spec.work_room_levels,
+        start_work_room_tokens=start_room, work_room_applies_to_verdict=prepared is None,
+        window_record=asdict(record), fit=fit,
+        phase='prepared_candidate' if prepared is not None else 'task_preparation',
+        input_basis='minimum_bound_not_a_candidate' if failure else 'measured_candidate',
+        diagnostic_notes=['No live host: feature tools/instructions, dynamic tool notices and provider wire are absent.',
+                          'Density is fixed at 1.0; no account-scoped window observations are inferred.'])
+    if fit:
+        result['density'] = fit['measurement']['measurement_density']
+        result['reply_allowance'] = fit['measurement']['reply_allowance_tokens']
+    else:
+        result['diagnostic_notes'].append(
+            'MinimumViewUnfit is a fresh-start refusal, not a session verdict; the input number is a lower bound, not a sent candidate.')
+    return result
 
 
-def report(root, room, window, reserve, mode='max', snapshot=False):
+def report(root, room, window, reserve, mode='max', snapshot=False, session_provider=None):
     from devtools._context_fit_readonly import readonly_inputs, server_alive, snapshot_root
     root = Path(root).resolve(strict=True)
     source_root = root
@@ -154,7 +184,7 @@ def report(root, room, window, reserve, mode='max', snapshot=False):
             snapshot_root(root, copied)
             root = copied
         with patch.dict(os.environ, {'OUROBOROS_DATA_DIR': str(root), 'OUROBOROS_SETTINGS_PATH': str(root / 'settings.json')}):
-            with readonly_inputs(root, source_root=source_root):
+            with readonly_inputs(root, source_root=source_root, scratch_root=scratch / 'observability'):
                 from ouroboros import context
                 from ouroboros.memory import Memory
                 from ouroboros.tools.registry import ToolRegistry
@@ -166,10 +196,15 @@ def report(root, room, window, reserve, mode='max', snapshot=False):
                     task['project_id'] = project['id']
                 core = context._capture_context_core(env, Memory(drive_root=root, repo_dir=REPO), task, None, None)
                 core = replace(core, section_root=str(scratch / 'captures'), section_task_id='context-fit-report')
-                result = measure_core(core, ToolRegistry(REPO, root).schemas(), root=root,
-                                      window=window, reserve=reserve, mode=mode)
+                tools = ToolRegistry(REPO, root)
+                if session_provider:
+                    from devtools._context_fit_session import report_session
+                    result = report_session(core, tools, root=root, scratch=scratch, window=window,
+                                            reserve=reserve, mode=mode, provider=session_provider)
+                else:
+                    result = measure_core(core, tools.schemas(), root=root, window=window, reserve=reserve, mode=mode)
                 result['snapshot'] = snapshot
-                result['diagnostic_notes'] = ['Live process scanning is unavailable in an offline measurement.']
+                result['diagnostic_notes'].append('Live process scanning is unavailable; no scan notice enters the measured input.')
                 return result
 
 
@@ -182,6 +217,8 @@ def main(argv=None):
     parser.add_argument('--mode', choices=('max', 'low', 'nano'), default='max')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--snapshot', action='store_true')
+    parser.add_argument('--session-provider', choices=('gemini_live', 'grok_realtime', 'openai_realtime'),
+                        help='also prepare a bundled provider session offline, with default call options (never connect)')
     args = parser.parse_args(argv)
     if args.window <= 0 or args.reserve <= 0:
         parser.error('window and reserve must be positive')
@@ -190,7 +227,7 @@ def main(argv=None):
     sys.dont_write_bytecode = True
     logging.disable(logging.CRITICAL)  # Never echo private source text or settings through capture warnings.
     try:
-        result = report(args.data, args.room, args.window, args.reserve, args.mode, args.snapshot)
+        result = report(args.data, args.room, args.window, args.reserve, args.mode, args.snapshot, args.session_provider)
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(f'Context measurement unavailable ({type(exc).__name__}). Check offline stores or use --snapshot.', file=sys.stderr)
         return 2
@@ -206,6 +243,9 @@ def main(argv=None):
         print(f"{result['mode']}: input {result['input_tokens']} + reserve {result['reserve']} / {result['window']}; "
               f"{result['verdict']}, margin {result['margin_tokens']}, work-room deficit {result['work_room_deficit_tokens']}")
         print('Ladder (' + result['ladder_basis'] + '): ' + json.dumps(result['ladder']))
+        print(f"Phase: {result['phase']}; profile: {result['profile']}; work-room levels: {result['work_room_levels']}")
+        for note in result['diagnostic_notes']:
+            print('Diagnostic: ' + note)
     return 0 if result['verdict'] == 'fits' else 1
 
 

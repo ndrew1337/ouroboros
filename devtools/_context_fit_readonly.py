@@ -7,6 +7,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import sys
+import tempfile
 from unittest.mock import patch
 
 
@@ -128,10 +129,10 @@ sys.addaudithook(_audit)
 
 
 @contextmanager
-def readonly_inputs(root, *, source_root=None):
+def readonly_inputs(root, *, source_root=None, scratch_root=None):
     """Use immutable SQLite readers; skip migration, activation and name-lock writes."""
     from ouroboros import config, dialogue_store, store, capability_evidence, usage_store, platform_layer, context_health
-    from ouroboros import settings_integrity, mcp_client
+    from ouroboros import settings_integrity, mcp_client, observability
     from ouroboros.chronicle_store import ChronicleStore
     from ouroboros.memory import Memory
     from supervisor import state
@@ -189,9 +190,16 @@ def readonly_inputs(root, *, source_root=None):
             raise PermissionError('Diagnostic cannot create a source lock')
         return acquire_lock(path, *args, **kwargs)
 
-    _GUARDED.add(root)
+    guarded = {root.resolve(), Path(source_root).resolve() if source_root is not None else root.resolve()}
+    added = guarded - _GUARDED
+    _GUARDED.update(guarded)
     try:
         with ExitStack() as stack:
+            scratch = Path(scratch_root) if scratch_root is not None else Path(stack.enter_context(
+                tempfile.TemporaryDirectory(prefix='context-fit-blobs-', dir='/tmp')))
+            if any(scratch.resolve().is_relative_to(path) for path in guarded):
+                raise ValueError('Diagnostic scratch must be outside the measured root')
+            write_blob = observability.write_blob
             for target, name, value in (
                 (sqlite3, 'connect', checked_connect), (sqlite3.dbapi2, 'connect', checked_connect),
                 (store, 'open_store', current), (dialogue_store, 'transaction', dialogue),
@@ -203,7 +211,10 @@ def readonly_inputs(root, *, source_root=None):
                 (config, 'load_settings', lambda: config.load_settings_lock_held(_settings_lock_held=False)),
                 (platform_layer, 'acquire_exclusive_file_lock', no_source_lock),
                 (state, 'DRIVE_ROOT', root),
-                (context_health, '_stray_server_note', lambda env: 'Live process scan unavailable: offline context measurement.'),
+                # Retain the same content-addressed pointer the server renders. Only the
+                # destination changes; neither fallback JSON nor diagnostic notices enter P.
+                (observability, 'write_blob', lambda data, payload, **kw: write_blob(scratch, payload, **kw)),
+                (context_health, '_stray_server_note', lambda env: ''),
                 (capability_evidence, 'canonical_evidence_root', lambda: root),
                 (mcp_client, '_manager', mcp_client.MCPManager()),
             ):
@@ -231,4 +242,4 @@ def readonly_inputs(root, *, source_root=None):
             stack.enter_context(config.task_settings_scope(settings_integrity.task_settings_snapshot(settings, projected)))
             yield
     finally:
-        _GUARDED.remove(root)
+        _GUARDED.difference_update(added)
