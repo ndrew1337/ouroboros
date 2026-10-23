@@ -90,14 +90,16 @@ def calibrated_input_token_limit(
         # intact. Zero is absence of evidence, not a zero-token provider limit.
         return int(budget_cap)
     from ouroboros.capability_evidence import resolve_review_token_density
+    from ouroboros.reviewer_window import reviewer_input_limit
 
     density, _ = resolve_review_token_density(
         drive_root if drive_root is not None else review_drive_root(None), model_id
     )
+    usable = reviewer_input_limit(context_window, output_reserve)
     return min(
         budget_cap,
-        int((context_window - output_reserve) / max(1.0, density)),
-        context_window - output_reserve - tokenizer_margin,
+        int(usable / max(1.0, density)),
+        usable - tokenizer_margin,
     )
 
 

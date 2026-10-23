@@ -6,7 +6,7 @@ round facts, deficits and reply allowance. The public context_fit names stay ava
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 if TYPE_CHECKING:
@@ -50,6 +50,7 @@ class MainFitMeasurement:
     view_kind: str = ""
     window_witness_bound: bool = False
     window_observation_fp: str = ""
+    window: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -138,7 +139,9 @@ def measure_main_fit(
     )
     margin = reclaim_low_water_margin(target, capacity) if deficit > 0 else 0
     goal = deficit + margin
+    from ouroboros.context_view_facts import window_projection
     measurement = MainFitMeasurement(
+        window=window_projection(current),
         view_kind=plan.view_kind,
         route_fp=str(plan.route_fp or ""),
         round_id=str(round_id or ""),

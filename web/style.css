@@ -460,6 +460,8 @@ html[data-layout="stack"] .resize-handle { display: none; }
     padding-block: var(--space-3);
 }
 
+/* The layered reference tint keeps the shared colour transition. */
+@property --project-reference-fill { syntax: '<color>'; inherits: true; initial-value: transparent; }
 /* === design-system:migrated-begin (chat: Project reference) === */
 /* The Project reference (project_reference.js; docs/DESIGN.md "References and actions"): the Projects glyph, the
    Project's name and ↗ in the Project's ink on the Project's fill, in two forms only. The whole control is the
@@ -470,17 +472,18 @@ html[data-layout="stack"] .resize-handle { display: none; }
     align-items: center;
     gap: var(--space-2);
     border: 0;
-    background: var(--project-08);
+    --project-reference-fill: var(--project-08);
+    background: linear-gradient(var(--project-reference-fill), var(--project-reference-fill)), var(--project-reference-backing, transparent);
     color: var(--project);
     font: inherit;
     font-size: var(--type-body);
     line-height: var(--line-body);
     text-align: left;
     cursor: pointer;
-    transition: var(--motion-tone);
+    transition: var(--motion-tone), --project-reference-fill 0.12s ease;
 }
 @media (hover: hover) {
-    .chat-live-project-card-btn:hover { background: var(--project-12); }
+    .chat-live-project-card-btn:hover { --project-reference-fill: var(--project-12); }
 }
 .chat-live-project-card-btn:active { filter: var(--press); }
 .chat-live-project-icon { display: inline-flex; flex: none; line-height: 1; }
@@ -555,16 +558,36 @@ html[data-layout="stack"] .resize-handle { display: none; }
 /* === design-system:migrated-begin (chat: Project completion mirror) === */
 /* A Project root's final answer in Main is an ordinary Ouroboros message (docs/DESIGN.md
    "Project completion mirror"): folded when it is long, with the Project chip under it. The
-   clamp is unconditional CSS over the complete text (never a cut, the text stays selectable);
-   `is-folded` adds the fade only when the fold hides text. The Project opens the complete answer. */
+   seven-line footprint stays fixed while the painted tail borrows footer whitespace. JS
+   compensates the actual extension (including answers shorter than the tail); full text stays selectable. */
 .chat-bubble.project-answer {
-    --project-answer-fold: calc(var(--type-section) * var(--line-body) * 7);
+    --project-reference-backing: var(--voice-ouroboros);
+    --project-answer-line: calc(var(--type-section) * var(--line-body));
+    --project-answer-lines: 7;
+    --project-answer-fold: calc(var(--project-answer-line) * var(--project-answer-lines));
+    --project-answer-tail: calc(var(--project-answer-line) * 2);
 }
 .chat-bubble.project-answer > .message { max-height: var(--project-answer-fold); overflow: hidden; }
 .chat-bubble.project-answer.is-folded > .message {
+    max-height: calc(var(--project-answer-fold) + var(--project-answer-tail));
+    margin-bottom: var(--project-answer-compensation, 0px);
+    -webkit-mask-image: linear-gradient(to bottom, black 0, black calc(var(--project-answer-line) * 25 / 6), rgba(0,0,0,.94) calc(var(--project-answer-line) * 31 / 6), rgba(0,0,0,.65) calc(var(--project-answer-line) * 6), rgba(0,0,0,.25) var(--project-answer-fold), rgba(0,0,0,.07) calc(var(--project-answer-line) * 95 / 12), transparent calc(var(--project-answer-line) * 9));
+    mask-image: linear-gradient(to bottom, black 0, black calc(var(--project-answer-line) * 25 / 6), rgba(0,0,0,.94) calc(var(--project-answer-line) * 31 / 6), rgba(0,0,0,.65) calc(var(--project-answer-line) * 6), rgba(0,0,0,.25) var(--project-answer-fold), rgba(0,0,0,.07) calc(var(--project-answer-line) * 95 / 12), transparent calc(var(--project-answer-line) * 9));
+}
+/* Width changes defer measurement: retain the CSS-only footprint until the feed settles. */
+[data-resizing] .chat-bubble.project-answer.is-folded > .message {
+    max-height: var(--project-answer-fold);
+    margin-bottom: 0;
     -webkit-mask-image: linear-gradient(180deg, black 60%, transparent 100%);
     mask-image: linear-gradient(180deg, black 60%, transparent 100%);
 }
+/* A limitation and its disclosure own the space before Project; never paint over their words. */
+.chat-bubble.project-answer:has(> .project-answer-limitation, > .project-ending-details) { --project-answer-tail: 0px; }
+.chat-bubble.project-answer.is-folded:has(> .project-answer-limitation, > .project-ending-details) > .message {
+    -webkit-mask-image: linear-gradient(180deg, black 60%, transparent 100%);
+    mask-image: linear-gradient(180deg, black 60%, transparent 100%);
+}
+.chat-bubble.project-answer > :is(.system-message-actions, .msg-time) { position: relative; z-index: 1; }
 .chat-bubble.project-answer > .message > :first-child { margin-top: 0; }
 .chat-bubble.project-answer > .system-message-actions,
 .chat-bubble.assistant > .system-message-actions { align-items: center; padding-block: var(--space-2) var(--space-1); }

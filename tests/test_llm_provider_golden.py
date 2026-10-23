@@ -178,7 +178,6 @@ class _FakeResponse:
     def model_dump(self) -> Dict[str, Any]:
         return copy.deepcopy(self._body)
 
-    # probe_oversized_context reads the SDK object shape directly.
     @property
     def choices(self) -> Any:
         raw = self._body.get("choices") or []
@@ -761,7 +760,7 @@ def test_golden_covers_every_declared_provider_lane():
     }
     assert ledger_sources >= {
         "llm.chat", "llm.local", "llm.anthropic", "llm.gigachat",
-        "capability_probe", "web_search.openrouter", "web_search.anthropic",
+        "web_search.openrouter", "web_search.anthropic",
     }
 
 

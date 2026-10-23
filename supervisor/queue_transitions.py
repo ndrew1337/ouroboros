@@ -1561,16 +1561,19 @@ def reconcile_terminal_task_projections(drive_root, task_id: str) -> None:
     except Exception:
         log.debug("owner_hurry terminal reconcile failed for %s", task_id, exc_info=True)
     try:
-        # #Q-2b structural expiry (owner decision 30=A): every still-open quiz
-        # dies with its author, and the already-rendered cards learn it live.
-        from ouroboros.owner_quiz import reconcile_terminal as quiz_reconcile
+        # The wait ends with its author; the unanswered card remains answerable.
+        from ouroboros.owner_quiz import reconcile_terminal as quiz_reconcile, quiz_states
 
         expired = quiz_reconcile(drive_root, str(task_id))
         if expired:
             from supervisor.message_bus import get_bridge
 
+            blocks = quiz_states(drive_root, str(task_id))
             for quiz_id in expired:
-                get_bridge().send_quiz_state(quiz_id, str(task_id), "expired_terminal")
+                block = blocks.get(quiz_id) or {}
+                get_bridge().send_quiz_state(quiz_id, str(task_id), "expired_terminal",
+                    chat_id=int(block.get("publication_chat_id", block.get("chat_id", 0)) or 0),
+                    wait_for_answer=False)
     except Exception:
         log.debug("owner_quiz terminal reconcile failed for %s", task_id, exc_info=True)
 

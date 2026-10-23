@@ -160,8 +160,10 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # shares the owner's page thread, so heavy computation belongs in a blob: Worker); nothing else changed.
     # D3 adds the recorded reply_to address to forward_to_worker and escalate.
     # Target merge retains the contributor tool affordances and target review/mail contracts.
+    # 2026-10-23: escalate gains request_id for private Main questions; its retry
+    # description also explains that a new wait after timeout needs a new key.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "c96acac3175e8b2468a501d0f621d40fc468fddfff8876fcd4de286bdff86aa2"
+        "466a6505a29350292d7a4586df88bc04089466f8b95dfce6dc9232d530ab4168"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

@@ -211,13 +211,6 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # NOTE: OUROBOROS_OBSERVABILITY_KEEP_RAW (writes UNREDACTED secret-bearing payloads to
     # disk) is intentionally NOT a settings/UI carrier — it is an env-only operator debug
     # override so a self-change or non-owner save can never enable secret logging.
-    # Generative context-window probe machinery: when enabled AND a caller passes
-    # allow_generative=True, confirms a route's >=1M window from a FREE over-window
-    # reject; *_CHARS sizes the padding. Since the settings-time Max gate retirement
-    # no production surface passes allow_generative=True (dormant; kept for tests
-    # and future explicit owner probes).
-    "OUROBOROS_GENERATIVE_PROBE": "1",
-    "OUROBOROS_GENERATIVE_PROBE_CHARS": "5000000",
     # Configured task-actor SSOT and, since the review pool, the ONE reviewer
     # configuration surface too (rows marked review_eligible); "" = bounded
     # legacy/undecided read. The former review-lane keys are RETIRED (see
@@ -348,6 +341,8 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
 # an owner customization — which would otherwise leave a removed key living in data/settings.json
 # forever, still served by GET /api/settings. Retiring a key is a decision; its ghost is not.
 RETIRED_SETTING_KEYS: tuple[str, ...] = (
+    "OUROBOROS_GENERATIVE_PROBE",
+    "OUROBOROS_GENERATIVE_PROBE_CHARS",
     # v6.87.7: the depth cap conflated how DEEP delegation nests with how STRONG a descendant is.
     "OUROBOROS_SUBAGENT_CAPABILITY_DEPTH_LIMIT",
     # The acceptance improvement-pass and plan-swarm knobs are retired (the cap bounds result/commit/skill waves).

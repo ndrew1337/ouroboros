@@ -198,3 +198,36 @@ def test_reprojection_keeps_accepted_input_evidence_when_mode_reserve_changes(tm
         ratio=1, output_reserve=16_384, tool_schemas=[], start_mode="nano")
     assert refit.window_record.input.tokens == refit.window_record.usable == 150_000
     assert refit.window_tokens == 160_000 and refit.working_reserve_tokens == 10_000
+
+
+@pytest.mark.parametrize("window,basis,raiseable,expected", [
+    (92_000, "provider", False, 92_000),
+    (80_000, "estimator", False, 80_000),
+    (133_554, "provider", True, 160_000),
+])
+def test_window_authority_receipt_preserves_live_route_policy(
+        tmp_path, monkeypatch, window, basis, raiseable, expected):
+    from ouroboros import capability_evidence as ce
+    from ouroboros.context_view_facts import window_projection
+    from ouroboros.context_window import record_observation, resolve_window
+
+    monkeypatch.setattr(ce, "canonical_evidence_root", lambda: tmp_path)
+    built = plan(core(tmp_path), window, facts=RouteFacts(
+        conversation_window_tokens=window, working_reserve_tokens=10_000,
+        basis=basis, acceptance_can_raise=raiseable))
+    scope = built.window_record.route_fp
+    # Even on a raiseable route, a numbered refusal cannot raise a declaration.
+    record_observation(tmp_path, scope, refused=200_000)
+    assert resolve_window(built, 10_000, root=tmp_path).total.tokens == window
+    record_observation(tmp_path, scope, accepted=150_000)
+    result = fit.measure_main_fit(built, built.messages_for("nano"), [], profile="owner_nano",
+        rendered_mode="nano", round_id="authority-merge").measurement
+    record = resolve_window(built, 10_000, root=tmp_path)
+    assert result.capacity_total_tokens == expected
+    assert result.response_reserve_tokens == 10_000
+    assert result.window == window_projection(record)
+    assert result.window["reserve"] == 10_000
+    assert result.window["kind"] == ("input" if raiseable else "total")
+    assert result.window_observation_fp == scope
+    if basis == "estimator":
+        assert result.measurement_density == 1.0

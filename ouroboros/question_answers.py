@@ -118,6 +118,9 @@ def deliver_answer(root, asker: str, quiz_id: str, block: dict, live_reader, fal
     while task is not None and recipient not in attempted:
         attempted.add(recipient)
         agent = get_direct_chat_agent(recipient)
+        if agent is None:
+            from ouroboros.conversation_lease import presence_author_agent
+            agent = presence_author_agent(root, recipient)
         lock = getattr(agent, "_owner_message_admission_lock", None) or q._queue_lock
         with lock:
             # Same admission owner as room intake: no final-drain admission after closure.

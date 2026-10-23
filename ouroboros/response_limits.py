@@ -241,27 +241,52 @@ def probe_response_limit(drive_root, evidence, route: dict) -> ResponseLimit:
         options=options or None, allow_fetch=route.get("allow_fetch", True), api_key=api_key)
 
 
-def response_limit_preview(drive_root, route: dict, *, account="", settings=None) -> dict:
-    """Owner editor projection of the dispatch endpoint and exact advertised account; it stores nothing."""
-    from ouroboros.capability_evidence import model_account_options, _claudexor_metadata_evidence
+def response_limit_preview(drive_root, route: dict, *, account="", settings=None, role="main", window=None) -> dict:
+    """Owner projection: stored API evidence and a live local subscription catalog, without writes."""
+    from ouroboros import capability_evidence as ce
+    from ouroboros.context_fit import main_output_reserve_tokens
+    from ouroboros.context_view_facts import window_projection
+    from ouroboros.context_window import resolve_window, route_observation_scope
+    from ouroboros.model_slots import MODEL_CONTEXT_WINDOWS_KEY, model_role_option
 
     model = route["model"]
     provider, base_url, _key = _dispatch_route(route)
-    options = model_account_options(model, credential_profile_id=account, settings=settings) if provider == "claudexor" else None
+    options = ce.model_account_options(model, credential_profile_id=account, settings=settings) if provider == "claudexor" else {}
+    data = ce._load(drive_root)
     observed = None
-    if options is not None:
+    if provider == "claudexor":
         try:
-            bound = _claudexor_metadata_evidence(model, base_url, None, options, record=False)
+            bound = ce._claudexor_metadata_evidence(model, base_url, None, options, record=False)
             if bound.account_fingerprint:
                 options.update(credential_profile_id=bound.credential_profile_id, account_fingerprint=bound.account_fingerprint)
-                observed = ResponseLimit(**{**bound.response_limit, "stale": bool(bound.stale)})  # an expired catalog is no current maximum
+                observed = {**bound.response_limit, "stale": bool(bound.stale)}
         except Exception:
             pass  # Unread account capacity remains unknown, never a fabricated cap.
-    evidence = resolve_response_limit(drive_root, provider=provider, model=model, base_url=base_url, options=options)
-    if observed is not None and evidence.source != "owner_ack":
-        evidence = observed  # This read's catalog fact, shown without being stored.
-    return {"route": {**route, "provider": provider, "base_url": base_url, "options": options},
-            "response_limit": asdict(evidence)}
+    window_route = {key: route[key] for key in ("provider", "model", "base_url", "use_local") if key in route}
+    window_route.update(provider=provider, options=options)
+    evidence = ce.probe(drive_root, **window_route, allow_fetch=False)
+    if observed is not None and evidence.response_limit.get("source") != "owner_ack":
+        evidence.response_limit = observed  # This read's catalog fact, shown without being stored.
+    response = evidence.response_limit
+    window = int(model_role_option(MODEL_CONTEXT_WINDOWS_KEY, role, settings=settings)) if window is None else int(window)
+    evidence = ce.with_role_window(evidence, window)
+    reserve = main_output_reserve_tokens(use_local=bool(route.get("use_local")), evidence=evidence)
+    if role in {"light", "deep_review"}:
+        from ouroboros.consolidator import LIGHT_ANSWER_CEILING_TOKENS
+        from ouroboros.deep_self_review import _DEEP_MAX_OUTPUT_TOKENS
+        reserve = LIGHT_ANSWER_CEILING_TOKENS if role == "light" else _DEEP_MAX_OUTPUT_TOKENS
+        if route.get("use_local"):
+            from ouroboros.llm_local import local_context_limits
+            reserve = local_context_limits(reserve)[1]
+        reserve = ResponseLimit(**response).ceiling(reserve)
+    scope = route_observation_scope({**window_route, "use_local": bool(route.get("use_local"))}, settings)
+    record = resolve_window(evidence, reserve, root=drive_root, observation_fp=scope,
+                            bound=provider != "claudexor" or bool(account))
+    window_route.pop("use_local", None)
+    return {"route": {**route, "provider": provider, "base_url": base_url, "options": options or None},
+            "response_limit": response, "window": window_projection(record),
+            "window_route": {**window_route, "route_fp": evidence.route_fp},
+            "window_ack": bool(data.get("owner_acks", {}).get(evidence.route_fp))}
 
 
 def response_allowance(model: str, requested: int, *, use_local=False, model_role="", credential_profile_id=None,

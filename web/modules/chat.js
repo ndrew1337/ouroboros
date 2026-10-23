@@ -11,7 +11,7 @@ import { ORIGIN_ADDRESSED_NOTICE_TYPES, childRowPlacement, replayConcludesTask }
 import { appendProjectRow, decorateProjectRow, PROJECT_ROW_TYPES, refreshProjectAnswerFold, syncSavedProjectContext } from './project_answer.js';
 import { createWorkPortals, isPortal, reconcilePortalNotes } from './work_portal.js';
 import { createTaskEpisodes } from './task_episodes.js';
-import { createChatMedia, showTaskIncidentToast } from './chat_media.js';
+import { createChatMedia, decorateContactSource, showTaskIncidentToast } from './chat_media.js';
 import { attachmentCaption, attachmentViews, createUnconfirmedSends } from './chat_attachments.js';
 import { createChatDecision } from './chat_decision.js';
 import { createRoomWork } from './room_work.js';
@@ -784,20 +784,28 @@ export function createChatInstance({
 
     // Fold host facts; absent counters stay absent.
     function noteToolMetrics(taskId, metrics, rawTs, { suppressDomInsert = false } = {}) {
+        const rounds = Number.isInteger(metrics?.rounds) && metrics.rounds >= 0 ? metrics.rounds : null;
         const [calls, errors, routing, completion] = ['tool_calls', 'tool_errors', 'routing_tool_calls', 'completion_tool_calls']
-            .map(key => Number.isInteger(metrics?.[key]) ? metrics[key] : null);
-        if (!calls && !errors && !metrics.tool_evidence?.observations?.length
-                && !metrics.tool_evidence?.legacy?.calls && !toolEvidenceIncomplete(metrics.tool_evidence?.coverage)) return false;
+            .map(key => Number.isInteger(metrics?.[key]) && metrics[key] >= 0 ? metrics[key] : null);
+        const hasToolEvidence = calls > 0 || errors > 0 || metrics.tool_evidence?.observations?.length
+            || metrics.tool_evidence?.legacy?.calls || toolEvidenceIncomplete(metrics.tool_evidence?.coverage);
+        if (rounds === null && calls === null && !hasToolEvidence) return false;
         return withStableViewport(() => {
             const record = getLiveCardRecord(taskId);
             const before = captureLiveCardProjection(record);
             const duration = Number(metrics.duration_sec);
-            if (Number.isFinite(duration)) record.durationSec = duration;
-            const summary = noteToolHostMetrics(record, { calls, errors, routing, completion, counts: metrics.tool_call_counts, evidence: metrics.tool_evidence });
-            record.toolCalls = summary.calls;
-            record.toolErrors = summary.errors;
-            const changed = placeReplayedEvidence(record, summary, metrics.tool_evidence, rawTs, normalizeLogTs)
-                && renderLiveCardTimeline(record);
+            if (rounds !== null) record.rounds = Math.max(record.rounds ?? 0, rounds);
+            if (metrics.duration_sec != null && Number.isFinite(duration)) record.durationSec = duration;
+            if (calls !== null) record.toolCalls = Math.max(record.toolCalls ?? 0, calls);
+            let changed = false;
+            // Rounds and a known zero are facts, not a tool invocation or a row of work.
+            if (hasToolEvidence) {
+                const summary = noteToolHostMetrics(record, { calls, errors, routing, completion, counts: metrics.tool_call_counts, evidence: metrics.tool_evidence });
+                if (summary.calls > 0 || record.toolCalls != null) record.toolCalls = summary.calls;
+                record.toolErrors = summary.errors;
+                changed = placeReplayedEvidence(record, summary, metrics.tool_evidence, rawTs, normalizeLogTs)
+                    && renderLiveCardTimeline(record);
+            }
             updateLiveCardCount(record);
             renderLiveCardMeta(record);
             reanchorTaskCard(record, rawTs, { suppressDomInsert });
@@ -1165,7 +1173,7 @@ export function createChatInstance({
 
     function admitCardMetadata(row) {
         // Carrier facts precede presentation returns.
-        if (row.tool_evidence && row.task_id) noteToolMetrics(row.task_id, row, row.ts || row.timestamp || '');
+        if ((row.tool_evidence || Number.isInteger(row.rounds)) && row.task_id) noteToolMetrics(row.task_id, row, row.ts || row.timestamp || '');
         if (row.system_type === 'task_evidence') {
             // The task's own evidence: mints its card at the carrier's row (zero tools included).
             const record = getLiveCardRecord(row.task_id);
@@ -1729,7 +1737,7 @@ export function createChatInstance({
         }
         if (summary.modelExecution) record.modelExecution = summary.modelExecution;
         if (summary.effort) record.effort = summary.effort;
-        if (Number.isInteger(summary.toolCalls)) record.toolCalls = summary.toolCalls;
+        if (Number.isInteger(summary.toolCalls)) record.toolCalls = Math.max(record.toolCalls ?? 0, summary.toolCalls);
         record._lastFrameMeta = Array.isArray(summary.meta) ? summary.meta : [];
         if (rawTs) record.latestSourceTs = rawTs;
         renderLiveCardMeta(record, summary.costProjection);
@@ -1912,7 +1920,7 @@ export function createChatInstance({
         const rawTs = msg?.ts || new Date().toISOString();
         if (!taskId) return false;
         modelWaits.observe(taskId, msg);
-        let changed = msg.tool_evidence ? noteToolMetrics(taskId, msg, rawTs) : false;
+        let changed = msg.tool_evidence || Number.isInteger(msg.rounds) ? noteToolMetrics(taskId, msg, rawTs) : false;
         // Only host-attested progress grants Stop authority.
         if (grantCancelAuthority && msg.cancelable === true) {
             changed = markTaskCancelable(String(taskId)) || changed;
@@ -2100,7 +2108,7 @@ export function createChatInstance({
         const summary = summarizeChatLiveEvent(evt);
         if (childInfo && subagentTerminalChildren.has(taskId) && !summary?.toolCall) return false;
         // Root/child fold: metrics, terminal and replay.
-        let changed = evt.tool_evidence || ['task_metrics_event', 'task_eval', 'task_done'].includes(eventType)
+        let changed = evt.tool_evidence || Number.isInteger(evt.rounds) || ['task_metrics_event', 'task_eval', 'task_done'].includes(eventType)
             ? noteToolMetrics(taskId, evt, rawTs) : false;
         if (!childInfo) changed = attachTaskDetailReviews(taskId, evt) || changed;
         if (!summary) return changed;
@@ -2182,6 +2190,7 @@ export function createChatInstance({
                 originProjected: !!opts.originProjected, terminalTime: opts.terminalTime || null,
                 completionNotice: opts.completionNotice || null,
                 skillReview: opts.skillReview || null, evidenceRef: opts.evidenceRef || null,
+                presenceContact: opts.presenceContact || null,
                 attachments: attachments.length ? attachments : null,
                 textPlaceholder: opts.textPlaceholder === true,
             });
@@ -2228,6 +2237,7 @@ export function createChatInstance({
             ${pendingHtml}
             ${timeHtml}
         `;
+        decorateContactSource(bubble, opts.presenceContact);
         if (attachments.length) chatMedia.mountAttachments(bubble, attachments, shown);
         if (!isProgress && shown) chatMedia.attachCopyControl(bubble, String(shown));
         if (!isProgress) replies.decorate(bubble, opts.reply);
@@ -2425,6 +2435,7 @@ export function createChatInstance({
                 }
                 // A stored row as its bubble: its own identity and labels, plus what its kind adds.
                 const addStoredRow = (msg, taskId, extra) => addMessage(msg.text, msg.role, !!msg.markdown, msg.ts || null, false, {
+                    presenceContact: msg.presence_contact,
                     historyId: msg.history_id, historyPosition: msg.history_position,
                     systemType: msg.system_type || '', narration: msg.narration, taskId,
                     source: msg.source || '', initiator: msg.initiator || '',
@@ -3412,6 +3423,7 @@ export function createChatInstance({
             }
             const routingCleared = clearTransientRoutingAnnotations(messagesDiv);
             const added = addMessage(msg.content, msg.role, msg.markdown, msg.ts || null, false, {
+                presenceContact: msg.presence_contact,
                 systemType: msg.system_type || '', narration: msg.narration,
                 source: msg.source || '',
                 initiator: msg.initiator || '',

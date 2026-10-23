@@ -154,7 +154,18 @@ def subscription_ui():
         elif path == "/api/claudexor/status":
             body = fixture["status"]
         elif path == "/api/settings":
-            body = settings
+            query = parse_qs(urlparse(request.url).query)
+            if query.get("response_limit_preview") == ["1"] and backend.get("response_preview"):
+                body = backend["response_preview"](query)
+            elif query.get("response_limit_preview") == ["1"]:
+                from ouroboros.context_view_facts import window_projection
+                from ouroboros.context_window import WindowLimit, WindowRecord
+                window = int(query.get("window", [0])[0])
+                body = {"route": {}, "response_limit": {}, "window_ack": False,
+                        "window": window_projection(WindowRecord("fixture", reserve=65536,
+                            total=WindowLimit(window, "total", "user_setting") if window else None))}
+            else:
+                body = settings
         elif path == "/api/review-pool":
             body = backend.get("review_pool", {"pool": [], "excluded": [], "last_executions": {},
                                                "row_costs": {}, "config_error": "", "migration": None})
@@ -288,9 +299,34 @@ def test_quick_start_requires_a_model_source_for_the_connected_harness(subscript
     assert page.locator("#quick-start-btn").is_visible() is expected
 
 
-def test_model_roles_pin_context_fallback_and_manual_draft_survive_preview(subscription_ui):
+def test_model_roles_pin_context_fallback_and_manual_draft_survive_preview(subscription_ui, tmp_path, monkeypatch):
+    from ouroboros import capability_evidence as ce
+    from ouroboros.llm import LLMClient
+    from ouroboros.provider_models import provider_for_model
+    from ouroboros.response_limits import response_limit_preview
+
     ui = subscription_ui
     page = ui["page"]
+    def catalog(source, profile=None, **_kw):
+        profile = profile or "personal"
+        row = ui["fixture"]["catalog"]["items"][0]
+        return {"source": source, "credentialProfileId": profile, "accountFingerprint": f"identity-{profile}",
+                "observedAt": ce.utc_now_iso(), "provenance": "fixture",
+                "models": [{"id": row["id"], "maxContextWindow": 500000 if profile == "work" else row["max_context_window"],
+                            "maxOutputTokens": 8192 if profile == "work" else 4096}]}
+    monkeypatch.setattr(LLMClient, "claudexor_model_catalog", staticmethod(catalog))
+    monkeypatch.setattr(ce, "canonical_evidence_root", lambda: tmp_path)
+    # Discovery stores windows; each passive preview binds them through a fresh local catalog read.
+    for profile in ("personal", "work"):
+        ce.probe(tmp_path, provider="claudexor", model="claudexor::codex=gpt-test", base_url="",
+                 options={"source_id": "codex", "credential_profile_id": profile})
+    before = ce._store_path(tmp_path).read_bytes()
+    def preview(query):
+        model = query["model"][0]
+        return response_limit_preview(tmp_path, {"model": model, "provider": provider_for_model(model), "base_url": "",
+            "use_local": query["local"] == ["true"]}, account=query.get("account", [""])[0], settings=ui["settings"],
+            role=query["role"][0], window=int(query["window"][0]))
+    ui["backend"]["response_preview"] = preview
     page.goto(ui["url"] + "/onboarding")
     page.wait_for_selector('#quick-start-btn:not([hidden])')
     page.click('#next-btn')
@@ -298,23 +334,29 @@ def test_model_roles_pin_context_fallback_and_manual_draft_survive_preview(subsc
     main = page.locator('[data-model-role="main"]')
     light = page.locator('[data-model-role="light"]')
     main.locator('[data-model-role-account]').select_option('personal')
-    held_catalog = []
-    page.route('**/api/model-catalog?*credential_profile_id=work', lambda route: held_catalog.append(route))
+    held_preview = []
+    hold_preview = True
+    preview_pattern = '**/api/settings?*account=work&role=light&*'
+    def release_preview(route):
+        body = preview(parse_qs(urlparse(route.request.url).query))
+        route.fulfill(content_type='application/json', body=json.dumps(body))
+    page.route(preview_pattern, lambda route: held_preview.append(route) if hold_preview else release_preview(route))
     light.locator('[data-model-role-account]').select_option('work')
     main.locator('summary').click()
     light.locator('summary').click()
-    assert 'not known' in light.locator('[data-model-context-note]').inner_text()
+    assert light.locator('[data-model-context-note]').inner_text() == 'Context limit not known for this route.'
     page.wait_for_function("() => document.querySelector('[data-model-role=light] [data-model-role-account]').value === 'work'")
-    assert held_catalog
-    work_catalog = copy.deepcopy(ui['fixture']['catalog'])
-    work_catalog['items'][0].update(credential_profile_id='work', max_context_window=500000)
-    for route in held_catalog:
-        route.fulfill(content_type='application/json', body=json.dumps(work_catalog))
-    page.unroute('**/api/model-catalog?*credential_profile_id=work')
+    assert held_preview
+    hold_preview = False
+    for route in held_preview:
+        release_preview(route)
+    page.unroute(preview_pattern)
     page.wait_for_function("() => document.querySelector('[data-model-role=light] [data-model-context-note]').textContent.includes('500,000')")
-    assert '872,000' in main.locator('[data-model-context-note]').inner_text()
+    page.wait_for_function("() => document.querySelector('[data-model-role=main] [data-model-context-note]').textContent.includes('872,000')")
+    assert '872,000' not in light.locator('[data-model-context-note]').inner_text()
+    assert '500,000' not in main.locator('[data-model-context-note]').inner_text()
     main.locator('[data-model-role-context]').fill('1000000')
-    assert 'set by you' in main.locator('[data-model-context-note]').inner_text()
+    page.wait_for_function("() => document.querySelector('[data-model-role=main] [data-model-context-note]').textContent.includes('set in Settings')")
     page.locator('[data-model-role="vision"] [data-model-role-account]').select_option('work')
     page.click('[data-model-add]')
     fallback = page.locator('[data-model-role-group="fallback"]')
@@ -369,6 +411,7 @@ def test_model_roles_pin_context_fallback_and_manual_draft_survive_preview(subsc
     assert body['OUROBOROS_MODEL_FALLBACKS'] == 'openai::second, claudexor::codex=first'
     (row,) = body['OUROBOROS_SUBAGENTS']['items']
     assert (row['subagent_id'], row['review_eligible'], row['effort']) == ('codex', True, 'high')
+    assert ce._store_path(tmp_path).read_bytes() == before
 
 
 def test_settings_accounts_and_model_roles_use_the_same_compact_components(subscription_ui):

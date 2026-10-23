@@ -490,6 +490,7 @@ D20 = "Presence"
 "ouroboros/presence_context.py" = "D20"
 "ouroboros/presence_continuation.py" = "D20"
 "ouroboros/presence_observations.py" = "D20"
+"ouroboros/presence_owner_contact.py" = "D20"
 "ouroboros/presence_delivery.py" = "D20"
 "ouroboros/presence_recovery.py" = "D20"
 "ouroboros/presence_runner.py" = "D20"
@@ -1224,6 +1225,7 @@ lazy_only = [
   "D08->D10",
   "D08->D11",
   "D08->D13",
+  "D08->D20",
   "D09->D02",
   "D09->D04",
   "D09->D05",
@@ -1232,6 +1234,7 @@ lazy_only = [
   "D09->D12",
   "D09->D14",
   "D09->D15",
+  "D09->D20",
   "D10->D01",
   "D10->D07",
   "D10->D09",

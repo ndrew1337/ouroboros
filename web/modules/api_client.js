@@ -451,8 +451,8 @@ export const apiClient = {
     webSearchPreview: (selection = {}) => fetchJson(
         `/api/settings?${new URLSearchParams({ websearch_preview: '1', ...selection })}`, { cache: 'no-store' }),
     /** @returns {Promise<import('./model_route_types.js').ResponseLimitPreview>} */
-    responseLimitPreview: ({ model, local = false, account = '' }) => fetchJson(
-        `/api/settings?${new URLSearchParams({ response_limit_preview: '1', model, local: String(Boolean(local)), account })}`,
+    responseLimitPreview: ({ model, local = false, account = '', role = 'main', window }) => fetchJson(
+        `/api/settings?${new URLSearchParams({ response_limit_preview: '1', model, local: String(Boolean(local)), account, role, ...(window === undefined ? {} : { window: String(window) }) })}`,
         { cache: 'no-store' }),
     /** @param {{key: string}|{mcp_server_id: string, header_name?: string}} selector @returns {Promise<{value: string}>} */
     revealSettingsSecret: (selector) => jsonPost('/api/settings/secret', selector),

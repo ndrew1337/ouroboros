@@ -270,7 +270,7 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
 # A display reader that needs a dropped path names it here; ``tests/test_task_reads.py``
 # builds a page from display views and from full documents and requires the same page.
 DISPLAY_DROPPED: Tuple[str, ...] = (
-    "loop_outcome", "trace_refs", "review_evidence", "artifacts", "result", "trace_summary",
+    "trace_refs", "review_evidence", "artifacts", "result", "trace_summary",
     "governing_owner_words", "verification_ledger", "plan_review_state", "acceptance_debt",
     "mutation_evidence", "configured_subagent", "context", "continuation_narrative", "origin_message_text",
     "owner_mailbox", "subagent_availability", "plan_record", "review_status", "schedule_admission",
@@ -281,7 +281,10 @@ DISPLAY_DROPPED: Tuple[str, ...] = (
         "origin_message_text", "wake_observation", "project_last_task_result", "current_chat",
         "workspace_preflight", "workspace_copy", "late_answer")),
 )
-DISPLAY_KEPT: Dict[str, Tuple[str, ...]] = {"artifact_bundle": ("status",), "task_contract": ("deadline_at",)}
+DISPLAY_KEPT: Dict[str, Tuple[str, ...]] = {
+    "artifact_bundle": ("status",), "task_contract": ("deadline_at",),
+    "loop_outcome": ("usage",), "loop_outcome.usage": ("total_rounds",),  # history's accepted solve responses
+}
 _KEEP = "__keep__"  # a path no kept object holds: the no-op target of a conditional edit
 
 

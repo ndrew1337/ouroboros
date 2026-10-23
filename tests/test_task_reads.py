@@ -24,7 +24,8 @@ from tests._store_shared import read_result, seed_result
 
 TS = "2026-10-16T10:00:00Z"
 BULK = {  # every dropped path, filled so a reader that used one would change the page
-    "loop_outcome": {"usage": {"cost_usd": 9.0}, "trace_refs": ["t"] * 50, "status": "failed"},
+    "loop_outcome": {"usage": {"total_rounds": 3, "cost_usd": 9.0, "extra": "U" * 100_000},
+                     "trace_refs": ["t"] * 50, "status": "failed", "extra": "L" * 100_000},
     "trace_refs": ["trace"] * 200, "review_evidence": {"rounds": ["x" * 500]},
     "artifacts": [{"path": "a.txt", "status": "ok"}], "result": "R" * 2000, "trace_summary": "S" * 500,
     "governing_owner_words": "W" * 500, "verification_ledger": {"checks": ["c"] * 20},
@@ -60,7 +61,8 @@ def _room(root, tasks):
         ts = f"2026-10-16T10:00:{index:02d}Z"
         chat.append({"ts": ts, "direction": "out", "chat_id": 1, "task_id": task_id, "text": f"answer {task_id}"})
         chat.append({"ts": ts, "direction": "system", "type": "task_summary", "chat_id": 1, "task_id": task_id,
-                     "summary_id": f"task-terminal:{task_id}", "text": f"done {task_id}", "tool_calls": 1})
+                     "summary_id": f"task-terminal:{task_id}", "text": f"done {task_id}", "tool_calls": 1,
+                     "rounds": 99})  # legacy recovery counted physical attempts
         progress.append({"ts": ts, "content": f"step {task_id}", "task_id": task_id, "chat_id": 1})
     for name, rows in (("chat", chat), ("progress", progress)):
         (root / "logs" / f"{name}.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
@@ -80,6 +82,9 @@ def test_display_view_drops_only_the_bulky_evidence(tmp_path):
         assert (sub not in view["metadata"]) if sub else (key not in view), path
     assert view["artifact_bundle"] == {"status": "complete"}
     assert view["task_contract"] == {"deadline_at": "2026-10-17T00:00:00Z"}
+    assert view["loop_outcome"] == {"usage": {"total_rounds": 3}}
+    assert len(json.dumps(view)) < 2000
+    assert read_result(tmp_path, "task-a") == full, "display reads never rewrite the authoritative body"
     # Every other key arrives exactly as stored: booleans, nulls and an unknown new fact included.
     kept = {key: value for key, value in full.items()
             if key not in task_store.DISPLAY_DROPPED and key not in task_store.DISPLAY_KEPT and key != "metadata"}
@@ -88,6 +93,24 @@ def test_display_view_drops_only_the_bulky_evidence(tmp_path):
     assert view["metadata"] == {"source": "owner"}
     # A kept key that is not an object stays as stored; an absent kept sub-key stays absent.
     assert views["task-b"]["artifact_bundle"] == "legacy" and views["task-b"]["task_contract"] == {}
+
+
+@pytest.mark.parametrize("snapshot, expected", [
+    ({}, {}),
+    ({"loop_outcome": None}, {"loop_outcome": None}),
+    ({"loop_outcome": {}}, {"loop_outcome": {}}),
+    ({"loop_outcome": {"usage": None}}, {"loop_outcome": {"usage": None}}),
+    ({"loop_outcome": {"usage": {}}}, {"loop_outcome": {"usage": {}}}),
+    *[({"loop_outcome": {"usage": {"total_rounds": rounds, "extra": "U" * 100_000}, "extra": "L" * 100_000}},
+       {"loop_outcome": {"usage": {"total_rounds": rounds}}}) for rounds in (None, 0, 3)],
+], ids=["missing", "null", "empty", "usage-null", "usage-empty", "rounds-null", "zero", "accepted"])
+def test_display_rounds_keep_presence_without_bulk_or_full_reads(tmp_path, monkeypatch, snapshot, expected):
+    seed_result(tmp_path, "snapshot", {"task_id": "snapshot", "status": "completed", **snapshot})
+    full = read_result(tmp_path, "snapshot")
+    monkeypatch.setattr(task_store, "documents_by_ids", lambda *_: pytest.fail("display read fetched full bodies"))
+    view = TaskReads(tmp_path).load(tmp_path, "snapshot")
+    assert {key: view[key] for key in ("loop_outcome",) if key in view} == expected
+    assert read_result(tmp_path, "snapshot") == full
 
 
 def test_a_page_built_from_display_views_is_the_page_full_documents_build(tmp_path, monkeypatch):
@@ -101,6 +124,7 @@ def test_a_page_built_from_display_views_is_the_page_full_documents_build(tmp_pa
     with_views = _page(tmp_path)
     annotated = [row for row in with_views["messages"] if row.get("outcome_axes")]
     assert len(annotated) >= len(tasks), "the page carries each task's current truth"
+    assert {row["rounds"] for row in annotated if row.get("outcome_final")} == {3}
     monkeypatch.setattr(task_store, "DISPLAY_DROPPED", ())
     monkeypatch.setattr(task_store, "DISPLAY_KEPT", {})
     assert _page(tmp_path)["messages"] == with_views["messages"]

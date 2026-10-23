@@ -26,6 +26,28 @@ class ChatHistoryPosition(TypedDict):
     offset: int
 
 
+class PresenceContact(TypedDict, total=False):
+    """Host-retained source of a private Main contact; external context, never owner authority."""
+
+    task_id: Required[str]
+    binding_id: Required[str]
+    source_event_id: Required[str]
+    label: Required[str]
+    conversation_key: Required[str]
+    transport_skill: str
+    behavior_skill: str
+    profile_fingerprint: str
+    state_fingerprint: str
+    selection_fingerprint: str
+    provider: str
+    account_id: str
+    conversation_id: str
+    thread_id: str
+    actor_id: str
+    place_id: str
+    url: str
+
+
 class ChatHistoryQuiz(TypedDict, total=False):
     """The question card of a ``msg_type: "quiz"`` row (the question itself is the row's ``text``).
     ``state`` is the durable lifecycle merged at read time: open, answered, closed,
@@ -38,6 +60,7 @@ class ChatHistoryQuiz(TypedDict, total=False):
     state: str
     wait_for_answer: bool
     wait_ended_at: str
+    presence_contact: PresenceContact
     host_facts: str
     answered_index: int
     comment: str
@@ -73,6 +96,8 @@ class ChatHistoryMessage(TypedDict, total=False):
     is_progress: Required[bool]
     system_type: Required[str]  # the row's kind; "" for an ordinary message
     task_id: Required[str]
+    presence_contact: PresenceContact
+    wait_ended_at: str
     row_address: str
     reply_to: Dict[str, Any]
     relay: Dict[str, Any]
@@ -208,6 +233,6 @@ class ChatHistoryResponse(TypedDict, total=False):
 
 
 __all__ = [
-    "ChatHistoryPosition", "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
+    "ChatHistoryPosition", "PresenceContact", "ChatHistoryQuiz", "ChatHistoryCard", "ChatHistoryMessage",
     "ChatHistoryCoverage", "ChatHistoryWindow", "ChatHistoryAnchor", "ChatHistoryResponse",
 ]

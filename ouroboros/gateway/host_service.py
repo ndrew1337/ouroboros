@@ -432,11 +432,17 @@ async def _api_identity(request: Request) -> JSONResponse:
     except HostServiceAuthError as exc:
         return _json_error(str(exc), 403)
     name, description = await asyncio.to_thread(_identity_facts, ctx)
+    from ouroboros.places import WAKE_FACTS
     from ouroboros.presence_continuation import CONTINUATION_VERSION
+    from ouroboros.presence_owner_contact import MAIN_CONTACT_VERSION
+    from ouroboros.presence_recovery import WORK_OUTPUT_VERSION
 
     return JSONResponse({"ok": True, "name": name, "description": description,
                          "presence_delivery_version": DELIVERY_VERSION, "places_version": 1,
                          "presence_continuation_version": CONTINUATION_VERSION,
+                         "presence_main_contact_version": MAIN_CONTACT_VERSION,
+                         "presence_work_output_version": WORK_OUTPUT_VERSION,
+                         "presence_wake_facts": list(WAKE_FACTS),
                          "notify_version": NOTIFY_VERSION})
 
 

@@ -1,7 +1,7 @@
 // Pure chat-activity helpers shared by chat.js and dependency-free node tests:
 // live-card presentation projections (moved verbatim from chat.js) plus the
 // census snapshot hydration. The room's status word is the server's (work_status.js).
-import { META_PART_SEPARATOR, executorIdentityMarkup, executorModelText, formatCoordinatorProvenance } from './harness_presentation.js';
+import { META_PART_SEPARATOR, executorIdentityMarkup, executorModelText, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { effortChipMarkup } from './effort_chip.js';
 import { resultFilesItemHtml } from './result_files.js';
 import { taskSourceDownloadUrl, apiFetch } from './api_client.js';
@@ -209,7 +209,7 @@ export function noteToolCall(record, observation) {
 /**
  * The host's totals for the turn, merged FIELD-WISE onto what the host already
  * stated. An ABSENT field (null/undefined) stays absent and keeps the previous
- * known value: a partial snapshot that carries `tool_calls` alone must not read
+ * known value; invocation totals never decrease on replay. A partial snapshot carrying `tool_calls` must not read
  * as "no addressing calls" and turn a block that only addressed work into
  * content, and it must not erase an error or routing count a complete snapshot
  * already gave. `counts` is known only as a NON-EMPTY object, so an empty or
@@ -229,10 +229,10 @@ export function noteToolHostMetrics(record, host) {
     const counts = host?.counts && typeof host.counts === 'object' && Object.keys(host.counts).length > 0
         ? host.counts : (known.counts ?? null);
     fold.host = {
-        calls: carry(host?.calls, known.calls),
+        calls: host?.calls == null ? (known.calls ?? null) : Math.max(host.calls, known.calls ?? 0),
         errors: carry(host?.errors, known.errors),
-        routing: carry(host?.routing, known.routing),
-        completion: carry(host?.completion, known.completion),
+        routing: host?.routing == null ? (known.routing ?? null) : Math.max(host.routing, known.routing ?? 0),
+        completion: host?.completion == null ? (known.completion ?? null) : Math.max(host.completion, known.completion ?? 0),
         counts,
     };
     return toolEvidenceView(record.toolFold);
@@ -835,6 +835,7 @@ export function clearStickyCardState(record) {
     record.modelExecution = null;
     record.effort = null;
     record.toolCalls = null;
+    record.rounds = null;
     record.toolErrors = null;
     // The folded evidence is cycle state too: a recycled slot must not count
     // the previous cycle's invocations.
@@ -1394,6 +1395,7 @@ function paintLiveFacts(record, rows) {
 export function renderLiveCardMeta(record, { agentModel = record?.agentModel || '' } = {}) {
     if (!record?.metaEl) return false;
     const toolCalls = Number.isInteger(record.toolCalls) ? `${record.toolCalls} tool ${record.toolCalls === 1 ? "call" : "calls"}` : '';
+    const rounds = Number.isInteger(record.rounds) && record.rounds >= 0 ? `${record.rounds} round${record.rounds === 1 ? '' : 's'}` : '';
     const cost = (record.costMeta && Array.isArray(record.costMeta.meta)) ? record.costMeta.meta : [];
     // A Main portal is the collapsed form of a work that lives in its Project room: tool calls ·
     // cost · updated, plus the facts that change what the owner may trust. Executor, model and
@@ -1405,8 +1407,9 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
     // evidence; any other card the model a usable solve response observed, else its agent model, and an
     // unobserved execution in its own words. Effort is the selected leaf's dispatch level, not the nanny's
     // reasoning level or a provider echo (subagent_runtime.resolve_configured_actor_dispatch).
-    // Coordinator, routine counts and provenance are details; effort and exceptions stay on the line.
+    // Session counters belong to the supervising agent, never the foreign executor.
     const chip = record.executorChip;
+    const supervision = chip && harnessPresentation(chip.harness).kind === 'harness';
     const execution = modelExecutionView(record.modelExecution);
     const coordinator = compactModel(agentModel);
     const provenance = chip ? formatCoordinatorProvenance(
@@ -1434,6 +1437,7 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
             record.historyRetentionProblem || '',
             record.toolErrors > 0 ? `${record.toolErrors} error${record.toolErrors === 1 ? '' : 's'}` : '',
             Number.isFinite(record.durationSec) ? formatLogDuration(record.durationSec) : '',
+            !supervision && record.toolCalls > 0 ? toolCalls : '',
             ...(Array.isArray(record._lastFrameMeta) ? record._lastFrameMeta : []),
             ...cost,
             record.finished ? '' : clockLabel(record),
@@ -1446,7 +1450,10 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
         // An unobserved execution of a card without an executor is its compact model fact already.
         [execution?.label || 'Model execution', execution && (chip || execution.observed) ? escapeHtml(execution.value) : ''],
         ['Started by', record.initiator === 'consciousness' ? 'Consciousness' : ''],
-        ['Tool calls', Number.isInteger(record.toolCalls) ? String(record.toolCalls) : ''],
+        ['Tool calls', !supervision && record.toolCalls === 0 ? '0' : ''],
+        ['Rounds', !supervision && rounds ? `${record.rounds} · usable solve response${record.rounds === 1 ? '' : 's'}` : ''],
+        ['Supervision', supervision && (rounds || toolCalls)
+            ? `${[rounds, toolCalls].filter(Boolean).join(META_PART_SEPARATOR)} (supervising agent; executor session counts are not reported)` : ''],
         ['Updated', escapeHtml(updated)],
     ]);
     const detailChanged = paintLiveDetail(record, 'liveCostDetail', String(record.costMeta?.detail || ''));

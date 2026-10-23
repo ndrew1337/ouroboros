@@ -175,36 +175,22 @@ def _append_or_merge_user_content(
             isinstance(b, dict) and b.get("type") in ("image_url", "image") for b in content):
         if _evict_stale_image_blocks([*messages, {"content": content}]) and (stamp or slot) is not None:
             sanction_rewrite(stamp or slot, "image_eviction")
-    if kind or not (messages and unsent_in_previous_send(slot, messages[-1])
+    if kind or not (messages and messages[-1].get("role") == "user"
+                    and unsent_in_previous_send(slot, messages[-1])
                     and set(messages[-1]) <= {"role", "content"}):
         # Typed words, unknown or sent content and any typed tail stay intact (slot-less producers too).
         messages.append({"role": "user", **({HOST_CONTEXT_KIND_KEY: kind} if kind else {}), "content": content})
         return
-    if messages and messages[-1].get("role") == "user":
-        prior = messages[-1].get("content")
-        if isinstance(content, list):
-            new_blocks = list(content)
-            if isinstance(prior, list):
-                messages[-1] = {**messages[-1], "content": list(prior) + new_blocks}
-                return
-            prior_text = prior if isinstance(prior, str) else str(prior or "")
-            prefix_block = [{"type": "text", "text": prior_text.rstrip() + "\n\n---\n\n"}] if prior_text else []
-            messages[-1] = {**messages[-1], "content": prefix_block + new_blocks}
-            return
-        text = str(content or "")
-        if isinstance(prior, list):
-            messages[-1] = {
-                **messages[-1],
-                "content": list(prior) + [{"type": "text", "text": "\n\n---\n\n" + text}],
-            }
-            return
+    prior = messages[-1].get("content")
+    if isinstance(prior, list):
+        suffix = list(content) if isinstance(content, list) else [{"type": "text", "text": "\n\n---\n\n" + str(content or "")}]
+        merged = list(prior) + suffix
+    else:
         prior_text = prior if isinstance(prior, str) else str(prior or "")
-        messages[-1] = {
-            **messages[-1],
-            "content": (prior_text.rstrip() + "\n\n---\n\n" + text) if prior_text else text,
-        }
-        return
-    messages.append({"role": "user", "content": content})
+        prefix = prior_text.rstrip() + "\n\n---\n\n" if prior_text else ""
+        merged = (([{"type": "text", "text": prefix}] if prefix else []) + list(content)
+                  if isinstance(content, list) else prefix + str(content or ""))
+    messages[-1] = {**messages[-1], "content": merged}
 
 
 def _owner_marked_content(content: Any) -> Any:
@@ -283,6 +269,16 @@ def _initialize_owner_directives(ctx: Any, messages: List[Dict[str, Any]]) -> No
         return
     metadata = getattr(ctx, "task_metadata", None)
     metadata = metadata if isinstance(metadata, dict) else {}
+    from ouroboros.owner_quiz import late_answer_ref, late_answer_owner_text
+    late = late_answer_ref(metadata.get("late_answer"))
+    answered = ((late or {}).get("answer_snapshot") or {}).get("quiz") or {}
+    if answered.get("presence_contact"):
+        # The named owner ingress carries the host-bound answer snapshot. Keep
+        # its human words as authority; the source-work link in the model's
+        # surrounding frame and the external request are context, not orders.
+        _loop()._record_owner_directive(ctx, source="owner_quiz_answer", content=late_answer_owner_text(answered),
+                                      origin={"source_task_id": late["task_id"]})
+        return
     author = metadata.get("objective_author")
     # A task-drafted objective, or the host's Continue work order (its facts are
     # the host's; the owner's exact words ride ``owner_corpus``).

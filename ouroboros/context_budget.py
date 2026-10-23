@@ -21,6 +21,7 @@ the comments give the approximate token equivalents.
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, Literal, Optional, Tuple
 
@@ -232,6 +233,27 @@ def output_or_body_size_message(text: Any) -> bool:
     return any(marker in low for marker in OUTPUT_OR_BODY_SIZE_MARKERS)
 
 
+# Limit phrases share their parser with recovery. Generic lengths require token
+# units; header/character limits and bare numbers never establish a window.
+_CTX_LIMIT_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"context (?:window|length)\s*(?:of|is)?\s*\(?\s*([0-9][0-9,]*)\s*tokens?\b",
+    r"maximum allowed length\s*\(?\s*([0-9][0-9,]*)\s*tokens?\b",
+    r"maximum (?:input |prompt )?(?:length|tokens?)\s*(?:is|of)?\s*([0-9][0-9,]*)\s*tokens?\b",
+    r"tokens\s*>\s*([0-9][0-9,]*)\s*maximum",
+    r"context limit:\s*[0-9][0-9,]*\s*\+\s*[0-9][0-9,]*\s*>\s*([0-9][0-9,]*)",
+    r"maximum number of tokens allowed\s*\(?\s*([0-9][0-9,]*)",
+))
+
+
+def _parse_ctx_limit_number(text: str) -> int:
+    """Extract a stated context-token limit, or 0 when its units are unknown."""
+    for pattern in _CTX_LIMIT_PATTERNS:
+        match = pattern.search(str(text or ""))
+        if match:
+            return int(match.group(1).replace(",", ""))
+    return 0
+
+
 def context_overflow_message(text: Any) -> bool:
     """True when a provider error message matches the shared overflow markers.
 
@@ -244,7 +266,7 @@ def context_overflow_message(text: Any) -> bool:
     low = str(text or "").lower()
     if output_or_body_size_message(low):
         return False
-    return any(marker in low for marker in CONTEXT_OVERFLOW_MESSAGE_MARKERS)
+    return any(marker in low for marker in CONTEXT_OVERFLOW_MESSAGE_MARKERS) or _parse_ctx_limit_number(low) > 0
 
 MeasurementBasis = Literal["fresh_route_usage", "fresh_model_usage", "cold_estimate"]
 ReclaimStatus = Literal[

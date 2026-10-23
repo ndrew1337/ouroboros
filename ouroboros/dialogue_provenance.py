@@ -28,9 +28,9 @@ def is_presence_task(task: Mapping[str, Any]) -> bool:
 
 # A Presence binding's own work is reached through this scope (owner Q1/Q2).
 PRESENCE_OWN_WORK_SCOPE = "own_binding"
-# The one metadata key a DELEGATED descendant of a Presence-bound task carries:
-# the binding it acts for, never the speaker's ``metadata.presence`` (whose
-# presence arms the forced reply, the parser and the conversation context).
+# Work acting for a binding without speaking: delegated descendants and related
+# roots started by a late owner answer. Never stamp the owner turn itself or copy
+# the speaker's ``metadata.presence`` (which arms the external final and context).
 PRESENCE_BINDING_AUTHORITY_KEY = "presence_binding_authority"
 
 
@@ -38,7 +38,7 @@ def presence_record_binding(record: Any) -> str:
     """The nonempty host binding id one task/queue record carries, else ``""``.
 
     The one reader of both carriers: a speaker's ``metadata.presence`` and the
-    ``metadata.presence_binding_authority`` of work a delegated descendant started.
+    ``metadata.presence_binding_authority`` of related work without a speaker route.
     """
 
     metadata = record.get("metadata") if isinstance(record, Mapping) else None
@@ -67,8 +67,8 @@ def presence_related_work(binding_id: str, record: Any) -> bool:
 def presence_metadata_binding(metadata: Any) -> str | None:
     """``None`` for a non-Presence task's metadata; otherwise the binding it acts for (may be empty).
 
-    A Presence turn, promoted or follow-up root speaks from ``metadata.presence``;
-    a delegated descendant holds only the host-inherited binding authority. A
+    A Presence speaker carries ``metadata.presence``; a descendant or related root
+    without a speaker route holds only the host-inherited binding authority. A
     malformed authority carrier is still a Presence one: it narrows to nothing.
     """
 
@@ -115,7 +115,18 @@ def presence_root_carrier(source: Any, *, task_contract: Any = None) -> dict[str
     presence = source.get("presence") if isinstance(source, Mapping) else None
     if isinstance(presence, Mapping) and presence:
         return {"presence": dict(presence)}
-    return presence_binding_authority_metadata(source, task_contract=task_contract)
+    # A private late answer is an ordinary owner turn. Only work it STARTS
+    # inherits the retained source binding, never the external speaker/final.
+    authority = presence_binding_authority_metadata(source, task_contract=task_contract)
+    if not authority and isinstance(source, Mapping):
+        from ouroboros.owner_quiz import late_answer_ref
+        from ouroboros.presence_owner_contact import private_main_contact
+
+        late = late_answer_ref(source.get("late_answer")) or {}
+        block = _mapping(_mapping(late.get("answer_snapshot")).get("quiz"))
+        if private_main_contact(block, late.get("task_id")):
+            return {PRESENCE_BINDING_AUTHORITY_KEY: {"binding_id": block["presence_contact"]["binding_id"]}}
+    return authority
 
 
 def presence_sender_origin(ctx: Any) -> dict[str, str]:

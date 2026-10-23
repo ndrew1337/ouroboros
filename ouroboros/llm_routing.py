@@ -545,18 +545,6 @@ class _ProviderRoutingMixin:
             self._remote_clients[cache_key] = self._new_remote_client(target)
         return self._remote_clients[cache_key]
 
-    def probe_oversized_context(
-        self, model: str, content: str, *,
-        base_url: str = "", max_output_tokens: int = 8, timeout: float = 20.0,
-        api_key: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        from ouroboros.llm_probe import probe_oversized_context
-
-        return probe_oversized_context(
-            self, model, content, base_url=base_url,
-            max_output_tokens=max_output_tokens, timeout=timeout, api_key=api_key,
-        )
-
     def probe_provider_readiness(
         self,
         model: str,

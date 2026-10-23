@@ -19,7 +19,7 @@ from ouroboros.gateway.claudexor_contracts import (  # noqa: F401 -- public re-e
     ClaudexorStatusResponse,
 )
 from ouroboros.gateway.work_contracts import WorkStateFields
-from ouroboros.gateway.history_contracts import ChatHistoryResponse  # noqa: F401 -- public re-export
+from ouroboros.gateway.history_contracts import ChatHistoryResponse, PresenceContact  # noqa: F401 -- public re-exports
 from ouroboros.gateway.health_contracts import BootDocument, BootJob, BootStep, HealthResponse  # noqa: F401 -- public re-exports
 from ouroboros.gateway.attachment_contracts import (  # noqa: F401 -- public re-exports
     AttachmentManifestEntry, ChatAttachmentInbound, ChatAttachmentView,
@@ -110,6 +110,7 @@ class TransportMetadata(TypedDict, total=False):
 class ChatOutbound(ChatReferenceFields):
     """Outbound WS chat frame."""
 
+    presence_contact: NotRequired[PresenceContact]
     type: Literal["chat"]
     role: Literal["user", "assistant", "system"]
     content: str
@@ -419,6 +420,8 @@ class QuizOutbound(ChatReferenceFields):
     assumption: str
     wait_for_answer: NotRequired[bool]
     state: str
+    wait_ended_at: NotRequired[str]
+    presence_contact: NotRequired[PresenceContact]
     ts: str
     answered_index: NotRequired[int]
     comment: NotRequired[str]

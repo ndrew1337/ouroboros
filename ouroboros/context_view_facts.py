@@ -35,16 +35,41 @@ def wake_facts(plan, mode):
     return f"captured unsealed rooms {len(rooms)}, {chars:,} characters ({share} of story + open rooms); drafts awaiting a decision {drafts}"
 
 
+def window_projection(record):
+    """Pure sourced projection shared by Main, Settings and terminal failures."""
+    from dataclasses import asdict
+
+    limit = record.limiting
+    observed = limit.observed_at if limit else ""
+    source = limit.source if limit else "unknown"
+    labels = {"user_setting": "set in Settings", "owner_ack": "owner confirmation",
+              "provider_metadata": "server metadata", "local_health": "local serving window"}
+    label = labels.get(source, source)
+    dated = f"{label} {observed.replace('T', ' ')[:16]}".strip()
+    if limit:
+        text = f"window {limit.tokens:,} {limit.kind}: {dated}; usable input {record.usable:,}"
+    else:
+        text = "window unknown"
+        if record.accepted:
+            text += f"; accepted input ≥ {record.accepted:,} ({record.accepted_at.replace('T', ' ')[:16]})"
+    text += f"; reply reserve {record.reserve:,}"
+    contradiction = asdict(record.contradicted_by) if record.contradicted_by else None
+    if contradiction:
+        label = labels.get(contradiction["source"], contradiction["source"])
+        text += (f"; {label} says {contradiction['tokens']:,} {contradiction['kind']}"
+                 f" ({contradiction['observed_at'].replace('T', ' ')[:16]})")
+    if record.retired_ack:
+        stamp = str(record.retired_ack.get("ts") or "date unknown").replace("T", " ")[:16]
+        text += f"; old confirmation {record.retired_ack['window_tokens']:,}, {stamp} — not used"
+    return dict(tokens=limit.tokens if limit else None, kind=limit.kind if limit else "unknown",
+                reserve=record.reserve, source=source, observed_at=observed, contradiction=contradiction,
+                retired_ack=record.retired_ack, usable=record.usable, text=text)
+
+
 def window_fact(plan, reserve):
     from ouroboros.context_window import resolve_window
 
     if plan is None:
         return ""
     record = resolve_window(plan, int(reserve or 0), bound=getattr(plan, "window_witness_bound", True))
-    if record.boundary is None:
-        accepted = (f"; accepted input ≥ {record.accepted:,} ({record.accepted_at.replace('T', ' ')[:16]})"
-                    if record.accepted else "")
-        return f"window unknown{accepted}"
-    limit = min((limit for limit in (record.input, record.total) if limit),
-                key=lambda limit: limit.tokens - (record.reserve if limit.kind == "total" else 0))
-    return f"window {limit.tokens:,} {limit.kind}: {record.source}; usable input {record.usable:,}"
+    return window_projection(record)["text"]

@@ -534,8 +534,7 @@ def resolve_context_fit_route(
     actual operation receipts when it rebinds. A manual role window is an owner
     sizing assertion only; it neither changes the provider nor writes a scope ack.
     """
-    from dataclasses import replace
-    from ouroboros.capability_evidence import SOURCE_USER_SETTING, STATUS_ASSERTED, probe
+    from ouroboros.capability_evidence import probe, with_role_window
     from ouroboros.config import DATA_DIR
     from ouroboros.model_slots import MODEL_CONTEXT_WINDOWS_KEY, model_role_option
 
@@ -555,11 +554,7 @@ def resolve_context_fit_route(
         route["window_observation_fp"] = route_observation_scope(route, settings)
     window = int(model_role_option(MODEL_CONTEXT_WINDOWS_KEY, route["model_role"],
                                    settings=settings))
-    if window:
-        evidence = replace(evidence, window_tokens=window, status=STATUS_ASSERTED,
-                           source=SOURCE_USER_SETTING, stale=False,
-                           detail=f"Context for {route['model_role']} asserted by user; provider limit unchanged")
-    return route, evidence
+    return route, with_role_window(evidence, window)
 
 
 def _failed_route_evidence(task: Dict[str, Any]) -> Tuple[Dict[str, Any], Any]:

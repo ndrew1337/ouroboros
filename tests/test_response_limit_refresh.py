@@ -29,6 +29,8 @@ def test_expired_maximum_throttles_failed_catalog_refresh_then_recovers_on_wire(
     route = dict(provider=provider, model=model, base_url=target["base_url"])
     # The independent window acknowledgement must not hide output-limit refreshes.
     ce.record_owner_ack(root, **route, window_tokens=100_000)
+    # Window discovery now runs beside an ack; this test measures the independent output refresh cadence.
+    monkeypatch.setattr(ce, "_provider_metadata_window", lambda *a, **k: (100_000, clock[0].isoformat()))
     state = {"outage": "", "maximum": 4096}
     gets = []
 

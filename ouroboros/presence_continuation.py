@@ -1,9 +1,9 @@
-"""Same-author Presence continuation at a qualified review wait (#1536).
+"""Same-author Presence continuation at a review or private owner-question wait.
 
 A Presence author waiting for a review it left for an addressed message (a commit,
-change or result review, ``review_pause``) keeps its live stack, task, controls and
-paid review, but not its conversation: at the existing review park
-(``owner_wait.wait_after_tools`` with a ``review_binding``) this narrow
+change or result review, ``review_pause``), or its own private Main question, keeps
+its live stack, task, controls and paid review, but not its conversation: at the park
+(``owner_wait.wait_after_tools``) this narrow
 ``review_wait_callback`` qualifies the boundary, persists one source-bound initial
 envelope on the canonical task row and reads it back, adds the turn to the
 conversation projection, publishes that envelope to its Host execution (which returns
@@ -111,7 +111,7 @@ class ReviewWaitBinding:
 
 def bind_review_wait(agent: Any, *, lease: Any, event: Any, task_id: str, identity: str,
                      drive_root: Path) -> None:
-    """Give a Presence agent the narrow review-wait owner; never an owner-wait callback."""
+    """Bind review/private-question parks; never grant the generic owner-wait capability."""
     if lease is None or not callable(getattr(lease, "lend", None)):
         return
     binding = ReviewWaitBinding(lease, Path(drive_root), task_id, identity, event)
@@ -124,6 +124,12 @@ def bind_review_wait(agent: Any, *, lease: Any, event: Any, task_id: str, identi
 def presence_review_wait(binding: ReviewWaitBinding, ctx: Any, checkpoint: dict, messages: list) -> str:
     from ouroboros.owner_wait import direct_owner_wait
 
+    if not checkpoint.get("review_binding"):
+        from ouroboros.owner_quiz import quiz_states
+        from ouroboros.presence_owner_contact import private_main_contact
+        block = quiz_states(binding.drive_root, binding.task_id).get(checkpoint.get("quiz_id")) or {}
+        if not private_main_contact(block, binding.task_id) or checkpoint.get("reason") != "owner":
+            raise ValueError("Presence can park only for its review or private owner question")
     lent = _yield_conversation(binding, ctx, checkpoint)
     try:
         outcome = direct_owner_wait(ctx, checkpoint)
@@ -208,7 +214,7 @@ def _handoff_ref(ctx: Any) -> str:
 
 
 def _yield_conversation(binding: ReviewWaitBinding, ctx: Any, checkpoint: dict) -> bool:
-    """Lend the conversation at a qualified review park; True when it was lent.
+    """Lend the conversation at a qualified review/question park; True when lent.
 
     Order is the guarantee: the conversation projection is written and read back (a
     successor must see this open author), then the canonical row commits the envelope and
@@ -743,7 +749,8 @@ def work_view(stored: Mapping[str, Any], ref: str, drive_root=None) -> tuple[int
     if not isinstance(record, dict) or not isinstance(record.get("initial"), dict):
         return None
     presence = (stored.get("metadata") or {}).get("presence") or {}
-    common = {"ok": True, "work_ref": ref, "continuation_ref": ref, "continuation_version": CONTINUATION_VERSION,
+    common = {"ok": True, "work_ref": ref, "task_id": ref,
+              "continuation_ref": ref, "continuation_version": CONTINUATION_VERSION,
               "child_work_ref": str(record.get("child_work_ref") or record["initial"].get("work_ref") or ""),
               "outputs": [project_output(drive_root, stored.get("metadata") or {}, ref, row)
                           for row in record.get("outputs") or [] if isinstance(row, dict)],

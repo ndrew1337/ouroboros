@@ -458,7 +458,7 @@ def recover_pending_root_post_task_synthesis(
                     release_post_task_synthesis(key)
                 continue
             usage = {"cost": cost_projection(task)["accounted_upper_bound_usd"],
-                     "rounds": int(task.get("total_rounds") or 0),
+                     "rounds": ((task.get("loop_outcome") or {}).get("usage") or {}).get("total_rounds"),
                      "reason_code": str(task.get("reason_code") or ""), "outcome_axes": task.get("outcome_axes") or {}}
             trace = {"tool_calls": [], "reasoning_notes": [str(task.get("trace_summary") or "")],
                      "recovered_post_task_synthesis": True}
@@ -874,6 +874,7 @@ def emit_task_results(
         expected_output=str(task.get("expected_output") or ""), receipts=verification_receipts,
     )
     outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
+    loop_rounds = (loop_outcome.get("usage") or {}).get("total_rounds")
     execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
     # Pre-store carriers state the status observed now, as the outbox stamp does (a later race may differ).
     terminal_status = _durable_terminal_status(env, task, execution_status)
@@ -960,6 +961,7 @@ def emit_task_results(
     pending_events.append({
         "type": "task_metrics",
         "task_id": task.get("id"), "task_type": task.get("type"),
+        "rounds": loop_rounds,
         "outcome_axes": outcome_axes,
         "reason_code": reason_code,
         "duration_sec": duration_sec,
@@ -988,7 +990,7 @@ def emit_task_results(
         # Stop before post-task dispatch forbids paid synthesis, not the free
         # factual row. Record it after durable result write; the structural
         # root predicate deliberately excludes stopped roots from recovery.
-        fact_usage = {**usage, "outcome_axes": outcome_axes, "reason_code": reason_code}
+        fact_usage = {**usage, "rounds": loop_rounds, "outcome_axes": outcome_axes, "reason_code": reason_code}
         if _typed_routing_action:
             fact_usage["typed_routing_action"] = _typed_routing_action
         _record_task_facts(env, task, _pre_synthesis_usage_snapshot(env, task, fact_usage),
@@ -1045,6 +1047,8 @@ def emit_task_results(
 
     if _is_root_post_task(task):
         post_usage = dict(usage or {})
+        # A split root may dispatch on the parent drive before its actor result is copied back.
+        post_usage["rounds"] = loop_rounds
         post_usage["outcome_axes"] = outcome_axes
         post_usage["reason_code"] = reason_code
         if _typed_routing_action:

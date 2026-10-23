@@ -131,7 +131,7 @@ test('inert tool carrier restores a speechless card without invented narration o
         assert.match(f.rows().map(row => row.innerHTML).join(' '), /1 tool call/);
         assert.equal(f.card().querySelector('[data-live-phase]').hidden, true, 'history alone confers no liveness');
         assert.match(f.meta(), /Activity unconfirmed/, 'the hidden chip is replaced by the meta label');
-        assert.match(f.facts(), /<dt>Tool calls<\/dt><dd>1<\/dd>/);
+        assert.match(f.meta(), /1 tool call/);
         assert.equal(f.card().querySelector('[data-resume-run]'), null);
         assert.equal(f.card().querySelector('[data-cancel-run]'), null);
         assert.equal(f.card().querySelector('[data-live-title]').textContent, '');
@@ -150,6 +150,7 @@ test('empty incomplete tool evidence stays visible and never reads as zero calls
         const text = f.rows().map(row => row.innerHTML).join(' ');
         assert.match(text, /Tool history incomplete/);
         assert.doesNotMatch(text, /0 tool calls/);
+        assert.doesNotMatch(f.facts(), /<dt>Tool calls/);
         f.census([{ activity_id: TASK, chat_id: 1, kind: 'managed_task', phase: 'working' }]);
         assert.equal(f.historyReads(), 1, 'census updates never replay tool history');
     } finally { f.close(); }
@@ -392,7 +393,7 @@ test('a direct turn with two successful tools is the task card: ONE evidence row
             'the closed row counts; the tool names wait behind Expand');
         f.emit('chat', { ...final, tool_calls: 2 });
         assert.equal(f.card().dataset.finished, '1');
-        assert.match(f.facts(), /<dt>Tool calls<\/dt><dd>2<\/dd>/);
+        assert.match(f.meta(), /2 tool calls/);
         assert.match(f.meta(), /\$0\.12/);
     } finally { f.close(); }
     const g = fixture([
@@ -410,7 +411,7 @@ test('a direct turn with two successful tools is the task card: ONE evidence row
         // The replay row is the same row: the host's totals reach the same builder.
         assert.equal(g.rows().length, 2);
         assert.ok(g.rows().some((n) => /2 tool calls/.test(n.innerHTML)));
-        assert.match(g.facts(), /<dt>Tool calls<\/dt><dd>2<\/dd>/);
+        assert.match(g.meta(), /2 tool calls/);
     } finally { g.close(); }
 });
 
@@ -917,13 +918,74 @@ test('a timeout and a failure for one call are one error', () => {
 });
 
 test('a recycled card counts no invocation from the cycle before it', () => {
-    const record = {};
+    const record = { rounds: 8, toolCalls: 3 };
     noteToolCall(record, { key: 'a', status: 'ok', receipt: false, tool: 'read_file' });
     noteToolHostMetrics(record, { calls: 3, errors: 1, routing: 0, counts: { read_file: 3 } });
     clearStickyCardState(record);
     assert.equal(record.toolFold, null);
+    assert.equal(record.rounds, null);
     assert.deepEqual([toolEvidenceView(record.toolFold).headline, record.toolCalls, record.toolErrors],
         ['0 tool calls', null, null]);
+});
+
+for (const calls of [undefined, 0]) test(`rounds alone never manufacture tool evidence or a Done card: calls=${calls}`, async () => {
+    const metrics = { rounds: 4, ...(calls === undefined ? {} : { tool_calls: calls }) };
+    const f = fixture();
+    try {
+        f.log({ type: 'llm_round_finished', ...metrics });
+        assert.equal(Boolean(f.card()), false, 'rounds are not a row of tool evidence');
+        f.emit('chat', { ...final, ...metrics });
+        f.log({ type: 'task_done', ...final, status: 'completed', ...metrics });
+        assert.equal(Boolean(f.card()), false, 'a text-only Done leaves no card');
+    } finally { f.close(); }
+    const g = fixture([{ ...final, ...metrics, role: 'system', system_type: 'task_summary', ts: TS }]);
+    try {
+        await g.instance.refreshHistory({ revision: 1 });
+        assert.equal(Boolean(g.card()), false, 'cold text-only Done leaves no card');
+    } finally { g.close(); }
+});
+
+test('known zero stays in Details, missing counts stay absent, and replay cannot lower a current count', () => {
+    const f = fixture();
+    try {
+        f.emit('chat', { task_id: TASK, role: 'assistant', is_progress: true, content: 'Reading the complete source.' });
+        assert.doesNotMatch(f.facts(), /Tool calls|Rounds/);
+        f.log({ type: 'task_metrics_event', tool_calls: 0, rounds: 0 });
+        assert.doesNotMatch(f.meta(), /tool call|round/);
+        assert.match(f.facts(), /<dt>Tool calls<\/dt><dd>0<\/dd>/);
+        assert.match(f.facts(), /<dt>Rounds<\/dt><dd>0/);
+        assert.equal(f.rows().some(n => /0 tool calls/.test(n.innerHTML)), false);
+        f.log({ type: 'task_metrics_event', tool_calls: 31, rounds: 9 });
+        f.log({ type: 'task_metrics_event', tool_calls: 3, rounds: 2, ts: '2026-09-15T11:00:00Z' });
+        f.log({ ...final, type: 'task_done', status: 'completed', tool_calls: 2, rounds: 1 });
+        assert.match(f.meta(), /31 tool calls/);
+        assert.doesNotMatch(f.meta(), /round/);
+        assert.match(f.facts(), /<dt>Rounds<\/dt><dd>9/);
+        assert.doesNotMatch(f.facts(), /<dt>Tool calls/);
+        assert.equal(f.card().querySelector('[data-live-counters]'), null);
+    } finally { f.close(); }
+});
+
+for (const session of [false, true]) test(`a child's counts remain its own, session=${session}`, () => {
+    const f = fixture();
+    try {
+        f.log({ type: 'task_metrics_event', tool_calls: 2, rounds: 1 });
+        f.emit('chat', { role: 'assistant', is_progress: true, content: 'Checking the source.', task_id: 'counter-child',
+            subagent_task_id: 'counter-child', parent_task_id: TASK, root_task_id: TASK,
+            delegation_role: 'subagent', subagent_role: 'Reviewer', subagent_event: 'progress',
+            model: 'coordinator', ...(session ? { executor_route: 'claude' } : {}) });
+        f.log({ type: 'task_metrics_event', task_id: 'counter-child', tool_calls: 31, rounds: 9 });
+        assert.match(f.meta(), /2 tool calls/);
+        assert.doesNotMatch(f.meta(), /31 tool calls/);
+        if (session) {
+            assert.doesNotMatch(f.meta('counter-child'), /tool call|round/);
+            assert.match(f.facts('counter-child'), /<dt>Supervision<\/dt><dd>9 rounds · 31 tool calls/);
+            assert.doesNotMatch(f.facts('counter-child'), /<dt>Tool calls|<dt>Rounds/);
+        } else {
+            assert.match(f.meta('counter-child'), /31 tool calls/);
+            assert.match(f.facts('counter-child'), /<dt>Rounds<\/dt><dd>9/);
+        }
+    } finally { f.close(); }
 });
 
 // Stationary row (owner decision): the evidence stays at the first call's place
@@ -1031,7 +1093,7 @@ test('a child folds its own live calls and host counters', () => {
         f.log({ type: 'task_metrics_event', task_id: CHILD, tool_calls: 5, tool_errors: 0,
             tool_call_counts: { read_file: 5 } });
         assert.equal(folded().length, 1, 'host counters update the same folded row');
-        assert.match(f.facts(CHILD), /<dt>Tool calls<\/dt><dd>5<\/dd>/);
+        assert.match(f.meta(CHILD), /5 tool calls/);
     } finally { f.close(); }
 });
 

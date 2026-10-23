@@ -218,9 +218,8 @@ def test_cold_metadata_is_unknown_not_healthy(metadata_engine, tmp_path, operati
     _, calls, clients, _, config_dir = metadata_engine
     if operation == "capability":
         evidence = ce.probe(tmp_path / "evidence", provider="claudexor",
-            model="claudexor::codex=exact-model", allow_fetch=True, allow_generative=False)
+            model="claudexor::codex=exact-model", allow_fetch=True)
         assert evidence.status == ce.STATUS_FAILED and evidence.window_tokens == 0
-        assert not ce.confirms_at_least(evidence)
     else:
         with pytest.raises(ClaudexorUnavailable) as caught:
             if operation == "sources":

@@ -269,9 +269,32 @@
  */
 
 /**
+ * Host-retained source of a private Main contact; external context, never owner authority.
+ * @typedef {Object} PresenceContact
+ * @property {string} task_id
+ * @property {string} binding_id
+ * @property {string} source_event_id
+ * @property {string} label
+ * @property {string} conversation_key
+ * @property {string=} transport_skill
+ * @property {string=} behavior_skill
+ * @property {string=} profile_fingerprint
+ * @property {string=} state_fingerprint
+ * @property {string=} selection_fingerprint
+ * @property {string=} provider
+ * @property {string=} account_id
+ * @property {string=} conversation_id
+ * @property {string=} thread_id
+ * @property {string=} actor_id
+ * @property {string=} place_id
+ * @property {string=} url
+ */
+
+/**
  * The question card of a `msg_type: "quiz"` history row (the question itself is the row's `text`).
  * `state`: open | answered | closed | expired_terminal | superseded, merged at read time.
  * @typedef {Object} ChatHistoryQuiz
+ * @property {PresenceContact=} presence_contact
  * @property {string} quiz_id
  * @property {Object[]=} options  // QuizOption rows {label, detail?, recommended?}
  * @property {string=} stake
@@ -301,6 +324,8 @@
  * task-progress and outcome fields of a live `chat` frame (`ChatOutbound`). Replay-evidence rows
  * (`quiz_answer`, `quiz_closed`, `task_evidence`, or `summary_kind` + `historical_terminal`) are never shown.
  * @typedef {Object} ChatHistoryMessage
+ * @property {PresenceContact=} presence_contact
+ * @property {string=} wait_ended_at
  * @property {string=} row_address
  * @property {Object=} reply_to
  * @property {Object=} relay

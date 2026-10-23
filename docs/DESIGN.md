@@ -1453,8 +1453,9 @@ Anatomy, top to bottom:
 1. **Head** — one 28px row in every room: neutral `Question` chip (`--type-meta`,
    neutral pair), the status beside it as a 7 px status mark + text, amber while
    the task waits for the answer. The row never wraps (a narrow card's long status
-   takes two lines in place). The voice line above names who asks and a Main copy's
-   Project. The lifecycle word family is closed and leads with the one
+   takes two lines in place). The voice line names who asks and a Main copy's
+   Project; private Presence questions and reports add the linked place/thread
+   source beside the name, outside authored text. The lifecycle family leads with the one
    word that answers "is there an unanswered question for me?":
    `Waiting for your answer` needs positive wait evidence (the task's live wait
    record, or the original required flag before any record exists); a resumed
@@ -1559,7 +1560,7 @@ Expanded ordinary cards disclose earlier Files, timeline, Reviews and children
 in collapsible sections using their original content, never duplicate cards.
 A Project portal still reaches that content through its room.
 
-**Project completion mirror.** Eligible managed/transferred Project finals reach Main as Markdown in Ouroboros's voice, host-stamped only for a model-authored final, so the browser never infers authorship; ordinary Project-native replies stay local. A long answer folds to about seven lines of complete selectable text, faded only where text is hidden; folded text has no keyboard stops. The Project reference below opens the complete answer and its delivered documents; Main has no in-place expansion or Files inventory. A nonclean final carries one compact factual limitation from the recorded outcome and review beside the answer, wrapping legibly at narrow widths; a clean final has no status caption. Copy and Reply quote the answer alone. Ordinary document readers, quiz materials and task-card Files stay on their existing surfaces; retained availability is not delivery or owner receipt. Full reviews, logs and progress stay in their sources. Durable rows/wire frames keep System metadata and text; Reply uses the persisted visible answer without changing its address. Telegram status replies reference the work instead. Endings without an authored answer keep System voice: Main shows the work's name and true outcome, its cause, accessible recorded details and any labelled preserved output. The Project is named once by its reference; Copy, canonical history and Telegram retain full context. Older rows without these typed facts keep their stored text. A quiet scheduled run (it finished without a message) keeps its internal result and a terse `Done · no message` row in its own room; it creates no Main completion summary and sends no finish notification, while a host notice it carries stays visible. One logical identity joins retries/history and keeps one-ending-one-notification; external transport stays at-least-once.
+**Project completion mirror.** Eligible managed/transferred model-authored finals reach Main as host-stamped Markdown in Ouroboros's voice; ordinary Project-native replies stay local. Long answers keep a seven-line footprint; only painted fading text extends two lines into footer whitespace, without moving Project/time/actions. Short answers have no fade; limitations/details keep the tail above their words. Complete text stays selectable; folded text has no keyboard stops. Project opens the complete answer and delivered documents; Main has no expansion or Files inventory. A nonclean final has one compact, wrapping limitation from the recorded outcome/review; a clean final has no status caption. Copy and Reply quote the answer alone. Ordinary document readers, quiz materials and task-card Files stay on their existing surfaces; retained availability is not delivery or owner receipt. Full reviews, logs and progress stay in their sources. Durable rows/wire frames keep System metadata and text; Reply uses the persisted visible answer without changing its address. Telegram status replies reference the work instead. Endings without an authored answer keep System voice: Main shows the work's name and true outcome, its cause, accessible recorded details and any labelled preserved output. The Project is named once by its reference; Copy, canonical history and Telegram retain full context. Older rows without these typed facts keep their stored text. A quiet scheduled run (it finished without a message) keeps its internal result and a terse `Done · no message` row in its own room; it creates no Main completion summary and sends no finish notification, while a host notice it carries stays visible. One logical identity joins retries/history and keeps one-ending-one-notification; external transport stays at-least-once.
 
 History with no current execution or known outcome keeps its expandable content under `Outcome unavailable`, without a task chip, typing or Stop. Before complete live-source reconciliation, it is `Activity unconfirmed`. Positive current activity restores only its proven controls. A delivery warning may coexist with a preserved result-review PASS. Model metadata says `Last solve response`, naming the initial request only when the route changed.
 
@@ -1900,29 +1901,28 @@ before the observed cursor states unresolved coverage. Live, reconnect and repla
 use the same projection. Telegram reserves room for problems and incompleteness
 beside its disclosed speech preview and keeps the complete task reference.
 
-The block's chrome follows the work it stands on
-(`web/modules/chat.js::blockHasWork`, the presence facts minus open attention
-and a bare terminal outcome), never the lane that ran the turn (owner decision
-16.09: real work is a task card, a greeting is nothing). A block with work (a
-review group, a child card, an evidence or narration row, a tool error) is the
-task card, whether a managed root or a direct conversation turn produced it: a
-title (the coined name or the latest narration headline; a finished card with
-neither reads `Task activity`, a running one stays untitled because its chip
-already says Working), the status chip, Stop while the host attests it, and
-`Turn into project` in Main unless its origin is already bound (a direct turn's
-later rows then route to the Project room like a work that called
-`move_to_project`); its meta line and one action row ([Reply] first, then Turn
-into project, Resume, Stop…, one primary) form its foot. A nested child card is
-work inside its root's block, never a block of its own: it carries neither
-control, and its root's conversion converts the whole work. A block that exists
-only for open attention (a model wait, a pending or host-offered Stop) or only
-for a non-Done ending of a turn that did no work carries no title placeholder
-and no conversion; its chip says its state (Waiting…, Cancelling…, Failed), the
-wait controls stay, and its first row of work gives it the title. The compact
-meta line says who ran the work on what (a root: the
-observed solve model, else its agent model), duration, cost, exceptions and, while
-it runs, `updated` from its own narration. Tool calls, model provenance, origin
-and a finished card's update time are labelled rows of its details. Money
+`web/modules/chat.js::blockHasWork` governs chrome from work, excluding open
+attention and a bare outcome (owner 16.09: real work is a card, a greeting is
+nothing). Reviews, children, evidence, narration or tool errors give managed
+roots and direct turns the same card: a coined name or narration headline
+(`Task activity` when finished without either; untitled while Working), status,
+host-attested Stop, and `Turn into project` in Main unless already bound. Bound
+direct turns route later rows to their Project like `move_to_project`. The foot
+holds metadata and one action row: [Reply], Turn into project, Resume, Stop…,
+one primary. Nested children stay inside their root, carry neither root control,
+and convert with it. Attention-only blocks and non-Done endings without work
+have their status and wait controls, no title placeholder or conversion; the
+first work row adds the title.
+
+The compact meta line names executor/model (roots: observed solve model, else
+agent model), duration, cost, exceptions and running narration's `updated`.
+One positive task-local tool-call count joins that line and remains after Done
+(owner 22.10, A). Helpers are not aggregated. Rounds (usable solve responses)
+and known zero calls stay in Details; missing counts stay absent. For footer
+and Details counters, session nanny counts appear only in `Supervision`,
+separate from unreported executor counts. Portals keep one count.
+Neither rounds nor zero calls create work or a second footer row. Model
+provenance, origin and a finished card's update time stay in Details. Money
 there is ONE line whose wording carries its openness and never renders an
 unknown as a number: `$0.00` only where priced rows evidenced that zero,
 `up to $1.20` while the tracked subtotal is inexact, `Tracked: $1.20` when part
@@ -2170,12 +2170,12 @@ from Main remains visibly inherited while its account can be pinned
 independently. Fallbacks use the same row in their saved order, with adjacent
 move/remove controls and the group's Add action.
 
-Context details distinguish the exact route's advertised Auto window from a
-manual value labelled "set by you". Changing an account withdraws the previous
-account's metadata immediately, including during a failed or pending catalog
-read. Unknown limits stay unknown. Catalog updates keep the edited field and
-caret in place and never assign a model. `model_roles.js` and `model_roles.css`
-own the shared Settings/wizard editor.
+Context details show the server-built sourced window line: "set in Settings"
+labels a manual value; the Clear confirmation button removes the route acknowledgement.
+Account changes withdraw old metadata during pending or failed catalog reads.
+Unknown stays unknown. Catalog updates preserve the edited field and caret
+without assigning a model. `model_roles.js` and `model_roles.css` own the shared
+Settings/wizard editor.
 
 A source is chosen, never spelled. Every surface that assigns a model — the
 Models roles, Available subagents (reviewers included), the first-run wizard and

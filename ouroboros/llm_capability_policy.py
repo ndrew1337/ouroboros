@@ -115,6 +115,7 @@ class _CapabilityPolicyMixin:
 
     # OpenRouter-reported context window per model id (provider_metadata evidence).
     _CONTEXT_LENGTH_CACHE: Dict[str, int] = {}
+    _CONTEXT_LENGTH_OBSERVED_AT: str = ""
 
     _REJECTED_PARAMS_CACHE: Dict[str, Set[str]] = {}
 
@@ -147,6 +148,7 @@ class _CapabilityPolicyMixin:
                 [(m.get("id"), (m.get("top_provider") or {}).get("max_completion_tokens")) for m in rows],
                 provider="openrouter", base_url="https://openrouter.ai/api/v1",
                 field="top_provider.max_completion_tokens", source="OpenRouter")
+            context_lengths = {}
             for m in rows:
                 mid = m.get("id") or ""
                 sp = m.get("supported_parameters")
@@ -155,7 +157,9 @@ class _CapabilityPolicyMixin:
                 # Context window (provider_metadata Capability Evidence source).
                 cl = m.get("context_length")
                 if mid and isinstance(cl, (int, float)) and cl > 0:
-                    cls._CONTEXT_LENGTH_CACHE[mid] = int(cl)
+                    context_lengths[mid] = int(cl)
+            from ouroboros.utils import utc_now_iso
+            cls._CONTEXT_LENGTH_CACHE, cls._CONTEXT_LENGTH_OBSERVED_AT = context_lengths, utc_now_iso()
             # Image input is a fact about this exact route: one parser, stored
             # under the OpenRouter route scope with this response's time, so any
             # process (a worker, a cold VLM child) reads it without a fetch.
@@ -184,19 +188,13 @@ class _CapabilityPolicyMixin:
 
     @classmethod
     def openrouter_context_length(cls, model_id: str, *, allow_fetch: bool = True) -> int:
-        """OpenRouter-reported context window (tokens) for a model id, else 0.
+        """Read the catalog, refreshing expired evidence only when fetching is allowed."""
+        from ouroboros.capability_evidence import _age_seconds, _CONFIRMED_TTL_SEC
 
-        provider_metadata Capability Evidence source. A successful /models fetch is
-        cached and not repeated; pass allow_fetch=False to read only the existing
-        cache (so a hot path never triggers a blocking /models call). On the
-        capability-probe path (allow_fetch=True) a RE-fetch is allowed when the
-        last fetch FAILED or the requested model is absent from the cache — so a
-        transient outage isn't poisoned one-shot and a model picked while the
-        provider is unreachable is correctly seen as a transport failure (and
-        surfaced as a no-connection error), not silently 'unprobeable' (v6.33.0)."""
         mid = str(model_id or "")
         needs_fetch = (not cls._SUPPORTED_PARAMS_FETCHED) or (
-            allow_fetch and (not cls._CAPABILITIES_FETCH_OK or mid not in cls._CONTEXT_LENGTH_CACHE)
+            allow_fetch and (not cls._CAPABILITIES_FETCH_OK or mid not in cls._CONTEXT_LENGTH_CACHE
+                            or _age_seconds(cls._CONTEXT_LENGTH_OBSERVED_AT) > _CONFIRMED_TTL_SEC)
         )
         if allow_fetch and needs_fetch:
             cls._fetch_openrouter_capabilities()

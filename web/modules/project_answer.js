@@ -29,23 +29,32 @@ export function appendProjectRow(addMessage, msg, text, opts) {
     });
 }
 
-// The fade says "there is more": it appears only when the fold really hides text. The clamp
-// itself is unconditional CSS, so measuring the fade never moves layout. A row mounted while
-// Chat is not the visible page has no layout box (clientHeight 0): it is left alone and
+// The fade says "there is more": compare with the seven-line footprint, never the extended
+// painted box. Otherwise answers between seven and nine lines alternate on every refresh.
+// A row mounted while Chat is not the visible page has no layout box (clientHeight 0): it is left alone and
 // measured when Chat is shown; a resize re-measures, because the width decides the height.
 export function refreshProjectAnswerFold(bubble) {
     const seen = measureFold(bubble);
-    if (seen) applyFold(seen);
+    if (seen) applyFolds([seen]);
 }
 function measureFold(bubble) {
     if (!bubble?.classList.contains('project-answer')) return null;
     const message = bubble.querySelector('.message');
     if (!message || !message.clientHeight) return null;
-    return { bubble, message, folded: message.scrollHeight > message.clientHeight + 1 };
+    const style = getComputedStyle(message);
+    const fold = parseFloat(style.lineHeight) * parseFloat(style.getPropertyValue('--project-answer-lines'));
+    return { bubble, message, fold, folded: message.scrollHeight > fold + 1 };
 }
-function applyFold({ bubble, message, folded }) {
-    bubble.classList.toggle('is-folded', folded);
-    syncFold(bubble, message, folded);
+function applyFolds(rows) {
+    for (const { bubble, message, folded } of rows) {
+        bubble.classList.toggle('is-folded', folded);
+        syncFold(bubble, message, folded);
+    }
+    // Compensate only the actual extension: a 180px answer borrows 12px, not the full
+    // 48px tail. Read all heights before writing margins; no intermediate frame is painted.
+    const tails = rows.map(({ message, fold, folded }) => folded
+        ? Math.max(0, parseFloat(getComputedStyle(message).height) - fold) : 0);
+    rows.forEach(({ message }, index) => { message.style.setProperty('--project-answer-compensation', `${-tails[index]}px`); });
 }
 
 // Folded text offers no keyboard stops (pointer clicks still reach visible links): the Project
@@ -82,7 +91,7 @@ function refreshFoldsSoon() {
         // would lay it out alone. The rest are measured together, then marked together: one layout serves them all.
         const due = [...document.querySelectorAll('.chat-bubble.project-answer')]
             .filter((bubble) => !bubble.closest('[data-resizing], [data-laid]'));
-        due.map(measureFold).filter(Boolean).forEach(applyFold);
+        applyFolds(due.map(measureFold).filter(Boolean));
     }));
 }
 function watchFolds() {

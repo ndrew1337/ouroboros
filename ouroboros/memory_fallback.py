@@ -128,7 +128,7 @@ def _light_fit(binding: Mapping[str, Any]) -> Tuple[Optional[int], Callable[[str
     unknown window is no fitting at all (a provider refusal by size is a receipt).
     """
     try:
-        from ouroboros.capability_evidence import is_known
+        from ouroboros.context_window import resolve_window
         from ouroboros.context_fit import (_route_calibration_ratio, estimate_context_prompt_tokens,
                                            resolve_context_fit_route)
         from ouroboros.provider_models import provider_for_model
@@ -138,13 +138,14 @@ def _light_fit(binding: Mapping[str, Any]) -> Tuple[Optional[int], Callable[[str
         route, evidence = resolve_context_fit_route(
             task, allow_fetch=bool(binding["use_local"]) or provider_for_model(binding["model"]) == "claudexor")
         density = _route_calibration_ratio(None, evidence.route_fp, route["model"])
-        window = int(evidence.window_tokens) if is_known(evidence, require_fresh=True) else None
         from ouroboros.response_limits import ResponseLimit
         reserve = ResponseLimit(**(getattr(evidence, "response_limit", {}) or {})).ceiling(ANSWER_RESERVE_TOKENS)
         if binding["use_local"]:
             from ouroboros.llm_local import local_context_limits
 
             _local_window, reserve = local_context_limits(reserve)
+        scope = route.get("window_observation_fp") or evidence.route_fp
+        window = resolve_window(evidence, reserve, observation_fp=scope, bound=bool(scope))
     except Exception:
         log.debug("fallback writer: Light window unknown", exc_info=True)
         return None, _chars_measure
@@ -153,7 +154,7 @@ def _light_fit(binding: Mapping[str, Any]) -> Tuple[Optional[int], Callable[[str
         return ceil(estimate_context_prompt_tokens([{"role": "user", "content": text}], None,
                                                   provider=route["provider"], reasoning_effort="low") * density)
 
-    return (window - reserve if window else None), measure
+    return window.usable, measure
 
 
 # --- which unit ------------------------------------------------------------------------------------

@@ -46,7 +46,7 @@ from ouroboros.utils import (
     read_json_dict,
     utc_now_iso,
 )
-from ouroboros.config import runtime_setting
+from ouroboros.context_budget import _parse_ctx_limit_number  # noqa: F401 — shared overflow parser
 
 log = logging.getLogger(__name__)
 
@@ -64,26 +64,8 @@ SOURCE_PROVIDER_METADATA = "provider_metadata"
 SOURCE_LOCAL_HEALTH = "local_health"
 SOURCE_OWNER_ACK = "owner_ack"
 SOURCE_USER_SETTING = "user_setting"
-SOURCE_GENERATIVE_PROBE = "generative_probe"
 SOURCE_NONE = "none"
 
-# Context-overflow rejections carry the model's limit in the human-readable message
-# (NOT the `code` field, which varies: context_length_exceeded / invalid_request_error /
-# 400 / 1261). Parse the number from the text across the known provider phrasings.
-_CTX_LIMIT_PATTERNS: Tuple[re.Pattern[str], ...] = (
-    re.compile(r"maximum context length is\s*([0-9][0-9,]*)", re.I),
-    re.compile(r"context length is\s*([0-9][0-9,]*)", re.I),
-    re.compile(r"longer than the model's context length\s*\(?\s*([0-9][0-9,]*)", re.I),
-    re.compile(r"maximum allowed length\s*\(?\s*([0-9][0-9,]*)", re.I),
-    re.compile(r"context (?:window|length)\s*(?:of|is)?\s*([0-9][0-9,]*)\s*tokens", re.I),
-    re.compile(r"maximum (?:input |prompt )?(?:length|tokens?)\s*(?:is|of)?\s*([0-9][0-9,]*)", re.I),
-    # Anthropic ("prompt is too long: 215000 tokens > 200000 maximum"; "input length and `max_tokens` exceed
-    # context limit: 190000 + 65536 > 200000") and Gemini ("... exceeds the maximum number of tokens allowed
-    # (1048576)") state the limit after the size.
-    re.compile(r"tokens\s*>\s*([0-9][0-9,]*)\s*maximum", re.I),
-    re.compile(r"context limit:\s*[0-9][0-9,]*\s*\+\s*[0-9][0-9,]*\s*>\s*([0-9][0-9,]*)", re.I),
-    re.compile(r"maximum number of tokens allowed\s*\(?\s*([0-9][0-9,]*)", re.I),
-)
 #: The refused request's whole input where the provider states it beside the limit: OpenAI ("your messages
 #: resulted in N tokens"), Anthropic ("prompt is too long: N tokens", "context limit: N + R") and Gemini
 #: ("input token count (N)").
@@ -91,6 +73,8 @@ _CTX_INPUT_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"resulted in\s*([0-9][0-9,]*)\s*tokens", re.I),
     re.compile(r"prompt is too long:\s*([0-9][0-9,]*)\s*tokens", re.I),
     re.compile(r"context limit:\s*([0-9][0-9,]*)\s*\+", re.I),
+    re.compile(r"(?:input length|the input)\s*\(\s*([0-9][0-9,]*)\s*tokens?\b", re.I),
+    re.compile(r"([0-9][0-9,]*)\s*tokens? from the input messages", re.I),
     re.compile(r"input token count\s*\(?\s*([0-9][0-9,]*)", re.I),
 )
 #: Shares of the input where only the parts are stated: OpenAI's messages and functions (tool definitions),
@@ -98,11 +82,12 @@ _CTX_INPUT_PATTERNS: Tuple[re.Pattern[str], ...] = (
 _CTX_INPUT_PART = re.compile(r"([0-9][0-9,]*)\s*(?:of [a-z]+ input|in the (?:messages|functions))", re.I)
 #: The reply the refused request reserved ("R in the completion" / "in the output", Anthropic's "+ R").
 _CTX_REPLY_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    re.compile(r"([0-9][0-9,]*)\s*tokens? for the completion", re.I),
     re.compile(r"([0-9][0-9,]*)\s*in the (?:completion|output)", re.I),
     re.compile(r"context limit:\s*[0-9][0-9,]*\s*\+\s*([0-9][0-9,]*)", re.I),
 )
 #: OpenAI's and OpenRouter's "you requested (about) N tokens" is a total: the input plus that reserved reply.
-_CTX_TOTAL_PATTERN = re.compile(r"you requested (?:about\s*)?([0-9][0-9,]*)\s*tokens", re.I)
+_CTX_TOTAL_PATTERN = re.compile(r"you requested (?:(?:about|a total of)\s*)?([0-9][0-9,]*)\s*tokens", re.I)
 
 
 def gateway_double_counted_cache(prompt_tokens: int, cached_tokens: int) -> bool:
@@ -137,61 +122,10 @@ def _parse_ctx_requested(text: str) -> Tuple[int, int, int]:
     return stated, reply, total
 
 
-def _parse_ctx_limit_number(text: str) -> int:
-    """Extract the model's context-token limit from an overflow error message, or 0."""
-    for pat in _CTX_LIMIT_PATTERNS:
-        m = pat.search(str(text or ""))
-        if m:
-            try:
-                return int(m.group(1).replace(",", ""))
-            except (ValueError, TypeError):
-                continue
-    return 0
-
-
-def classify_generative_probe_response(
-    status_code: Optional[int],
-    body_text: str,
-    *,
-    canaries: Optional[List[str]] = None,
-    echoed_text: str = "",
-    usage_prompt_tokens: int = 0,
-    sent_token_estimate: int = 0,
-) -> Tuple[int, str, str]:
-    """Pure (no-network) classifier for a generative context-window probe response.
-
-    Free-only policy (owner Q1): confirm a window ONLY from a FREE pre-inference
-    reject that states the limit; a genuine 200 (the model ACCEPTED — and would bill —
-    the oversized input) never auto-confirms >=1M, it routes to owner-ack.
-    Returns ``(window_tokens, status, detail)``.
-    """
-    # 4xx: pre-inference reject (free). Parse the limit NUMBER from the text.
-    if isinstance(status_code, int) and 400 <= status_code < 500:
-        n = _parse_ctx_limit_number(body_text)
-        if n > 0:
-            return n, STATUS_CONFIRMED, f"generative overflow reject: max {n} tokens"
-        # e.g. Zhipu code 1261 (no number) or a 413 size reject -> cannot size it.
-        return 0, STATUS_UNPROBEABLE, "overflow reject without a parseable limit; owner-ack required"
-    # 200: the oversized input was ACCEPTED. Under free-only this is a possibly-PAID
-    # accept and must NOT confirm >=1M (owner chose owner-ack). Truncation guard is
-    # recorded for forensics but does not change the owner-ack outcome.
-    if status_code == 200:
-        cs = canaries or []
-        echoed_ok = bool(cs) and all(c in (echoed_text or "") for c in cs)
-        usage_ok = sent_token_estimate > 0 and usage_prompt_tokens >= int(0.95 * sent_token_estimate)
-        detail = "oversized input accepted (200); free-only policy -> owner-ack"
-        if not (echoed_ok and usage_ok):
-            detail = "oversized input 200 but truncation suspected (canaries/usage); owner-ack"
-        return 0, STATUS_UNPROBEABLE, detail
-    # transport / 5xx / timeout / unknown -> transient failure (short TTL, retried).
-    return 0, STATUS_FAILED, f"generative probe transport/server error (status={status_code})"
-
 _KNOWN_STATUS = {STATUS_CONFIRMED, STATUS_ASSERTED}
 
 _CONFIRMED_TTL_SEC = 24 * 3600
 _FAILED_TTL_SEC = 10 * 60
-
-ONE_MILLION = 1_000_000
 
 
 @dataclass
@@ -213,6 +147,8 @@ class CapabilityEvidence:
     route_facts: Dict[str, Any] = field(default_factory=dict)
 
     window_kind: str = "total"  # metadata may explicitly state an input-only limit
+    retired_ack: Dict[str, Any] = field(default_factory=dict)
+    server_window: Dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> Dict[str, Any]:
         return {**asdict(self), "window_tokens": int(self.window_tokens or 0), "stale": bool(self.stale)}
@@ -236,31 +172,6 @@ def is_known(evidence: Any, *, require_fresh: bool = False) -> bool:
         str(getattr(evidence, "status", "") or "") in _KNOWN_STATUS
         and int(getattr(evidence, "window_tokens", 0) or 0) > 0
         and not (require_fresh and bool(getattr(evidence, "stale", False)))
-    )
-
-
-def confirms_at_least(
-    evidence: Any, threshold: int = ONE_MILLION, *, require_fresh: bool = False,
-) -> bool:
-    """True only when KNOWN evidence meets the threshold.
-
-    unprobeable / failed / None / below-threshold all fail closed.
-
-    ``require_fresh`` picks the caller's freshness policy EXPLICITLY, because the two
-    directions carry opposite risk and the choice must be visible at the call site:
-
-    * a gate that AUTHORIZES on the evidence (blocking scope-review authority, BIBLE
-      P3) passes ``require_fresh=True`` — an expired or outage-carried window is a
-      dated impression, not the sourced Capability Evidence the floor turns on;
-    * a gate that would DOWNGRADE the owner's own cognitive horizon on a provider blip
-      keeps the default ``False`` — this module's standing invariant is that an outage
-      must never erase a prior confirmed record (P4/P1)."""
-    # A role's ordinary sizing override is not the route-bound acknowledgement
-    # that a governance gate asks the owner to make through its dedicated path.
-    return (
-        getattr(evidence, "source", "") != SOURCE_USER_SETTING
-        and is_known(evidence, require_fresh=require_fresh)
-        and int(getattr(evidence, "window_tokens", 0) or 0) >= int(threshold)
     )
 
 
@@ -931,8 +842,16 @@ def record_owner_ack(
     return record
 
 
+def retired_owner_ack(record: Any) -> bool:
+    """Retire only the fixed 1M acknowledgements from the removed dialogs."""
+    return isinstance(record, dict) and record.get("window_tokens") == 1_000_000 and record.get("note") in {
+        "owner-confirmed via settings save", "owner-confirmed via context-mode toggle",
+        "owner-confirmed scope reviewer window",
+    }
+
+
 def list_owner_acks(drive_root: Any) -> List[Dict[str, Any]]:
-    return list(_load(drive_root).get("owner_acks", {}).values())
+    return [{**row, "retired": retired_owner_ack(row)} for row in _load(drive_root).get("owner_acks", {}).values()]
 
 
 def revoke_owner_ack(drive_root: Any, route_fp: str) -> bool:
@@ -1093,16 +1012,17 @@ def _openai_compatible_metadata_window(
 
 def _provider_metadata_window(
     provider: str, model: str, base_url: str, allow_fetch: bool, api_key: Optional[str] = None
-) -> int:
-    """Best-effort live window from provider metadata. 0 = no metadata source."""
+) -> Tuple[int, str]:
+    """Provider window and its observation time; cached facts keep their original date."""
     p = str(provider or "").strip().lower()
     # OpenRouter publishes context_length in /models (one cached fetch).
     if "openrouter" in p or (not p and "/" in str(model or "")):
         try:
             from ouroboros.llm import LLMClient
-            return int(LLMClient.openrouter_context_length(model, allow_fetch=allow_fetch) or 0)
+            window = LLMClient.openrouter_context_length(model, allow_fetch=allow_fetch)
+            return int(window or 0), LLMClient._CONTEXT_LENGTH_OBSERVED_AT
         except Exception:
-            return 0
+            return 0, ""
     # CW6: OpenAI-compatible /models probe (vLLM/Ollama/...) before falling to unprobeable.
     if p in {"openai-compatible", "minimax"}:
         if p == "minimax" and api_key is None:
@@ -1111,10 +1031,11 @@ def _provider_metadata_window(
                 api_key = str((runtime_settings() or {}).get("MINIMAX_API_KEY") or "")
             except Exception:
                 api_key = ""
-        return _openai_compatible_metadata_window(model, base_url, allow_fetch, api_key=api_key, provider=p)
+        window = _openai_compatible_metadata_window(model, base_url, allow_fetch, api_key=api_key, provider=p)
+        return window, utc_now_iso() if window else ""
     # GigaChat's /models (aget_models) lists model ids but does NOT publish a per-model
     # context window, so a gigachat route stays unprobeable (owner-ack path) — no probe.
-    return 0
+    return 0, ""
 
 
 def _local_health_window(model: str) -> int:
@@ -1146,56 +1067,6 @@ def _metadata_fetch_transport_failed(provider: str, model: str, use_local: bool)
         return False
 
 
-_GENERATIVE_PROBE_PROVIDERS = {"cloudru", "openai-compatible", "minimax", "openai", "openrouter"}
-_PROBE_CANARIES = ["OBOCANARYBEGIN7Q", "OBOCANARYMID7Q", "OBOCANARYEND7Q"]
-
-
-def _generative_probe_enabled() -> bool:
-    return (runtime_setting("OUROBOROS_GENERATIVE_PROBE", "1") or "").strip().lower() not in {"", "0", "false", "no", "off"}
-
-
-def _generative_probe_pad_chars() -> int:
-    try:
-        return max(200_000, int(runtime_setting("OUROBOROS_GENERATIVE_PROBE_CHARS", "5000000") or "5000000"))
-    except (ValueError, TypeError):
-        return 5_000_000
-
-
-def _generative_probe_window(
-    provider: str, model: str, base_url: str = "", api_key: Optional[str] = None,
-) -> Tuple[int, str, str]:
-    """Empirically size a route's window with ONE oversized request, free-only.
-
-    Sends a deliberately over-window input on an OpenAI-compatible route; the
-    provider rejects it PRE-inference (free) with the limit in the message. Never
-    raises — any setup/transport error returns FAILED (-> fail-closed owner-ack).
-    """
-    if not _generative_probe_enabled() or provider not in _GENERATIVE_PROBE_PROVIDERS:
-        return 0, STATUS_UNPROBEABLE, "generative probe not applicable/enabled for this route"
-    pad = _generative_probe_pad_chars()
-    chunk = "x " * (pad // 4)
-    content = f"{_PROBE_CANARIES[0]} {chunk} {_PROBE_CANARIES[1]} {chunk} {_PROBE_CANARIES[2]} Echo the three OBOCANARY tokens verbatim."
-    sent_estimate = max(1, len(content) // 4)
-    # Transport lives in the shared LLMClient seam (DEVELOPMENT.md): it owns route
-    # resolution, the per-provider token key, the hard timeout, and never-raises. This
-    # module only CLASSIFIES the raw outcome into window evidence (fail-closed).
-    try:
-        from ouroboros.llm import LLMClient
-
-        out = LLMClient().probe_oversized_context(model, content, base_url=base_url, api_key=api_key)
-    except Exception as exc:  # pragma: no cover - defensive
-        return 0, STATUS_FAILED, f"generative probe failed: {type(exc).__name__}"
-    if out.get("ok"):
-        return classify_generative_probe_response(
-            200, "", canaries=_PROBE_CANARIES, echoed_text=str(out.get("echoed_text") or ""),
-            usage_prompt_tokens=int(out.get("usage_prompt") or 0), sent_token_estimate=sent_estimate,
-        )
-    status = out.get("status_code")
-    return classify_generative_probe_response(
-        status if isinstance(status, int) else None, str(out.get("body") or ""),
-    )
-
-
 def _probe_window(
     drive_root: Any,
     *,
@@ -1206,13 +1077,12 @@ def _probe_window(
     options: Optional[Dict[str, Any]] = None,
     use_local: bool = False,
     allow_fetch: bool = True,
-    allow_generative: bool = False,
     force: bool = False,
     api_key: Optional[str] = None,
 ) -> CapabilityEvidence:
     """Resolve Capability Evidence for a route, using the cache unless ``force``.
 
-    Owner-ack wins; local capacity is read from the serving instance on every
+    Local capacity is read from the serving instance on every
     call. Remote routes use fresh cache -> provider metadata -> unprobeable.
     Network probing is skipped when allow_fetch=False (hot-path callers)."""
     fp = route_fingerprint(provider=provider, base_url=base_url, model=model, headers=headers, options=options)
@@ -1222,18 +1092,6 @@ def _probe_window(
     account_bound = all(account_options.get(key) for key in (
         "source_id", "credential_profile_id", "account_fingerprint",
     ))
-
-    # Owner-ack always wins as ASSERTED evidence for its exact route.
-    ack = data.get("owner_acks", {}).get(fp)
-    if ack and (not subscription or account_bound):
-        return CapabilityEvidence(
-            window_tokens=int(ack.get("window_tokens") or 0), status=STATUS_ASSERTED,
-            source=SOURCE_OWNER_ACK, route_fp=fp, model=model, provider=provider,
-            ts=str(ack.get("ts") or ""), detail=f"owner-ack by {ack.get('owner') or 'owner'}",
-            source_id=str(account_options.get("source_id") or ""),
-            credential_profile_id=str(account_options.get("credential_profile_id") or ""),
-            account_fingerprint=str(account_options.get("account_fingerprint") or ""),
-        )
 
     if use_local:
         # Stored local rows have no serving-instance binding and may contain
@@ -1249,12 +1107,7 @@ def _probe_window(
     if subscription and not account_bound and str((cached or {}).get("status") or "") in _KNOWN_STATUS:
         # Model-only legacy evidence cannot certify any subscription account.
         cached = None
-    # An EXPLICIT generative probe (owner toggle/save, allow_generative=True) must run even
-    # when a prior LAZY (allow_generative=False) call left a fresh UNPROBEABLE/FAILED record
-    # — otherwise the owner's empirical probe is silently short-circuited and never fires.
-    # Only a CONFIRMED cache is authoritative enough to skip the live probe on that path.
-    _skip_cache_for_generative = allow_generative and str((cached or {}).get("status") or "") != STATUS_CONFIRMED
-    if cached and not force and not _skip_cache_for_generative:
+    if cached and not force:
         age = _age_seconds(str(cached.get("ts") or ""))
         ttl = _CONFIRMED_TTL_SEC if cached.get("status") == STATUS_CONFIRMED else _FAILED_TTL_SEC
         if age <= ttl:
@@ -1280,42 +1133,13 @@ def _probe_window(
             ev = CapabilityEvidence(0, STATUS_FAILED, SOURCE_NONE, fp, model, provider,
                                     ts=utc_now_iso(), detail=f"model catalog unavailable: {type(exc).__name__}")
         _store_evidence(drive_root, "probes", ev.route_fp, ev.to_json())
-        if (not ev.stale and ev.provenance and parse_deadline_ts(ev.ts)
-                and ev.source_id and ev.credential_profile_id and ev.account_fingerprint):
-            # Metadata established the missing identity for this exact account.
-            # Reuse only its owner authority, never stale metadata over this read.
-            bound_options = {**account_options, "source_id": ev.source_id,
-                             "credential_profile_id": ev.credential_profile_id,
-                             "account_fingerprint": ev.account_fingerprint}
-            acknowledged = probe(drive_root, provider=provider, model=model, base_url=base_url,
-                                 headers=headers, options=bound_options, allow_fetch=False)
-            if acknowledged.source == SOURCE_OWNER_ACK:
-                return acknowledged
         return ev
 
-    # Live probe.
-    window = 0
-    source = SOURCE_NONE
-    if window <= 0:
-        meta = _provider_metadata_window(provider, model, base_url, allow_fetch=allow_fetch, api_key=api_key)
-        if meta > 0:
-            window, source = meta, SOURCE_PROVIDER_METADATA
-
-    # Generative probe: only when metadata gave nothing AND a toggle/save call-site
-    # opted in (allow_generative) — never on the lazy per-task hot path. Confirms a
-    # window empirically via a free over-window reject; a 200/numberless reject -> owner-ack.
-    if window <= 0 and allow_generative and not use_local:
-        gwin, gstatus, gdetail = _generative_probe_window(provider, model, base_url, api_key=api_key)
-        if gwin > 0:
-            window, source = gwin, SOURCE_GENERATIVE_PROBE
-        elif gstatus == STATUS_FAILED:
-            ev = CapabilityEvidence(0, STATUS_FAILED, SOURCE_NONE, fp, model, provider,
-                                    ts=utc_now_iso(), detail=gdetail)
-            _store_evidence(drive_root, "probes", fp, ev.to_json())
-            return ev
-
+    window, observed_at = _provider_metadata_window(provider, model, base_url, allow_fetch=allow_fetch, api_key=api_key)
     if window > 0:
-        ev = CapabilityEvidence(window, STATUS_CONFIRMED, source, fp, model, provider, ts=utc_now_iso(), detail="live probe")
+        ev = CapabilityEvidence(window, STATUS_CONFIRMED, SOURCE_PROVIDER_METADATA, fp, model, provider,
+                                ts=observed_at, stale=_age_seconds(observed_at) > _CONFIRMED_TTL_SEC,
+                                detail="provider metadata")
         _store_evidence(drive_root, "probes", fp, ev.to_json())
         return ev
 
@@ -1340,12 +1164,36 @@ def _probe_window(
     return ev
 
 
+def with_role_window(evidence: CapabilityEvidence, window: int) -> CapabilityEvidence:
+    """The role declaration wins without borrowing a metadata observation date."""
+    from dataclasses import replace
+
+    return replace(evidence, window_tokens=window, window_kind="total", status=STATUS_ASSERTED,
+                   source=SOURCE_USER_SETTING, stale=False, ts="", detail="role Window set by owner") if window else evidence
+
+
 def probe(drive_root: Any, **route) -> CapabilityEvidence:
     """Resolve independent context and output facts; one owner's window ack cannot suppress output discovery."""
-    from dataclasses import asdict
+    from dataclasses import asdict, replace
     from ouroboros.response_limits import probe_response_limit
 
     evidence = _probe_window(drive_root, **route)
+    if is_known(evidence, require_fresh=True):
+        evidence.server_window = dict(tokens=evidence.window_tokens, kind=evidence.window_kind,
+                                      source=evidence.source, observed_at=evidence.ts)
+    ack = _load(drive_root).get("owner_acks", {}).get(evidence.route_fp)
+    options = {**(route.get("options") or {}), **{key: getattr(evidence, key) for key in (
+        "source_id", "credential_profile_id", "account_fingerprint") if getattr(evidence, key)}}
+    bound = route["provider"] != "claudexor" or all(options.get(key) for key in (
+        "source_id", "credential_profile_id", "account_fingerprint"))
+    if retired_owner_ack(ack):
+        evidence.retired_ack = {key: ack.get(key) for key in ("window_tokens", "ts", "note")}
+    elif ack and bound:
+        evidence = replace(evidence, window_tokens=int(ack.get("window_tokens") or 0),
+            window_kind="total", status=STATUS_ASSERTED, source=SOURCE_OWNER_ACK, stale=False,
+            ts=str(ack.get("ts") or ""), detail=f"owner-ack by {ack.get('owner') or 'owner'}",
+            **{key: str(options.get(key) or "") for key in (
+                "source_id", "credential_profile_id", "account_fingerprint")})
     evidence.response_limit = asdict(probe_response_limit(drive_root, evidence, route))
     return evidence
 

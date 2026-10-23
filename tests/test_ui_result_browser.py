@@ -330,9 +330,9 @@ def test_ui_results_and_required_question_journey(wait_clone, tmp_path, monkeypa
                     unknown.locator('[data-live-meta]').filter(has_text="Outcome unavailable").wait_for(timeout=30000)
                     assert unknown.locator('[data-cancel-run]').count() == 0
                     route = page.locator('.chat-live-card[data-task-id="routing-history"]')
-                    route_facts = route.locator('[data-live-facts] > div').filter(has_text="Tool calls")
-                    route_facts.wait_for(state="attached")
-                    assert route_facts.locator('dd').text_content() == "2"
+                    route_meta = route.locator(':scope > [data-live-foot] > [data-live-meta]')
+                    route_meta.filter(has_text="2 tool calls").wait_for(state="visible")
+                    assert "2 tool calls" in route_meta.inner_text()
                     assert route.locator('.chat-live-line.done').count() == 1
                     accepted = page.locator('.chat-live-card[data-task-id="parent1"]')
                     accepted.locator('[data-live-phase]').filter(has_text="Done with warnings").wait_for()

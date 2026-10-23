@@ -117,8 +117,7 @@ def test_speechless_history_and_direct_resume(direct_server_with_data, engine):
                 page.keyboard.press("Escape")
                 page.screenshot(path=str(diagnostic_directory(root.parent, "task-evidence") / f"task-evidence-{engine}-{width}-paused.png"), full_page=True)
                 card.locator(":scope > [data-live-summary-button] [data-live-disclosure]").click()
-                expect(card.locator("[data-live-facts] .chat-live-fact").filter(
-                    has=page.locator("dt", has_text="Tool calls")).locator("dd")).to_have_text("24")
+                expect(card.locator(":scope > [data-live-foot] > [data-live-meta]")).to_contain_text("24 tool calls")
                 lines = card.locator(".chat-live-line")
                 # The tool calls, then the answer's own Done line.
                 assert lines.count() == 2, lines.all_inner_texts()

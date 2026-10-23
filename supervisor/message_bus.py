@@ -915,14 +915,18 @@ class LocalChatBridge:
             # "quiz:{task_id}:{quiz_id}"): an anonymous quiz would render
             # buttons that cannot deliver anywhere.
             return False, "task_id is required"
-        try:
-            payload = validate_quiz_payload(question, options, stake, assumption, wait_for_answer=wait_for_answer)
-        except QuizValidationError as exc:
-            return False, str(exc)
         from ouroboros.owner_quiz import CLOSURE_FIELDS, question_delivery_projection, quiz_states, record_publication
         from supervisor.log_addressing import resolve_quiz_publication
 
         prior = quiz_states(DATA_DIR, str(task_id)).get(qid) or {}
+        # Validation concerns the original ask, not its still-active wait. Both
+        # timeout and terminal reconciliation retain wait_ended_at as evidence
+        # that this required question was valid without an optional assumption.
+        required_ask = bool(prior.get("wait_for_answer") or prior.get("wait_ended_at")) if prior else wait_for_answer
+        try:
+            payload = validate_quiz_payload(question, options, stake, assumption, wait_for_answer=required_ask)
+        except QuizValidationError as exc:
+            return False, str(exc)
         chat_id = resolve_quiz_publication(DATA_DIR, str(task_id), prior, chat_id)
         block = record_publication(DATA_DIR, str(task_id), qid, chat_id)
         if not block or "publication_chat_id" not in block:
@@ -942,10 +946,12 @@ class LocalChatBridge:
         }
         wait_for_answer = bool(block.get("wait_for_answer"))
         host_facts = str(block.get("host_facts") or host_facts or "")
-        lifecycle = {key: block[key] for key in ("answered_index", "comment", *CLOSURE_FIELDS) if key in block}
+        lifecycle = {key: block[key] for key in ("answered_index", "comment", "wait_ended_at", *CLOSURE_FIELDS) if key in block}
         if delivery := question_delivery_projection(block):
             lifecycle["question_delivery"] = delivery
         materials = list(block.get("materials") or [])
+        if block.get("presence_contact"):
+            lifecycle["presence_contact"] = block["presence_contact"]
         ts = utc_now_iso()
         msg = {
             "type": "quiz",
@@ -990,9 +996,7 @@ class LocalChatBridge:
                 **lifecycle,
                 **({"materials": materials} if materials else {}),
                 "wait_for_answer": bool(wait_for_answer),
-                "options": payload["options"],
-                "stake": payload["stake"],
-                "assumption": payload["assumption"],
+                **{key: payload[key] for key in ("options", "stake", "assumption")},
                 "state": str(state or "open"),
                 **({"host_facts": str(host_facts)} if host_facts else {}),
             },

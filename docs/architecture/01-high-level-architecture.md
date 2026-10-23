@@ -118,7 +118,7 @@ ouroboros/ — agent core and shared runtime (§6)
   presence_admission.py, presence_context.py — connector events resolved to a place, the focus metadata and its FOCUS assignment (§12)
   presence_authority.py, presence_capabilities.py, presence_bindings.py — frozen readers: old task ceilings and old bindings stay decodable for retained work and the one-time place migration (§12)
   place_intake.py, place_reply.py, place_projection.py, places_migration.py — model-free attention after capture, the automatic reply's Silent/Safety boundary, owner-facing place views, binding → place import (§12)
-  presence_runner.py, presence_continuation.py, presence_observations.py, presence_delivery.py, presence_recovery.py — the connector turn carrier a focus runs on: conversation-serialized fresh agents, continuation, observations, delivery receipts, retained room facts (§12)
+  presence_runner.py, presence_continuation.py, presence_observations.py, presence_delivery.py, presence_recovery.py, presence_owner_contact.py — focus turns: conversation serialization, continuation, observations, receipts, retained facts and private Main contact (§12)
   places.py, conversation_lease.py — the host place record (state, wake list, notes, owner accounts, folder, model) and one author per place conversation with the physical conversation bound (§12)
   dialogue_provenance.py — exact transport-provenance rendering for history, memory and consolidation
   extension_companion.py, extension_reconcile_queue.py — host-supervised companion processes for transport skills; durable worker→server reconcile markers (§12; §13)

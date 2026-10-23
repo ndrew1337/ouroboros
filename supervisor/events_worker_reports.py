@@ -167,7 +167,7 @@ def _handle_task_metrics(evt: Dict[str, Any], ctx: Any) -> None:
         "outcome_axes": normalize_outcome_axes(evt),
         "reason_code": str(evt.get("reason_code") or ""),
     }
-    for key in ("routing_tool_calls", "completion_tool_calls"):
+    for key in ("routing_tool_calls", "completion_tool_calls", "rounds"):
         if key in evt:
             payload[key] = None if evt[key] is None else int(evt[key])
     if "tool_call_counts" in evt:

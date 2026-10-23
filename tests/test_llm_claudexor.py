@@ -868,7 +868,7 @@ def test_cold_actual_model_call_still_ensures_engine_after_unknown_metadata(setu
     root, gateway, client = setup
     monkeypatch.setattr(owned, "owned_config_dir", lambda: root / "cold-owned")
     evidence = ce.probe(root, provider="claudexor", model=MODEL,
-        allow_fetch=True, allow_generative=False)
+        allow_fetch=True)
     assert evidence.status == ce.STATUS_FAILED and evidence.window_tokens == 0
     assert not ledger(root) and not gateway.creates
     startup = []

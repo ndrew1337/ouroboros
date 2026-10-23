@@ -341,13 +341,13 @@ def _update_scratchpad(ctx: ToolContext, content: str) -> str:
 
 
 def owner_contact_refusal(ctx: ToolContext, chat_id: object) -> str:
-    """Why this caller may not speak to the owner directly, or "" when it may.
+    """The owner-note gate shared by service-style notices and scheduled notes.
 
     A delegated child answers its parent, and a Presence or agent-to-agent turn
-    speaks for an external conversation; none of them reaches the owner through a
-    Main notice or a note scheduled for later. Shared by both doors; the Main
-    notice adds its room check, a note does not (one started by consciousness is
-    a legitimate contact, BIBLE P0).
+    speaks for an external conversation. Presence roots have a separate,
+    source-bound private Main contact through ``_main_notice_refusal``; that
+    exception does not grant scheduled notes or a generic service-notice voice.
+    A note started by ordinary consciousness is legitimate contact (BIBLE P0).
     """
     from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
     from ouroboros.dialogue_provenance import presence_caller_binding
@@ -370,13 +370,18 @@ def owner_contact_refusal(ctx: ToolContext, chat_id: object) -> str:
 def _main_notice_refusal(ctx: ToolContext, chat_id: object) -> str:
     """Why this caller may not address Main, or "" when it may.
 
-    Main is the owner's own conversation: beyond ``owner_contact_refusal``, only
-    an owner-visible root room (a Project or an owner-started root) gains a Main
-    voice through this argument.
+    A retained Presence root uses source-bound private contact. Other callers
+    need an owner-visible root room (a Project or an owner-started root).
     """
     from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID
     from ouroboros.dialogue_provenance import run_origin
 
+    from ouroboros.presence_owner_contact import contact_origin
+    try:
+        if contact_origin(ctx) is not None:
+            return ""
+    except (OSError, ValueError) as exc:
+        return str(exc)
     if refusal := owner_contact_refusal(ctx, chat_id):
         return refusal
     if str(chat_id) == str(HIDDEN_CHAT_ID):
@@ -403,7 +408,7 @@ def _main_notice_refusal(ctx: ToolContext, chat_id: object) -> str:
 
 
 def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destination: str = "current",
-                       reply_to_relay: str | None = None) -> str:
+                       reply_to_relay: str | None = None, request_id: str = "") -> str:
     """Send a separate owner reply without completing the ongoing task.
 
     ``destination="main"`` addresses the owner's main chat from an owner-visible
@@ -431,6 +436,23 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
             return publish_no_effect(ctx, ToolResult(status="blocked", code="ACCESS_BLOCKED", text=(
                 f"⚠️ MAIN_NOTICE_BLOCKED: destination='main' refused: {refusal}. Nothing was sent; "
                 "destination='current' still reaches this conversation.")))
+        from ouroboros.presence_owner_contact import ContactRequestConflict, ContactRequestInvalid, contact_origin, send_main_message
+        try:
+            origin = contact_origin(ctx)
+            if origin is not None:
+                if reply_to_relay is not None:
+                    raise ContactRequestInvalid("omit reply_to_relay; Presence Main contact uses its host-bound source")
+                return send_main_message(ctx, text, origin, request_id)
+        except ContactRequestConflict as exc:
+            return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(
+                f"OWNER_CONTACT_REQUEST_CONFLICT: {exc}. The original message is unchanged. "
+                "Use a new request_id only for an intentional new message.")))
+        except ContactRequestInvalid as exc:
+            return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+                text=f"TOOL_ARG_ERROR: {exc}. Nothing was sent."))
+        except (OSError, ValueError) as exc:
+            return _publish_tool_result(ctx, ToolResult(status="unavailable", code="CAPABILITY_UNAVAILABLE",
+                text=f"OWNER_CONTACT_UNAVAILABLE: {exc}. Retry the same request_id and words."))
         from ouroboros.contracts.chat_id_policy import WEB_UI_CHAT_ID
         from ouroboros.project_dialogue import MAIN_NOTICE_TYPE
 

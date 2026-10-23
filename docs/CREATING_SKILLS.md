@@ -990,17 +990,28 @@ stays enabled. Frozen old task ceilings remain readable; new focuses have no cei
 
 Use the connector's ordinary content-hash-bound skill token for:
 
+- `GET /identity`: `presence_main_contact_version: 1` advertises host-bound private
+  Main messages/questions and live/late answer routing; `presence_work_output_version: 1`
+  advertises canonical output identities and separate producer/child references in
+  work polls. `presence_wake_facts` lists accepted provider facts. Check these facts
+  for features you require: the older `places_version`, continuation and delivery
+  version trio does not imply them. Missing facts mean an explicit setup/upgrade
+  gap, not permission to inject owner messages or invent output identities. A
+  historical record can still lack `output_ref` on a capable host.
 - `POST /presence/turn`: `event`, optional legacy `binding_id`, `staged_files`,
   `delivery_reporting_version` and `continuation_version`. The event still carries
   `source_event_id`, `provider`, `account_id`, `conversation_id`, `thread_id`,
   `conversation_key`, `actor`, `conversation`, `message` and `text`. The host derives
   its own canonical conversation key. Files stay confined to the connector's state root.
 - Optional `event.facts`: a list of `direct_message`, `group_dm`, `mention`,
-  `reply_to_me`, `my_thread`, `new_issue`, `new_pull_request`, `any_message`, `from_bot`.
+  `reply_to_me`, `my_thread`, `new_issue`, `new_pull_request`, `review_requested`,
+  `assigned`, `any_message`, `from_bot`.
   These are observed provider facts, never text classification. Absent facts mean
   `legacy_addressed`, compatibility for older connectors that filtered events themselves;
   new connectors send `facts` with every event. Empty facts are distinct from absent
-  facts. Bots require an explicit bot wake item.
+  facts. `review_requested` and `assigned` mean requests addressed to the watched
+  identity; narrow wake declarations may use them. A new discussion is not a
+  `new_issue`; `any_message` is the generic alternative. Bots require an explicit bot wake item.
 - `GET /presence/place?provider=&account_id=&conversation_id=&thread_id=`: returns
   `{place_id, label, state}` for the connector's outbox recheck. `/identity`
   advertises `places_version: 1`. Optional `thread_id` selects the topic; omission keeps
@@ -1040,6 +1051,38 @@ the durable answer and its output identity; repeated holds record one fact per s
 Late receipts still record what happened and add a visible warning. Proactive speech uses the connector's own tools; `presence_finish` and
 `initiate_presence` are no longer public tools.
 
+Private Main contact uses the mind's existing tools: a Presence root can call
+`send_user_message(text=..., destination="main", request_id=...)` for a substantive
+report, or `escalate(question=..., options=..., assumption=..., request_id=...)` for
+a question. The host binds source work, place and event from the retained task;
+the model supplies words, not provenance. The existing message/question renders
+the typed source in its voice line, linking `event.message.url` or `message.permalink` when
+present (otherwise `conversation.url`). These are private Main deliveries,
+independent of the external destination's Silent state. Paused admits no new
+focus, but does not discard already owed contact. `/notify` is unchanged.
+
+Use the same `request_id` (nonblank, at most 128 characters) and identical fields
+after uncertain contact delivery. Reusing a key with different fields refuses;
+omitting it rejoins an identical contact from the same work. A new intentional
+identical contact needs a new key. Questions use the normal canonical quiz and
+answer ingress. An answer reaches a live inline author through its mailbox and
+final-drain admission lock. After that author ends, normal late-answer intake
+starts an unrestricted Main owner turn with the source snapshot, current child
+work and exact owner words. Roots that turn starts inherit the source binding
+as related work, without an automatic external-final route. Inline `wait_for_answer=true`
+uses the narrow Presence continuation park: idle custody lends conversation and
+active slot, then reacquires both before reentry; otherwise it waits holding
+custody. Pooled roots retain their normal owner wait. Stop/deadlines still apply;
+a bound ending is not consent, and terminal questions stay answerable. Neither contact nor answer delivery
+sends an external reply or accepts an external request as an owner instruction.
+Delegated children still escalate to their parent.
+
+For promised work without a new event, `start_task` and
+`schedule_followup(notify=false, relation=...)` retain the existing Presence
+carrier and ordinary resource/control semantics. A scheduled root explicitly
+uses connector tools to deliver later; it is not discovered by polling the old
+event. `notify=true` and the owner-wide schedule table are separate capabilities.
+
 A turn's source identity uses its first legacy binding id (otherwise its place id), source event ID, provider/account,
 conversation/thread, actor ID and text. Keep those facts stable on retry;
 `staged_files` paths and delivery-reporting negotiation may change. A collision
@@ -1054,11 +1097,15 @@ Then it is terminal: a recorded `completed` or `failed` answer keeps its recorde
 projection (a selected reply, or `silent`); a cancellation, unknown outcome, resource
 refusal or settled loss is `failed` (`cancelled` when recorded) with `outcome: "silent"`, empty `text`/`output_ref`, the typed `code` and facts
 (`recorded_status` is the status when observed, `uncertainty`,
-`status_reconciled_from`), `work_ref` naming the polled reference, a real child in
-`child_work_ref` and already released continuation outputs. There `silent` means
+`status_reconciled_from`), `work_ref` naming the polled reference, producer
+`task_id`, a real child in `child_work_ref` and already released continuation
+outputs. Canonical terminal views also expose their existing `output_ref` and
+`child_work_ref`, including selected output from a failed child. There `silent` means
 nothing further to deliver, never chosen silence or absence of effects. Stop
 observing a reference at its terminal, keep the receipt, observe a child until its
-own terminal, and deduplicate output by its original source identity. An ended
+own terminal, and deduplicate each selected output by its exact `output_ref`.
+A missing historical reference remains empty: do not invent a reference from
+text or `work_ref`, or claim delivery success without one. An ended
 attempt is never re-run. A live turn's model
 recovery keeps its conversation under existing controls until it finishes or
 returns a retained refusal; input custody is not released merely by a stream loss.
@@ -1083,7 +1130,7 @@ within the request. A retry of the same event returns the identical stored envel
 `continuing` releases text to you and is not proof of provider delivery.
 
 Poll `GET /presence/work/{continuation_ref}?binding_id=...` like other late work. Ordinary pending
-and terminal continuation views carry `work_ref` and `continuation_ref` naming the author, plus
+and terminal continuation views carry producer `task_id`, `work_ref` and `continuation_ref` naming the author, plus
 `child_work_ref` for its promoted independent work (empty if none). Discover and retain the child
 before handling author status; poll it independently. A child promoted after the first yield
 appears at the next park even if the immutable initial envelope has an empty `work_ref`.

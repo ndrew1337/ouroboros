@@ -100,7 +100,7 @@ _MIXIN_OWNERS = {
         "_get_remote_client _make_no_proxy_async_client _make_no_proxy_client _new_remote_client "
         "_no_proxy_timeout _openrouter_session_identity _parse_provider_model "
         "_prompt_cache_identity _qualified_model_name _resolve_remote_target "
-        "probe_oversized_context probe_provider_readiness"
+        "probe_provider_readiness"
     ),
     (llm_messages, "_MessageShapingMixin"): (
         "_REASONING_CONTENT_BLOCK_TYPES _content_with_system_notice_marker "
@@ -224,6 +224,7 @@ def test_llm_client_member_inventory_is_unchanged():
     places complete remote dispatch with the existing provider/client owner.
     (5) Explicit OpenRouter receipt reconciliation retires the unused
     ``_fetch_generation_cost`` compatibility stub and its empty mixin.
+    (6) Window authority removes the callerless oversized context probe.
     """
     assert _defined_members(pathlib.Path(llm.__file__), "LLMClient") == _PARENT_MEMBERS
     moved = {name for names in _MIXIN_OWNERS.values() for name in names.split()}
@@ -231,7 +232,7 @@ def test_llm_client_member_inventory_is_unchanged():
     assert hashlib.sha256(
         json.dumps(composed, separators=(",", ":")).encode()
 
-    ).hexdigest() == "4d444f433e693f9692ebbdff2e1f71cb1a223f0c1674d9e148b970329856430c"
+    ).hexdigest() == "bdd42e3c4c129b607307047308ebea5455aa1191933d90f458dd204e08b9a1e4"
     for name in composed:
         assert hasattr(LLMClient, name), name
 

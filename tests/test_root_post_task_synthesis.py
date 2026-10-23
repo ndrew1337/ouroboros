@@ -152,14 +152,16 @@ def test_retry_root_checkpoint_preserves_logical_subtree_cost(tmp_path):
     assert stored["cost_final"] is True
 
 
-def test_startup_recovery_reuses_pending_root_result_checkpoint(tmp_path, monkeypatch):
+@pytest.mark.parametrize("rounds", [None, 0, 3])
+def test_startup_recovery_reuses_pending_root_result_checkpoint(tmp_path, monkeypatch, rounds):
     pipeline.write_task_result(
         tmp_path,
         "recover-root",
         pipeline.STATUS_COMPLETED,
         root_task_id="recover-root",
         objective="finish recovery",
-        total_rounds=3,
+        total_rounds=99,
+        **({"loop_outcome": {"usage": {"total_rounds": rounds}}} if rounds is not None else {}),
         accounted_upper_bound_usd=0.25,
         root_phase_checkpoint={
             "phase": "task_acceptance",
@@ -177,7 +179,7 @@ def test_startup_recovery_reuses_pending_root_result_checkpoint(tmp_path, monkey
     monkeypatch.setattr(pipeline, "_run_post_task_processing_async", fake_run)
     assert pipeline.recover_pending_root_post_task_synthesis(tmp_path, tmp_path / "repo") == 1
     assert calls[0][1]["id"] == "recover-root"
-    assert calls[0][2]["rounds"] == 3
+    assert calls[0][2]["rounds"] == rounds
     assert calls[0][3]["recovered_post_task_synthesis"] is True
     assert calls[0][-1] is False
     assert pipeline.recover_pending_root_post_task_synthesis(tmp_path, tmp_path / "repo") == 0

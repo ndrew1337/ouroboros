@@ -467,7 +467,12 @@ _MARK_MATERIAL = """buttons => {
     const dark = document.documentElement.dataset.theme !== 'light';
     const painted = node => {
         const layers = [];
-        for (let el = node; el; el = el.parentElement) layers.unshift(rgba(getComputedStyle(el).backgroundColor));
+        for (let el = node; el; el = el.parentElement) {
+            const style = getComputedStyle(el);
+            // The shared tint is painted over its optional opaque backing (the answer fade passes behind it).
+            if (el.classList.contains('chat-live-project-card-btn')) layers.unshift(rgba(style.getPropertyValue('--project-reference-fill')));
+            layers.unshift(rgba(style.backgroundColor));
+        }
         return layers.reduce((base, layer) => ({...over(layer, base), a: 1}), page);
     };
     const lum = c => ['r', 'g', 'b'].map(k => c[k] / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4)
@@ -480,7 +485,7 @@ _MARK_MATERIAL = """buttons => {
                 : button.closest('.msg-routing-annotation') ? 'receipt' : 'capsule', ink: inkAt(button),
             voice: dark && Boolean(button.closest('.chat-bubble.assistant, .chat-live-card')),
             tile: rgba(getComputedStyle(icon).backgroundColor).a,
-            fill: rgba(getComputedStyle(button).backgroundColor).a,
+            fill: rgba(getComputedStyle(button).getPropertyValue('--project-reference-fill')).a,
             glyph: getComputedStyle(icon).color, name: getComputedStyle(name).color,
             glyph_on_fill: contrast(rgba(getComputedStyle(icon).color), fill),
             fill_on_beneath: contrast(fill, beneath),

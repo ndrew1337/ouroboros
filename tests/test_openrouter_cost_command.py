@@ -210,9 +210,8 @@ def test_owner_custody_limits_still_apply(env, capsys, monkeypatch, block):
     assert current(env, row["attempt_id"]) == row
 
 
-@pytest.mark.parametrize("source", ["provider_test", "capability_probe"])
 @pytest.mark.parametrize("price", [0.0, 0.125])
-def test_real_system_probe_scope_can_fetch_then_apply(env, capsys, monkeypatch, source, price):
+def test_real_system_probe_scope_can_fetch_then_apply(env, capsys, monkeypatch, price):
     from ouroboros import llm_probe
 
     monkeypatch.setenv("OUROBOROS_DATA_DIR", str(env))
@@ -224,15 +223,10 @@ def test_real_system_probe_scope_can_fetch_then_apply(env, capsys, monkeypatch, 
         sends.append(payload)
         return {"id": "generation-probe", "choices": [{"message": {"content": "OK"}, "finish_reason": "stop"}]}
 
+    source = "provider_test"
     with usage.capture_attempt_ids() as attempt_ids:
-        if source == "provider_test":
-            llm_probe.accounted_one_shot(target, {"model": target["resolved_model"], "max_tokens": 1,
-                "messages": [{"role": "user", "content": "OK"}]}, send, source=source)
-        else:
-            remote = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **p: send(p))))
-            remote.with_options = lambda **_kwargs: remote
-            client = SimpleNamespace(_resolve_remote_target=lambda _model: target, _get_remote_client=lambda _target: remote)
-            assert llm_probe.probe_oversized_context(client, target["resolved_model"], "OK")["ok"]
+        llm_probe.accounted_one_shot(target, {"model": target["resolved_model"], "max_tokens": 1,
+            "messages": [{"role": "user", "content": "OK"}]}, send, source=source)
     assert len(attempt_ids) == len(sends) == 1
     row = current(env, attempt_ids[0])
     assert row["task_id"] == row["root_task_id"] == f"system:{source}"

@@ -60,11 +60,8 @@ export function modelSourceGroups({ sources = [], providers = [], current = '', 
     ];
 }
 
-export function modelContextNote(item, override = 0) {
-    if (Number(override) > 0) return `${Number(override).toLocaleString('en-US')} tokens · set by you; the provider may accept less.`;
-    const window = Number(item?.max_context_window || item?.context_window || 0);
-    return window > 0 ? `Auto: ${window.toLocaleString('en-US')} tokens · advertised for this route.`
-        : 'Auto: context limit not known for this route.';
+export function modelContextNote(preview) {
+    return preview?.window?.text || 'Context limit not known for this route.';
 }
 
 // The slot an empty role uses: Main, except the Safety Supervisor, which checks with the Light model (and so
@@ -208,7 +205,8 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             <div class="model-role-context">
                 <label class="ui-field">Window <input id="${escapeHtml(inputIdFor(row))}-context" class="ui-control" data-model-role-context type="number" min="0" step="1"
                     placeholder="Auto" value="${escapeHtml(row.context || '')}" aria-label="${escapeHtml(row.slot.label)} context window"></label>
-                <span data-model-context-note>${escapeHtml(modelContextNote(currentItem(row), row.context))}</span>
+                <span data-model-context-note>${escapeHtml(modelContextNote(row.windowPreview))}</span>
+                <button type="button" class="btn btn-default" data-window-clear hidden>Clear confirmation</button>
             </div>
             <div class="model-role-context">
                 <label class="ui-field">Maximum response <input class="ui-control" data-response-limit type="number" min="0" step="1" placeholder="Auto" aria-label="${escapeHtml(row.slot.label)} maximum response"></label>
@@ -268,6 +266,12 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             const node = element.querySelector(`[data-model-role="${row.id}"]`);
             if (!node) continue;
             const responseIdentity = JSON.stringify([responseModel(row), row.local, row.account]);
+            const windowIdentity = JSON.stringify([responseIdentity, row.context]);
+            if (row.windowIdentity !== windowIdentity) {
+                row.windowPreview = null;
+                if (showContext) void responseLimit(row, node);
+                row.windowIdentity = windowIdentity;
+            }
             if (row.responseIdentity && row.responseIdentity !== responseIdentity) {
                 const field = node.querySelector('[data-response-limit]');
                 if (field) { field.value = ''; responseEdits.delete(field); }
@@ -291,7 +295,7 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             updateModelChooser(node.querySelector('[data-model-role-model]'), catalogModelOptions(itemsFor(row).map((item) => ({
                 ...item, value: parseModelSource(item.value || item.id).model,
             }))));
-            if (showContext) node.querySelector('[data-model-context-note]').textContent = modelContextNote(currentItem(row), row.context);
+            if (showContext) node.querySelector('[data-model-context-note]').textContent = modelContextNote(row.windowPreview);
             if (showContext) node.querySelector('[data-processing-summary]').textContent = processingIntentLabel(row.processing_preference, processingPreference);
             if (showContext) node.querySelector('[data-processing-capability]').textContent = processingCapabilityNote(row.processing_preference || processingPreference, currentItem(row)?.processing,
                 catalog.model_sources.find((source) => source.id === sourceId(row))?.processingPreferences);
@@ -351,22 +355,28 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
         }
         const model = responseModel(row);
         if (!model || model.endsWith('::')) { note.textContent = 'Choose a model to check its maximum response.'; return; }
-        const identity = JSON.stringify([model, row.local, row.account]);
+        const identity = JSON.stringify([model, row.local, row.account, row.context]);
         const draft = field.value;
         const sequence = row.responseSequence = (row.responseSequence || 0) + 1;
         if (apply) row.responseApplying = sequence;
         const current = () => !destroyed && sequence === row.responseSequence && node.isConnected
-            && identity === JSON.stringify([responseModel(row), row.local, row.account]);
+            && identity === JSON.stringify([responseModel(row), row.local, row.account, row.context]);
+        let saved = false;
         try {
-            const data = await apiClient.responseLimitPreview({ model, local: row.local, account: row.account });
+            const data = await apiClient.responseLimitPreview({ model, local: row.local, account: row.account,
+                role: row.slot.slot, window: Number(row.context || 0) });
             if (!current()) return;
             if (!data.response_limit || !data.route) throw new Error('Maximum response is not checked');
+            row.windowPreview = data;
+            node.querySelector('[data-model-context-note]').textContent = modelContextNote(data);
+            node.querySelector('[data-window-clear]').hidden = !data.window_ack;
             let evidence = data.response_limit;
             if (apply) {
                 const result = await apiClient.ownerCapabilityAck({ ...data.route, route_fp: evidence.route_fp, max_output_tokens: value });
                 if (!current()) return;
                 if (!result.ok) throw new Error(result.error || 'Maximum response could not be saved');
                 evidence = result.ack;
+                saved = true;
             }
             // Edits can precede the deferred toggle which starts this read.
             if (!apply && !responseEdits.has(field) && field.value === draft) field.value = evidence.source === 'owner_ack' ? String(evidence.max_output_tokens || '') : '';
@@ -376,7 +386,10 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             const server = endpoint ? ` Server: ${endpoint.host}${endpoint.pathname.replace(/\/$/, '')}.` : '';
             note.textContent = `${evidence.max_output_tokens && !evidence.stale ? `${evidence.max_output_tokens.toLocaleString('en-US')} tokens · ${source}` : 'Auto: maximum response unknown'}.${server} Context window is separate.${data.route.provider === 'claudexor' ? ' Planning allowance only; the native engine controls its response.' : ''}`;
         } catch (error) { if (current()) note.textContent = error.message; }
-        finally { if (row.responseApplying === sequence) row.responseApplying = 0; }
+        finally {
+            if (row.responseApplying === sequence) row.responseApplying = 0;
+            if (saved && current()) void responseLimit(row, node);
+        }
     }
 
     function bindRows(element) {
@@ -389,6 +402,17 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
             });
             node.querySelector('.model-role-details')?.addEventListener('toggle', (event) => {
                 if (event.target.open) void responseLimit(row, node);
+            });
+            node.querySelector('[data-window-clear]')?.addEventListener('click', async () => {
+                const preview = row.windowPreview;
+                if (!preview?.window_route) return;
+                try {
+                    const result = await apiClient.ownerCapabilityAck({ ...preview.window_route, window_tokens: 0 });
+                    if (!result.ok) throw new Error(result.error || 'Confirmation could not be cleared');
+                    if (!destroyed && node.isConnected) await responseLimit(row, node);
+                } catch (error) {
+                    if (!destroyed && node.isConnected) node.querySelector('[data-model-context-note]').textContent = error.message;
+                }
             });
             node.querySelector('[data-response-apply]')?.addEventListener('click', () => { void responseLimit(row, node, true); });
             node.querySelector('[data-response-limit]')?.addEventListener('input', (event) => { responseEdits.add(event.target); });

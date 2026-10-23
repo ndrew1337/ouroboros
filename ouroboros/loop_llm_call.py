@@ -1563,7 +1563,7 @@ def call_llm_with_retry(
                     "record_contract_version", "reasoning_effort", "cost_usd", "prompt_tokens", "completion_tokens", "cached_tokens", "cache_write_tokens",
                     "prompt_cache_ttl", "effort", "effort_resolution", "request_wire", "claudexor", "duration_ms") if key in _round_event},
                 "response_kind": "tool_calls" if tool_calls else "message",
-                "tool_call_count": len(tool_calls),
+                "tool_call_count": len(tool_calls), "rounds": accumulated_usage["rounds"],
                 "has_text": bool(content and str(content).strip()),
             })
             append_jsonl(drive_logs / "events.jsonl", _round_event)

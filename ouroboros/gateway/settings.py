@@ -865,23 +865,25 @@ async def api_acknowledge_capability(request: Request) -> JSONResponse:
         except (ValueError, TypeError) as exc:
             return json_error(str(exc), 400)
     try:
-        window_tokens = int((body or {}).get("window_tokens") or 0)
+        window_tokens = int(body.get("window_tokens", -1))
     except (TypeError, ValueError):
-        window_tokens = 0
-    if window_tokens <= 0:
-        return json_error("'window_tokens' must be a positive integer", 400)
+        window_tokens = -1
+    if window_tokens < 0:
+        return json_error("'window_tokens' must be a non-negative integer", 400)
     try:
-        from ouroboros.capability_evidence import record_owner_ack
-        record = await asyncio.to_thread(record_owner_ack,
-            request_drive_root(request),
-            provider=provider, model=model,
-            base_url=str((body or {}).get("base_url") or ""),
-            window_tokens=window_tokens,
-            headers=(body or {}).get("headers") if isinstance((body or {}).get("headers"), dict) else None,
-            options=(body or {}).get("options") if isinstance((body or {}).get("options"), dict) else None,
-            note=str((body or {}).get("note") or ""),
-            expected_route_fp=str((body or {}).get("route_fp") or ""),
-        )
+        from ouroboros.capability_evidence import record_owner_ack, revoke_owner_ack, route_fingerprint
+        route = dict(provider=provider, model=model, base_url=str(body.get("base_url") or ""),
+                     headers=body.get("headers") if isinstance(body.get("headers"), dict) else None,
+                     options=body.get("options") if isinstance(body.get("options"), dict) else None)
+        fp = route_fingerprint(**route)
+        if body.get("route_fp") and body["route_fp"] != fp:
+            raise ValueError("Capability acknowledgement route fingerprint mismatch")
+        if window_tokens == 0:
+            removed = await asyncio.to_thread(revoke_owner_ack, request_drive_root(request), fp)
+            record = {"route_fp": fp, "window_tokens": 0, "removed": removed}
+        else:
+            record = await asyncio.to_thread(record_owner_ack, request_drive_root(request), **route,
+                window_tokens=window_tokens, note=str(body.get("note") or ""), expected_route_fp=fp)
         _owner_audit(request, "capability_ack", {"route_fp": record.get("route_fp"), "window_tokens": window_tokens, "model": model})
         return JSONResponse({"ok": True, "ack": record})
     except ValueError as exc:
@@ -914,11 +916,18 @@ async def api_settings_get(request: Request) -> JSONResponse:
             backend=request.query_params.get("backend"), model=request.query_params.get("model")))
     if request.query_params.get("response_limit_preview") == "1":
         from ouroboros.response_limits import response_limit_preview
+        try:
+            window = int(request.query_params["window"]) if "window" in request.query_params else None
+            if window is not None and window < 0:
+                raise ValueError
+        except ValueError:
+            return json_error("'window' must be a non-negative integer", 400)
         model = str(request.query_params.get("model") or settings.get("OUROBOROS_MODEL") or "")
         route = _active_main_route(settings, model_override=model,
             use_local_override=request.query_params.get("local") == "true")
         return JSONResponse(await asyncio.to_thread(response_limit_preview, request_drive_root(request), route,
-            account=request.query_params.get("account", ""), settings=settings))
+            account=request.query_params.get("account", ""), settings=settings,
+            role=request.query_params.get("role", "main"), window=window))
     safe = {k: v for k, v in settings.items()}
     for key in SECRET_SETTING_KEYS:
         if safe.get(key):

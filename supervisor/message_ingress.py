@@ -252,6 +252,8 @@ def _chat_record(
                 record[key] = dict(meta[key])
         if meta.get("reply_to_relay"):
             record["reply_to_relay"] = str(meta["reply_to_relay"])
+        if isinstance(meta.get("presence_contact"), dict):
+            record["presence_contact"] = dict(meta["presence_contact"])
         if meta.get("late_answer"):
             from ouroboros.owner_quiz import late_answer_ref
             accepted_answer = late_answer_ref(meta["late_answer"])

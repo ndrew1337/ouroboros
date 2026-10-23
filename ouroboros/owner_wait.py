@@ -738,6 +738,9 @@ def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
 
     control = ctx.model_wait_context
     root = pathlib.Path(ctx.budget_drive_root or ctx.drive_root)
+    if getattr(ctx, "event_queue", None) is None:
+        from ouroboros.presence_owner_contact import flush_owner_events
+        flush_owner_events(root, ctx.pending_events)
     # Without a queue (a Presence turn may have none) the buffer keeps its events for the final flush.
     while ctx.pending_events and getattr(ctx, "event_queue", None) is not None:
         ctx.event_queue.put(dict(ctx.pending_events[0]))
@@ -817,9 +820,12 @@ def announce_wait_ended(root: Any, task_id: str, quiz_id: str, chat_id: int) -> 
     if not quiz_id:
         return
     try:
-        from ouroboros.owner_quiz import mark_wait_ended
+        from ouroboros.owner_quiz import mark_wait_ended, quiz_states
+        from ouroboros.presence_owner_contact import private_main_contact
 
         changed = mark_wait_ended(root, task_id, quiz_id)
+        block = quiz_states(root, task_id).get(quiz_id) or {}
+        chat_id = int(block.get("publication_chat_id", 1 if private_main_contact(block, task_id) else chat_id))
     except Exception:
         log.debug("owner-wait end not recorded on quiz %s", quiz_id, exc_info=True)
         return
@@ -955,9 +961,9 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
         ctx._owner_wait_deadline_at = ""
         return
     callback = getattr(ctx, "owner_wait_callback", None)
-    # A Presence author has only the narrow review-wait owner (``presence_continuation``): it
-    # parks for a review it left and never gains owner quizzes, sleeps or budget pauses through it.
-    review_callback = getattr(ctx, "review_wait_callback", None) if review_binding else None
+    # Presence validates its own review/private question at this narrow seam;
+    # the callback grants no sleep, detach, owner Pause or budget-pause capability.
+    review_callback = getattr(ctx, "review_wait_callback", None)
     if not callable(callback) and not callable(review_callback):
         raise RuntimeError("required owner wait has no worker continuation owner")
     checkpoint = checkpoint_owner_wait(ctx, messages, trace, usage, round_idx, tool_schemas, seen,
@@ -965,7 +971,8 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
     from ouroboros import model_sleep
 
     if not callable(callback):
-        review_callback(ctx, checkpoint, messages)
+        outcome = review_callback(ctx, checkpoint, messages)
+        append_wake_notice(ctx, checkpoint, outcome, messages)
     elif sleep := checkpoint.get("sleep"):
         model_sleep.begin(ctx)
         checkpoint["sleep_started_at"] = ctx._model_sleep_started

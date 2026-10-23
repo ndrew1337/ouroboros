@@ -53,6 +53,11 @@ def resolve_quiz_publication(root: Any, task_id: str, block: dict, proposed_chat
                 or block.get("publication_evidence") not in {"pre_exposure", "history"}):
             raise ValueError("publication_address_unknown")
         return block["publication_chat_id"]
+    # A host-bound place question is private Main contact even if its work is
+    # later bound to a Project. The external room is never a fallback address.
+    from ouroboros.presence_owner_contact import private_main_contact
+    if private_main_contact(block, task_id):
+        return WEB_UI_CHAT_ID
     from ouroboros.projects_registry import RoomResolver
 
     # Use the public task-tree room rule before the immutable publication is bound.

@@ -237,6 +237,7 @@
 /** @typedef {import('./client_contract_types.js').ConversationFinishedOutbound} ConversationFinishedOutbound */
 /**
  * @typedef {Object} ChatOutbound
+ * @property {import('./client_contract_types.js').PresenceContact=} presence_contact
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
  * @property {string=} closed_reason
  * @property {string=} closed_at
@@ -563,6 +564,8 @@
 
 /**
  * @typedef {Object} QuizOutbound
+ * @property {import('./client_contract_types.js').PresenceContact=} presence_contact
+ * @property {string=} wait_ended_at
  * @property {Array<Object>=} materials Validated existing artifact references.
  * @property {{kind:'publication'|'answer'|'closure',state:'owed'|'delivered',reason_code?:string,dismissed?:boolean}=} question_delivery Canonical settlement delivery fact.
  * @property {string=} closed_reason

@@ -105,7 +105,7 @@ def review_native_transcript_bound(
         model_id=model_id, binding=dict(use_local=use_local, model_role=model_role,
                                        credential_profile_id=credential_profile_id, model_route=model_route))
     capacity = _CHARS_PER_ESTIMATED_TOKEN * max(0, int(calibrated_input_token_limit(
-        str(model_id or ""), context_window=window, output_reserve=reserve,
+        str(model_id or ""), context_window=sized, output_reserve=reserve,
         tokenizer_margin=margin, budget_cap=window)))
     return max(0, capacity)
 

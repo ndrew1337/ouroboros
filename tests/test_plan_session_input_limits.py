@@ -123,7 +123,7 @@ def test_large_room_fits_actual_session_wrapper_and_keeps_exact_source(harness, 
     assert "Preserve original files." in source.decode("utf-8")
     assert manifest["own_dialogue"]["file"] in task
     facts = delivery["dialogue_delivery"][slot.slot_id]
-    assert facts["window"] == "unasserted" and facts["input_limit"]["fits"] is True
+    assert facts["window"] == "unknown" and facts["input_limit"]["fits"] is True
     assert facts["input_limit"]["prompt_chars"] == delivery["slot_prompt_chars"][slot.slot_id] == len(actual_prompt)
     assert len(packet) > 1_000_000
 
@@ -164,7 +164,7 @@ def test_asserted_and_transport_bounds_are_independent(harness, monkeypatch, ass
         asserted=asserted, monkeypatch=monkeypatch)
     facts = delivery["dialogue_delivery"][slot.slot_id]
     assert facts["conversation_inline_rows"] == expected_rows
-    assert facts["window"] == ("asserted" if asserted else "unasserted")
+    assert facts["window"] == ("user_setting" if asserted else "unknown")
     assert facts["input_limit"]["limit"] == transport_bound
 
 

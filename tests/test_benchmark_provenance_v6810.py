@@ -588,6 +588,7 @@ _TRUNCATION_DECISIONS: dict[str, tuple[bool, str]] = {
     "upload_unreadable": (False, "gateway/files.py: a chat attachment's confined read failed; HTTP 503, not a task terminal"),
     "history_source_unavailable": (False, "gateway/history_paging.py: readable recent projection with explicit source gap; no task attempt was truncated"),
     "quiz_delivery_failed": (False, "gateway/task_decision.py: the answer was recorded and its delivery stays owed (503, retry); never a task terminal or trial truncation"),
+    "quiz_answer_unconfirmed": (False, "503 before any answer was recorded; not a task terminal or truncation"),
     "awaiting_recipient_read": (False, "question_answers.py: a recorded answer is in its living recipient's mailbox (paused or held too), read pending; a delivery fact on the question, never a task terminal"),
     "asker_not_reading": (False, "question_answers.py: no living asker or successor holds the answer, so it goes to named ingress in its room (the asker's live late-answer head, else a fresh head); a delivery fact, never a task terminal"),
     "promotion_not_started": (False, "promotion_intent.py: boot reconciliation of a start_task intent proven never admitted; that separate work never ran (explicit retry), so nothing was truncated and it is never a trial root's code"),

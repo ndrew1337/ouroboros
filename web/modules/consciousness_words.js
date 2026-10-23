@@ -37,6 +37,8 @@ export const WAKE_FACT_WORDS = Object.freeze({
     my_thread: 'replies in its threads',
     new_issue: 'new issues',
     new_pull_request: 'new pull requests',
+    review_requested: 'review requests addressed to me',
+    assigned: 'assignments addressed to me',
     any_message: 'every message',
     from_bot: 'messages from bots',
     legacy_addressed: 'messages addressed to it',

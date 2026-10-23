@@ -856,6 +856,7 @@ def provider_terminal_fallback_text(
             "⚠️ Context-size recovery ended without a fitting request; no further provider call was made. "
             "The recovery passes, the configured fallback and a renewed view could not make it fit"
             f"{f' ({facts})' if facts else ''}. The exact transcript and any files written so far are preserved."
+            + _failure_window_fact(accumulated_usage, overflow=True)
         )
     if is_transport_wait:
         if unknown:
@@ -897,7 +898,26 @@ def provider_terminal_fallback_text(
         f"{_unknown_terminal_recovery_hint(accumulated_usage) if unknown else provider_recovery_hint(accumulated_usage)}"
         f"{UNKNOWN_ATTEMPT_COST_NOTE if unknown else ''} "
         "Any files written so far are preserved in the workspace."
+        + _failure_window_fact(accumulated_usage)
     )
+
+
+def _failure_window_fact(usage, *, overflow=False):
+    if not overflow and usage.get("_last_llm_error_kind") not in {"bad_request", "request_too_large", "context_overflow"}:
+        return ""
+    from ouroboros.capability_evidence import _parse_ctx_requested
+    from ouroboros.context_view_facts import window_projection
+    from ouroboros.context_window import WindowRecord
+
+    input_tokens, _reply, total = _parse_ctx_requested(usage.get("_last_llm_provider_message", ""))
+    if input_tokens or total:
+        request = f"request {'input' if input_tokens else 'total'} {input_tokens or total:,} tokens (provider stated)"
+    else:
+        estimate = int(usage.get("_context_prompt_estimate") or 0)
+        request = f"request input estimated {estimate:,} tokens" if estimate else "request size unknown"
+    window = usage.get("_context_window") or window_projection(WindowRecord("", reserve=int(
+        usage.get("_context_response_reserve_tokens") or 0)))
+    return f"\n{request}; assumed {window['text']}."
 
 
 

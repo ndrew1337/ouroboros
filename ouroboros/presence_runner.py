@@ -1016,6 +1016,15 @@ def run_presence_turn(
             return _run_current()
         finally:
             try:
+                # Inline turns emit no task_done. Only a proven terminal row ends
+                # the question/wait projections; an unknown attempt stays unknown.
+                terminal = _stored_turn(Path(drive_root), task_id, identity)
+                if terminal.get("status") in {STATUS_COMPLETED, STATUS_FAILED, STATUS_CANCELLED}:
+                    from supervisor.queue_transitions import reconcile_terminal_task_projections
+                    reconcile_terminal_task_projections(Path(drive_root), task_id)
+            except Exception:
+                log.warning("Presence %s terminal projections remain unconfirmed", task_id, exc_info=True)
+            try:
                 from supervisor.queue_transitions import release_turn_acceptance_fence  # no task_done ends a turn
                 release_turn_acceptance_fence(Path(drive_root), task_id)  # before "not live": no open row outlives it
             finally:  # a turn whose release failed still stops reading live
@@ -1130,6 +1139,11 @@ def run_presence_turn(
         try:
             lease.intake_agent = agent
             events = agent.handle_task(task)
+            # Unlike a pooled worker, this runner has no end-of-task event drain.
+            # Private owner contact still uses the existing durable delivery owners
+            # when there was no live queue (or its enqueue acknowledgement failed).
+            from ouroboros.presence_owner_contact import flush_owner_events
+            flush_owner_events(Path(drive_root), events)
         except BaseException:  # its executor ended without a terminal: record that end, never a re-run
             _notify_unresolved_turn(Path(drive_root), task_id)
             raise

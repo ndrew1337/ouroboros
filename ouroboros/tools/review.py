@@ -512,14 +512,14 @@ def _triad_governance_usable_window(api_models: list, api_slots: list) -> int:
     the QUORUM limit the fit ladder already sizes the packet with (one SSOT),
     never the narrowest row — one small slot degrades its own seat instead of
     stripping the whole panel's rules."""
-    from ouroboros.reviewer_window import reviewer_window_binding
+    from ouroboros.reviewer_window import reviewer_input_limit, reviewer_window_binding
 
     usable: dict = {}
     for model, slot in zip(api_models, api_slots):
         window = reviewer_context_window(model, **(binding := reviewer_window_binding(slot)))
         output_reserve, tokenizer_margin = window_scaled_reserves(
             window, output_reserve=_review_output_budget(), tokenizer_margin=50_000, model_id=model, binding=binding)
-        usable[slot.slot_id] = max(0, int(window) - int(output_reserve) - int(tokenizer_margin))
+        usable[slot.slot_id] = max(0, reviewer_input_limit(window, output_reserve) - int(tokenizer_margin))
     return _quorum_input_token_limit(list(usable), usable) if usable else 0
 
 
