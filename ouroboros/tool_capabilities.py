@@ -21,7 +21,7 @@ OWNER_DELIVERY_TOOL_NAMES: frozenset[str] = frozenset({
 # child's sets below carry it for the child's own drafts only).
 COGNITIVE_MEMORY_TOOL_NAMES: frozenset[str] = frozenset({
     "knowledge_read", "knowledge_write", "knowledge_list",
-    "update_scratchpad", "update_identity", "chat_history",
+    "update_scratchpad", "update_identity", "update_world", "chat_history",
     "memory_read", "memory_mark",
 })
 
@@ -148,7 +148,8 @@ ACTING_SUBAGENT_MODE: str = "acting_subagent"
 # (isolated self_worktree / shared external_workspace) and run shell/services there.
 # They explicitly CANNOT commit the live body (commit_reviewed /
 # vcs_commit_reviewed), run runtime control, touch the skills lifecycle, enable
-# tools, or write identity or scratchpad (update_identity / update_scratchpad).
+# tools, or write identity, the world map or scratchpad (update_identity /
+# update_world / update_scratchpad).
 # Knowledge notes and memory marks they may write in their own name: the host
 # signs both with the child's focus. chronicle_write publishes only their drafts of
 # pages and parts, which the integrating mind accepts or rejects; a note, correction

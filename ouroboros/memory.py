@@ -187,6 +187,7 @@ class Memory:
     def world_path(self) -> pathlib.Path: return self._memory_path("WORLD.md")
     def journal_path(self) -> pathlib.Path: return self._memory_path("scratchpad_journal.jsonl")
     def identity_journal_path(self) -> pathlib.Path: return self._memory_path("identity_journal.jsonl")
+    def world_journal_path(self) -> pathlib.Path: return self._memory_path("world_journal.jsonl")
     def logs_path(self, name: str) -> pathlib.Path:  # once per instance: a resolve lstat's every component
         return self._logs.get(name) or self._logs.setdefault(name, (self.drive_root / "logs" / name).resolve())
 

@@ -215,13 +215,13 @@ ouroboros/ — agent core and shared runtime (§6)
   consciousness.py, consciousness_wake.py — the background alarm admitting an ordinary Main turn through the supervisor tick; the wake input and `wake_task_metadata` envelope (§6 Background consciousness)
   consciousness_authority.py, consciousness_allowance.py — dispatch-bound autonomy ceilings and the rolling 24-hour spend allowance (§6 Background consciousness and Evolution)
   chat_chain.py, chat_references.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source` (§6)
-  chronicle_store.py — append-only chronicle: pages/parts, version-bound accounts and separate common-view selections; disposable index (§6 Durable memory)
-  chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6 Durable memory)
+  chronicle_store.py — append-only chronicle: pages/parts, version-bound accounts and separate common-view selections; disposable index (§6)
+  chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
   consolidator.py — shared Light transport and scratchpad compression; writes no knowledge (§6)
   memory_fallback.py — one signed Light helper draft per root task while consciousness is off (§6)
   memory.py — scratchpad, identity, chat history
-  knowledge.py — linked-Markdown notes with shelf indexes and revision-checked writes, so concurrent cognition cannot silently overwrite a newer note (§6 Durable memory)
-  memory_publication.py — per-file revision-checked identity/registry publication, atomic source replacement and origin-stamped history (§6 Durable memory)
+  knowledge.py — linked-Markdown notes with shelf indexes and revision-checked writes, so concurrent cognition cannot silently overwrite a newer note (§6)
+  memory_publication.py — per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
   memory_journal_compaction.py — compatibility entry point that only measures journal sizes (`server_maintenance.py` emits `memory_journal_observation`); history stays complete
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
   task_tree_ledger.py — append-only `data/task_trees/<root>/blackboard.jsonl`: ephemeral swarm coordination (`tree_note`/`tree_read`), mirrored into the project journal at root completion
@@ -239,7 +239,7 @@ ouroboros/ — agent core and shared runtime (§6)
   context_measurement.py — sealed-request facts, deficits and reply allowance in route units (§6 Context fitting)
   context_budget.py — budget vocabulary and typed reclaim SSOT; `estimate_message_chars` (§6 Context fitting)
   context_mode_compat.py — `load_settings()` normalizes/persists `OUROBOROS_CONTEXT_MODE`/`OUROBOROS_CONTEXT_MODE_AUTO_LOW` together (§7 Default settings)
-  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses (§6 Durable memory)
+  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses (§6)
   memory_floor.py — physical memory-view floor: overflow becomes address lines, people's words last (§6 Context fitting)
   capability_evidence.py, response_limits.py — sourced capability, token-density and maximum-response evidence (`data/state/capability_evidence.json`); windows size sends and grant no review authority (§6 Prompt size, density and windows)
   density_probe.py — the bounded cold-start review-density probe, re-exported by capability_evidence (§6 Prompt size, density and windows)
@@ -406,7 +406,7 @@ ouroboros/ — agent core and shared runtime (§6)
   utils.py — SSOT for atomic JSON, timestamps, hashes, sanitization, subprocess helpers, `truncate_review_artifact`
   jsonl_tail.py — `JsonlChainSnapshot` (captured byte reads of a file chain; the swarm rollup) and the bounded filtered tail over the rotated file logs
   markdown_source.py — byte-preserving Markdown structure shared by books and knowledge notes; physical ranges tied to source SHA; `MarkdownSourceError` keeps a missing grammar or malformed YAML visible
-  world_profiler.py — Generates WORLD.md
+  world_profiler.py — WORLD.md's fenced measured block, refreshed each start; the rest is the mind's map (`update_world`) (§6)
   contracts/ — Frozen ABI package (§11)
     tool_context.py — ToolContextProtocol
     tool_abi.py — ToolEntryProtocol + GetToolsProtocol
@@ -613,7 +613,7 @@ ouroboros/ — agent core and shared runtime (§6)
 
 `POST /api/tasks` creates an ordinary managed root (§4); the CLI refuses any `delegation_role` other than `root`, and only `schedule_subagent` creates children. Admission reserves the task id and a worker-pool slot under one queue lock, off the HTTP event loop, so a cancelled HTTP waiter never cancels an admitted task; unconfirmed persistence answers 503 `unconfirmed` and keeps the row. Attachments are copied into the effective task drive before enqueue; a stored artifact reference is no host-path authority.
 
-Workspace tasks default to `memory_mode=forked`; `shared` is refused for an external workspace and runs on a forked child drive in project scope. The stored `memory_mode` says what was requested and `drive_root` where the task executes, so isolation never depends on relabelling the request. The mode isolates the execution drive and knowledge seed; identity and scratchpad writes still land on the canonical root. Forked and empty drives live under `data/state/headless_tasks/<task_id>/data`: a fork copies `identity.md`, `WORLD.md`, `registry.md` and global knowledge (only `knowledge/patterns.md` for project forks); dialogue, scratchpad, mailbox and history never cross, and the child's context still comes from repository governance and the canonical root's shared memory. `memory_export.json` is an explicit artifact, never auto-merged.
+Workspace tasks default to `memory_mode=forked`; `shared` is refused for an external workspace and runs on a forked child drive in project scope. The stored `memory_mode` says what was requested and `drive_root` where the task executes, so isolation never depends on relabelling the request. The mode isolates the execution drive and knowledge seed; identity, world-map and scratchpad writes still land on the canonical root. Forked and empty drives live under `data/state/headless_tasks/<task_id>/data`: a fork copies `identity.md`, `WORLD.md`, `registry.md` and global knowledge (only `knowledge/patterns.md` for project forks); dialogue, scratchpad, mailbox and history never cross, and the child's context still comes from repository governance and the canonical root's shared memory. `memory_export.json` is an explicit artifact, never auto-merged.
 
 `--detach` returns after durable admission; `--no-stream` polls to completion. `ouroboros run` exits 0 only for a completed lifecycle with a clean execution axis, no failed or degraded objective and a finished artifact bundle (`_is_terminal_success`), so shell automation cannot read "the model answered" as "the deliverable exists"; `--patch`/`--patch-out` are stricter and trust `workspace_patch.json`, which distinguishes an omitted, no-op and failed patch (§6 Headless finalization and workspace patch capture). An explicitly partial cost gets a bounded finality wait (`_await_cost_finality`) before its partial flags stay visible. Schedules enqueue ordinary tasks (no second scheduler, §5); skill `scheduled_tasks` only suggest (`skill_schedule_suggestions.py`). A blank timezone means the DST-aware system zone (fixed offset only when that zone is unrecoverable); the schedule digest rides task and consciousness context.
 
@@ -732,7 +732,7 @@ Default root (overrides: §7). This tree is the orientation carrier; `docs/PERSI
 │   │   ├── dialogue_blocks.json   ← chronicle import source, with dialogue_summary.md
 │   │   ├── dialogue_meta.json     ← chronicle import cursor and nomination source
 │   │   ├── chronicle/             ← records.jsonl (append-only authority), index.sqlite3 (disposable)
-│   │   ├── WORLD.md               ← host profile from first run
+│   │   ├── WORLD.md               ← my world map
 │   │   ├── knowledge/             ← topic files, patterns.md (Pattern Register), improvement-backlog.md
 │   │   ├── deep_review.md         ← deep-self-review output
 │   │   ├── registry.md            ← memory awareness map

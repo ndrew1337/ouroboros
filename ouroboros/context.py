@@ -16,6 +16,7 @@ from ouroboros.desktop_autostart import runtime_facts as desktop_runtime_facts
 from ouroboros.context_budget import (
     LARGE_CONTEXT_SECTION_CHARS,
     SCRATCHPAD_SECTION_BUDGET_CHARS,
+    WORLD_SECTION_BUDGET_CHARS,
 )
 from ouroboros.context_fit import (
     ContextCore as _ContextCore,
@@ -646,7 +647,8 @@ from ouroboros.context_sections import (  # noqa: E402,F401 — existing public 
 from ouroboros.section_floor import HostSection, capture_sections, labelled_section  # noqa: E402
 
 
-_SECTION_BUDGETS = {"scratchpad": SCRATCHPAD_SECTION_BUDGET_CHARS, "identity": 80_000, "registry": 30_000, "world": 16_000}
+_SECTION_BUDGETS = {"scratchpad": SCRATCHPAD_SECTION_BUDGET_CHARS, "identity": 80_000, "registry": 30_000,
+                    "world": WORLD_SECTION_BUDGET_CHARS}
 
 
 def _warn_if_over_budget(name: str, content: str) -> None:
@@ -759,7 +761,7 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
         world_file = memory.load_world_profile()
         world_raw = world_file.strip()
         if world_raw:
-            # Generated profile is full; oversize is a generation-discipline bug.
+            # The map loads whole; oversize is the mind's to compact (detail to knowledge).
             _warn_if_over_budget("world", world_raw)
             sections.append(_world_section(world_file))
 
@@ -779,11 +781,11 @@ def _world_section(world_file: str) -> HostSection:
     from ouroboros.context_layout import generate_doc_nav_map
 
     reader = "read_file(root='runtime_data', path='memory/WORLD.md', start_line=A, max_lines=N)"
-    full = ("## Environment Profile (from `memory/WORLD.md` — already loaded; delete WORLD.md and restart to "
-            "regenerate if the host environment changes)\n\n" + world_file.strip())
-    headings = generate_doc_nav_map(world_file, title="Environment Profile", rel_path="memory/WORLD.md",
+    full = ("## My World (from `memory/WORLD.md` — already loaded; the measured block refreshes at startup, "
+            "the rest is mine to keep current with update_world; compact, detail in knowledge)\n\n" + world_file.strip())
+    headings = generate_doc_nav_map(world_file, title="My World", rel_path="memory/WORLD.md",
                                     instructions=False).split("\n", 2)[2]  # below its own title line
-    return HostSection("world", full, f"## Environment Profile (from `memory/WORLD.md`)\n\n{headings}\n\n"
+    return HostSection("world", full, f"## My World (from `memory/WORLD.md`)\n\n{headings}\n\n"
                                       f"Its line ranges read with {reader}.")
 
 

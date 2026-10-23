@@ -627,13 +627,13 @@ def test_an_already_failed_portal_follows_a_later_fast_continue(project_chat, jo
 
 def test_empty_output_recovery_preserves_failed_card_and_continue(project_chat, tmp_path):
     """The new terminal cause uses the real card/replay/Continue consumers, not a new UI."""
-    from ouroboros.owner_continue import continuation_eligibility
+    from ouroboros.owner_continue import continuation_offer
     from ouroboros.project_dialogue import TASK_CAUSE_PHRASES
     page, expect, state = project_chat["page"], project_chat["expect"], project_chat["state"]
     reason = "output_recovery_exhausted"
     record = _interrupted(reason_code=reason, root_task_id="creation",
         outcome_axes={"execution": {"status": "infra_failed"}, "objective": {"status": "not_evaluated"}})
-    record["continuation_offer"] = continuation_eligibility(record, "creation")
+    record["continuation_offer"] = continuation_offer(record, "creation")
     assert record["continuation_offer"]["eligible"]
     project_chat["details"]["creation"] = record
     state["active_chat_activities"] = [r for r in state["active_chat_activities"] if r["activity_id"] != "creation"]
@@ -647,6 +647,40 @@ def test_empty_output_recovery_preserves_failed_card_and_continue(project_chat, 
         expect(card.locator('[data-continue-task]')).to_have_text("Continue")
         expect(card).to_contain_text(TASK_CAUSE_PHRASES[reason])
     card.screenshot(path=_evidence(tmp_path, project_chat, "output-recovery"), animations="disabled")
-    project_chat["continues"]["creation"] = {"ok": True, "successor_task_id": SUCCESSOR, "status": "scheduled"}
-    card.locator('[data-continue-task]').click()
-    expect(card.locator('[data-continue-task]')).to_have_text("Continued")
+    admitted = []
+
+    def admit(route):
+        # An accepted Continue persists its link before replying; the portal immediately rereads that record.
+        payload = route.request.post_data_json
+        assert route.request.method == "POST" and payload["action_nonce"], payload
+        admitted.append(payload)
+        binding = {"project_id": "alpha", "chat_id": 7}
+        record["continued_by"] = {"state": "admitted", "successor_task_id": SUCCESSOR,
+                                  "action_nonce": payload["action_nonce"], "binding": binding}
+        record["continuation_offer"] = continuation_offer(record, "creation")
+        project_chat["details"][SUCCESSOR] = {"task_id": SUCCESSOR, "status": "pending", **binding}
+        state["task_bindings"][SUCCESSOR] = binding
+        state["active_chat_activities"].append({"activity_id": SUCCESSOR, "kind": "managed_task", "phase": "queued",
+                                                "started_at": 1791468600, "cancelable": True, **binding})
+        route.fulfill(json={"ok": True, "successor_task_id": SUCCESSOR, "status": "scheduled"})
+
+    page.route("**/api/tasks/creation/continue", admit)
+    with page.expect_response(lambda r: r.url.endswith('/api/tasks/creation/continue')) as accepted:
+        card.locator('[data-continue-task]').click()
+    assert accepted.value.json()["ok"]
+    for replay in (False, True):
+        if replay:
+            page.reload()
+            page.wait_for_function("() => window.chat && document.querySelector('#chat-messages .chat-bubble')")
+        page.evaluate("s => chat.hydrateStateSnapshot(s)", with_work_fields(state))
+        successor = _card(page, SUCCESSOR)
+        expect(successor).to_be_visible(timeout=15000)
+        expect(successor.locator('.chat-live-phase').first).to_have_text("Queued")
+        expect(card).to_be_hidden()
+        assert _visible_cards(page) == [SUCCESSOR, "transfer"], "Continue keeps one card for the work"
+        episodes = successor.locator('.chat-live-episode')
+        expect(episodes).to_have_count(2)
+        expect(episodes.first).to_contain_text(_episode(1, "13:57–14:09", "Failed", name=WORK))
+        expect(episodes.first).to_contain_text(TASK_CAUSE_PHRASES[reason])
+        expect(successor.locator('[data-continue-task]')).to_have_count(0)
+    assert len(admitted) == 1 and not record["continuation_offer"]["eligible"], admitted

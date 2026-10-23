@@ -158,10 +158,12 @@ def _snapshot(tmp_path, monkeypatch, *, tracked_evidence=False, baseline_link=""
 def _write_evidence(copy):
     run = copy / ".review-evidence" / "run-1"
     run.mkdir(parents=True)
-    (run / "result.json").write_text('{"returncode": 0}\n', encoding="utf-8")
-    (copy / ".review-evidence" / "notes.txt").write_text("checked with the fixture\n", encoding="utf-8")
-    return {".review-evidence/run-1/result.json": b'{"returncode": 0}\n',
-            ".review-evidence/notes.txt": b"checked with the fixture\n"}
+    # Retention preserves bytes: exercise both LF and CRLF on every host.
+    expected = {".review-evidence/run-1/result.json": b'{"returncode": 0}\n',
+                ".review-evidence/notes.txt": b"checked with the fixture\r\n"}
+    for name, payload in expected.items():
+        (copy / name).write_bytes(payload)
+    return expected
 
 
 def _retained(block):
@@ -397,9 +399,9 @@ def test_evidence_written_after_a_retained_summary_is_retained_before_release(tm
     try:
         capture = _capture_terminal_patch(ctx, entry)
         assert capture["named_evidence"]["status"] == "retained" and capture["named_evidence"]["witness"]
-        (copy / ".review-evidence" / "later.log").write_text("written after the first retention\n", encoding="utf-8")
-        (copy / ".review-evidence" / "notes.txt").write_text("rewritten later\n", encoding="utf-8")
-        expected.update({".review-evidence/later.log": b"written after the first retention\n",
+        (copy / ".review-evidence" / "later.log").write_bytes(b"written after the first retention\r\n")
+        (copy / ".review-evidence" / "notes.txt").write_bytes(b"rewritten later\n")
+        expected.update({".review-evidence/later.log": b"written after the first retention\r\n",
                          ".review-evidence/notes.txt": b"rewritten later\n"})
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
         assert "🚫 Rejected" in out and not copy.exists(), out
@@ -434,7 +436,7 @@ def test_tracked_files_under_the_evidence_folder_stay_in_the_product_patch(tmp_p
 
     target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch, tracked_evidence=True)
     (copy / ".review-evidence" / "keep.txt").write_text("the project's own file, edited\n", encoding="utf-8")
-    (copy / ".review-evidence" / "new.log").write_text("session log\n", encoding="utf-8")
+    (copy / ".review-evidence" / "new.log").write_bytes(b"session log\r\n")
     if staged:
         _git(copy, "add", "-A")
     entry = _isolated_entry(ctx, target, handle)
@@ -447,7 +449,7 @@ def test_tracked_files_under_the_evidence_folder_stay_in_the_product_patch(tmp_p
         assert excluded in manifest["tracked_excluded" if staged else "untracked_excluded"]
         patch = pathlib.Path(capture["patch_artifact"]).read_text(encoding="utf-8")
         assert "edited" in patch and "session log" not in patch
-        assert _retained(capture) == {".review-evidence/new.log": b"session log\n"}
+        assert _retained(capture) == {".review-evidence/new.log": b"session log\r\n"}
         out = _integrate_delegated_patch(ctx, "run-1", "apply", "checked")
         assert "✅ Integrated" in out, out
         assert (target / ".review-evidence" / "keep.txt").read_text(encoding="utf-8") == "the project's own file, edited\n"
@@ -467,8 +469,8 @@ def test_baseline_evidence_symlinks_are_product_and_do_not_block_unrelated_work(
     (copy / "feature.py").write_text("VALUE = 7\n", encoding="utf-8")
     expected = {}
     if baseline_link == "entry":
-        (copy / ".review-evidence" / "check.log").write_text("new evidence\n", encoding="utf-8")
-        expected[".review-evidence/check.log"] = b"new evidence\n"
+        (copy / ".review-evidence" / "check.log").write_bytes(b"new evidence\r\n")
+        expected[".review-evidence/check.log"] = b"new evidence\r\n"
         # An edited baseline symlink is still product; retention never reads either target.
         link = copy / ".review-evidence" / "project-link"
         link.unlink()
@@ -488,9 +490,14 @@ def test_baseline_evidence_symlinks_are_product_and_do_not_block_unrelated_work(
         assert (target / "feature.py").exists() is (decision == "apply")
         assert not copy.exists() and _retained(capture) == expected
         link = target / ".review-evidence" if baseline_link == "root" else target / ".review-evidence/project-link"
-        assert link.is_symlink()
+        # With core.symlinks=false (Git for Windows' default on hosted runners) Git writes an
+        # applied link edit as a plain file holding its target; the edit is still product.
+        plain = (decision == "apply" and baseline_link == "entry" and _git(
+            target, "config", "--type=bool", "--get", "core.symlinks", check=False).stdout.strip() == "false")
+        assert link.is_symlink() is not plain
         if baseline_link == "entry":
-            assert link.readlink().as_posix() == ("../feature.py" if decision == "apply" else "../tracked.txt")
+            text = link.read_text(encoding="utf-8") if plain else link.readlink().as_posix()
+            assert text == ("../feature.py" if decision == "apply" else "../tracked.txt")
     finally:
         custody._CUSTODY.clear()
 

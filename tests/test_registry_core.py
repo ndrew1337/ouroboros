@@ -785,7 +785,8 @@ def test_light_actionable_redirects_keep_legacy_mapping_without_light_remap(
         expected_text = (
             "⚠️ COGNITIVE_TOOL_REQUIRED: cognitive memory is not written via 'write_file'. "
             "Use the dedicated first-class tools (always available in light mode): "
-            "update_identity for memory/identity.md, update_scratchpad for "
+            "update_identity for memory/identity.md, update_world for memory/WORLD.md, "
+            "update_scratchpad for "
             "memory/scratchpad.md, knowledge_write for memory/knowledge/<topic>.md. They "
             "apply the correct structure (journaling, timestamped blocks, index maintenance). "
             "Read the current state before writing (Bible P12)."

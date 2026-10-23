@@ -143,7 +143,7 @@ def test_a_visible_receipt_line_keeps_its_node_when_the_newest_window_moves_past
         browser = getattr(pw, browser_engine).launch(headless=True)
         try:
             # A feed shorter than the bounded timeline lets it overhang both edges.
-            page = browser.new_page(viewport={'width': 1280, 'height': 440})
+            page = browser.new_page(viewport={'width': 1280, 'height': 360})
             _open(page, direct_server_with_data['url'])
             feed = _open_project(page, project)
             card = page.locator(f'{feed} .chat-live-card[data-task-id="{task_id}"]')

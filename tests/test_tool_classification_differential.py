@@ -355,7 +355,7 @@ def _golden() -> dict[str, dict]:
 # New producer contracts have no historical answer: the recorded old SHA is
 # unavailable. Keep the historical corpus intact and assert the new observed
 # outcome explicitly rather than manufacture old evidence (04-AGENCY S1/S3).
-CURRENT_PRODUCER_CONTRACTS = {
+CURRENT_PRODUCER_CONTRACTS = {"WORLD_SIZE_NOTICE": (False, "ok"),  # the map's size notice rides a successful update_world
     # D1 per-target mutation custody: the existing INTEGRATE_ family reports a
     # busy target as a substrate refusal; no historical answer is fabricated.
     "INTEGRATE_DELEGATED_TARGET_BUSY": (True, "integration_blocked"),

@@ -68,12 +68,16 @@ def test_chat_header_decoration_does_not_clip_menu_and_system_actions_keep_gap(s
         assert metrics["below"] == pytest.approx(12, abs=0.5), metrics
     header = page.locator(".chat-page-header")
     paint = header.evaluate("""el => ({mask:getComputedStyle(el).maskImage,
-        overflow:getComputedStyle(el).overflow, fade:getComputedStyle(el,'::before').maskImage,
-        blur:getComputedStyle(el,'::before').backdropFilter,
-        pointer:getComputedStyle(el,'::before').pointerEvents})""")
+        overflow:getComputedStyle(el).overflow, background:getComputedStyle(el).backgroundColor,
+        before:getComputedStyle(el,'::before').content})""")
     assert paint["mask"] == "none" and paint["overflow"] == "visible", paint
-    assert "gradient" in paint["fade"] and "blur" in paint["blur"], paint
-    assert paint["pointer"] == "none"
+    # The full-width fade gave way to individually backed capsules (#2193); menus still escape the bar.
+    assert paint["background"] == "rgba(0, 0, 0, 0)" and paint["before"] in ("none", "normal"), paint
+    backing = header.locator('.app-page-title-row').evaluate("""el => {
+        const s = getComputedStyle(el), channels = s.backgroundColor.match(/[0-9.]+/g).map(Number);
+        return {alpha: channels[3] ?? 1, blur: s.backdropFilter, shadow: s.boxShadow};
+    }""")
+    assert backing["alpha"] >= 0.98 and "blur" in backing["blur"] and backing["shadow"] != "none", backing
     page.locator("#chat-messages").evaluate("el=>el.scrollTop=0")
     setup_browser.capture(page, f"shell-chat-actions-{width}")
     page.locator("#chat-messages").evaluate("el=>el.scrollTop=160")

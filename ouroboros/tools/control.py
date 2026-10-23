@@ -358,6 +358,20 @@ def get_tools() -> List[ToolEntry]:
                 "expected_revision": {"type": "string", "description": "Required for an existing identity: source_revision (SHA-256 of bytes) from read_file. A stale revision refuses with the current revision."},
             }, "required": ["content"]},
         }, _update_identity),
+        ToolEntry("update_world", {
+            "name": "update_world",
+            "description": "Update my map of my world (memory/WORLD.md): what lives in my environment — "
+                           "agents, services, hosts, devices — how I reach each, what worked, what is held "
+                           "or refused. The host owns the measured block (system, roots, tools found at "
+                           "startup) and keeps it; I send the whole file with the rest revised. Read it "
+                           "first and keep it compact (detail belongs in knowledge). The same continuous "
+                           "file in every room and drive; this is the only correct way to write it — never "
+                           "write memory/WORLD.md through write_file/edit_text.",
+            "parameters": {"type": "object", "properties": {
+                "content": {"type": "string", "description": "Full file content; the host keeps or restores its measured block"},
+                "expected_revision": {"type": "string", "description": "Required for an existing file: source_revision (SHA-256 of bytes) from read_file. A stale revision refuses with the current revision."},
+            }, "required": ["content"]},
+        }, _update_world),
         ToolEntry("toggle_evolution", {
             "name": "toggle_evolution",
             "description": "Enable or disable evolution mode. When enabled, Ouroboros runs continuous self-improvement cycles. Enabling requires runtime_mode 'advanced', 'pro', or 'cyber_pro'; it is refused in 'light' mode.",
@@ -472,6 +486,7 @@ from ouroboros.tools.control_runtime import (  # noqa: E402, F401 -- intentional
     _toggle_evolution,
     _update_identity,
     _update_scratchpad,
+    _update_world,
 )
 
 

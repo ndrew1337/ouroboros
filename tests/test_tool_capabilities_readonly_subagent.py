@@ -47,6 +47,7 @@ def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkey
         "edit_text",
         "update_scratchpad",
         "update_identity",
+        "update_world",
         "commit_reviewed",
         "preflight_review",
         "skill_review",

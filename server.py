@@ -19,7 +19,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 import uvicorn
 from ouroboros.server_control import (PanicIngress, execute_panic_stop as _execute_panic_stop_impl,
-                                      exit_after_restart, exit_after_shutdown,
+                                      exit_after_shutdown,
                                       restart_current_process as _restart_current_process_impl)  # noqa: F401 — restart lifecycle binding
 from ouroboros.owned_shutdown import (begin_owned_stop, finish_unconfirmed_stops, start_inherited_import,
                                        stop_owned_work)

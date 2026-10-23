@@ -747,11 +747,21 @@ def verify_system_state(env: Any, git_sha: str) -> None:
 
     identity_ok = identity_path.exists() and identity_path.stat().st_size > 0
     scratchpad_ok = scratchpad_path.exists()
+    # The map's measured block is the host's: refresh it in place at every start, keeping
+    # the text the mind wrote around it (a missing file is generated).
+    try:
+        from ouroboros.world_profiler import refresh_world_profile
+
+        world_refreshed = refresh_world_profile(
+            str(world_path), str(getattr(env, "repo_dir", "") or ""), str(memory_dir.parent))
+    except Exception:
+        log.debug("WORLD.md measured block refresh failed", exc_info=True)
+        world_refreshed = False
     world_ok = world_path.exists()
 
     checks["identity"] = {"exists": identity_path.exists(), "non_empty": identity_ok}
     checks["scratchpad"] = {"exists": scratchpad_ok}
-    checks["world_profile"] = {"exists": world_ok}
+    checks["world_profile"] = {"exists": world_ok, "measured_refreshed": world_refreshed}
 
     if not identity_ok:
         issues += 1

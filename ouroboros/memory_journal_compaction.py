@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 import stat
 
 
-_JOURNALS = ("memory/identity_journal.jsonl", "memory/knowledge_history.jsonl",
+_JOURNALS = ("memory/identity_journal.jsonl", "memory/world_journal.jsonl", "memory/knowledge_history.jsonl",
              "memory/knowledge/patterns_history.jsonl")
 
 

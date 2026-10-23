@@ -737,6 +737,10 @@ def test_open_task_menu_never_outlives_its_census_state(room_ui, subject, ending
         page.wait_for_function("() => [...document.querySelectorAll('.toast')].some(t => t.textContent.includes('Pausing'))")
         assert [path for path, _ in transport.posts[posted:]] == [f"/api/tasks/{task_id}/pause"]
         assert transport.posts[-1][1].get("request_id"), transport.posts[-1]
+        # Hover pauses a toast's lifetime (#2193); move away so it expires while the Work list stays open.
+        notice = page.locator('#toast-stack .toast').filter(has_text="Pausing:")
+        page.mouse.move(0, 0)
+        notice.wait_for(state="detached")
         assert open_menu() == ["pause", "stop_now"]
         # Paused: a fresh open offers only Stop now (Resume is the row's own button); the old menu must go or match.
         first, last = transition("paused", lambda f: (f["word"], f["secondary"]) == ("Paused", ""),

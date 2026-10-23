@@ -112,7 +112,7 @@ EXPECTED_TOOLS = [
     "integrate_delegated_patch", "cancel_task", "resume_child_task",
     "peek_task", "discard_child_result", "override_delegation_constraint",
     "request_deep_self_review", "chat_history", "update_scratchpad",
-    "send_user_message", "update_identity", "toggle_evolution",
+    "send_user_message", "update_identity", "update_world", "toggle_evolution",
     "toggle_consciousness",
     "set_next_wakeup", "switch_model", "get_task_result",
     "wait_task", "wait_tasks", "await_messages", "tree_note", "tree_read",

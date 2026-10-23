@@ -2920,22 +2920,30 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
         padding-inline: 0;
     }
 
-    /* A COLLAPSED nested child keeps its one-line identity row — status chip ·
-       role · `N notes` · chevron — over its model/executor metadata (DESIGN.md
+    /* A COLLAPSED nested child keeps its identity row — status chip ·
+       role · Details · chevron — over its model/executor metadata (DESIGN.md
        §5) instead of dropping the title to a third band once its own inline
        width crosses this threshold (#623). The row never wraps: the side
-       controls keep their size and the role (nowrap/ellipsis, below) takes the
-       rest, so a long role ellipsizes before its `N notes` count would drop to
-       a row of its own. Higher specificity than the .chat-live-title rule
-       above, so the cascade decides, not source order. */
+       controls keep their size and the role reserves a readable fragment before
+       ellipsizing. A long waiting status wraps inside its chip. Higher specificity
+       than the .chat-live-title rule above, so the cascade decides, not source order. */
     .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button > .chat-live-summary {
         flex-wrap: nowrap;
+    }
+
+    .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button .chat-live-summary-main {
+        flex: 0 1 auto;
+    }
+
+    .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button .chat-live-phase {
+        min-width: 0;
+        white-space: normal;
     }
 
     .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button .chat-live-title {
         order: 0;
         flex: 1 1 0;
-        min-width: 0;
+        min-width: 4em;
     }
 
     .chat-live-card.subagent:not([data-expanded="1"]) > .chat-live-summary-button .chat-live-summary-side {
@@ -2972,8 +2980,7 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 }
 
 /* A nested child is subordinate to its root: quieter ink, and collapsed it is
-   an identity row (chip · role · notes + chevron; the `Show details`
-   label is the root's) over its metadata row (model, harness chip with the run count,
+   an identity row (chip · role · Details + chevron) over its metadata row (model, harness chip with the run count,
    cost, last update, docked Reviews count). Only its narration line waits for
    expansion. The title stays on one line and stays IN the identity row at every
    width (in the narrow regime above it ellipsizes before the side controls
@@ -10179,6 +10186,7 @@ body.keyboard-open .project-panel {
         border-color: transparent; background: var(--chip-float-hover); box-shadow: var(--elev-rest);
     }
     :root[data-theme] .chat-header-btn.danger.ui-chrome-control:hover { background: linear-gradient(var(--tone-red-hover), var(--tone-red-hover)), var(--chip-float); }
+    :root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control:hover { background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control:hover { border-color: transparent; background: var(--chip-float-hover); }
     :root[data-theme] .chat-budget-pill.ui-chrome-control[data-attention="1"]:hover { background: linear-gradient(var(--tone-amber-hover), var(--tone-amber-hover)), var(--chip-float); }
     :root[data-theme] .chat-header-menu > :is(.chat-header-btn.ui-chrome-control, .chat-budget-pill.ui-chrome-control):hover {
@@ -10187,6 +10195,8 @@ body.keyboard-open .project-panel {
 }
 :root[data-theme] :is(.project-panel-close, .mobile-nav-toggle, .nav-drawer-close) { border-radius: var(--pill-radius); }
 :root[data-theme] .chat-header-btn.danger.ui-chrome-control { background: linear-gradient(var(--tone-red), var(--tone-red)), var(--chip-float); color: var(--panic-ink); }
+/* The dark danger tone is already the capsule's neutral veil. Stacking it twice washes out Panic's red ink. */
+:root:not([data-theme="light"]) .chat-header-btn.danger.ui-chrome-control { background: var(--chip-float); }
 :root[data-theme] .chat-header-more > summary.has-active.ui-chrome-control { background: var(--tone-crimson-soft); color: var(--tone-crimson-soft-ink); }
 :root[data-theme] .chat-budget-pill.ui-chrome-control {
     border-color: transparent; background: var(--chip-float); box-shadow: var(--elev-rest); transition: var(--motion-tone);

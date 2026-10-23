@@ -141,10 +141,20 @@ def test_real_geometry_on_a_read_only_child_refuses_before_the_daemon(
     assert blocked[0]["task_id"] == "t-geometry"
 
 
-def test_the_host_states_its_prohibitions_on_every_delegated_run(tmp_path, monkeypatch):
-    request, _ = _started_request(tmp_path, acting=True, monkeypatch=monkeypatch)
+@pytest.mark.parametrize("access", ["readonly", "workspace_write"])
+def test_the_host_states_its_prohibitions_on_every_delegated_run(tmp_path, monkeypatch, access):
+    request, _ = _started_request(tmp_path, acting=True, monkeypatch=monkeypatch, access=access)
     instructions = request["instructions"].lower()
-    assert "git commit" in instructions and "outside this root" in instructions
+    assert "do not run git commit, tag, push, rebase, reset" in instructions
+    assert "explicit task constraints and the assigned edit target still bind" in instructions
+    if access == "readonly":
+        assert "inside this root, and make no edits or writes" in instructions
+    else:
+        # #2190 permits verification scratch and the named cache, without
+        # granting writes to another project or the operator's files.
+        assert ("you may edit inside this root, and outside it write only disposable process state "
+                "outside every git working tree and the shared download cache your host names, "
+                "never another project or the operator's files") in instructions
 
 
 def test_the_model_has_no_argument_that_could_widen_the_profile():
