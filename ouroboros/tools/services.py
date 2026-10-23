@@ -1116,7 +1116,7 @@ def get_tools() -> List[ToolEntry]:
     return [
         ToolEntry("start_service", {
             "name": "start_service",
-            "description": "Start a task-scoped long-running service and return pid/readiness/state. In runtime_mode=light a service whose cwd is the Ouroboros repository is refused (LIGHT_MODE_BLOCKED): pass an explicit external/task/artifact cwd.",
+            "description": "Start a long-running process owned by this task (dev server, watcher) and return pid/readiness/state; it is stopped when the task ends unless kept alive (keep_alive). In runtime_mode=light a service whose cwd is the Ouroboros repository is refused (LIGHT_MODE_BLOCKED): pass an explicit external/task/artifact cwd.",
             "parameters": {"type": "object", "properties": {
                 "cmd": {"type": "array", "items": {"type": "string"}},
                 "cwd": {
@@ -1152,7 +1152,7 @@ def get_tools() -> List[ToolEntry]:
         }, _service_logs),
         ToolEntry("stop_service", {
             "name": "stop_service",
-            "description": "Stop a task-scoped service process group.",
+            "description": "Stop a task-scoped service's process group, then copy the files it declared in outputs into the task artifact store.",
             "parameters": {"type": "object", "properties": {
                 "name": {"type": "string", "default": "service"},
             }, "required": []},

@@ -259,7 +259,7 @@ def persist_author_evidence(root: Path, evidence: dict, credential: str) -> list
         write_record(root / "author-evidence.json", evidence)
     except (OSError, ValueError, TypeError) as exc:
         errors.append(f"SKILL_SMOKE_EVIDENCE_INCOMPLETE: local: {type(exc).__name__}: {exc}")
-        diagnostics_incomplete(errors[-1])
+        diagnostics_incomplete(errors[-1], root)
         report_diagnostic(redact_known_values(errors[-1], [credential]))
     actor_keys = {"model_id", "status", "raw_text", "parsed_items", "failure_code",
                   "operation_state", "late_result_pending", "raw_results"}
@@ -301,7 +301,7 @@ def persist_author_evidence(root: Path, evidence: dict, credential: str) -> list
     except (OSError, ValueError, TypeError) as exc:
         error = f"SKILL_SMOKE_EVIDENCE_INCOMPLETE: export: {type(exc).__name__}: {exc}"
         errors.append(error)
-        diagnostics_incomplete(error)
+        diagnostics_incomplete(error, root)
         report_diagnostic(redact_known_values(error, [credential]))
     return errors
 
@@ -398,14 +398,14 @@ def run_author_review(*, candidate: CandidateCheckout, source_data: Path, root: 
         except (OSError, ValueError, TypeError) as exc:
             error = f"SKILL_SMOKE_EVIDENCE_INCOMPLETE: {key}: {type(exc).__name__}: {exc}"
             evidence["evidence_errors"].append(error)
-            diagnostics_incomplete(error)
+            diagnostics_incomplete(error, root)
     try:
         evidence["evidence_errors"].extend(persist_author_evidence(root, evidence, credential[1]))
     except (OSError, ValueError, TypeError, AttributeError) as exc:
         # A malformed diagnostic must not replace a task/spawn or teardown failure.
         error = f"SKILL_SMOKE_EVIDENCE_INCOMPLETE: export: {type(exc).__name__}: {exc}"
         evidence["evidence_errors"].append(error)
-        diagnostics_incomplete(error)
+        diagnostics_incomplete(error, root)
         report_diagnostic(redact_known_values(error, [credential[1]]))
     paid = [row for row in evidence["review_history"] if row.get("paid")]
     print(f"{name}: initial={paid[0].get('status') if paid else 'missing'} "

@@ -37,7 +37,7 @@ from ouroboros.runtime_mode_policy import (
 from ouroboros.tools.commit_gate import _invalidate_advisory
 from ouroboros.shell_parse import POSIX_SHELL_HEADS, is_absolute_path_text, recover_stringified_argv  # noqa: F401
 from ouroboros.shell_parse import inline_operand_start
-from ouroboros.tools.tool_result import _publish_process_result, _wrap_run_script_process_result
+from ouroboros.tools.tool_result import _publish_process_result
 from ouroboros.tools.verify import check_exit_masking  # noqa: F401 -- ONE exit-masking sensor shared with verify_and_record (pinned here); its disclosure lives in shell_audit
 from ouroboros.tools.registry import (
     ToolContext,
@@ -130,7 +130,7 @@ _CONTROL_DIR_BACKUP_MAX_BYTES = 5 * 1024 * 1024
 # Historical private spellings stay as aliases for call sites and tests.
 from ouroboros.tools.process_facts import (  # noqa: E402
     active_resolved_runtime as _active_resolved_runtime,
-    process_environment_tool, record_runtime_selection, selected_process_environment,
+    process_environment_tool, record_runtime_selection, selected_process_environment, wrap_script_result, script_refusal_with_source,
     publish_process_facts as _publish_process_facts,  # noqa: F401 — historical private spelling for call sites and tests
 )
 from ouroboros.tools.shell_process import (  # noqa: E402
@@ -584,13 +584,13 @@ def _run_script(
     interp = str(interpreter or "python3").strip()
     body = str(script or "")
     if not body.strip():
-        return _pre_spawn_refusal(ctx, "⚠️ TOOL_ARG_ERROR (run_script): script is required.", tool="run_script")
+        return script_refusal_with_source(ctx, _pre_spawn_refusal(ctx, "⚠️ TOOL_ARG_ERROR (run_script): script is required.", tool="run_script"))
     try:
         binding = _resolved_binding or build_resolved_resource_binding(
             ctx, operation="shell", process_cwd=cwd, bucket=bucket, skill_name=skill_name,
         )
     except (OSError, ValueError) as exc:
-        return _pre_spawn_refusal(ctx, shell_cwd_block_message(ctx, cwd, operation="shell", error=exc), tool="run_script")
+        return script_refusal_with_source(ctx, _pre_spawn_refusal(ctx, shell_cwd_block_message(ctx, cwd, operation="shell", error=exc), tool="run_script"))
     # The undeclared-output audit of the script BODY (argv only carries the temp script path, so
     # _run_shell cannot see the body) is POST-exec (v6.56.0): the stat filter needs the files to
     # exist, and a pre-exec scan on not-yet-written paths would either be a no-op or false-flag
@@ -598,8 +598,8 @@ def _run_script(
     # executes in so a relatively-declared scratch path matches a user_files write in the body.
     resolved_workdir = pathlib.Path(binding.target_path)
     if not resolved_workdir.is_dir():
-        return _pre_spawn_refusal(ctx, f"⚠️ SHELL_CWD_BLOCKED: cwd is not a directory: {resolved_workdir}.",
-                                  tool="run_script")
+        return script_refusal_with_source(ctx, _pre_spawn_refusal(ctx, f"⚠️ SHELL_CWD_BLOCKED: cwd is not a directory: {resolved_workdir}.",
+                                  tool="run_script"))
     _scratch_abs_body = _resolve_scratch_abs(scratch, resolved_workdir)
     _body_start_epoch = time.time()  # st_mtime audit; monotonic below is for durations
     _body_start_ts = time.monotonic()
@@ -638,7 +638,7 @@ def _run_script(
                 try:
                     script_arg = executor_map_host_path(executor, script_path)
                 except Exception as exc:
-                    return _pre_spawn_refusal(ctx, f"⚠️ RUN_SCRIPT_BLOCKED: executor-backed run_script could not map temp script path: {type(exc).__name__}: {exc}", tool="run_script")
+                    return script_refusal_with_source(ctx, _pre_spawn_refusal(ctx, f"⚠️ RUN_SCRIPT_BLOCKED: executor-backed run_script could not map temp script path: {type(exc).__name__}: {exc}", tool="run_script"))
         argv = [interp, script_arg, *[str(item) for item in (args or [])]]
         shell_entered = True
         result = _run_shell(
@@ -649,7 +649,7 @@ def _run_script(
     except (OSError, ValueError) as exc:
         if shell_entered:
             raise
-        return _pre_spawn_refusal(ctx, f"⚠️ RUN_SCRIPT_BLOCKED: script preparation failed: {exc}", tool="run_script")
+        return script_refusal_with_source(ctx, _pre_spawn_refusal(ctx, f"⚠️ RUN_SCRIPT_BLOCKED: script preparation failed: {exc}", tool="run_script"))
     finally:
         try:
             if run_dir is not None:
@@ -687,7 +687,7 @@ def _run_script(
             + ", ".join(undeclared_user_outputs)
             + ". Re-run with outputs=[...] or write the canonical deliverable via root=artifact_store."
         )
-    result = _wrap_run_script_process_result(ctx, result, audit_note, script_path)
+    result = wrap_script_result(ctx, result, audit_note, script_path)
     return _disclose_output_audit_failure(ctx, result, audit_error)
 
 

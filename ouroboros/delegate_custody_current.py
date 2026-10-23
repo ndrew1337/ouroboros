@@ -60,21 +60,7 @@ def collection_pending(entry, root=None) -> bool:
         or entry.output_terminal_sha != entry.terminal_source.get("sha256")
         or (capture and not entry.patch_captured and not entry.patch_disposed and not entry.superseded_by)):
         return True
-    # Captured, undisposed snapshots stay HELD. Off-loop readers also consult
-    # the existing evidence receipt: Restart may interrupt between patch and files.
-    if root is None or not (entry.terminal_source and entry.patch_captured) or entry.patch_disposed or entry.superseded_by:
-        return False
-    from ouroboros.delegate_registration_policy import candidate_apply_possible
-    if not candidate_apply_possible(entry):
-        return True  # evidence-only cleanup is still owed
-    if (not (entry.snapshot_id and entry.execution_root) or entry.authority_source == "skill_payload"
-            or entry.resource_ref.get("workspace_kind") == "directory"):
-        return False
-    from ouroboros.delegate_collection import saved_named_evidence
-    from ouroboros.delegate_start_instructions import EVIDENCE_DIRNAME
-    _, known = saved_named_evidence(root, entry)
-    return known.get("status") in ("partial", "capture_failed") or (
-        os.path.lexists(os.path.join(entry.execution_root, EVIDENCE_DIRNAME)) and known.get("status") != "retained")
+    return False
 
 
 def _held(entry) -> bool:

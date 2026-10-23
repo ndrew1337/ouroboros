@@ -273,3 +273,50 @@ def test_an_unreadable_store_is_never_proven_absent(tmp_path, monkeypatch, bad):
     monkeypatch.setattr(task_store, "display_documents", broken)
     with pytest.raises(OSError):
         reads.absent("task-a")
+
+
+@pytest.mark.parametrize("children", [10, 200])
+def test_settled_children_whose_drives_are_gone_cost_no_schema_builds(tmp_path, monkeypatch, children):
+    """A room's settled children name drives removed by design: each is read as an absent store, and
+    the number of schema builds that costs must not grow with the number of children."""
+    import threading
+
+    from ouroboros import store_empty
+
+    monkeypatch.setattr(store_empty, "_IDLE", threading.local())
+    builds, real = [], sqlite3.connect
+
+    def counted(database, *args, **kwargs):
+        builds.append(database) if database == ":memory:" else None
+        return real(database, *args, **kwargs)
+
+    tasks = [f"child-{n}" for n in range(children)]
+    for task_id in tasks:
+        _seed(tmp_path, task_id, "completed", child_drive_root=str(tmp_path / "drives" / task_id))
+    monkeypatch.setattr(store_empty.sqlite3, "connect", counted)
+    reads = TaskReads(tmp_path)
+    reads.prefetch(tasks)
+    assert len(builds) == 1, len(builds)
+    assert all(reads.load(tmp_path / "drives" / task_id, task_id) is None for task_id in tasks)
+    assert reads.store_reads == 1 + children and not reads.failed
+
+
+def test_the_prefetch_decodes_each_view_once_and_loads_stay_private(tmp_path, monkeypatch):
+    from ouroboros import task_reads
+
+    tasks = [f"task-{n}" for n in range(12)]
+    for task_id in tasks:
+        _seed(tmp_path, task_id, "completed", retry_task_id="task-0" if task_id == "task-11" else "")
+    decoded = []
+
+    def counted(text, *args, **kwargs):
+        decoded.append(text)
+        return json.loads(text, *args, **kwargs)
+
+    monkeypatch.setattr(task_reads, "json", SimpleNamespace(loads=counted, dumps=json.dumps))
+    reads = TaskReads(tmp_path)
+    for _ in range(3):  # a page prefetches its candidates, then its window, then its overlays
+        reads.prefetch(tasks)
+    assert len(decoded) == len(tasks), "one decode per view per read, however often the read looks"
+    first, second = reads.load(tmp_path, "task-1"), reads.load(tmp_path, "task-1")
+    assert first == second and first is not second and first["metadata"] is not second["metadata"]

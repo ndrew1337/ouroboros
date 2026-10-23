@@ -427,6 +427,7 @@ def test_a_lowered_variable_limit_refuses_only_the_retired_expansion(tmp_path, m
     retired one-variable-per-seed expansion, the negative control, cannot run at all."""
     drive = tmp_path / "data"
     _wide_queue(drive)
+    store.close_connections(store.store_path(drive))
     connect = store.connect
 
     def lowered(*args, **kwargs):

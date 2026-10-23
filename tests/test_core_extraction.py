@@ -159,8 +159,9 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # Rolled for the start ledger: show_card's description adds one sentence (on most devices an app
     # shares the owner's page thread, so heavy computation belongs in a blob: Worker); nothing else changed.
     # D3 adds the recorded reply_to address to forward_to_worker and escalate.
+    # Target merge retains the contributor tool affordances and target review/mail contracts.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "df429d1df523448de5cc87c34112e929c41ba9fb8aaf89e14999e2ce71974e10"
+        "c96acac3175e8b2468a501d0f621d40fc468fddfff8876fcd4de286bdff86aa2"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

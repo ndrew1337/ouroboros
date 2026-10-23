@@ -333,6 +333,10 @@ def test_supervisor_reaches_ready_and_real_assignment_while_both_captures_are_bl
         _until(lambda: not maintenance._CUSTODY_SWEEP_LOCK.locked())
 
 
+@pytest.mark.xfail(strict=True, reason=(
+    "22.10 hotfix: the rule that kept partial named evidence collectable re-offered every unchanged "
+    "partial capture on the 20 s body cadence and saturated the server; recapture after an interrupted "
+    "retention returns with the follow-up that makes one attempt per evidence generation"))
 def test_body_stop_mid_capture_keeps_named_files_pending_for_the_next_generation(tmp_path, monkeypatch):
     from ouroboros import headless
 

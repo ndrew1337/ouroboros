@@ -196,7 +196,7 @@ def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
         inspect_hint = (
             "compare the live payload content against the patch artifact"
             if getattr(entry, "authority_source", "") == "skill_payload"
-            else "vcs_diff, compare against the patch artifact")
+            else "vcs_read diff, compare against the patch artifact")
         return (
             f"⚠️ INTEGRATE_DELEGATED_APPLY_AMBIGUOUS: a durable apply-intent row "
             f"exists for run {rid} but no completed disposition — a previous "
@@ -218,12 +218,12 @@ def _unwritten_disposition_text(rid: str, target_root: str, disposition: str,
                                 applied: bool, *, payload: bool = False) -> str:
     """The typed refusal for a completed operation whose row did not land.
     ``payload`` selects accurate apply wording (Sol P2-3): a payload apply lands
-    LIVE in the non-Git payload — nothing staged, no index for vcs_diff."""
+    LIVE in the non-Git payload — nothing staged, no index for vcs_read diff."""
     if applied:
         landed, verify = (
             (f"applied LIVE into the non-Git payload {target_root}",
              "compare the live payload against the patch artifact") if payload
-            else (f"applied and staged in {target_root}", "verify with vcs_diff"))
+            else (f"applied and staged in {target_root}", "verify with vcs_read diff"))
         return (
             f"⚠️ INTEGRATE_DISPOSITION_UNWRITTEN: run {rid}'s patch IS {landed}, "
             "but the durable disposition row could not be "
@@ -941,7 +941,7 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
             f"({len(touched)} file(s)) is incomplete ({staging_failure[:300]}), "
             "and the apply could not be cleanly reversed. Do NOT retry this call — the "
             "changes are already in your working tree and a second apply would double "
-            "them. Inspect with vcs_diff, stage what you accept yourself, and note that "
+            "them. Inspect with vcs_read diff, stage what you accept yourself, and note that "
             "the run is recorded as applied. Its execution snapshot is preserved for "
             f"comparison. Verdict: {verdict_path or '(unwritten)'}.{format_patch_exclusions(manifest)}{tail}"
         )

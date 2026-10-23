@@ -33,6 +33,7 @@ def _schema(name):
 
 def _catalog(total):
     """Extras FIRST, so a plain truncation would cut core schemas."""
+    assert total > len(PINNED), "the pinned catalog alone is already this large"
     extras = [f"extra_{index:02d}" for index in range(total - len(PINNED))]
     return [_schema(name) for name in (*extras, *PINNED)]
 
@@ -150,7 +151,8 @@ def test_the_main_round_measures_and_sends_the_fitted_list(monkeypatch):
         return {"role": "assistant", "content": "ok"}, 0.0
 
     monkeypatch.setattr(loop_module, "_dispatch_round_model", dispatch)
-    for total, expected in ((129, 128), (128, 128), (100, 100)):
+    below = len(PINNED) + 1  # one extra under the ceiling: nothing is cut
+    for total, expected in ((129, 128), (128, 128), (below, below)):
         seen.clear()
         loop_model_call._call_round_model(_round_ctx(_catalog(total)))
         assert seen == {"measured": expected, "sent": expected}

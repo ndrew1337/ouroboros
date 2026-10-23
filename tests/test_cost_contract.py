@@ -187,6 +187,7 @@ def assert_flat(measured: Dict[Any, Any], tag: str) -> None:
 # ---- B1-B5 and the room ------------------------------------------------------------------------
 
 def test_b1_lifespan_before_health_is_flat(measured):
+    assert_flat(measured, "B0")
     assert_flat(measured, "B1")
     assert_flat(measured, "B1h")
 

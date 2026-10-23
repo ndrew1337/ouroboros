@@ -301,7 +301,7 @@ _PRODUCER_SHAPES = (
     ("resource_policy", "read_file", "⚠️ RESOURCE_POLICY_BLOCKED: task_contract.resource_policy protects 'blackbox'.", "RESOURCE_POLICY_BLOCKED", ()),
     ("cognitive_redirect", "write_file", "⚠️ COGNITIVE_TOOL_REQUIRED: cognitive memory is not written via 'write_file'.", "COGNITIVE_TOOL_REQUIRED", ()),
     ("extension_reported_failure", "ext_1_demo_screenshot", '{"ok": false, "error": "HTTP 500"}', "TOOL_REPORTED_FAILURE", (("dynamic_provider", True),)),
-    ("git_error_untyped_text", "vcs_status", "git refusal text without any marker", "GIT_ERROR", ()),
+    ("git_error_untyped_text", "vcs_read", "git refusal text without any marker", "GIT_ERROR", ()),
     ("review_blocked_untyped_text", "commit_reviewed", "review rejection text without any marker", "REVIEW_BLOCKED", ()),
     ("executor_crash", "write_file", "⚠️ TOOL_ERROR (write_file): RuntimeError: boom", "EXECUTOR_ERROR", ()),
     ("outer_timeout", "read_file", "⚠️ TOOL_TIMEOUT (read_file): exceeded 120s limit.", "TOOL_TIMEOUT", (("timeout_sec", 120),)),

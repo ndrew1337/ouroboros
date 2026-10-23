@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from ouroboros import delegate_custody as custody
+from ouroboros import delegate_collection, delegate_custody as custody
 from ouroboros.delegate_continuation import bind_continuation
 from ouroboros.owner_continue import binding_sha
 from tests._store_shared import seed_result, unreadable_result
@@ -246,11 +246,13 @@ def test_continuable_owned_project_never_pays_the_full_chain_read(tmp_path, monk
     row = seed(tmp_path)
     result(tmp_path, 'owner', status='failed', reason_code='worker_crash_signal')
     settle(tmp_path, gateway, row)
+    # Terminal collection belongs to the body after readiness, not to the orphan sweep.
+    delegate_collection.collect_terminal(tmp_path, 'run', gateway=gateway)
     calls = _counting_full_reads(monkeypatch)
     sweep(tmp_path, gateway, set())
     sweep(tmp_path, gateway, set())
     assert gateway.removed == [] and calls == []
-    assert custody.replay(tmp_path)['run'].output_source, 'terminal collection still runs'
+    assert custody.replay(tmp_path)['run'].output_source, 'the body retained the terminal output'
     result(tmp_path, 'owner')  # Closing the Continue offer makes retirement eligible.
     sweep(tmp_path, gateway, set())
     assert gateway.removed == ['project'] and calls
@@ -270,8 +272,10 @@ def test_shared_project_kept_by_a_settled_sharer_reads_the_full_chain_once(tmp_p
     result(tmp_path, 'b', status='failed', reason_code='worker_crash_signal')
     settle(tmp_path, gateway, owner)
     settle(tmp_path, gateway, sharer)
-    # Settlement now retains an observation: finish collection so the unowned
-    # sharer really is outside the held projection whose lookup this measures.
+    # Settlement retains an observation; the body (not the orphan sweep) finishes collection,
+    # so the unowned sharer really is outside the held projection whose lookup this measures.
+    for run_id in (owner.run_id, sharer.run_id):
+        delegate_collection.collect_terminal(tmp_path, run_id, gateway=gateway)
     sweep(tmp_path, gateway, set())
     assert set(current.runs(tmp_path, 'state=?', ('held',))) == {owner.run_id}
     calls = _counting_full_reads(monkeypatch)

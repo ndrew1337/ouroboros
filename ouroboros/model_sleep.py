@@ -417,7 +417,11 @@ def cold_blockers(ctx: Any, *, chosen: Dict[str, Any] | None = None,
                 # The root sleep fence would prevent this member from starting,
                 # including a child whose terminal/mail was selected as our wake.
                 blockers.append({"kind": "queued_member", "detail": task_id})
-            own_sleep = current_tool_operation(ctx, "continue_in_background" if detach else "await_messages") if own else ""
+            own_sleep = ""
+            if own:
+                sleep_tools = ("continue_in_background",) if detach else ("await_messages",)
+                own_sleep = next((operation for tool in sleep_tools
+                                  if (operation := current_tool_operation(ctx, tool))), "")
             from ouroboros.tool_custody import retained_tool_custody
             if retained_tool_custody(root, task_id, row, excluding=own_sleep):
                 blockers.append({"kind": "member_custody", "detail": task_id})

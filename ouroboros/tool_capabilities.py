@@ -33,7 +33,8 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     "search_code", "query_code", "query_data", "plan_task",
     "run_command", "run_script",
     "start_service", "service_status", "service_logs", "stop_service",
-    "vcs_status", "vcs_diff", "vcs_commit_reviewed", "commit_reviewed",
+    "vcs_read", "vcs_commit_reviewed", "commit_reviewed",
+    "github_read", "github_write",
     "vcs_restore", "vcs_revert", "vcs_pull_ff", "vcs_rollback",
     # One-shot deferred follow-up (W=A): core so a root task facing a typed wait
     # instant (e.g. a structurally unreachable review quorum with a known reset)
@@ -68,7 +69,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     "recent_tasks", "live_roots", "update_focus",
     "web_search",
     "browse_page", "browser_action", "analyze_screenshot", "view_image",
-    "ocr_pdf", "youtube_transcript", "extract_video_frames",
+    "ocr_pdf", "extract_pdf_text", "youtube_transcript", "extract_video_frames",
     "generate_image", "list_image_models", "recover_image",
     *OWNER_DELIVERY_TOOL_NAMES,
     "escalate",
@@ -101,7 +102,7 @@ LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     # asking the parent to respawn it (BIBLE P5). Nothing about the sandbox changes.
     "switch_model",
     "read_file", "list_files", "search_code", "query_code", "query_data",
-    "vcs_status", "vcs_diff",
+    "vcs_read", "github_read",
     # Memory: a child reads, writes knowledge notes and marks in its own name (the
     # host signs both with its focus) and publishes chronicle pages and parts only as
     # drafts signed with its focus (it is not the integrating mind, so tools/chronicle.py
@@ -135,7 +136,7 @@ LOCAL_READONLY_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     "delegate_message",
     "web_search", "browse_page", "browser_action", "analyze_screenshot", "vlm_query", "view_image",
     # Bounded media projection: writes derived frames only under artifact_store/video_frames.
-    "ocr_pdf", "youtube_transcript", "extract_video_frames",
+    "ocr_pdf", "extract_pdf_text", "youtube_transcript", "extract_video_frames",
     # Reads this child's own callable catalog (the name-miss answer points here);
     # it grants nothing, unlike enable_tools, which stays Nano schema selection.
     "list_available_tools", "list_image_models",
@@ -163,7 +164,7 @@ ACTING_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     # asking the parent to respawn it (BIBLE P5). Nothing about the sandbox changes.
     "switch_model",
     "read_file", "list_files", "search_code", "query_code", "query_data",
-    "vcs_status", "vcs_diff",
+    "vcs_read", "github_read",
     "write_file", "edit_text",
     "apply_patch", "edit_batch",
     "run_command", "run_script",
@@ -188,7 +189,7 @@ ACTING_SUBAGENT_TOOL_NAMES: frozenset[str] = frozenset({
     "delegate_message",
     "integrate_delegated_patch",
     "web_search", "browse_page", "browser_action", "analyze_screenshot", "vlm_query", "view_image",
-    "ocr_pdf", "youtube_transcript", "extract_video_frames",
+    "ocr_pdf", "extract_pdf_text", "youtube_transcript", "extract_video_frames",
     "list_available_tools", "list_image_models", "generate_image", "recover_image",
 })
 
@@ -216,7 +217,7 @@ READ_ONLY_PARALLEL_TOOLS: frozenset[str] = frozenset({
     "read_file", "list_files",
     "search_code", "query_code", "query_data", "recent_tasks",
     "web_search", "chat_history",
-    "vcs_status", "vcs_diff", "service_status", "service_logs",
+    "vcs_read", "service_status", "service_logs",
     "get_task_result", "list_projects", "memory_read",
 })
 
@@ -358,7 +359,7 @@ RESULT_VIEW_PARAMS: dict[str, dict[str, Any]] = {
 EXPLICIT_RANGE_ARGS: frozenset[str] = frozenset({
     RESULT_VIEW_HEAD_ARG, RESULT_VIEW_TAIL_ARG,
     "max_chars", "max_lines", "start_char", "start_line",
-    "source_start_char", "source_end_char", "offset", "limit",
+    "source_start_char", "source_end_char", "offset", "limit", "tail_lines",
     "from", "to", "start", "after_seq",  # chronicle row bounds and continuation pages
 })
 

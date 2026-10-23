@@ -34,6 +34,56 @@ updated `budget_drive_root`, `drive_root`/`child_drive_root` as applicable, and
 cleared `reason_code`/`reason_detail`. Keep sources through adoption.
 Copying the directory alone never rewrites those pointers.
 
+## Unknown model role at startup
+
+An error such as `OUROBOROS_MODEL_CONTEXT_WINDOWS: unknown model role(s)`
+means the code reading that setting does not recognize a role name. Current
+diagnostics name the setting and offending roles, without dumping their values.
+Older packages print `OUROBOROS_MODEL_CONTEXT_WINDOWS must contain only known
+model roles` without identifying the role; the same recovery below applies.
+Check for a misspelling or a version mismatch. The same strict rule applies to account pins
+and processing preferences: unknown entries are not silently ignored or changed
+to Auto, even when a context window is zero.
+
+The packaged launcher and the managed repository are separate. Updating the
+repository, including a manual `git pull` in a fork, does not replace an older
+executable. Current launchers can hand off to updated source after an import
+probe, but an older executable without that handoff still needs an application
+package update. New source cannot repair its frozen settings parser or logging.
+
+To recover without resetting the installation:
+
+1. Identify the executable you actually launch, its package/build, the user it
+   runs as, and the effective paths listed above. The default native Linux
+   package is `/opt/ouroboros/Ouroboros`; AppImages and tarballs live wherever
+   you placed them. A repository version alone does not identify the launcher.
+2. Stop that instance through its normal launch path. If you chose the optional
+   systemd unit, see its [stop and log instructions](../packaging/systemd/README.md)
+   and shared-daemon caveat. Back up the actual data directory, settings file
+   (if separate), and repository/local changes before changing anything.
+   Do not delete `settings.json`, memory, or the checkout to get past this error.
+3. If the name is genuinely misspelled, correct only that entry after checking
+   its intended role. If another version wrote a legitimate role, identify which
+   reader is stale from the traceback. A frozen launcher needs a compatible
+   package: upgrade the `.deb`/`.rpm`, or replace the AppImage/tarball application
+   files; keep user data and the managed checkout. If the managed checkout is
+   older (for example, after a rollback or in a pinned fork), use a compatible
+   checkout while preserving local changes. A newer package alone will not fix
+   that reader. Do not strip an unfamiliar role merely to bypass validation.
+   Default native package files under `/opt/ouroboros` are separate from
+   `~/Ouroboros/data` and `~/Ouroboros/repo`. Verify any custom layout first.
+4. Launch as the same user with the same path overrides, then check the saved
+   model/account selections and logs. Normal bootstrap/migrations still run;
+   package replacement is not a promise that every file remains byte-identical.
+
+Current launchers log uncaught main/thread exceptions. With an older package,
+`launcher.log` can contain only a crash-fuse summary while the actual traceback
+went to stderr. After stopping the old instance, run the same executable from a
+terminal and retain its output, or read the unit journal if that was the launch
+path. Default logs are in `~/Ouroboros/data/logs/`; use the actual data root if
+overridden. Share only the relevant traceback and package identity, never the
+whole settings file or credentials. Repeated restarts do not fix a parser mismatch.
+
 ## Containers
 
 Two images, one recipe file: [`packaging/docker/compose.yaml`](../packaging/docker/compose.yaml)

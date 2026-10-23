@@ -299,7 +299,8 @@ _SCHEMAS = {
     },
     "skill_update": {
         "description": (
-            "Apply an update: replace replaces local edits (the previous copy is kept as .previous), keep skips "
+            "Update one installed skill to a release found by skill_search. Modes: replace replaces local edits "
+            "(the previous copy is kept as .previous), keep skips "
             "this release, merge merges it into local changes. digest names the release you saw; local_digest "
             "detects edits since you looked. From a review source the configured review decides (Cyber Pro: your own check)."
         ),

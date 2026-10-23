@@ -223,10 +223,13 @@ def get_task_result_entry() -> ToolEntry:
     """The result/source reader schema lives beside its scoped handler."""
     return ToolEntry("get_task_result", {
         "name": "get_task_result",
-        "description": "Read the effective result or exact authority of a task, including one bounded canonical work-order source range when requested.",
+        "description": "Read a task's selected answer, current outcome and evidence (view=answer/summary/evidence/full), or its exact authority/source ranges. Omitted/full returns the complete response; short views do not count as reading authority or sources.",
         "parameters": {"type": "object", "required": ["task_id"], "properties": {
             "task_id": {"type": "string", "description": "Task ID returned by scheduling or exposed by the host routing manifest."},
-            "known_result_sha256": {"type": "string", "description": "Optional child_result_sha256 from a previous read. An exact match omits only unchanged result/trace text, retaining current facts and a full-read reference. Omit for full text; explicit authority/source requests always return their requested view."},
+            "call_id": {"type": "string", "description": "With manifest_sha256: read one retained redacted tool call or script dispatch of this task. Uses the source range and presence scope parameters."},
+            "manifest_sha256": {"type": "string", "description": "Exact retained manifest digest for call_id. Omit ranges for source length/hash; provide both bounds for text."},
+            "known_result_sha256": {"type": "string", "description": "Conditional child_result_sha256 identity in every view; summary/evidence still refresh dynamic facts."},
+            "view": {"type": "string", "enum": ["answer", "summary", "evidence", "full"], "description": "Optional semantic result view. Omitted/full preserves the legacy response exactly. Short views retain answer identity, terminal origin, outcome, host notice, and capability facts; summary adds current cost/custody/retry; evidence adds only authorized current-projection recipes."},
             "include_authority": {"type": "boolean", "default": False, "description": "Return the exact selected result, task contract, origin, artifact references, and current plan-review authority."},
             "include_work_order_source": {"type": "boolean", "default": False, "description": "Return the canonical work-order source projection; provide both source_start_char and source_end_char for the exact bounded range."},
             "include_completion_source": {"type": "boolean", "default": False,
@@ -255,6 +258,7 @@ def _get_task_result(
     presence_scope: str = "", review_source_sha256: str = "",
     presence_reentry_sha256: str = "", presence_reentry_offset: Any = None,
     view_head_chars: Any = None, view_tail_chars: Any = None, delegated_output_sha256: str = "",
+    view: str = "", call_id: str = "", manifest_sha256: str = "",
 ) -> str:
     """Read a task result, or a bounded canonical work-order/completion source range.
 
@@ -262,6 +266,38 @@ def _get_task_result(
     parameters bind; the loop's delivery honors them when it shapes the first
     view of this answer. They select nothing in the source arithmetic below.
     """
+    from ouroboros.tools.task_result_views import validate_result_view
+
+    try:
+        if call_id or manifest_sha256:
+            import re
+
+            if (not isinstance(call_id, str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", call_id)
+                    or call_id in {".", ".."} or not isinstance(manifest_sha256, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256)):
+                raise ValueError("call_id and a lowercase 64-character manifest_sha256 are required together")
+            if (include_authority or include_work_order_source or include_completion_source or include_focus_source
+                    or focus_source_sha256 or review_source_sha256 or delegated_output_sha256
+                    or presence_reentry_sha256 or presence_reentry_offset is not None):
+                raise ValueError("call_id cannot be combined with another authority/source selector")
+        selected_view = validate_result_view(view)
+    except ValueError as exc:
+        return _publish_tool_result(ctx, ToolResult(
+            status="error", code="TOOL_ARG_ERROR", text=f"⚠️ TOOL_ARG_ERROR (get_task_result): {exc}",
+        ))
+    source_request = bool(
+        include_authority or include_work_order_source or include_completion_source or include_focus_source
+        or focus_source_sha256 or review_source_sha256 or delegated_output_sha256
+        or presence_reentry_sha256 or presence_reentry_offset is not None
+        or call_id or manifest_sha256
+        or source_start_char is not None or source_end_char is not None
+    )
+    if selected_view not in {"", "full"} and source_request:
+        return _publish_tool_result(ctx, ToolResult(
+            status="error", code="TOOL_ARG_ERROR",
+            text=(f"⚠️ TOOL_ARG_ERROR (get_task_result): view={selected_view} is incompatible with "
+                  "authority/source selectors; use view=full or omit view"),
+        ))
     metadata = getattr(ctx, "task_metadata", {}) if isinstance(getattr(ctx, "task_metadata", {}), dict) else {}
     status_drive_root = Path(str(metadata.get("budget_drive_root") or getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
     scoped = bool(str(presence_scope or "").strip())
@@ -312,6 +348,24 @@ def _get_task_result(
     notice = promotion_intent_notice(task_id, data)
     if notice:
         return _publish_tool_result(ctx, ToolResult(status="unavailable", code="LEGACY_UNAVAILABLE", text=notice))
+    if call_id:
+        from ouroboros.tools.task_result_views import retained_call_source
+
+        try:
+            source = retained_call_source(ctx, status_drive_root, data, str(task_id), call_id,
+                                          manifest_sha256, source_start_char, source_end_char)
+        except PermissionError as exc:
+            return _publish_tool_result(ctx, ToolResult(status="blocked", code="ACCESS_BLOCKED", text=str(exc)))
+        except FileNotFoundError:
+            return _publish_tool_result(ctx, ToolResult(status="unavailable", code="LEGACY_UNAVAILABLE",
+                text="Retained call has no available redacted projection."))
+        except (OSError, ValueError, TypeError):
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ERROR",
+                text="Retained call source is unreadable or failed verification."))
+        text = json.dumps({"call_source": source}, ensure_ascii=False, sort_keys=True)
+        if source.get("reason") == "source_range_invalid":
+            return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=text))
+        return text
     if presence_reentry_sha256:
         from ouroboros.presence_continuation import reentry_source_projection
 
@@ -427,6 +481,18 @@ def _get_task_result(
     # SSOT cost projection (C2): unknown never renders as $0.00 (and a null in
     # the stored result no longer crashes the f-string with a TypeError).
     from ouroboros.cost_projection import cost_display
+
+    if selected_view and selected_view != "full":
+        from ouroboros.tools.task_result_views import render_result_view
+
+        return render_result_view(
+            data, task_id=str(task_id), view=selected_view,
+            known_result_sha256=known_result_sha256,
+            child_result_sha256=child_result_sha256,
+            outcome_summary=outcome_summary,
+            capability_delta=disclosable_capability_delta(data),
+            effort=disclosable_effort_fact(data), presence_scope=str(presence_scope or ""),
+        )
 
     unchanged = _unchanged_result_reference(str(task_id), child_result_sha256, known_result_sha256)
     if unchanged:
@@ -645,8 +711,17 @@ def _terminal_probe(ctx: ToolContext, ids: list) -> Callable:
 
 def _wait_for_task(
     ctx: ToolContext, task_id: str, timeout_sec: int = 180, known_result_sha256: str = "",
+    view: str = "",
 ) -> str:
     """Wait for a subtask to reach a terminal status."""
+    from ouroboros.tools.task_result_views import validate_result_view
+
+    try:
+        selected_view = validate_result_view(view)
+    except ValueError as exc:
+        return _publish_tool_result(ctx, ToolResult(
+            status="error", code="TOOL_ARG_ERROR", text=f"⚠️ TOOL_ARG_ERROR (wait_task): {exc}",
+        ))
     try:
         tid = validate_task_id(task_id)
     except ValueError as exc:
@@ -694,10 +769,15 @@ def _wait_for_task(
         window = {"requested_sec": requested, "window_sec": timeout, "window_bound": bound}
         extra += f"\n\n[WAIT_WINDOW] {json.dumps(window)}"
     tasks = waited.get("tasks") if isinstance(waited.get("tasks"), dict) else {}
-    result = _unsettled_wait_body(status_drive_root, tid, tasks.get(tid), known_result_sha256)
+    result = _unsettled_wait_body(
+        status_drive_root, tid, tasks.get(tid),
+        known_result_sha256 if selected_view in {"", "full"} else "",
+    )
     if not result:
-        result = (_get_task_result(ctx, tid, known_result_sha256=known_result_sha256)
-                  if known_result_sha256 else _get_task_result(ctx, tid))
+        kwargs = {"view": selected_view} if selected_view else {}
+        if known_result_sha256:
+            kwargs["known_result_sha256"] = known_result_sha256
+        result = _get_task_result(ctx, tid, **kwargs)
     return f"{header} after {waited.get('elapsed_sec', 0):.1f}s.{extra}\n\n{result}"
 
 
@@ -919,7 +999,7 @@ def _await_as_sleep(ctx: ToolContext, mode: str, **chosen: Any) -> str:
 
     try:
         if mode not in (model_sleep.MODE_WARM, model_sleep.MODE_COLD):
-            raise ValueError("senders/tasks/runs/services/wake_at/wake_after_sec select a sleep: give mode warm or cold")
+            raise ValueError("senders/tasks/runs/services/wake_at/wake_after_sec select a sleep: requires mode=warm or cold; for example await_messages(mode=\"warm\", wake_after_sec=60)")
         if not callable(getattr(ctx, "owner_wait_callback", None)):
             raise ValueError("this task has no continuation owner to sleep under")
         outcome = model_sleep.request_sleep(ctx, model_sleep.selectors(ctx, **chosen), mode)
@@ -939,7 +1019,7 @@ def await_messages_entry() -> ToolEntry:
     return ToolEntry("await_messages", {
         "name": "await_messages",
         "description": (
-            "Wait, without spending model rounds, until an unread message for THIS task exists "
+            "Wait without model rounds for this task's mail, or use mode=warm/cold for event-driven sleep. In-slot, the default, waits until an unread message for THIS task exists "
             "in your mailbox (an addressed contribution from a peer task, a parent's steering, "
             "an owner message, a child's escalation) or the window elapses. Use it when you have "
             "asked a peer or your parent for its next turn and have nothing useful to do until "
@@ -972,15 +1052,15 @@ def await_messages_entry() -> ToolEntry:
             "mode": {"type": "string", "enum": ["in_slot", "warm", "cold"],
                      "description": "in_slot (default) holds your slot for timeout_sec; warm/cold is a sleep."},
             "senders": {"type": "array", "items": {"type": "string"},
-                        "description": "Sleep: task ids whose ordinary mail wakes you; owner input and descendant escalations bypass this filter."},
+                        "description": "Requires mode=warm or cold. Sleep: task ids whose ordinary mail wakes you; owner input and descendant escalations bypass this filter."},
             "tasks": {"type": "array", "items": {"type": "string"},
-                      "description": "Sleep: task ids whose terminal (any settled status) wakes you."},
+                      "description": "Requires mode=warm or cold. Sleep: task ids whose terminal (any settled status) wakes you."},
             "runs": {"type": "array", "items": {"type": "string"},
-                     "description": "Sleep: your delegated run ids whose terminal wakes you."},
+                     "description": "Requires mode=warm or cold. Sleep: your delegated run ids whose terminal wakes you."},
             "services": {"type": "array", "items": {"type": "string"},
-                         "description": "Warm sleep: names of your own running services whose exit wakes you."},
-            "wake_at": {"type": "string", "description": "Sleep: an absolute ISO-8601 wake time (with timezone)."},
-            "wake_after_sec": {"type": "integer", "description": "Sleep: wake after this many seconds."},
+                         "description": "Requires mode=warm or cold. Warm sleep: names of your own running services whose exit wakes you."},
+            "wake_at": {"type": "string", "description": "Requires mode=warm or cold. Sleep: an absolute ISO-8601 wake time (with timezone)."},
+            "wake_after_sec": {"type": "integer", "description": "Requires mode=warm or cold. Sleep: wake after this many seconds."},
         }},
     }, _await_messages, timeout_sec=get_per_call_timeout_ceiling_sec() + 60)
 

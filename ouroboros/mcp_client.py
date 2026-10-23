@@ -36,6 +36,7 @@ from ouroboros.secret_masking import (
     mask_prefixed_secret,
 )
 from ouroboros.mcp_headers import mask_headers, validate_headers
+from ouroboros.mcp_schema import filter_schema_literals, redact_metadata, tool_metadata
 from ouroboros.tools.tool_result import ToolResult
 from ouroboros.platform_layer import IS_WINDOWS
 from ouroboros.config import get_runtime_mode
@@ -139,6 +140,7 @@ class MCPTool:
     prefixed_name: str
     description: str
     schema: Dict[str, Any]
+    metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -148,6 +150,7 @@ class MCPServerRuntime:
     config: MCPServerConfig
     tools: List[MCPTool] = field(default_factory=list)
     tool_name_collisions: List[Dict[str, str]] = field(default_factory=list)
+    schema_omissions: List[str] = field(default_factory=list)
     last_error: str = ""
     last_refreshed: str = ""
     last_attempted: str = ""
@@ -767,6 +770,8 @@ async def _list_tools_async(cfg: MCPServerConfig, *, timeout_sec: int) -> List[D
                             value = getattr(tool, key, None)
                             if value is not None:
                                 tools_raw[-1][key] = value.model_dump(mode="json", by_alias=True) if hasattr(value, "model_dump") else value
+                        if metadata := tool_metadata(tool):
+                            tools_raw[-1]["metadata"] = {**(tools_raw[-1].get("metadata") or {}), **metadata}
                     cursor = getattr(result, "nextCursor", None)
                     if not cursor:
                         break
@@ -957,13 +962,15 @@ def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Opti
 
 def normalize_listing(cfg: MCPServerConfig, tools_raw: list, complete: bool) -> tuple:
     """Pure provider presentation shared by publication, seeding and adoption."""
+    tools_raw, literal_omissions = filter_schema_literals(tools_raw, lambda text: _redact_error_text(text, cfg))
     normalized = [
         MCPTool(
             server_id=cfg.id,
             raw_name=str(item.get("name") or "").strip(),
             prefixed_name=make_tool_name(cfg.id, item.get("name") or ""),
-            description=_redact_error_text(str(item.get("description") or ""), cfg)[:1024],
+            description=_redact_error_text(str(item.get("description") or ""), cfg),
             schema=_normalize_input_schema(item.get("input_schema"), cfg),
+            metadata=redact_metadata(item.get("metadata") or {}, lambda text: _redact_error_text(text, cfg)),
         )
         for item in tools_raw
         if str(item.get("name") or "").strip()
@@ -986,7 +993,7 @@ def normalize_listing(cfg: MCPServerConfig, tools_raw: list, complete: bool) -> 
             continue
         seen[tool.prefixed_name] = tool
         deduped.append(tool)
-    omission_notes: List[str] = []
+    omission_notes: List[str] = literal_omissions
     if collisions:
         omission_notes.append(
             f"{len(collisions)} tool(s) unavailable due to slug collision: "
@@ -1098,6 +1105,8 @@ class MCPManager:
         items = envelope["items"] if envelope else []
         runtime.tools, runtime.tool_name_collisions, notes = normalize_listing(
             runtime.config, items, bool(envelope and envelope["complete"]))
+        notes.extend(envelope.get("schema_omissions", []) if envelope else [])
+        runtime.schema_omissions = list(dict.fromkeys(note for note in notes if note.startswith("MCP_SCHEMA_")))
         from ouroboros.tool_effects import record_mcp_annotations  # every process learns the published hints
         record_mcp_annotations(runtime.config.id, items)
         attempt = envelope["latest_attempt"] if envelope else {}
@@ -1195,6 +1204,7 @@ class MCPManager:
                             "server_id": tool.server_id,
                             "raw_name": tool.raw_name,
                             "raw_description": _redact_error_text(tool.description, cfg),
+                            "metadata": tool.metadata,
                         }
                     )
             return results
@@ -1250,6 +1260,7 @@ class MCPManager:
                                 "name": tool.raw_name,
                                 "prefixed_name": tool.prefixed_name,
                                 "description": _redact_error_text(tool.description, cfg),
+                                **({"metadata": tool.metadata} if tool.metadata else {}),
                             }
                             for tool in runtime.tools
                         ],
@@ -1296,8 +1307,10 @@ class MCPManager:
         from ouroboros.owner_pause import OwnerPauseRefused
 
         items, complete, error = None, False, ""
+        schema_omissions = []
         try:
             raw = _run_async(lambda: self._async_list_tools(cfg, timeout), join_timeout=timeout + 3)
+            raw, schema_omissions = filter_schema_literals(raw, lambda text: _redact_error_text(text, cfg))
             items, complete = mcp_catalog.sanitize_items(raw, lambda text: _redact_error_text(text, cfg))
         except OwnerPauseRefused as exc:
             return {"ok": False, "not_started": True, "error": f"MCP listing NOT STARTED: {exc}"}
@@ -1309,7 +1322,7 @@ class MCPManager:
             if target is not runtime or mcp_catalog.identity(target.config) != mcp_catalog.identity(cfg):
                 return {"ok": False, "published": False, "error": f"stale MCP refresh discarded for server {server_id!r}"}
             envelope = mcp_catalog.attempt_envelope(cfg, target.catalog, at=at, error=error,
-                                                   items=items, complete=complete)
+                                                   items=items, complete=complete, schema_omissions=schema_omissions)
             target.published_before_failure = self._catalog_reader.load(cfg)
             try:
                 mcp_catalog.publish(cfg, envelope)
@@ -1385,16 +1398,19 @@ class MCPManager:
             t for t in tools_raw
             if not (isinstance(t, dict) and t.get("_pagination_truncated"))
         ]
+        tools_raw, literal_omissions = filter_schema_literals(tools_raw, lambda text: _redact_error_text(text, cfg))
         return {
             "ok": True,
             "server_id": cfg.id,
             "tool_count": len(tools_raw),
             "configuration_warnings": list(cfg.configuration_warnings),
+            **({"schema_omissions": literal_omissions} if literal_omissions else {}),
             **({"pagination_truncated": True} if truncated else {}),
             "tools": [
                 {
                     "name": str(t.get("name") or ""),
-                    "description": _redact_error_text(str(t.get("description") or ""), cfg)[:512],
+                    "description": _redact_error_text(str(t.get("description") or ""), cfg),
+                    "metadata": redact_metadata(t.get("metadata") or {}, lambda text: _redact_error_text(text, cfg)),
                 }
                 for t in tools_raw
             ],

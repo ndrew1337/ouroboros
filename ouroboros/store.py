@@ -27,7 +27,7 @@ import weakref
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from ouroboros.utils import append_jsonl, machine_json, utc_now_iso  # one compact JSON text: key order kept, facts round-trip
-from ouroboros import store_hot_facts, store_task_cards, store_timing
+from ouroboros import store_empty, store_hot_facts, store_task_cards, store_timing
 
 STORE_REL = pathlib.Path("state/current.sqlite")
 LOCK_NAME = "current.lock"  # the name-tier lock around every access
@@ -920,6 +920,7 @@ def _after_fork_child() -> None:
             handle.close()
     _INODES.clear()
     _PROCESS_LOCKS.clear()
+    store_empty.forget()
     _INODE_GUARD = threading.RLock()
     _CONNECTION_GUARD = threading.Condition(threading.RLock())
     _PROCESS_LOCKS_GUARD = threading.Lock()
@@ -1218,11 +1219,8 @@ def open_store(root: Any, *, write: bool, wait_sec: float = STORE_WAIT_SEC, serv
         raise StoreMigrating(f"current store not published yet: the import of {root} runs")
     state, tier = probe(root)
     if state == "absent" and ((not write and not root.is_dir()) or _absent(root, write=write, service=service)):
-        with contextlib.closing(sqlite3.connect(":memory:", isolation_level=None)) as conn:
-            conn.row_factory = sqlite3.Row
-            conn.executescript(_SCHEMA)
-            with transaction(conn, write=False):
-                yield Txn(conn, root)
+        with store_empty.empty_store(_SCHEMA) as conn, transaction(conn, write=False):
+            yield Txn(conn, root)
         return
     if state == "absent":
         state, tier = probe(root)

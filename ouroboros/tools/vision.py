@@ -703,7 +703,7 @@ def get_tools() -> List[ToolEntry]:
             schema={
                 "name": "analyze_screenshot",
                 "description": (
-                    "Analyze the last browser screenshot using a Vision LLM. "
+                    "Ask a vision model, in a separate call, about this task's last browser screenshot. "
                     "Must call browse_page(output='screenshot') or browser_action(action='screenshot') first. "
                     "Returns a text description and analysis of the screenshot. "
                     "Use this to verify UI, check for visual errors, or understand page layout. "
@@ -736,7 +736,7 @@ def get_tools() -> List[ToolEntry]:
             schema={
                 "name": "vlm_query",
                 "description": (
-                    "Analyze any image using a Vision LLM. "
+                    "Ask a vision model, in a separate call, to analyze one image (not your own native view; see view_image). "
                     "Provide one of: file_path (local file, preferred — avoids large base64 in arguments), "
                     "image_url (public URL), or image_base64 (base64-encoded PNG/JPEG). "
                     "Use file_path for files already on disk (e.g. data/uploads/ attachments). "

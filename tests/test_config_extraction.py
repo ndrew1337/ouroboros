@@ -37,6 +37,8 @@ _ADDED_OWNERS = {
     "BUDGET_PROJECTION_RETRY_SEC": runtime_limits,
     # The usage store display read's short wait (then the fact is reported unavailable).
     "USAGE_DISPLAY_LOCK_TIMEOUT_SEC": runtime_limits,
+    # The kill-and-reap bound of one captured local Git read (vcs_read history and identity).
+    "GIT_READ_CAPTURE_TIMEOUT_SEC": runtime_limits,
     "IMMEDIATE_SETTINGS": settings_scales,
     "RESTART_REQUIRED_SETTINGS": settings_scales,
     # An explicit root starting effort is validated against the effort scale it names.

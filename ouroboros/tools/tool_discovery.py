@@ -313,10 +313,10 @@ def get_tools() -> List[ToolEntry]:
             schema={
                 "name": "enable_tools",
                 "description": (
-                    "Load permitted tools that are not in your tool list yet, by their exact names "
-                    "(comma-separated); a tool already loaded is confirmed. A namespace or a skill's "
-                    "name answers with its tools' names. In a live call the voice session reopens "
-                    "once to take the new tools."
+                    "Load schemas for tools this task may already call, by exact names (comma-separated). "
+                    "Reports loaded, policy-hidden and unknown names; grants no permission. A namespace "
+                    "or a skill's name answers with its tools' names. In a live call the voice session "
+                    "reopens once to take the new tools."
                 ),
                 "parameters": {
                     "type": "object",

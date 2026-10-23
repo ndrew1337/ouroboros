@@ -888,16 +888,12 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("web_search", {
             "name": "web_search",
             "description": (
-                "Search the web with the configured Source and Model. Auto uses the eligible built-in "
-                "routes listed in this task's runtime facts; a specific source is strict. "
-                "Skills, MCP and browser tools are independent choices. A per-call model override "
-                "follows the same source selection. Empty model uses the saved choice or provider defaults. "
-                "For a COMPOUND question (several distinct facts/entities/time ranges in one ask), "
-                "issue one focused web_search per sub-question instead of one broad query — "
-                "narrow queries return sharper sources. These read-only searches run in parallel. "
-                "The returned `answer` is a SUMMARY/lead (answer_type=summary), not a primary source: "
-                "confirm load-bearing facts by opening the returned sources (browse_page) before "
-                "relying on them."
+                (
+                'Search with the configured Source and Model. Returns a summary lead with sources; open them with '
+                'browse_page to verify load-bearing facts. Auto uses eligible built-in routes; a named source is '
+                'strict. A model override keeps that source selection; an empty model uses saved/provider defaults. '
+                'Split compound questions into focused searches. Skills, MCP and browser tools remain separate choices.'
+            )
             ),
             "parameters": {"type": "object", "properties": {
                 "query": {"type": "string", "description": "A single focused search query (split compound asks into separate calls)."},

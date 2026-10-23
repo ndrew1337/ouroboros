@@ -225,7 +225,8 @@ def test_cherry_pick_conflict_keeps_earlier_effects(invoke, monkeypatch, earlier
 @pytest.mark.parametrize("paths", [None, ["changed.txt"]])
 def test_restore_partial_keeps_checkout_effect_and_target_receipt(invoke, tmp_path, monkeypatch, paths):
     from ouroboros.tools import git, git_vcs_ops
-    binding = SimpleNamespace(root="active_workspace", base_path=tmp_path)
+    # repository_path is ResolvedResourceBinding's default: no nested repository was selected.
+    binding = SimpleNamespace(root="active_workspace", base_path=tmp_path, repository_path=None)
     monkeypatch.setattr(git, "_vcs_binding", lambda *a, **k: binding)
     monkeypatch.setattr(git, "binding_targets_system_repo", lambda *a: False)
     monkeypatch.setattr("ouroboros.tools.review_helpers.list_changed_paths_from_git_status", lambda *a, **k: ["changed.txt"])

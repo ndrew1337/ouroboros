@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ouroboros import config
+from ouroboros.mcp_schema import redact_metadata, wrap_schema_text
 from ouroboros.utils import atomic_write_json
 
 log = logging.getLogger(__name__)
@@ -35,14 +36,6 @@ def identity(cfg: Any) -> str:
 
 def sanitize_items(items: list, redact: Callable[[Any], str]) -> tuple[list, bool]:
     """Preserve wire fields and order; sanitize prose, never executable schema data."""
-    def schema_text(value: Any) -> Any:
-        if isinstance(value, dict):
-            return {k: redact(v) if k in {"description", "title"} and isinstance(v, str)
-                    else schema_text(v) for k, v in value.items()}
-        if isinstance(value, list):
-            return [schema_text(v) for v in value]
-        return value
-
     complete = not any(item.get("_pagination_truncated") for item in items)
     clean = []
     for item in items:
@@ -53,13 +46,17 @@ def sanitize_items(items: list, redact: Callable[[Any], str]) -> tuple[list, boo
         if "description" in row:
             row["description"] = redact(row["description"])
         if "input_schema" in row:
-            row["input_schema"] = schema_text(row["input_schema"])
+            row["input_schema"] = wrap_schema_text(row["input_schema"], redact, label_annotations=False)
+        for key in ("metadata", "annotations"):
+            if key in row:
+                row[key] = redact_metadata(row[key], redact)
         clean.append(row)
     return clean, complete
 
 
 def attempt_envelope(cfg: Any, previous: dict | None, *, at: str, error: str = "",
-                     items: list | None = None, complete: bool = False) -> dict:
+                     items: list | None = None, complete: bool = False,
+                     schema_omissions: list[str] | None = None) -> dict:
     """Failures/partial attempts cannot erase a complete last-known listing."""
     envelope = copy.deepcopy(previous) if previous else {
         "_schema_version": 1, "server_id": cfg.id, "identity": identity(cfg),
@@ -67,6 +64,7 @@ def attempt_envelope(cfg: Any, previous: dict | None, *, at: str, error: str = "
     }
     if items is not None and (complete or not envelope["complete"]):
         envelope.update(items=items, complete=complete, listed_at=at)
+        envelope["schema_omissions"] = list(schema_omissions or [])
     envelope["latest_attempt"] = {"at": at, "ok": items is not None, "error": error,
                                   "partial": items is not None and not complete}
     return envelope
@@ -146,4 +144,7 @@ def catalog_notice(runtime: Any) -> str:
             text += "; the listing is incomplete"
     if runtime.publication_error:
         text += f"; catalog publication failed: {runtime.publication_error}"
+    if omissions := list(dict.fromkeys([*envelope.get("schema_omissions", []),
+                                       *getattr(runtime, "schema_omissions", [])])):
+        text += "; " + "; ".join(omissions)
     return text

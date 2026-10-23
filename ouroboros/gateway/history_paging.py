@@ -7,8 +7,8 @@ answers older than the quota's reach are still weighed by the quota logic), and
 each older page the next older ones (owner decisions 2026-10-05, DESIGN "History
 edges"). The chat and progress streams keep separate quotas (``human``,
 ``progress``), each counted by its own predicate. A room's rows are addressed
-(``RoomLens``): one indexed probe per fact of the room -- its chat, the lineage
-columns of its bound tasks, the owner ids its bindings name -- so a page costs
+(``RoomLens``): indexed probes over the facts of the room -- its chat, the lineage
+columns of its bound tasks, the owner ids its bindings name; one statement per column -- so a page costs
 the room's own rows, never another room's history (``dialogue_store.probe_rows``).
 Coordinates are the chain coordinates the store keeps: every cursor an older
 body or a client holds names the same rows. The archive import's frontier is a
@@ -37,7 +37,7 @@ from ouroboros.store import StoreError, StoreMigrating
 from ouroboros.subagent_messages import CARD_ROW_PLACEMENTS, is_task_card_message, subagent_message_meta
 
 _SOURCES = ("chat", "progress")
-# One indexed probe page per room fact: a page's cost is the room's facts times this, never its history.
+# One probe page: each indexed column of the room's facts reads at most this many coordinates, never its history.
 _PROBE_ROWS = 200
 # The recent page reads the room's newest rows per stream until its quota is met AND its window is:
 # this many rows or this many stored bytes of the room's own rows, whichever comes first (the chain
@@ -201,8 +201,8 @@ def notes_stamp(data_dir):
 
 
 class RoomLens(NamedTuple):
-    """How one stream of a room is addressed in the store: one indexed probe per ``keys`` entry
-    (a ``dialogue_store.probe_rows`` column and value) and, for the chat stream, the coordinates
+    """How one stream of a room is addressed in the store: its ``keys`` (``dialogue_store.probe_rows``
+    columns and values, one statement per column) and, for the chat stream, the coordinates
     (``seqs``) of the owner rows a binding names without a client id, resolved by identity once per
     request. ``project_dialogue.room_membership`` decides each candidate; the lens is its superset."""
 
@@ -574,6 +574,18 @@ def history_page_coverage(page, stream_gaps):
                   "chain": _CHAIN_WITNESS, "gaps": sorted(stream_gaps[source])}
                  if page["quotas"]["human" if source == "chat" else source] else None)
         for source in _SOURCES}}
+
+
+def delivered_history_gaps(root, page, stream_gaps):
+    """Recheck narrowed import spans; projection failures have no narrower proof."""
+    import_gaps = {*_GAP_NAMES.values(), UNIMPORTABLE}
+    for source in _SOURCES:
+        if page["before"][source] == page["selections"][source][1]:
+            continue
+        reader = HistorySource(root, source, page["lens"][source], page["upper"][source])
+        stream_gaps[source] = (stream_gaps[source] - import_gaps) | reader.gaps(
+            page["before"][source], page["page_ends"][source])
+    return stream_gaps
 
 
 def history_page_tokens(page, messages=(), reads=None):

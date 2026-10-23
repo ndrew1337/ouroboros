@@ -68,12 +68,7 @@ _inproc_lock = threading.Lock()
 # Paths and registry
 # --------------------------------------------------------------------------- #
 def _data_dir(data_dir: Optional[Any] = None) -> Path:
-    if data_dir:
-        return Path(data_dir)
-    env = os.environ.get("OUROBOROS_DATA_DIR")
-    if env:
-        return Path(env)
-    return Path(DATA_DIR)
+    return Path(data_dir or os.environ.get("OUROBOROS_DATA_DIR") or DATA_DIR)
 
 
 def _registry_path(data_dir: Optional[Any] = None) -> Path:

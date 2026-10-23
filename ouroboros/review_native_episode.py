@@ -178,14 +178,13 @@ def native_or_packet_attempt_rail(slot: Any, two_send_surface: bool) -> Any:
 
 _INSPECTION_TOOL_NAMES = (
     "read_file", "list_files", "search_code", "query_code", "query_data",
-    "vcs_status", "vcs_diff", "compact_context",
+    "vcs_read", "compact_context",
 )
 
 _NATIVE_REVIEW_INSTRUCTIONS = (
     "You are an independent Ouroboros reviewer running a bounded read-only "
     "inspection episode. Retrieve the evidence yourself with the tools you are "
-    "given inside the repository root — read_file, list_files, search_code, "
-    "query_code, query_data, vcs_status, vcs_diff and compact_context. You cannot "
+    "given over the bound repository and admitted retained evidence. You cannot "
     "modify anything and have no shell. Read LARGE files in bounded chunks "
     "(read_file supports start_line/max_lines and start_char for long lines) instead of requesting a whole large "
     "document at once. The full required review surface may need several working views. "

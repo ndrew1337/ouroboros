@@ -35,8 +35,8 @@ def test_local_readonly_subagent_execute_blocks_forbidden_tools(tmp_path, monkey
     assert "LOCAL_READONLY_SUBAGENT_BLOCKED" not in registry.execute("switch_model", {})
     monkeypatch.setattr(mcp_client, "ensure_configured_from_settings", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("MCP touched")))
     assert "LOCAL_READONLY_SUBAGENT_BLOCKED" not in registry.execute("list_files", {"path": "."})
-    assert registry.get_schema_by_name("vcs_status") is not None
-    assert "TOOL_ACCESS_BLOCKED" not in registry.execute("vcs_status", {"root": "system_repo"})
+    assert registry.get_schema_by_name("vcs_read") is not None
+    assert "TOOL_ACCESS_BLOCKED" not in registry.execute("vcs_read", {"action": "status", "root": "system_repo"})
     # Memory written in the child's own name is open (signed with its focus), chronicle
     # pages only as its drafts (tests/test_child_chronicle_drafts.py); identity and
     # scratchpad stay with the integrating parent.

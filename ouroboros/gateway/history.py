@@ -27,7 +27,7 @@ from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
 from ouroboros.gateway._helpers import coerce_int
 from ouroboros.gateway.cost_breakdown import make_cost_breakdown_endpoint  # noqa: F401 — historical import path (router)
 from ouroboros.gateway.history_paging import (
-    HistoryCursorError, deferred_before, history_page_coverage, history_page_tokens, progress_quota_predicate,
+    HistoryCursorError, deferred_before, delivered_history_gaps, history_page_coverage, history_page_tokens, progress_quota_predicate,
     replay_evidence_rows, room_lens, room_view_fingerprint, select_history_page, latest_arrival, notes_stamp, parse_around,
     IMPORTING, PROJECTION_FAILED, _PROBE_ROWS, _RECENT_WINDOW_BYTES, _RECENT_WINDOW_ROWS,
 )
@@ -1506,7 +1506,8 @@ def _assemble_history_response(
     # review/cost authority and never consumes the conversation quota.
     messages.extend(replay_evidence_rows(messages, replay_evidence))
     tokens = history_page_tokens(page, messages, result_cache[_READS])
-    stream_gaps = {"chat": chat_gaps | selections["chat"][2], "progress": progress_gaps | selections["progress"][2]}
+    stream_gaps = delivered_history_gaps(data_dir, page, {
+        "chat": chat_gaps | selections["chat"][2], "progress": progress_gaps | selections["progress"][2]})
     if result_cache[_READS].failed or PROJECTION_FAILED in (stream_gaps["chat"] | stream_gaps["progress"]):
         tokens.pop("after_cursor", None)  # a read that failed part-way is read whole again, never continued
     window = _window_metadata(

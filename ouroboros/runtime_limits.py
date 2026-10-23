@@ -30,6 +30,9 @@ CLAUDEXOR_STOP_EXIT_WAIT_SEC = 5.0
 EXTERNAL_PLATFORM_UPDATE_TIMEOUT_SEC = 3600.0
 # Transport bound for one optional ditto process; expiry leaves the original patch intact.
 ARTIFACT_COMPRESSION_TIMEOUT_SEC = 120.0
+# Kill-and-reap bound for one captured local Git read (vcs_read history/identity); it sits
+# inside the default ToolEntry envelope so the reader reports and reaps before the loop abandons.
+GIT_READ_CAPTURE_TIMEOUT_SEC = 300.0
 
 
 EXTENSION_STREAM_CHUNK_BYTES = 64 * 1024

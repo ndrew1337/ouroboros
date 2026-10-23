@@ -26,7 +26,7 @@ import sqlite3
 import uuid
 from typing import Any, Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
 
-from ouroboros import store
+from ouroboros import store, store_empty
 from ouroboros.store import StoreBusy, StoreError, StoreLost, StoreMigrating, TIER_ENFORCED, TIER_NAME
 from ouroboros.utils import utc_now_iso
 
@@ -295,11 +295,8 @@ def transaction(root: Any, *, write: bool, wait_sec: float = WAIT_SEC) -> Iterat
         if write or holds_dialogue_files(root):
             ensure(root)
         else:
-            with contextlib.closing(sqlite3.connect(":memory:", isolation_level=None)) as conn:
-                conn.row_factory = sqlite3.Row
-                conn.executescript(_SCHEMA)
-                with store.transaction(conn, write=False):
-                    yield conn
+            with store_empty.empty_store(_SCHEMA) as conn, store.transaction(conn, write=False):
+                yield conn
             return
     tier = _tier(root)
     with contextlib.ExitStack() as stack:
@@ -698,10 +695,10 @@ def _bound(before: Optional[int]) -> int:
 
 def probe_rows(root: Any, stream: str, keys: Iterable[Tuple[str, Any]], *, before: Optional[int] = None,
                lower: int = 0, limit: int = 200, newest_first: bool = True) -> List[Row]:
-    """The union of one indexed probe per ``(column, value)`` key in ``[lower, before)``, newest
-    first, at most ``limit`` rows: the candidate rows of a room or a task tree. Each probe reads
-    at most ``limit`` coordinates through its own index; only the union's winning rows fetch
-    bodies in that snapshot; JSON decoding follows release. ``("chat_id", None)`` probes NULL chats."""
+    """The union of the ``(column, value)`` keys' rows in ``[lower, before)``, newest first, at
+    most ``limit`` rows: the candidate rows of a room or a task tree. One statement per column reads
+    at most ``limit`` coordinates through its index; only the union's winning rows fetch bodies in
+    that snapshot; JSON decoding follows release. ``("chat_id", None)`` probes NULL chats."""
     with transaction(root, write=False) as conn:
         records = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=newest_first)
     return [_row(record) for record in records]
@@ -709,20 +706,29 @@ def probe_rows(root: Any, stream: str, keys: Iterable[Tuple[str, Any]], *, befor
 
 def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]], *, before: Optional[int],
            lower: int, limit: int, newest_first: bool) -> List[sqlite3.Row]:
-    """Capture the winning stored records; the transaction owner decodes after release."""
-    found = set()
-    order = "DESC" if newest_first else "ASC"
+    """Capture the winning stored records; the transaction owner decodes after release.
+
+    One statement per column selects, through that column's index, the first ``limit`` coordinates
+    matching any of its values (one JSON list), so Python receives at most columns x ``limit``
+    integers however many keys a room has: a row among the union's first ``limit`` is among its own
+    column's first ``limit``, so the first ``limit`` of these is the union's."""
+    values: Dict[str, list] = {}
     for column, value in dict.fromkeys(tuple(keys)):
-        index = _PROBE_INDEX.get(column)
-        if index is None:
+        if column not in _PROBE_INDEX:
             raise ValueError(f"not a dialogue probe column: {column!r}")
-        if value is None and column != "chat_id":
-            continue  # the partial indexes hold only rows that carry the fact: nothing to probe
-        # ``IS`` reaches the NULL chat rows through the full room index; a partial index needs ``=``.
-        operator = "IS" if column == "chat_id" else "="
-        for record in conn.execute(f"SELECT seq FROM dialogue INDEXED BY {index} WHERE stream=? AND {column} {operator} ? AND seq<? AND seq>=? "
-                                   f"ORDER BY seq {order} LIMIT ?", (stream, value, _bound(before), lower, limit)):
-            found.add(record["seq"])
+        if value is not None or column == "chat_id":  # the partial indexes hold only rows that carry the fact
+            values.setdefault(column, []).append(value)
+    found = set()
+    order, bounds = ("DESC" if newest_first else "ASC"), (_bound(before), lower, limit)
+    for column, listed in values.items() if limit > 0 else ():
+        select = f"SELECT seq FROM dialogue INDEXED BY {_PROBE_INDEX[column]} WHERE stream=? AND {column} "
+        tail = f" AND seq<? AND seq>=? ORDER BY seq {order} LIMIT ?"
+        if None in listed:  # the chat-less rows, through the full room index
+            found.update(record["seq"] for record in conn.execute(select + "IS NULL" + tail, (stream, *bounds)))
+        if any(value is not None for value in listed):
+            found.update(record["seq"] for record in conn.execute(
+                select + "IN (SELECT +value FROM json_each(?))" + tail,  # unary + keeps the column's affinity
+                (stream, json.dumps([value for value in listed if value is not None]), *bounds)))
     chosen = heapq.nlargest(limit, found) if newest_first else heapq.nsmallest(limit, found)
     if not chosen:
         return []

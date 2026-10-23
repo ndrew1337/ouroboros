@@ -17,6 +17,11 @@ gateway handlers, the WebSocket chat door and the Stop path — is production co
 
 Boundaries (tags in the output):
 
+- ``B0``: the canonical path of the configured root (``install_identity.canonical_root``), resolved
+  before the lifespan. It is a process-wide memo filled on first use, and the health request, the
+  store import and the boot coordinator reach it concurrently, so the scheduler decides which
+  boundary below would pay the walk over the root's ancestors. That order does not depend on the
+  history. It is resolved once here and held to the same equality;
 - ``B1``: the lifespan up to ``lifespan.startup.complete`` (the work ``/api/health`` waits for);
   ``B1h``: the first ``/api/health`` request; ``popen_before_health``: child processes on that
   path (the lifespan and the request); ``B1c``: the boot coordinator thread that runs the remaining
@@ -46,7 +51,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List
 
-from tests._cost_meter import BOUNDARY, CostMeter
+from tests._cost_meter import BOUNDARY, CostMeter, tagged
 from tests._scale_root import CURRENT
 
 READY_TIMEOUT_SEC = 240.0  # the transport bound of this measurement, not a judgment about the boot
@@ -232,6 +237,10 @@ def run(spec: Dict[str, Any]) -> Dict[str, Any]:
 
         install_identity.canonical_root()
         events = _install_checkpoints(meter, srv, result)
+        from ouroboros import install_identity
+
+        tagged("B0", install_identity.canonical_root)
+        result["B0"] = _summary(meter, "B0")
         client = TestClient(_Tagger(srv.app, meter, result))
         with client:
             response = client.get("/api/health", headers={"x-cost-boundary": "B1h"})

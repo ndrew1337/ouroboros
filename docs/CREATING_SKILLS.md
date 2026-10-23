@@ -966,6 +966,18 @@ contributes:
 - `provides: place` requires `type: extension` and the `presence` permission. The Browse "Connectors" filter and
   "Connects <Service>" are derived from it; no tag or suffix is needed.
 
+A place connector reports observations; the host decides attention. While running and
+authenticated, report every supported event within the connected place's granted
+account, conversation and thread bounds, with observed provider facts. Do not discard
+these events based on their text, perceived relevance, wake list or place state.
+A bot sender is the fact `from_bot`, not an intake filter. Disable, unload, Panic and
+provider access still govern connector operation; this promises no access to events
+outside the provider API or the connector's declared support.
+
+The host validates and captures an event before applying authored wakes and execution
+conditions. Manifest wakes are suggestions, not a second attention policy. Provider
+access, supported event kinds and outgoing tools remain the connector's responsibility.
+
 ### Places and focus transport ingress
 
 A reviewed connector declares `permissions: [presence]` and `provides: place`.
@@ -986,8 +998,9 @@ Use the connector's ordinary content-hash-bound skill token for:
 - Optional `event.facts`: a list of `direct_message`, `group_dm`, `mention`,
   `reply_to_me`, `my_thread`, `new_issue`, `new_pull_request`, `any_message`, `from_bot`.
   These are observed provider facts, never text classification. Absent facts mean
-  `legacy_addressed` for older connectors that already filtered events. Empty facts
-  are distinct from absent facts. Bots require an explicit bot wake item.
+  `legacy_addressed`, compatibility for older connectors that filtered events themselves;
+  new connectors send `facts` with every event. Empty facts are distinct from absent
+  facts. Bots require an explicit bot wake item.
 - `GET /presence/place?provider=&account_id=&conversation_id=&thread_id=`: returns
   `{place_id, label, state}` for the connector's outbox recheck. `/identity`
   advertises `places_version: 1`. Optional `thread_id` selects the topic; omission keeps
@@ -1001,6 +1014,10 @@ Use the connector's ordinary content-hash-bound skill token for:
   retains dated inbox observations without making them owner directives.
 
 The host captures an event once into its room before deciding whether to wake.
+Silent remains eligible for a matching wake, subject to consciousness, allowance and
+capacity; it holds `message` and `write` aimed there and automatic replies. Paused
+keeps accepted new events heard without starting a new focus. Neither state withdraws
+an external request already accepted by the provider.
 Paused, consciousness Off/Panic, or no matching wake returns `silent` (heard).
 That final decision stays on the accepted room record: a retry stays silent after On,
 without creating a task document or retained context-source blob for the heard event.

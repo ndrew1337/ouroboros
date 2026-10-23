@@ -550,14 +550,15 @@ def test_local_fallback_lane_rate_limit_takes_the_audited_fail_open(monkeypatch,
 
 
 def test_marker_bearing_5xx_message_is_not_a_rate_limit_and_still_blocks(monkeypatch, tmp_path, _no_backoff):
-    """The markers are SUBSTRINGS, so `429`/`rpm`/`tpm` occur inside the request ids and
-    hostnames real outages carry. A KNOWN non-429 status must never reach the text
-    branch: this 503 carries `429` in its request id and must still block."""
+    """`429`/`rpm`/`tpm` still match separated request ids and hostnames real outages
+    carry. A KNOWN non-429 status must never reach the text branch: this 503 carries a
+    matching `429` in its request id and must still block."""
+    from ouroboros.loop_llm_call import is_rate_limit_text
     from ouroboros.safety import check_safety
 
-    stub = _ScriptedLLMClient([
-        _ServerError("503 Service Unavailable (request id: req_1f429ab0)"),
-    ])
+    message = "503 Service Unavailable (request id: req-429-ab0)"
+    assert is_rate_limit_text(message), "the fixture must reach the guard, not miss the text"
+    stub = _ScriptedLLMClient([_ServerError(message)])
     _patch_llm_client(monkeypatch, stub)
     ctx = _DriveCtx(tmp_path)
 
@@ -565,7 +566,7 @@ def test_marker_bearing_5xx_message_is_not_a_rate_limit_and_still_blocks(monkeyp
 
     assert ok is False, "a marker inside a request id must not wave a 5xx outage through"
     assert "SAFETY_UNAVAILABLE" in msg
-    assert "req_1f429ab0" in msg
+    assert "req-429-ab0" in msg
     assert len(stub.calls) == 1
     assert _read_events(ctx, "safety_check_rate_limited") == []
 

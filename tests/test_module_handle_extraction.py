@@ -207,7 +207,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_run_git_network_cmd", "_vcs_binding", "_vcs_result",
         "binding_targets_system_repo", "build_resolved_resource_binding",
         "is_protected_runtime_path", "normalize_repo_path", "protected_paths_in",
-        "run_cmd", "safe_relpath",
+        "run_cmd",
     })),
     "supervisor/git_ops_remotes.py": ("supervisor/git_ops.py", "_go", frozenset({
         "BRANCH_DEV", "REPO_DIR", "_configure_credential_helper",

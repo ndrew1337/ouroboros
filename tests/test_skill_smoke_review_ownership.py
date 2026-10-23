@@ -132,26 +132,45 @@ def test_failed_tree_reap_retains_candidate_data_and_blocks_ci_enable(tmp_path, 
         monkeypatch.setattr(author.SmokeAuthorServer, "_wait_ready", fail_parse)
     monkeypatch.setattr(smoke, "DATA_DIR", source)
     monkeypatch.setenv("OPENROUTER_API_KEY", "stub-not-a-credential")
+    run = tmp_path / "run"  # stands in for the whole battery's scratch root
+    run.mkdir()
+    monkeypatch.setenv("OUROBOROS_TEST_TEMP_ROOT", str(run))
     enabled = []
     monkeypatch.setattr(smoke, "save_enabled", lambda *args: enabled.append(args))
-    with pytest.raises(checkouts.CandidateError, match="unconfirmed descendant") as raised:
-        smoke.test_review_grants_and_enable("probe", None, lambda _slug: None, tmp_path)
-    assert candidate.unproven == 1 and candidate.path.exists()
-    assert (tmp_path / "author/data").exists()
-    assert not enabled and not load_enabled(tmp_path / "author/data", "probe")
-    if export_error != "write":
-        evidence = json.loads((tmp_path / "author/author-evidence.json").read_text())
-        assert evidence["server_stopped"] is False
-        assert "unconfirmed descendant" in evidence["teardown_failure"]
-        if export_error == "parse":
-            assert "author_tool_calls" in evidence["evidence_errors"][0]
-    else:
-        assert "SKILL_SMOKE_EVIDENCE_INCOMPLETE" in capsys.readouterr().err
-    if start_error:
-        assert isinstance(raised.value.__cause__, ValueError)
-        assert str(raised.value.__cause__) == "original readiness failure"
-    checkouts._retire_checkout(candidate.path, candidate, True)
-    assert candidate.path.exists(), "unproven checkout was deleted"
+    try:
+        with pytest.raises(checkouts.CandidateError, match="unconfirmed descendant") as raised:
+            smoke.test_review_grants_and_enable("probe", None, lambda _slug: None, tmp_path)
+        assert candidate.unproven == 1 and candidate.path.exists()
+        assert (tmp_path / "author/data").exists()
+        assert not enabled and not load_enabled(tmp_path / "author/data", "probe")
+        if export_error != "write":
+            evidence = json.loads((tmp_path / "author/author-evidence.json").read_text())
+            assert evidence["server_stopped"] is False
+            assert "unconfirmed descendant" in evidence["teardown_failure"]
+            if export_error == "parse":
+                assert "author_tool_calls" in evidence["evidence_errors"][0]
+        else:
+            assert "SKILL_SMOKE_EVIDENCE_INCOMPLETE" in capsys.readouterr().err
+        # A failed export keeps the author's own tree, never the run around it (#1908).
+        assert (tmp_path / "author/OUROBOROS_RETAINED.txt").is_file() is (export_error != "none")
+        assert not (run / "OUROBOROS_RETAINED.txt").exists()
+        if start_error:
+            assert isinstance(raised.value.__cause__, ValueError)
+            assert str(raised.value.__cause__) == "original readiness failure"
+        checkouts._retire_checkout(candidate.path, candidate, True)
+        assert candidate.path.exists(), "unproven checkout was deleted"
+    finally:
+        # The reap and the export faults are stubs: no process ever ran from this tree.
+        from tests._shared import retire_synthetic_retention
+        try:
+            json.loads("malformed JSON")
+        except ValueError as exc:
+            parse = f"author_tool_calls: {type(exc).__name__}: {exc}"
+        faults = ("local: OSError: synthetic export failure", "export: OSError: synthetic export failure", parse)
+        retire_synthetic_retention(candidate.path, "1 process tree(s) started from this checkout were never proven gone")
+        retire_synthetic_retention(tmp_path / "author/data", "CANDIDATE_RETAINED: tree reap: unconfirmed descendant")
+        retire_synthetic_retention(tmp_path / "author", *(
+            f"test diagnostics incomplete: SKILL_SMOKE_EVIDENCE_INCOMPLETE: {fault}" for fault in faults))
 
 
 def test_export_keeps_full_judgments_but_not_credentials_or_private_runtime(tmp_path, monkeypatch):
@@ -210,15 +229,26 @@ def test_author_entry_summary_uses_paid_verdict_and_failed_export_stays_red(tmp_
     args = dict(candidate=SimpleNamespace(path=tmp_path / "repo"), source_data=tmp_path / "source",
                 root=tmp_path / "author", name="probe", model="stub", timeout_sec=1,
                 credential=("OPENROUTER_API_KEY", "stub-not-a-credential"))
-    if export_error:
-        with pytest.raises(AssertionError, match="SKILL_SMOKE_EVIDENCE_INCOMPLETE"):
-            author.run_author_review(**args)
-        assert not gate
-    else:
-        assert author.run_author_review(**args)["review"]["status"] == "warnings"
-        assert gate == [True]
-        assert (tmp_path / "author/author-evidence.json").exists()
-    assert "final=warnings" in capsys.readouterr().out
+    run = tmp_path / "run"  # stands in for the whole battery's scratch root
+    run.mkdir()
+    monkeypatch.setenv("OUROBOROS_TEST_TEMP_ROOT", str(run))
+    try:
+        if export_error:
+            with pytest.raises(AssertionError, match="SKILL_SMOKE_EVIDENCE_INCOMPLETE"):
+                author.run_author_review(**args)
+            assert not gate
+        else:
+            assert author.run_author_review(**args)["review"]["status"] == "warnings"
+            assert gate == [True]
+            assert (tmp_path / "author/author-evidence.json").exists()
+        assert "final=warnings" in capsys.readouterr().out
+        assert (tmp_path / "author/OUROBOROS_RETAINED.txt").is_file() is export_error
+        assert not (run / "OUROBOROS_RETAINED.txt").exists()
+    finally:
+        from tests._shared import retire_synthetic_retention
+        retire_synthetic_retention(tmp_path / "author", *(  # the injected export fault, nothing else
+            f"test diagnostics incomplete: SKILL_SMOKE_EVIDENCE_INCOMPLETE: {stage}: OSError: synthetic export failure"
+            for stage in ("local", "export")))
 
 
 @pytest.mark.parametrize("source_missing", [False, True])

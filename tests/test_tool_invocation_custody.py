@@ -39,7 +39,7 @@ def test_actual_local_completion_releases_all_control_consumers(tmp_path, monkey
 
     registry, queue, workers = _registry(tmp_path, monkeypatch)
     if case == 'nonrepo_diff':
-        result = registry.execute_result('vcs_diff', {'root': 'active_workspace'})
+        result = registry.execute_result("vcs_read", {"action": "diff", 'root': 'active_workspace'})
         assert result.code == 'GIT_ERROR'
     elif case == 'numeric_argument':
         result = registry.execute_result('query_code', {'op': 'symbols', 'limit': 'invalid'})

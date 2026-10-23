@@ -123,7 +123,7 @@ EXPECTED_TOOLS = [
     "send_photo", "send_video", "send_file", "send_links", "show_card", "search_code", "query_code", "query_data", "escalate",
         "forward_to_worker",
     "generate_image", "list_image_models", "recover_image", "generate_evolution_stats",
-    "commit_reviewed", "vcs_commit_reviewed", "vcs_status", "vcs_diff",
+    "commit_reviewed", "vcs_read",
     "vcs_pull_ff", "vcs_restore", "vcs_revert",
     "fetch_pr_ref", "create_integration_branch", "cherry_pick_pr_commits",
     "stage_adaptations", "stage_pr_merge", "vcs_rollback",
@@ -143,7 +143,7 @@ EXPECTED_TOOLS = [
     "skill_sources", "skill_search", "skill_install", "skill_update",
     "list_available_tools", "enable_tools",
     "analyze_screenshot", "vlm_query", "view_image",
-    "ocr_pdf", "youtube_transcript", "extract_video_frames",
+    "extract_pdf_text", "youtube_transcript", "extract_video_frames",
 ]
 
 
@@ -203,10 +203,10 @@ def test_github_write_schema_fields(registry):
     schema = registry.get_schema_by_name("github_write")["function"]
     props = schema["parameters"]["properties"]
     assert schema["parameters"]["required"] == ["method"]
-    assert "create_issue" in props["method"]["enum"]
+    assert {"create_issue", "create_pr"} <= set(props["method"]["enum"])
     assert props["title"]["type"] == "string"
     assert props["body"]["type"] == "string"
-    assert props["body"]["default"] == ""
+    assert "default" not in props["body"]  # Omitted keeps the PR body; only an explicit "" clears it.
     assert props["labels"]["type"] == "array"
     assert "default" not in props["labels"]  # Omitted keeps labels; only an explicit [] clears them.
 

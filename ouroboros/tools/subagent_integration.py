@@ -1022,7 +1022,7 @@ def _integrate_subagent_patch(
         )
         detail = ("Integration did not finish cleanly." if apply_attempted else
                   "Result preparation failed. No file or patch apply was attempted.")
-        next_step = ("Inspect with vcs_diff and resolve, or run vcs_restore to abort, then retry or pick another child."
+        next_step = ("Inspect with vcs_read diff and resolve, or run vcs_restore to abort, then retry or pick another child."
                      if apply_attempted else "The copy and patch are retained. Reconcile changed source files with this copy, or reject the result.")
         return (f"⚠️ INTEGRATE_CONFLICT: {child_task_id} into {target}: {detail} "
                 f"Details: {stderr[:600]}\n{next_step}")
@@ -1179,7 +1179,7 @@ def get_tools() -> List[ToolEntry]:
                     "commit_reviewed. For best-of-N pick a child "
                     "and integrate it, or integrate several to synthesize. Own-body protected-path changes require "
                     "pro runtime mode (and, for a nested acting parent, protected_paths_grant). Conflicts "
-                    "are reported for you to resolve (vcs_diff) or abort (vcs_restore). Writes a "
+                    "are reported for you to resolve (vcs_read diff) or abort (vcs_restore). Writes a "
                     "subagent_patch_verdict_<task_id>.json audit artifact."
                 ),
                 "parameters": {

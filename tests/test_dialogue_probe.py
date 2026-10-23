@@ -133,7 +133,25 @@ def test_overlapping_keys_fetch_only_winning_bodies(newest_first, monkeypatch):
         expected = list(range(1205))[::-1] if newest_first else list(range(1205))
         assert [row.seq for row in rows] == [n * 100 for n in expected[:80]]
         assert counted.body_rows == len(decoded) == 80, "discarded key candidates must never fetch bodies"
-        assert counted.seq_rows > 1205, "exercise overlap before the body-fetch boundary"
+        assert 80 < counted.seq_rows <= 3 * 80, "discarded candidates exist, one statement per column bounds them"
+
+
+@pytest.mark.parametrize("newest_first", [False, True])
+def test_coordinates_reaching_python_do_not_grow_with_the_room(newest_first):
+    """A room's lens names every bound task three times over; the probe still hands Python at most
+    columns x limit coordinates and runs one statement per column, for 30 keys as for 3,000."""
+    measured = []
+    for count in (10, 1000):
+        with sqlite3.connect(":memory:") as conn:
+            conn.row_factory = sqlite3.Row
+            conn.executescript(ds._SCHEMA)
+            keys = _many_keys(conn, count)
+            counted = CountedConnection(conn)
+            rows = probe(counted, keys, limit=7, newest_first=newest_first)
+            expected = list(range(count))[::-1] if newest_first else list(range(count))
+            assert [row.seq for row in rows] == [n * 100 for n in expected[:7]]
+            measured.append((counted.statements, counted.seq_rows, counted.body_rows))
+    assert measured[0] == measured[1] == (4, 21, 7), measured
 
 
 @pytest.mark.parametrize("variables,compound", [(5, 1), (9, 3), (31, 7), (999, 500)])
@@ -284,3 +302,18 @@ def test_public_readers_decode_after_releasing_the_snapshot(tmp_path, monkeypatc
         rows = read()
         assert len(rows) == len(decoded) == 12
         assert sorted(row.row["text"] for row in rows) == sorted(f"row {n}" for n in range(12))
+
+
+def test_a_value_compares_with_the_columns_affinity_as_a_bound_parameter_did():
+    """``task_id = 123`` matched the stored ``'123'`` (TEXT affinity on the bound int) and ``chat_id = '5'``
+    matched 5: a JSON list element carries no affinity of its own (``+value``), so batching keeps both."""
+    with sqlite3.connect(":memory:") as conn:
+        conn.row_factory = sqlite3.Row
+        conn.executescript(ds._SCHEMA)
+        for seq, chat, task, client in ((10, 5, "123", "42"), (20, 6, "abc", "x"), (30, None, "124", "43")):
+            conn.execute("INSERT INTO dialogue(stream,seq,length,segment,ordinal,chat_id,task_id,client_message_id,body) "
+                         "VALUES('chat',?,10,1,?,?,?,?,'{}')", (seq, seq, chat, task, client))
+        for keys, expected in (([("task_id", 123)], [10]), ([("task_id", "123"), ("task_id", 124)], [30, 10]),
+                               ([("client_message_id", 42)], [10]), ([("chat_id", "5")], [10]),
+                               ([("chat_id", 6.0), ("root_task_id", 1)], [20]), ([("chat_id", None)], [30])):
+            assert [row.seq for row in probe(conn, keys)] == expected, keys

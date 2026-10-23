@@ -111,7 +111,7 @@ def test_native_review_and_git_codes_preserve_legacy_status_without_text_authori
         "commit_reviewed", review.text, False, review,
     )["status"] == "review_blocked"
     assert _extract_result_metadata(
-        "vcs_status", git.text, False, git,
+        "vcs_read", git.text, False, git,
     )["status"] == "git_error"
 
 
@@ -121,7 +121,7 @@ def test_binding_result_mappings_preserve_legacy_loop_classification():
         # their own outcome bucket instead of the shared generic `error`.
         ("query_code", "⚠️ TOOL_ARG_ERROR (query_code): ValueError: bad root", "error", "TOOL_ARG_ERROR", True, "argument_error"),
         ("apply_patch", "⚠️ TOOL_ERROR: ValueError: bad root", "error", "TOOL_ERROR", True, "error"),
-        ("vcs_status", "⚠️ GIT_ERROR: ValueError: bad root", "ok", "GIT_ERROR", False, "git_error"),
+        ("vcs_read", "⚠️ GIT_ERROR: ValueError: bad root", "ok", "GIT_ERROR", False, "git_error"),
     )
     for tool, text, status, code, is_error, legacy_status in cases:
         typed = LegacyTextResultAdapter.from_text(tool, text)

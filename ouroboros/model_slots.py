@@ -63,8 +63,17 @@ def normalize_model_role_options(key: str, raw: object) -> tuple[dict, str]:
             raw = json.loads(raw)
         except (ValueError, TypeError) as exc:
             raise ValueError(f"{key} must be a JSON object") from exc
-    if not isinstance(raw, dict) or set(raw) - set(MODEL_ROLE_SETTINGS):
-        raise ValueError(f"{key} must contain only known model roles")
+    if not isinstance(raw, dict):
+        raise ValueError(f"{key} must be a JSON object")
+    unknown_roles = [ascii(role) for role in raw if role not in MODEL_ROLE_SETTINGS]
+    if unknown_roles:
+        raise ValueError(
+            f"{key}: unknown model role(s): {', '.join(unknown_roles)}. "
+            f"Supported roles: {', '.join(MODEL_ROLE_SETTINGS)}. "
+            "Check the role spelling or use a compatible application version; "
+            "do not reset your settings. Packaged startup recovery: "
+            "docs/DEPLOYMENT.md#unknown-model-role-at-startup"
+        )
     def value(item: object) -> str | int:
         if key == MODEL_PROCESSING_PREFERENCES_KEY:
             return normalize_processing_preference(item)

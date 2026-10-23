@@ -1319,7 +1319,8 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("delegate_start", {
             "name": "delegate_start",
             "description": (
-                "Start a run on the owner's configured subscription harness; you become its NANNY. "
+                "Start a run on the owner's configured agent-session (subscription) harness and supervise it as its "
+                "NANNY; API actors are scheduled with schedule_subagent instead. "
                 "Subscription is requested, not guaranteed free: expired auth, paid routes or auth fallback "
                 "may bill. Read delegate_wait's terminal cost (zero, billed, estimated or undisclosed); "
                 "time, quota and a worker slot are also spent. Root, route and access inherit your authority "
@@ -1424,8 +1425,8 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("delegate_wait", {
             "name": "delegate_wait",
             "description": (
-                "A host-confirmed retry successor may retrieve a predecessor's proven terminal result; live control stays with its starter. "
-                "Sleep on a delegated run until a meaningful event. Quiet transport windows "
+                "Sleep on a delegated run until it ends, asks a question or needs you; quiet progress costs "
+                "no model rounds. Quiet transport windows "
                 "are renewed by the host with zero model calls; journal progress still streams "
                 "to the human but does not wake you. A daemon that cannot be reached is the "
                 "same quiet renewal (typed reason daemon_unreachable, told to the owner once per "
@@ -1434,7 +1435,9 @@ def get_tools() -> List[ToolEntry]:
                 "An observed terminal, a new interaction, "
                 "fault, addressed owner/task message, a direct-child attention/terminal event, "
                 "cancel/deadline control, recovery judgment, or an explicit one-shot checkpoint "
-                "wakes exactly once. Usable terminal output returns before pending host capture/accounting; "
+                "wakes exactly once. "
+                "A host-confirmed retry successor may retrieve a predecessor's proven terminal result; live control stays with its starter. "
+                "Usable terminal output returns before pending host capture/accounting; "
                 "rereading it is immediate, not a wait for that preparation. Every wake carries `sleep` (measured over this whole call), "
                 "`leaf_live_input` (the route's declared live-input capability, 'unknown' when "
                 "unread) and, once the prompt-cache horizon has passed since your last model "

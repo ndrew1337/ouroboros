@@ -47,7 +47,7 @@ RESULT_VIEW_MARKER = "RESULT_VIEW_JSON="
 FULL_SOURCE_MARKER = "FULL_RESULT_SOURCE_JSON="
 FULL_SOURCE_UNAVAILABLE = "FULL_RESULT_SOURCE_UNAVAILABLE=true"
 SOURCE_UNAVAILABLE_NOTE = "Do not treat this partial result as complete; exact source persistence failed."
-RECOVER_PAGEABLE = "Read the exact source above, or page this tool (offset/limit) for the omitted range."
+RECOVER_PAGEABLE = "Read the exact source above, or request another range using this tool's declared parameters."
 RECOVER_OTHER = "Do not rerun this tool to recover omitted output. Read the exact source above."
 
 # Re-measurements of the complete candidate after the first allocation. Each one

@@ -151,7 +151,11 @@ def test_local_readonly_subagent_initial_schemas_are_allowlisted(tmp_path):
     )
 
     names = {s["function"]["name"] for s in initial_tool_schemas(registry)}
-    assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES <= names
+    # A granted compat alias stays callable but is advertised only through its canonical name.
+    aliases = {name for name in LOCAL_READONLY_SUBAGENT_TOOL_NAMES if registry._entries[name].alias_for}
+    assert aliases == {"ocr_pdf"}
+    assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES - aliases <= names
+    assert not aliases & names and {registry._entries[name].alias_for for name in aliases} <= names
     assert "enable_tools" not in names
     assert "schedule_subagent" in names
     assert "verify_and_record" not in names

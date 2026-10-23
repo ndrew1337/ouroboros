@@ -164,7 +164,7 @@ def get_tools():
             "codebase_health",
             {
                 "name": "codebase_health",
-                "description": "Get codebase complexity metrics: file sizes, longest functions, modules exceeding limits. Useful for self-assessment per Bible Principle 7 (Minimalism).",
+                "description": "Measure the complexity of Ouroboros's own checkout: file sizes, longest functions, modules exceeding limits. Useful for self-assessment per Bible Principle 7 (Minimalism).",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
             _codebase_health,

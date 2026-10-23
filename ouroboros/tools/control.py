@@ -119,7 +119,8 @@ _ROOT_EFFORT_PARAM = {"type": "string", "enum": list(EFFORT_SCALE), "description
 
 
 _SCHEDULE_SUBAGENT_DESCRIPTION = (
-    "Schedule a live child of Ouroboros; returns task_id. Default native READ-ONLY children inspect "
+    "Start a child task on one objective; it reports its result back to you (start_task starts separate "
+    "independent work instead). Returns task_id. Default native READ-ONLY children inspect "
     "local repo/data/history and web/browser. Each returns findings; apart from knowledge notes, memory marks "
     "and chronicle drafts in its own name, it cannot write local state, commit, enable tools, or run "
     "shell/review/runtime/skills. write_surface selects a MUTATIVE (acting) child; you alone commit "
@@ -189,7 +190,10 @@ def get_tools() -> List[ToolEntry]:
             }, "required": ["action"]}}, _finish_task),
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",
-            "description": "Update the global tool timeout in settings.json and apply it immediately without restart.",
+            "description": (
+                "Set the saved global tool-call timeout immediately. Tool minimums still apply; use a call's "
+                'timeout_sec for a single long command.'
+            ),
             "parameters": {"type": "object", "properties": {
                 "seconds": {"type": "integer", "description": "New timeout in seconds (>= 1)"},
             }, "required": ["seconds"]},
@@ -197,7 +201,10 @@ def get_tools() -> List[ToolEntry]:
         *self_change_tool_entries(),
         ToolEntry("promote_to_stable", {
             "name": "promote_to_stable",
-            "description": "Promote ouroboros -> ouroboros-stable. Call when you consider the code stable.",
+            "description": (
+                'Ask the supervisor to advance ouroboros-stable to ouroboros and push it. Evolution promotes its exact '
+                'reviewed commit. Returns before completion; the owner receives the outcome.'
+            ),
             "parameters": {"type": "object", "properties": {"reason": {"type": "string"}}, "required": ["reason"]},
         }, _promote_to_stable),
         ToolEntry("start_task", {
@@ -341,14 +348,11 @@ def get_tools() -> List[ToolEntry]:
         }, _send_user_message),
         ToolEntry("update_identity", {
             "name": "update_identity",
-            "description": "Update your identity manifest (who you are, who you want to become). "
-                           "Persists across sessions. Obligation to yourself (Principle 1: Continuity). "
-                           "Read your current identity first, then evolve it — add, refine, deepen. "
-                           "Full rewrites are allowed but should be rare; continuity of self matters. "
-                           "Use this only after substantive reflection or real experience — not on a "
-                           "greeting or trivial turn. This is the only correct way to write identity; "
-                           "never write memory/identity.md through write_file/edit_text. "
-                           "Project rooms included — identity is the same continuous file in every room.",
+            "description": (
+                'Replace your persistent identity manifest with the full supplied text after substantive reflection. '
+                'Read it first and preserve continuity. This is the identity-writing tool in every project room; do not '
+                'edit memory/identity.md through file tools.'
+            ),
             "parameters": {"type": "object", "properties": {
                 "content": {"type": "string", "description": "Full identity content (prefer evolving over rewriting from scratch)"},
                 "expected_revision": {"type": "string", "description": "Required for an existing identity: source_revision (SHA-256 of bytes) from read_file. A stale revision refuses with the current revision."},
@@ -384,11 +388,10 @@ def get_tools() -> List[ToolEntry]:
         }, _set_next_wakeup),
         ToolEntry("switch_model", {
             "name": "switch_model",
-            "description": "Switch to a different LLM model or reasoning effort level. "
-                           "Use when you need more power (complex code, deep reasoning) "
-                           "or want to save budget (simple tasks). Takes effect on next round. "
-                           "After the host moved this turn to a configured fallback, primary='return' "
-                           "or 'wait' goes back to the turn's primary route.",
+            "description": (
+                'Switch model or reasoning effort on the next round. No arguments lists available models. After a host '
+                "fallback, primary='return' or 'wait' returns to this turn's primary route."
+            ),
             "parameters": {"type": "object", "properties": {
                 "model": {"type": "string", "description": "Model name (e.g. anthropic/claude-sonnet-4). Leave empty to keep current."},
                 "effort": {"type": "string", "enum": list(EFFORT_SCALE),
@@ -408,7 +411,8 @@ def get_tools() -> List[ToolEntry]:
             "description": "Wait for ONE subtask to reach a terminal status and return its effective result: the full single-child handoff once it settled (or when your known_result_sha256 no longer matches); a return BEFORE it settled carries the compact wait_tasks projection plus delegated_runs (its open delegated runs with dated observation facts, no liveness verdict). May return EARLY (before terminal) if the child raises a tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon — the result then carries a [CHILD_BEACONS] block so you can steer, review, or override it. An unread message in your own mailbox also returns early so the ordinary loop can deliver and acknowledge it; the child keeps running. With SEVERAL children in flight, prefer wait_tasks(any_terminal) to absorb whichever finishes first rather than blocking serially on one id at a time.",
             "parameters": {"type": "object", "required": ["task_id"], "properties": {
                 "task_id": {"type": "string", "description": "Task ID to check"},
-                "known_result_sha256": {"type": "string", "description": "Optional child_result_sha256 already obtained for this task. An exact match returns unchanged without repeating result/trace; current facts remain. Omit to return full text. This does not change when the wait ends."},
+                "view": {"type": "string", "enum": ["answer", "summary", "evidence", "full"], "description": "Settled result view; omitted/full preserves the existing handoff. Early returns remain compact wait observations, not a result or full read."},
+                "known_result_sha256": {"type": "string", "description": "Prior child_result_sha256 in every view; current facts still refresh. This does not change when the wait ends."},
                 "timeout_sec": {"type": "integer", "default": 180, "description":
                                 "Maximum seconds to wait (default 180); a larger value is clamped to "
                                 f"{_WAIT_TASK_CLAMP_SEC}, and a deadline narrows it (named in the result). Size the window to the child's expected life."},

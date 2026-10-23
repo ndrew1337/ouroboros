@@ -161,8 +161,13 @@ class TestCommitReviewedLandsInTheSystemRepository:
                             lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not review")))
         registry = ToolRegistry(ctx.repo_dir, ctx.drive_root)
         registry.set_context(ctx)
+        advertised = registry.get_schema_by_name("commit_reviewed")["function"]["parameters"]["properties"]["root"]
+        assert advertised["enum"] == ["system_repo"]
+        # The older name is a hidden alias (never advertised, still dispatched), so its
+        # root is read from the registered entry the dispatcher validates against.
+        assert registry.get_schema_by_name("vcs_commit_reviewed") is None
         for name in ("commit_reviewed", "vcs_commit_reviewed"):
-            root_schema = registry.get_schema_by_name(name)["function"]["parameters"]["properties"]["root"]
+            root_schema = registry._entries[name].schema["parameters"]["properties"]["root"]
             assert root_schema["enum"] == ["system_repo"]
             result = registry.execute(name, {"commit_message": "land the project", "root": "active_workspace"})
             assert "commit_reviewed lands in the system repository" in result and "review_change" in result

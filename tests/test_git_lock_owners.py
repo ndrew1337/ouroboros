@@ -784,9 +784,11 @@ def test_owner_work_beside_a_held_lock_is_refused_before_anything_moves(replace_
     status, body = update_lanes("auto_merge")
 
     error = body["error"].partition("could not preserve local changes before the update: ")
-    # Git may name the lock, report only the failed index write, or say nothing (Apple Git 2.39).
-    assert status == 409 and error[1] and ("index.lock" in error[2] or error[2] in {
-        "error: could not write index", "git stash push failed"}), body
+    # Git's own words vary by version: some name the lock, while Apple Git can
+    # report only that it could not write the index (or say nothing at all).
+    assert status == 409 and error[1] and (
+        "index.lock" in error[2] or error[2] in {"error: could not write index", "git stash push failed"}
+    ), body
     assert update_merge.read_update_tx_strict()[0] == "absent" and scene.events["respawned"] == 1
     assert workers.repo_writer_admission_closed() == "" and scene.events["fenced"] == []
     assert (scene.repo / "seed.txt").read_text(encoding="utf-8") == "owner edit in progress\n"

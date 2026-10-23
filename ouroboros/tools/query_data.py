@@ -38,6 +38,15 @@ _STATES = ("review", "review_job", "health", "enabled", "deps", "grants")
 _SELECTOR = re.compile(r"(?:[^.\[\]]+|\[(?:\d+|\*)\])(?:\.[^.\[\]]+|\[(?:\d+|\*)\])*")
 
 
+class SelectorError(ValueError):
+    """A value-free selector diagnostic.
+
+    The error describes structure only.  In particular it never includes a
+    neighbouring value from the document: object failures disclose key names,
+    and array failures disclose only the array length.
+    """
+
+
 def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
@@ -48,21 +57,74 @@ def _name(value):
     return value
 
 
+def _json_type(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, (int, float)):
+        return "number"
+    return type(value).__name__
+
+
+def _object_keys(value):
+    names = sorted(str(key) for key in value)
+    shown = names[:32]
+    suffix = f", ... ({len(names) - len(shown)} more)" if len(names) > len(shown) else ""
+    return "[" + ", ".join(json.dumps(name, ensure_ascii=False) for name in shown) + suffix + "]"
+
+
 def _select(value, selector):
     if not selector:
         return value
     parts = re.findall(r"[^.\[\]]+|\[(?:\d+|\*)\]", selector)
 
-    def walk(current, index):
+    def walk(current, index, path):
         if index == len(parts):
             return current
         part = parts[index]
         if part == "[*]":
             if not isinstance(current, list):
-                raise ValueError("[*] requires an array")
-            return [walk(item, index + 1) for item in current]
-        return walk(current[int(part[1:-1])] if part.startswith("[") else current[part], index + 1)
-    return walk(value, 0)
+                detail = f"; object keys={_object_keys(current)}" if isinstance(current, dict) else ""
+                raise SelectorError(
+                    f"selector {selector!r} failed at path {path!r}, segment '[*]': "
+                    f"expected array, got {_json_type(current)}{detail}"
+                )
+            return [walk(item, index + 1, f"{path}[{item_index}]")
+                    for item_index, item in enumerate(current)]
+        if part.startswith("["):
+            if not isinstance(current, list):
+                detail = f"; object keys={_object_keys(current)}" if isinstance(current, dict) else ""
+                raise SelectorError(
+                    f"selector {selector!r} failed at path {path!r}, segment {part!r}: "
+                    f"expected array, got {_json_type(current)}{detail}"
+                )
+            offset = int(part[1:-1])
+            if offset >= len(current):
+                raise SelectorError(
+                    f"selector {selector!r} failed at path {path!r}, segment {part!r}: "
+                    f"array length={len(current)}"
+                )
+            return walk(current[offset], index + 1, f"{path}[{offset}]")
+        if not isinstance(current, dict):
+            raise SelectorError(
+                f"selector {selector!r} failed at path {path!r}, segment {part!r}: "
+                f"expected object, got {_json_type(current)}"
+            )
+        if part not in current:
+            raise SelectorError(
+                f"selector {selector!r} failed at path {path!r}, segment {part!r}: "
+                f"object keys={_object_keys(current)}"
+            )
+        child_path = part if path == "$" else f"{path}.{part}"
+        return walk(current[part], index + 1, child_path)
+    return walk(value, 0, "$")
 
 
 def _path(ctx, root, relative):
@@ -149,7 +211,7 @@ def _jsonl(path, where, tail, cap):
             if where:
                 try:
                     field = _select(value, where["field"])
-                except (KeyError, IndexError, TypeError):
+                except SelectorError:
                     continue
                 if where["op"] == "eq":
                     matches = field == where["value"]

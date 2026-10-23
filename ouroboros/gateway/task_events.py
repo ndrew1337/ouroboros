@@ -5,7 +5,7 @@ Both transports share current result/lineage projections and all five sources;
 v2 owns only read positions, never event persistence or task state.
 
 ``progress`` and ``chat`` are the dialogue store's streams (``state/dialog.sqlite``):
-a task tree's rows are one indexed probe per identifier (``dialogue_store.task_rows``),
+a task tree's rows are indexed probes over its identifiers (``dialogue_store.task_rows``),
 never a scan of other rooms' history; the v1 ``line`` is the row's durable position
 among every stored object of its stream (``dialogue_positions``). ``events``, ``tools``
 and ``supervisor`` stay rotated files read by byte offset.
@@ -402,7 +402,7 @@ class _TaskEventFollower:
     def _read_dialogue_delta(self, root: pathlib.Path, source: str) -> List[Tuple[Dict[str, Any], Optional[int]]]:
         """The task tree's rows stored in one dialogue stream after the recorded coordinate, with
         each row's ``line`` (its durable ordinal + 1; None while the archive import has not settled
-        the counts, which ``_note_import`` discloses). One indexed probe per identifier, paged."""
+        the counts, which ``_note_import`` discloses). Indexed probes, one statement per column, paged."""
         state = self._log_state(root, source)
         rows: List[ds.Row] = []
         after = int(state["after"])
