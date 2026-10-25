@@ -73,6 +73,17 @@ def signature(root: Any, task_id: str, *, txn: Optional[Txn] = None) -> Optional
         return signature(root, task_id, txn=txn)
 
 
+def terminal_writes_since(root: Any, counter: int) -> List[str]:
+    """The task ids whose rows were written terminal after the terminal-write counter stood at COUNTER
+    (``obligations.task_written`` stamps each such row with the counter's new value, ``terminal_seq``),
+    in that order, through the ``tasks_terminal_seq`` index: what a pass keyed on the counter looks at
+    again, never the rows it did not move."""
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            "SELECT task_id FROM tasks INDEXED BY tasks_terminal_seq WHERE terminal_seq>? ORDER BY terminal_seq, task_id",
+            (int(counter),))]
+
+
 def delete_document(root: Any, task_id: str) -> bool:
     """Remove one task's row and body (a scheduling refusal undoing its own requested row)."""
     with open_store(root, write=True) as txn:
@@ -248,7 +259,34 @@ def newest_ids(root: Any, limit: Optional[int] = None, *, where: str = "", param
                 txn.conn.execute(f"SELECT task_id FROM tasks {clause}{_NEWEST_ORDER}{bound}", tuple(params))]
 
 
-ROOT_RESULT_WHERE = "parent_task_id IS NULL AND (delegation_role IS NULL OR delegation_role != 'subagent')"
+ROOT_RESULT_WHERE = store.ROOT_RESULT_WHERE
+
+
+def newest_root_ids(root: Any, limit: Optional[int] = None, *, project_id: str = "") -> List[str]:
+    """Root task ids (``ROOT_RESULT_WHERE``) newest first, walked in the root-only index of that
+    order (``store.ROOT_WINDOWS``: one project's ``tasks_project_root_ts``, the whole
+    store's ``tasks_root_ts``), so ``limit`` bounds the entries read: no child is visited, however
+    many are newer than the roots or between them. Unpinned, the planner reads every root through
+    ``tasks_parent`` and sorts them all."""
+    if not project_id and limit is None:
+        raise ValueError("the whole store's newest roots need a limit")
+    index, scope, params = (("tasks_project_root_ts", "project_id=? AND ", (project_id,)) if project_id
+                            else ("tasks_root_ts", "", ()))
+    bound = "" if limit is None else f" LIMIT {int(limit)}"
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            f"SELECT task_id FROM tasks INDEXED BY {index} WHERE {scope}{ROOT_RESULT_WHERE} {_NEWEST_ORDER}{bound}", params)]
+
+
+def project_result_counts(root: Any, project_id: str) -> Tuple[int, int]:
+    """``(roots, children)`` among one project's results, counted without a body: its roots over
+    its root index, all its rows over ``tasks_project`` alone (a child's table row is never read)."""
+    with open_store(root, write=False) as txn:
+        roots = txn.conn.execute(f"SELECT COUNT(*) FROM tasks INDEXED BY tasks_project_root_ts WHERE project_id=? "
+                                 f"AND {ROOT_RESULT_WHERE}", (project_id,)).fetchone()[0]
+        results = txn.conn.execute("SELECT COUNT(*) FROM tasks INDEXED BY tasks_project WHERE project_id=?",
+                                   (project_id,)).fetchone()[0]
+    return int(roots), int(results) - int(roots)
 
 
 def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:

@@ -27,7 +27,6 @@ if TYPE_CHECKING:
 
 from ouroboros.context_layout import reference_doc_sections
 from ouroboros.section_floor import HostSection, section_views, _governance_blocks as _section_governance, _system_blocks
-from ouroboros.section_floor import PATTERN_REGISTER_POINTER as PATTERN_REGISTER_POINTER
 from ouroboros.reference_books import ReferenceBook
 from ouroboros import context_budget
 from ouroboros.context_window import WindowRecord, resolve_window, route_observation_scope
@@ -113,8 +112,13 @@ class ContextFitPlan:
     def reproject_for_route(self, *, window_tokens: int, known_window: bool, ratio: float, output_reserve: int,
                             tool_schemas: Optional[List[Dict[str, Any]]], start_mode: Optional[str] = None,
                             current_messages: Optional[List[Dict[str, Any]]] = None,
-                            refused_tokens: int = 0, select_mode: Optional[str] = None) -> "ContextFitPlan":
-        """Keep fitting shown bytes; narrow on physical deficit from the same snapshot and selected forms."""
+                            refused_tokens: int = 0, select_mode: Optional[str] = None,
+                            measured_input_tokens: Optional[int] = None) -> "ContextFitPlan":
+        """Fit shown bytes; an actual envelope's raw estimate also prices its extra framing.
+
+        The measurement belongs to this candidate, includes tools and excludes the reply.
+        A requested saving alone does not establish pressure on held owner words or notes.
+        """
         from dataclasses import replace
 
         ratio = 1.0 if self.window_basis == "estimator" else ratio
@@ -143,11 +147,12 @@ class ContextFitPlan:
             shown = self.projection(start)
             names = [schema["function"]["name"] for schema in tool_schemas or []]
             sent = select_tool_schemas(tool_schemas or [], context_mode=start, schema_names=names).schemas
-            request = math.ceil((_request_tokens(json.loads(shown.system_content_json),
-                                                 shown.user_content_json or self.user_content_json,
-                                                 supplementary_messages_json=self.core.supplementary_messages_json,
-                                                 current_messages=current_messages)
-                                 + tool_schema_tokens(list(sent))) * ratio)
+            raw = (_request_tokens(json.loads(shown.system_content_json),
+                                   shown.user_content_json or self.user_content_json,
+                                   supplementary_messages_json=self.core.supplementary_messages_json,
+                                   current_messages=current_messages) + tool_schema_tokens(list(sent)))
+            overhead = max(0, int(measured_input_tokens or 0) - raw)
+            request = math.ceil((raw + overhead) * ratio)
             request += context_mode_limits(start, self.preferred_mode, output_reserve, **reserve_args)[1]
             deficit = max(request - window_tokens if known_window and window_tokens else 0, int(refused_tokens or 0))
             if deficit > 0 or select_mode:
@@ -158,6 +163,7 @@ class ContextFitPlan:
                     tool_schemas=tool_schemas, working_reserve_tokens=self.working_reserve_tokens,
                     window_tokens=window_tokens, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
                     window_record=record,
+                    envelope_overhead_tokens=overhead,
                     resident=True, current_messages=current_messages,  # actual running tail, enable_tools included
                     kept={mode: memory_floor.kept_level(snapshot, self.projection(mode).memory_facts) if snapshot else None
                           for mode in memory_floor.MODES},
@@ -269,11 +275,8 @@ class ContextCore:
     reference_books: Tuple[ReferenceBook, ...] = ()
     compact_reference_docs: bool = False
     reference_book_errors: Tuple[str, ...] = ()
-    # Knowledge (overview, index, patterns, project journal) leading the changing block.
+    # Knowledge (overview, index, project journal) leading the changing block.
     dynamic_head_text: str = ""
-    # The Pattern Register section as captured in ``dynamic_head_text``: Max, Low and every
-    # later route render it; Nano renders PATTERN_REGISTER_POINTER in its place (owner, 2026-10-20).
-    pattern_register_text: str = ""
     # The captured memory view (``memory_view.snapshot_json``); each projection renders
     # it for its own mode and window. Empty: no memory view (a declared-input child).
     memory_view_json: str = ""
@@ -628,6 +631,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
                       kept: Optional[Mapping[str, Any]] = None, saving: Optional[Mapping[str, int]] = None,
                       select: Optional[str] = None, kept_sections: Optional[Mapping[str, Iterable[Mapping]]] = None,
                       working_reserve_tokens: Optional[int] = None, window_record: Optional[WindowRecord] = None, work_room_levels: int = 1,
+                      envelope_overhead_tokens: int = 0,
                       ) -> Tuple[Dict[str, Tuple[List[Dict[str, Any]], Dict]], str]:
     """Select books once, walk memory once. Unsent book forms share the selected memory, not another budget."""
     from dataclasses import replace
@@ -641,8 +645,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
     names = [schema["function"]["name"] for schema in tool_schemas or []] if resident else None
 
     sections = {m: (*core.semi_stable_sections, *core.dynamic_sections,
-                    *(part for part in core.dynamic_head_sections
-                      if not (m == "nano" and part.section_id == "pattern_register")),
+                    *core.dynamic_head_sections,
                     *(governance[form[m]][0] if not isinstance(governance[form[m]][0], str) else ()))
                 for m in form}
     previous = tuple((kept_sections or {}).get(start or preferred, ()))
@@ -657,7 +660,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             return _request_tokens(_system_blocks(core, governance[form[selected]], story, room,
                 mode=selected, addressed=addressed), user_content_json,
                 supplementary_messages_json=core.supplementary_messages_json,
-                current_messages=current_messages) + tool_schema_tokens(list(sent.schemas))
+                current_messages=current_messages) + tool_schema_tokens(list(sent.schemas)) + envelope_overhead_tokens
         target, reserve = context_budget.context_mode_limits(selected, preferred, output_reserve,
                                                             working_reserve_tokens=working_reserve_tokens)
         record = replace(window_record, reserve=reserve) if window_record else None
@@ -679,9 +682,10 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
         return sent, fixed, reserve, window, boundary, allowances
 
     sent, fixed, reserve, window, boundary, allowances = frame(mode)
-    original_fixed = _request_tokens(_system_blocks(core, governance[form[start or preferred]],
+    original_fixed = (_request_tokens(_system_blocks(core, governance[form[start or preferred]],
         mode=start or preferred, addressed=section_views(sections[start or preferred], previous)), user_content_json,
-        supplementary_messages_json=core.supplementary_messages_json, current_messages=current_messages) + tool_schema_tokens(list(sent.schemas))
+        supplementary_messages_json=core.supplementary_messages_json, current_messages=current_messages)
+        + tool_schema_tokens(list(sent.schemas)) + envelope_overhead_tokens)
     original_reserve = reserve
     if kept is not None and known_window:
         minimum = floor.minimal_view_tokens(snapshot, window_tokens=window) if snapshot else 0
@@ -724,7 +728,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             measure_text=lambda story, room: _request_tokens(_system_blocks(core, governance[form[mode]], story, room,
                 mode=mode, addressed=section_views(sections[mode], receipts)), user_content_json,
                 supplementary_messages_json=core.supplementary_messages_json,
-                current_messages=current_messages) + tool_schema_tokens(list(sent.schemas)) - fixed)
+                current_messages=current_messages) + tool_schema_tokens(list(sent.schemas)) + envelope_overhead_tokens - fixed)
     if snapshot:
         story, room, facts = render()
         # Judged on the completed start view: Max keeps whole books only beside the whole story and the work room.
@@ -857,7 +861,6 @@ def build_context_fit_plan(
             "host_sections": [(part.section_id, part.full_text, part.operative_view, part.reader)
                               for part in (*core.semi_stable_sections, *core.dynamic_head_sections, *core.dynamic_sections)],
             "dynamic_head_text": core.dynamic_head_text,
-            **({"pattern_register_text": core.pattern_register_text} if core.pattern_register_text else {}),
             "dynamic_text": core.dynamic_text,
             "memory_view_json": core.memory_view_json,
             **({"supplementary_messages": json.loads(core.supplementary_messages_json)}

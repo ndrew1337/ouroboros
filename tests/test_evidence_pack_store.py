@@ -105,14 +105,14 @@ def test_a_pass_that_left_work_unfinished_stays_due_until_the_store_moves(root):
         assert maintenance.run_job(root, "evidence_packing") == {"state": "done", "items": 1}
     assert packs.published_generations(root, "held") and Path(refs[0]["path"]).exists()  # packed, not unlinked
     row = maintenance_jobs.job(root, "evidence_packing")
-    assert (row["pending"], row["quiet"], row["state"]) == (1, True, "done")
+    assert (row["pending"], row["quiet"], row["state"]) == (["held"], True, "done")  # the candidate it owes, by id
     assert "evidence_packing" not in maintenance.due(root)  # nothing written since the pass: no spawn
     _result(root, "other", "running")  # any store write re-arms the unfinished pass (a live row moves no terminal fact)
     assert "evidence_packing" in maintenance.due(root)
     assert maintenance.run_job(root, "evidence_packing")["state"] == "done"
     assert not Path(refs[0]["path"]).exists() and packs.blob_bytes(root, refs[0])
     row = maintenance_jobs.job(root, "evidence_packing")
-    assert (row["pending"], row["quiet"]) == (0, False)  # the unlink owes one more look
+    assert (row["pending"], row["quiet"]) == ([], False)  # the unlink owes one more look
     assert maintenance.run_job(root, "evidence_packing")["state"] == "done"
     assert maintenance_jobs.job(root, "evidence_packing")["quiet"] is True
     assert "evidence_packing" not in maintenance.due(root)
@@ -121,9 +121,9 @@ def test_a_pass_that_left_work_unfinished_stays_due_until_the_store_moves(root):
     with task_custody_lock(root, "later") as acquired:  # the child finishes unfinished work whenever it runs
         _task(root, "later", blobs=1)
         assert acquired and maintenance.run_job(root, "evidence_packing")["state"] == "done"
-    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == 1
+    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == ["later"]
     assert maintenance.run_job(root, "evidence_packing") is not None  # due in the child without any write
-    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == 0
+    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == []
 
 
 def test_a_receipt_committed_during_the_pass_keeps_the_unfinished_work_due(root, monkeypatch):
@@ -177,17 +177,17 @@ def test_a_receipt_committed_during_the_pass_keeps_the_unfinished_work_due(root,
         assert txn.revision() > before + 1  # the receipt and the pass's own record
     assert packs.published_generations(root, "finished") and _loose(refs[0])  # packed; the unlink deferred
     row = maintenance_jobs.job(root, "evidence_packing")
-    assert (row["pending"], row["quiet"]) == (1, True)
+    assert (row["pending"], row["quiet"]) == (["finished"], True)
     assert "evidence_packing" in maintenance.due(root)  # the receipt is a write the pass has not seen
     assert maintenance.run_job(root, "evidence_packing")["state"] == "done"
     assert not _loose(refs[0]) and packs.blob_bytes(root, refs[0])
-    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == 0
+    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == []
     with task_custody_lock(root, "held") as acquired:  # a contender that writes nothing during the retry
         _task(root, "held", blobs=1)
         assert acquired and maintenance.run_job(root, "evidence_packing")["state"] == "done"
-        assert maintenance_jobs.job(root, "evidence_packing")["pending"] == 1
+        assert maintenance_jobs.job(root, "evidence_packing")["pending"] == ["held"]
         assert "evidence_packing" not in maintenance.due(root)  # nothing written since the pass began
     _result(root, "held", "completed", note="the contender's receipt, after the pass")
     assert "evidence_packing" in maintenance.due(root)
     assert maintenance.run_job(root, "evidence_packing")["state"] == "done"
-    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == 0
+    assert maintenance_jobs.job(root, "evidence_packing")["pending"] == []

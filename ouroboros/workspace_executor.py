@@ -981,13 +981,14 @@ def start_service(
         drive_root=drive_root,
     )
     if executor.kind == "local":
+        from ouroboros.maintenance_retirement import artifact_changed
         from ouroboros.process_custody import spawn_supervised
-
         # A service inside the bound body candidate runs isolated; a refusal precedes any log.
         base_env = candidate_env if candidate_env is not None else _executor_service_env()
         log_path = drive_root / "services" / record.task_id / f"{name}.executor.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
         log_fh = log_path.open("ab")
+        artifact_changed(drive_root)
 
         from ouroboros.owner_pause import _member_coordinates
         from ouroboros.process_scope import record_task_group, scoped_child_env, task_launch_target

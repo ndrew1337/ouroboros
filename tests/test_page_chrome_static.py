@@ -178,9 +178,11 @@ def test_skills_and_widgets_use_inner_scroll_regions():
 
 def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
     """The sidebar is a pinned head (Main Chat), the Projects list as the ONE scroller (no inner cap, no outer
-    scroll wrapper) and the tools right after it: the Projects zone is as tall as its rows and shrinks to scroll
-    them, so free room stays under the last row, never between the zones (docs/DESIGN.md "Shell").
-    A too-short window falls back to the whole column scrolling with the head sticky."""
+    scroll wrapper), the tools right after it and the foot (the version and the update) on the bottom edge: the
+    Projects zone is as tall as its rows and shrinks to scroll them, so free room lies between the tools and the foot,
+    never between the list and the tools (docs/DESIGN.md "Shell").
+    A too-short window falls back to the whole column scrolling with the head sticky and the foot still on the
+    bottom edge (owner 23.10)."""
     css = _read("web/style.css")
     html = _read("web/index.html")
     zone = css.split("\n.nav-projects {", 1)[1].split("}", 1)[0]
@@ -193,6 +195,19 @@ def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
     # A finger's 44px rows run out of room sooner, so a touch column falls back at a taller window.
     fallback = css.split("@media (max-height: 540px), (pointer: coarse) and (max-height: 600px) {", 1)[1].split("}\n}", 1)[0]
     assert "#primary-sidebar .nav-projects-list { flex: 0 0 auto; overflow-y: visible;" in fallback
+    # There the tools' box steps aside, so the foot sticks to the column's bottom edge through the column's bottom
+    # padding, which the drawer grows by the safe area (test_sidebar_short_window_browser.py measures it).
+    assert "#primary-sidebar .sidebar-foot { display: contents; }" in fallback
+    pinned = fallback.split("#primary-sidebar .sidebar-foot-meta {", 1)[1]
+    for line in ("position: sticky;", "bottom: calc(-1 * var(--sidebar-pad-bottom));",
+                 "margin-bottom: calc(-1 * var(--sidebar-pad-bottom));", "padding-bottom: var(--sidebar-pad-bottom);",
+                 "background: var(--surface-side);"):
+        assert line in pinned, (line, pinned)
+    column = css.split("\n#primary-sidebar {", 1)[1].split("\n}", 1)[0]
+    assert "--sidebar-pad-bottom: var(--space-3);" in column and "padding: 0 var(--space-3) var(--sidebar-pad-bottom);" in column
+    drawer = css.split('\nhtml[data-layout="stack"] #primary-sidebar {', 1)[1].split("\n}", 1)[0]
+    assert "--sidebar-pad-bottom: calc(var(--space-3) + var(--inset-bottom));" in drawer, drawer
+    assert "padding-bottom: var(--sidebar-pad-bottom);" in drawer, drawer
     assert "--nav-projects-list-max-height" not in css and "--nav-projects-list-max-height" not in _read("web/ui.css")
     # A fresh document has no outer wrapper. An older desktop page can keep its pre-three-zone .sidebar-scroll; the
     # one rule naming it takes its box away, so that page's list scrolls again (test_ui_shell_legacy_browser.py).
@@ -202,6 +217,11 @@ def test_sidebar_is_three_zones_with_the_projects_list_as_the_one_scroller():
     assert legacy == ["#primary-sidebar > .sidebar-scroll { display: contents; }"], legacy
     head = css.split(".sidebar-head {", 1)[1].split("}", 1)[0]
     assert "position: sticky" in head and "top: 0" in head
+    # The foot (the version and the update) rests on the bottom edge whatever the list does (owner 22.10): the tools'
+    # box takes the free room and its last row is pushed down, so the free room lies between the tools and the foot.
+    foot = css.split("\n.sidebar-foot {", 1)[1].split("}", 1)[0]
+    meta = css.split("\n.sidebar-foot-meta {", 1)[1].split("}", 1)[0]
+    assert "flex: 1 0 auto" in foot and "margin-top: auto" in meta, (foot, meta)
     assert html.index('class="sidebar-head"') < html.index('id="nav-projects"') < html.index('class="sidebar-foot"')
     # The zones are filled from the page registry: Main into the head, the tools into the foot (pages.js).
     pages_js = _read("web/modules/pages.js")

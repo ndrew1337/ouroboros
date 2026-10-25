@@ -30,6 +30,15 @@ def _chain():
     add(custody.OUTPUT_CONSUMED, run_id="a", task_id="t1", sha256="0" * 64, reader_task_id="t1")
     add(custody.SETTLED, run_id="a", task_id="t1", cost_usd=1.25, spend_disclosed=True,
         model="test-model", access_profile="test-profile", source="delegated_subagent")
+    add(custody.COLLECTION_ATTEMPTED, run_id="a", task_id="t1",
+        outcome={"inputs": {"terminal_sha": "terminal"}, "generation": "body", "retry": "transient"})
+    add(custody.NAMED_EVIDENCE_RETAINED, run_id="a", task_id="t1",
+        outcome={"directory": "evidence-generation", "status": "partial", "inputs": {"witness": "source"}})
+    add(custody.CAPTURE_JOB_CHANGED, run_id="a", task_id="t1", expected_id="",
+        outcome={"id": "capture-job", "state": "pending", "binding": "snapshot"})
+    add(custody.STARTED, run_id="a", invocation_id="inv-a", task_id="t1", root_task_id="t1")
+    add(custody.CAPTURE_JOB_CHANGED, run_id="a", task_id="t1", expected_id="older-job",
+        outcome={"id": "stale", "state": "ready"})
     add(custody.PATCH_DISPOSED, run_id="a", task_id="t1")
     add(custody.START_REQUESTED, invocation_id="inv-b", task_id="t2", root_task_id="t1",
         billing_group={"billing_group_id": "group-b", "billing_group_limit_usd": 5})
@@ -83,6 +92,9 @@ def test_required_chain_matches_at_every_prefix_and_at_import(tmp_path):
     assert set(live["refused"]) == {"inv-b"}
     assert not live["runs"]["a"][0]["project_owned"]
     assert not live["runs"]["d"][0]["project_owned"]
+    assert live["runs"]["a"][0]["collection_attempt"]["generation"] == "body"
+    assert live["runs"]["a"][0]["named_evidence"]["status"] == "partial"
+    assert live["runs"]["a"][0]["capture_job"]["id"] == "capture-job"
     assert len(live["marks"]["t1"]["patch_verdicts"]) == 1
     path = custody.event_log_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)

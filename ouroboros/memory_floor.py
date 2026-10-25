@@ -520,8 +520,7 @@ def minimal_view_tokens(snapshot: mv.MemoryViewSnapshot, *, window_tokens: Optio
 # Host producers before indexes, then the memory walk, all under the same start budget.
 # Running views narrow only under physical pressure or a refusal.
 HOST_STEPS = ("runtime", "registry", "installed_skills",
-              "drive_state", "pattern_register", "world", "subagents",
-              "execution_reflections", "architecture_map", "development_map")
+              "drive_state", "world", "subagents", "architecture_map", "development_map")
 
 
 def _host_steps(sections, previous, *, measure, window, reserve, ratio, saving, root, task_id, allowance=None):

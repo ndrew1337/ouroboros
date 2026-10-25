@@ -73,12 +73,15 @@ def _stable_hash(payload: Any) -> str:
 
 
 def _run_git(root: pathlib.Path, *args: str) -> str:
+    from ouroboros.git_observation import host_git_env
+
     proc = subprocess.run(
         ["git", *args],
         cwd=str(root),
         capture_output=True,
         text=True,
         check=False,
+        env=host_git_env(),
     )
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "git command failed").strip()

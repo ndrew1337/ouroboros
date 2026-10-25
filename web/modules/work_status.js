@@ -160,6 +160,13 @@ export function workLine(work = {}, word = activityWord(work)) {
     return [sentence, pressed, ...tailWords(list(work.tails))].filter(Boolean).join(' · ');
 }
 
+/** The first of a room's works that says the room's own word, else null: a work Pausing beside a running one never
+ *  lends its reason to the room's Working. */
+export function roomSpeaker(room, works = [], word = activityWord(room)) {
+    const byId = new Map(list(works).map((work) => [work?.work_id, work]));
+    return list(room?.works).map((id) => byId.get(id)).find((work) => work && activityWord(work) === word) || null;
+}
+
 /** What waits for the owner in a room ('question' | 'action'), '' when nothing does or its own word says so. */
 export const roomAmber = (room) => (!room?.amber || (room.activity === 'waiting' && asked(room)) ? ''
     : asked(room) ? 'question' : 'action');
@@ -176,7 +183,9 @@ export const amberNote = (kind) => (kind === 'question' ? tr('work.amber.questio
  * turn: its amber dot takes the mark's place, the word keeps its ink); `amber` what waits (question | action), said in
  * words where the word does not already say it. `stopping` is the owner's own Stop press on every working work of the
  * room ('finalize' | 'immediate'); until the host is `ready`, an idle room says its start in the words of the host's
- * `boot` phases (host_starting_status.js).
+ * `boot` phases (host_starting_status.js). A room still preparing names as its `step` the step its speaking work
+ * stands at (a direct turn's start step), said beside the word and dropped before it on a short bar, so nothing in
+ * the bar reads as a model call before one is sent.
  */
 export function roomStatusView(state, { connected = true, ready = true, boot = null, sending = false, stopping = '' } = {}) {
     const view = (kind, text, tone, mark, extra = {}) => ({ kind, text, tone, mark, owner: false, amber: '', ...extra });
@@ -186,9 +195,13 @@ export function roomStatusView(state, { connected = true, ready = true, boot = n
     const turn = { owner: list(room.turn).length > 0, amber: roomAmber(room) };
     if (room.activity !== 'working' && sending) return view('thinking', chipWord('sending'), 'live', 'moving', turn);
     switch (room.activity) {
-    case 'working':  // a Pause still settling keeps the neutral ink; its mark moves while work stops
-        return view('thinking', stopping ? chipWord(stopping === 'finalize' ? 'finalizing' : 'cancelling') : activityWord(room),
-            room.transition === 'pausing' && !stopping ? 'held' : 'live', stopping ? 'moving' : mark, turn);
+    case 'working': {  // a Pause still settling keeps the neutral ink; its mark moves while work stops
+        const word = stopping ? chipWord(stopping === 'finalize' ? 'finalizing' : 'cancelling') : activityWord(room);
+        const step = !stopping && room.call === 'preparing'
+            ? reasonText(list(roomSpeaker(room, state?.works, word)?.because)[0]) : '';
+        return view('thinking', word, room.transition === 'pausing' && !stopping ? 'held' : 'live',
+            stopping ? 'moving' : mark, step ? { ...turn, step } : turn);
+    }
     case 'queued': return view('thinking', activityWord(room), 'queued', mark, turn);
     // The owner's own question says itself: the word takes the amber ink, beside the owner's dot.
     case 'waiting': return view('online', activityWord(room), asked(room) ? 'wait' : 'held', mark, turn);

@@ -50,6 +50,7 @@ from ouroboros.chronicle_store import (CHILD_DRAFT_RIGHT, DELEGATED_FOCUS_ROLES,
 from ouroboros.contracts.chat_id_policy import WEB_UI_CHAT_ID
 from ouroboros.dialogue_provenance import (RoomLabelResolver, is_presence_task, render_memory_row, render_row_text,
                                            row_class)
+from ouroboros.mark_anchors import describe as describe_anchor
 from ouroboros.memory_view_account import account_entries, account_lines, accounts_line, told_map
 from ouroboros.memory_view_legacy import INDENT, indented as _indented, retold_lines
 from ouroboros.utils import append_jsonl, sha256_text, utc_now_iso
@@ -130,7 +131,7 @@ class ViewSpec:
     origin_words: bool = True  # the owner's words that started a Project, when its rows are not open
     live_rooms: str = "lines"  # none | lines | lines_with_words | directory
     marks: str = "all"  # all | room_and_global | none
-    knowledge: bool = True  # overview, knowledge index, patterns, project journal (rendered by the context)
+    knowledge: bool = True  # overview, knowledge index, project journal (rendered by the context)
     work_room_levels: int = 1
     owner_words: bool = False  # the owner's words that caused a helper's work (owner_words.py)
 
@@ -782,7 +783,8 @@ def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., s
         entries.append({"id": mark["id"], "scope": str(mark.get("scope") or "room"),
                         "room": label(mark.get("room_id")), "text": str(mark.get("text") or ""), "by": str(by),
                         "date": _minute(mark.get("ts")).split(" ")[0], "target": _mark_target(mark.get("target_ref")),
-                        "quote": str(mark.get("quote") or "") if mark.get("visibility", "full") == "full" else ""})
+                        "quote": str(mark.get("quote") or "") if mark.get("visibility", "full") == "full" else "",
+                        "anchor": describe_anchor(mark["anchor"]) if isinstance(mark.get("anchor"), dict) else ""})
     return sorted(entries, key=lambda entry: (entry["scope"] == "global", "" if entry["scope"] == "global" else entry["room"]))
 
 
@@ -1132,7 +1134,8 @@ def _marks_text(marks: List[Dict[str, Any]]) -> str:
     for mark in marks:
         lines.append(f"- [{mark['scope']}; {mark['room']}] " + _indented(mark["text"]).lstrip()
                      + f" — marked by {mark['by']} on {mark['date']}; target {mark['target']}; "
-                     f"memory_mark(release_id='{mark['id']}', reason=…)")
+                     + (f"meets me at {mark['anchor']}; " if mark.get("anchor") else "")
+                     + f"memory_mark(release_id='{mark['id']}', reason=…)")
         if mark.get("quote"):
             lines.append(f"{INDENT}quote: " + _indented(mark["quote"]).lstrip())
     return "\n".join(lines)
@@ -1258,7 +1261,7 @@ def working_sources_line(spec: ViewSpec, snapshot: Optional[MemoryViewSnapshot] 
         missing.append(f"{', '.join(memory)} (my memory is not activated yet: {snapshot.store_status.get('reason')})")
     else:
         loaded += memory
-    (loaded if spec.knowledge else missing).append("knowledge (overview, index, patterns)")
+    (loaded if spec.knowledge else missing).append("knowledge (overview, index)")
     if spec.owner_words and (snapshot is None or snapshot.owner_words):  # named only when the block was drawn
         loaded.append("the words of my human that caused this work")
     missing += ["the global scratchpad", "earlier task reports"]

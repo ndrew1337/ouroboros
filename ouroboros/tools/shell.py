@@ -69,11 +69,9 @@ from ouroboros.tools.shell_process import (  # noqa: F401
 from ouroboros.tools.shell_effects import (  # noqa: F401
     _get_changed_files,
     _get_diff_stat,
-    _protected_runtime_dirty_paths,
     _record_scratch_fingerprints,
     _resolve_git_root,
     _resolve_scratch_abs,
-    _restore_protected_runtime_paths,
     _scratch_safety_reason,
     _shallow_listing,
     _status_snapshot,

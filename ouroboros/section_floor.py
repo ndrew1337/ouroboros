@@ -99,10 +99,6 @@ def _governance_blocks(env: Any, core: Any, *, mode: str, reference_docs: Callab
     return (capture_sections(static_parts, prefix="governance"), development)
 
 
-# The Pattern Register's reader where a context carries no register body: a child's, and Nano's.
-PATTERN_REGISTER_POINTER = "Pattern Register details: knowledge_read(topic='patterns', scope='global')."
-
-
 def _system_blocks(core: Any, governance: Tuple[Any, ...], story: str = "", room: str = "",
                    mode: str = "", addressed: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
     # All stable items precede C, including D only when the captured core calls
@@ -113,9 +109,7 @@ def _system_blocks(core: Any, governance: Tuple[Any, ...], story: str = "", room
     semi = render_sections(core.semi_stable_sections, core.semi_stable_text, addressed)
     dynamic = render_sections(core.dynamic_sections, core.dynamic_text, addressed)
     stable = (*rendered_governance, "\n\n".join(part for part in (semi, story) if part))
-    head = render_sections(core.dynamic_head_sections, core.dynamic_head_text, addressed)  # Nano shows the register's reader; the core keeps the captured body
-    if mode == "nano" and core.pattern_register_text and head.count(core.pattern_register_text) == 1:
-        head = head.replace(core.pattern_register_text, PATTERN_REGISTER_POINTER)
+    head = render_sections(core.dynamic_head_sections, core.dynamic_head_text, addressed)
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [
         {"type": "text", "text": "\n\n".join(part for part in (head, room, dynamic) if part)},

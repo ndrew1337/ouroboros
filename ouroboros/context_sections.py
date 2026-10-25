@@ -35,9 +35,6 @@ def build_knowledge_sections(
     *,
     project_id: str = "",
     warn_large: bool = False,
-    pattern_header: str = "## Known error patterns (Pattern Register)",
-    include_pattern_body: bool = True,
-    pattern_section_out: Optional[List[str]] = None,
 ) -> List[str]:
     sections: List[str] = []
     # One mind keeps its authored common orientation across rooms. The generated
@@ -87,18 +84,6 @@ def build_knowledge_sections(
         # title, people's summaries kept (``knowledge.render_knowledge_outline``).
         sections.append(HostSection("knowledge_index" if address is global_address else "project_knowledge_index",
                                     f"{header}\n\n{text}", f"{header}\n\n{outline}", reader=reader))
-    patterns_reader = "knowledge_read(topic='patterns', scope='global')"
-    pointer = f"Pattern Register details: {patterns_reader}."
-    if include_pattern_body:
-        text = safe_read(env.drive_path("memory/knowledge/patterns.md"))
-        if text.strip():
-            # The register's index entry stays in the knowledge index; its body is one read away.
-            sections.append(HostSection("pattern_register", f"{pattern_header}\n\n{text}",
-                                        f"{pattern_header}\n\n{pointer}", reader=patterns_reader))
-            if pattern_section_out is not None:
-                pattern_section_out.append(sections[-1])
-    if not include_pattern_body:
-        sections.append(pointer)
     if pid:
         # Bounded per-project journal tail + workpad (multi-project, v6.32.0):
         # the project's durable progress memory rides along with its knowledge.

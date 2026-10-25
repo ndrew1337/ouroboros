@@ -31,12 +31,13 @@ import { initUpdates } from './modules/updates.js';
 import { initActivity } from './modules/activity.js';
 import { initConsciousnessDashboard } from './modules/consciousness_dashboard.js';
 import { initUpdateStatus } from './modules/update_status.js';
+import { getInterfaceSize } from './modules/interface_size.js';
 import { initDashboard } from './modules/dashboard.js';
 import { initStorage } from './modules/storage.js';
 import { SHELL_ICONS } from './modules/page_icons.js';
 import { renderNavRows, renderProjectsHeader } from './modules/pages.js';
 import { renderPageHeader } from './modules/page_header.js';
-import { isStackLayout, onLayoutChange } from './modules/layout.js';
+import { isStackLayout, measurePinnedBars, onLayoutChange, pinchMagnified } from './modules/layout.js';
 import { createLayerStack } from './modules/layers.js';
 import { afterMotion, reducedMotion } from './modules/motion.js';
 import { createShellMotion } from './modules/shell_motion.js';
@@ -100,6 +101,7 @@ const shellMotion = createShellMotion({ content: document.getElementById('conten
 // follows the Projects, before the version. Nothing below looks a row up before this.
 primarySidebar?.querySelector('.sidebar-head')?.insertAdjacentHTML('beforeend', renderNavRows('head'));
 primarySidebar?.querySelector('.sidebar-foot-meta')?.insertAdjacentHTML('beforebegin', renderNavRows('foot'));
+measurePinnedBars(primarySidebar);  // a short window's row scroll margin under its pinned head and foot
 const navProjectsHeader = primarySidebar?.querySelector('.nav-projects-header');
 if (navProjectsHeader) navProjectsHeader.innerHTML = renderProjectsHeader();
 const navProjectsFacts = navProjectsHeader?.querySelector('.nav-projects-facts');
@@ -1391,6 +1393,8 @@ const disposeStorage = initStorage({ ...ctx, mount: document.getElementById('das
 initSkills(ctx);
 initWidgets(ctx);
 const updateStatus = initUpdateStatus(ctx);
+// The interface size's one controller: the desktop keys work on every page, the slider lives in Settings.
+getInterfaceSize();
 
 initOnboardingOverlay();
 
@@ -1525,6 +1529,8 @@ if (hashPage && hashPage !== state.activePage) showPage(hashPage);
     const updateVvh = () => {
         const h = viewportHeight();
         if (isStackLayout()) {
+            // A pinch only magnifies: the room keeps the height it had, or it would shrink with the visual viewport.
+            if (pinchMagnified()) return;
             vvhStyle.textContent = ':root{--vvh:' + Math.max(320, Math.ceil(h)) + 'px}';
             if (!focusedKeyboardEditable()) {
                 applyKeyboardState(false);

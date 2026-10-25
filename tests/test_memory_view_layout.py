@@ -325,7 +325,7 @@ def test_a_helpers_role_line_names_exactly_what_its_request_holds(tmp_path, rout
     assert f"the page of your parent's room {alpha}" in loaded and f"## This room ({alpha})" in c
     assert ("the top level of your story" in loaded) == story == ("## My story" in b)
     assert ("the top level of your story" in missing) == (not story)
-    assert "knowledge (overview, index, patterns)" in missing and "## Shared understanding" not in c
+    assert "knowledge (overview, index)" in missing and "## Shared understanding" not in c
     assert "raw conversations" in missing and "### Open conversation" not in c and "## Live rooms" not in c
     assert "the words of my human that caused this work" not in loaded  # no root record: no block drawn
 

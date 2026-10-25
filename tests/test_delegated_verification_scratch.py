@@ -207,6 +207,13 @@ def _saved(capture):
         encoding="utf-8"))
 
 
+def _latest(ctx, entry):
+    from ouroboros.delegate_named_evidence import saved_named_evidence
+
+    root = custody.custody_root(ctx)
+    return {"named_evidence": saved_named_evidence(root, entry)[1]}
+
+
 def _symlink_or_skip(link, target, *, directory=False):
     try:
         link.symlink_to(target, target_is_directory=directory)
@@ -240,8 +247,11 @@ def test_a_retention_gap_withholds_the_disposition_until_nothing_unretained_is_l
         out = _integrate_delegated_patch(ctx, "run-1", decision, "checked")
         assert ("✅ Integrated" if decision == "apply" else "🚫 Rejected") in out, out
         assert (target / "feature.py").exists() is (decision == "apply") and not copy.exists()
-        # The record keeps what it said, the gap moved aside: nothing named is left in the copy to lose.
-        assert _saved(capture) == {**capture["named_evidence"], "status": "retained", "gaps": [], "removed_gaps": gaps}
+        # The old receipt remains exact; the changed input publishes a new receipt before release.
+        assert _saved(capture) == capture["named_evidence"]
+        latest = _latest(ctx, entry)["named_evidence"]
+        assert latest["status"] == "retained" and latest["gaps"] == [] and latest["files"] == []
+        assert latest["evidence_dir"] != capture["named_evidence"]["evidence_dir"]
     finally:
         custody._CUSTODY.clear()
 
@@ -278,10 +288,12 @@ def test_removing_unretainable_evidence_releases_the_copy_and_keeps_what_was_ret
             (copy / gap).unlink()  # the link itself, never its target
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
         assert "🚫 Rejected" in out and not copy.exists(), out
-        saved = _saved(capture)
-        assert saved["status"] == "retained" and saved["gaps"] == [] and _retained(capture) == expected
-        assert {row["path"] for row in saved["files"]} == set(expected) and (outside / "elsewhere.log").exists()
-        assert saved.get("removed_gaps", []) == ([] if removed == "link" else gaps)  # a re-read folder has none
+        assert _saved(capture) == capture["named_evidence"] and _retained(capture) == expected
+        latest = _latest(ctx, entry)
+        assert latest["named_evidence"]["status"] == "retained" and latest["named_evidence"]["gaps"] == []
+        assert _retained(latest) == (expected if removed == "link" else {})
+        assert latest["named_evidence"]["evidence_dir"] != capture["named_evidence"]["evidence_dir"]
+        assert (outside / "elsewhere.log").exists()
     finally:
         custody._CUSTODY.clear()
 
@@ -340,7 +352,7 @@ def test_full_suite_sized_evidence_is_retained_whole_by_streaming(tmp_path, monk
         named = capture["named_evidence"]
         assert named["status"] == "retained" and named["gaps"] == [], named
         assert named["files"] == [{"path": ".review-evidence/run-1/results.jsonl", "size": size,
-                                   "sha256": digest.hexdigest()}]
+                                   "sha256": digest.hexdigest(), "mode": 0o644}]
         assert peak < 16 * 1024 * 1024, peak  # streamed: the file never sat in memory whole
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
         assert "🚫 Rejected" in out and not copy.exists() and len(out) < 4096, out[:400]
@@ -399,13 +411,15 @@ def test_evidence_written_after_a_retained_summary_is_retained_before_release(tm
     try:
         capture = _capture_terminal_patch(ctx, entry)
         assert capture["named_evidence"]["status"] == "retained" and capture["named_evidence"]["witness"]
+        original = dict(expected)
         (copy / ".review-evidence" / "later.log").write_bytes(b"written after the first retention\r\n")
         (copy / ".review-evidence" / "notes.txt").write_bytes(b"rewritten later\n")
         expected.update({".review-evidence/later.log": b"written after the first retention\r\n",
                          ".review-evidence/notes.txt": b"rewritten later\n"})
         out = _integrate_delegated_patch(ctx, "run-1", "reject", "checked")
         assert "🚫 Rejected" in out and not copy.exists(), out
-        assert _retained(capture) == expected
+        assert _retained(_latest(ctx, entry)) == expected
+        assert _retained(capture) == original and _saved(capture) == capture["named_evidence"]
     finally:
         custody._CUSTODY.clear()
 
@@ -521,7 +535,7 @@ def test_a_baseline_root_link_is_never_walked_for_evidence_or_its_witness(tmp_pa
     assert gaps == [] and not (tmp_path / "kept").exists()
 
 
-def test_a_run_that_named_no_evidence_shows_none(tmp_path, monkeypatch):
+def test_a_run_that_named_no_evidence_records_empty_retention(tmp_path, monkeypatch):
     from ouroboros.tools.delegate import _capture_terminal_patch
 
     target, ctx, handle, copy = _snapshot(tmp_path, monkeypatch)
@@ -529,8 +543,11 @@ def test_a_run_that_named_no_evidence_shows_none(tmp_path, monkeypatch):
     entry = _isolated_entry(ctx, target, handle)
     try:
         capture = _capture_terminal_patch(ctx, entry)
-        assert capture["status"] == "ready_with_changes" and "named_evidence" not in capture
-        assert not (pathlib.Path(capture["manifest_artifact"]).parent / "evidence").exists()
+        assert capture["status"] == "ready_with_changes"
+        named = capture["named_evidence"]
+        assert named["status"] == "retained" and named["files"] == [] and named["gaps"] == []
+        assert _saved(capture) == named
+        assert _capture_terminal_patch(ctx, entry)["named_evidence"] == named
     finally:
         custody._CUSTODY.clear()
 

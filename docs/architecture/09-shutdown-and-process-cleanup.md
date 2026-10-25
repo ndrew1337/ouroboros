@@ -7,7 +7,7 @@ Signals, timeouts and engine terminal facts prove no OS exit; jobs stay until re
 | Door | Stops | Keeps | Durable mark |
 |---|---|---|---|
 | Desktop close, keep-running on, live indicator | none: window hides | all tasks, schedules, companions and daemon | none |
-| Close, quit, SIGTERM, launcher gone (pipe EOF, POSIX too) | this generation's workers, services, owned executor/task processes and unfinished reviews | shared daemon/clients; saved pauses; saved work held for Resume | `server_shutdown.cause`: `external_signal`, `launcher_quit` or `launcher_gone` |
+| Close, quit, SIGTERM, launcher gone (pipe EOF, POSIX too) | this generation's workers, maintenance child, services, owned executor/task processes and unfinished reviews | shared daemon/clients; saved pauses; saved work held for Resume | `server_shutdown.cause`: `external_signal`, `launcher_quit` or `launcher_gone` |
 | Planned restart (self-restart, update, rollback) | same; off-pin daemon unless newer | saved pauses; saved work/runnable queue, returned; same-pin or newer daemon | restart handoff |
 | Manual Restart (owner) | same plus installation daemon and all its delegated runs, other clients' included | saved pauses; saved work/runnable queue, returned | restart transaction `door=owner_restart` |
 | Panic | all owned work | sleeping work: owner Resume; working: saved for Resume after launch; pauses unchanged | `panic_stop.flag` (`panic`), then `panic_ingress_receipt` |

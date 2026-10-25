@@ -21,7 +21,7 @@ def test_host_ladder_lists_live_producers_and_keeps_only_the_actual_protected_co
     from ouroboros.context_layout import TIER0_ALWAYS_FULL
 
     assert memory_floor.HOST_STEPS == ("runtime", "registry", "installed_skills", "drive_state",
-        "pattern_register", "world", "subagents", "execution_reflections",
+        "world", "subagents",
         "architecture_map", "development_map")
     assert section_floor.PROTECTED == TIER0_ALWAYS_FULL
     # The overview joins the protected core by the owner's choice (20.10.2026): never an address.
@@ -109,7 +109,7 @@ def _service(name="runtime", size=100_000):
 @pytest.mark.parametrize("preferred", ["max", "low", "nano"])
 @pytest.mark.parametrize("window", [0, 2_000_000])
 def test_unselected_projections_are_byte_identical_and_write_nothing(tmp_path, preferred, window):
-    core = _core(tmp_path, [_service(size=2_000), "protected dynamic text"], [_service("execution_reflections", 1_000)],
+    core = _core(tmp_path, [_service(size=2_000), "protected dynamic text"], [_service("world", 1_000)],
                  syn.snapshot(story=syn.pages(2, 4_000)))
     legacy = dataclasses.replace(core, dynamic_sections=(), dynamic_head_sections=())
     selected, baseline = _plan(core, window, preferred), _plan(legacy, window, preferred)
@@ -186,7 +186,7 @@ def test_runtime_keeps_scalars_authority_and_decisions_while_counting_observatio
 
 
 def test_route_reprojection_only_narrows_and_recomputes_from_the_original_capture(tmp_path):
-    core = _core(tmp_path, [_service(size=15_000)], [_service("execution_reflections", 15_000)], syn.snapshot())
+    core = _core(tmp_path, [_service(size=15_000)], [_service("world", 15_000)], syn.snapshot())
     initial = _plan(core, 2_000_000)
     narrowed = initial.reproject_for_route(window_tokens=50_000, known_window=True, ratio=1.0,
         output_reserve=RESERVE, tool_schemas=[], current_messages=initial.messages_for("max"))
@@ -392,20 +392,18 @@ def test_declared_inputs_use_the_same_book_map_floor_without_loading_shared_memo
 def test_the_shared_understanding_overview_is_never_addressed_while_steppable_sections_are(tmp_path):
     overview = HostSection("shared_understanding", "## Shared understanding\n\n" + "orientation " * 15_000,
                            "## Shared understanding\n\nIts own headings, verbatim:\n# One")
-    core = _core(tmp_path, [_service("execution_reflections", 15_000)], [overview], syn.snapshot())
+    core = _core(tmp_path, [_service("world", 15_000)], [overview], syn.snapshot())
     narrowed = _plan(core, 2_000_000).reproject_for_route(window_tokens=30_000, known_window=True, ratio=1.0,
         output_reserve=RESERVE, tool_schemas=[], current_messages=_plan(core, 2_000_000).messages_for("max"))
     addressed = {row["section_id"] for row in _host_facts(narrowed)}
     # The window pressure relocates the steppable producer, never the owner's whole orientation.
-    assert "execution_reflections" in addressed and "shared_understanding" not in addressed
+    assert "world" in addressed and "shared_understanding" not in addressed
     assert "orientation orientation" in _text(narrowed, "max")
 
 
-def test_authored_memory_selection_keeps_host_addresses_and_nano_register_pointer(tmp_path):
+def test_authored_memory_selection_keeps_host_addresses(tmp_path):
     snapshot = syn.snapshot(story=syn.pages(3, 8_000))
-    pattern = HostSection("pattern_register", "## Patterns\n" + "pattern " * 1000, "pattern reader")
-    core = dataclasses.replace(_core(tmp_path, [_service(size=15_000)], [pattern], snapshot),
-                               pattern_register_text=pattern.full_text)
+    core = _core(tmp_path, [_service(size=15_000)], snapshot=snapshot)
     plan = _plan(core, 30_000, "nano")
     receipts = _host_facts(plan)
     assert receipts
@@ -413,5 +411,3 @@ def test_authored_memory_selection_keeps_host_addresses_and_nano_register_pointe
     selected = memory_floor.select_view(plan, "nano", [address])
     assert _host_facts(selected) == receipts
     assert core.dynamic_text not in _text(selected)
-    assert pattern.full_text not in _text(selected)
-    assert section_floor.PATTERN_REGISTER_POINTER in _text(selected)

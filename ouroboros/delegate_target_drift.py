@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import pathlib
-import os
 import subprocess
 from typing import Any, Dict, List
 
 
 def _target_drift_evidence(entry: Any) -> Dict[str, Any]:
+    from ouroboros.git_observation import host_git_env, numstat_paths
     evidence: Dict[str, Any] = {"checked": False, "paths": [], "error": ""}
     target = pathlib.Path(str(entry.target_root or "")).resolve(strict=False)
     baseline = str(entry.baseline_sha or "").strip()
@@ -31,7 +31,7 @@ def _target_drift_evidence(entry: Any) -> Dict[str, Any]:
         evidence["error"] = f"authority target is not a Git worktree: {target}"
         return evidence
     try:
-        git_env = {**os.environ, "GIT_OPTIONAL_LOCKS": "0"}
+        git_env = host_git_env()
         def git_error(proc, fallback):
             detail = proc.stderr or proc.stdout or b""
             return (detail.decode("utf-8", "replace") if isinstance(detail, bytes) else str(detail)).strip() or fallback
@@ -82,17 +82,19 @@ def _target_drift_evidence(entry: Any) -> Dict[str, Any]:
                 return evidence
             if not _matches(_side(target / relative), before, exact_mode=True):
                 evidence["paths"].append(relative)
+        # Numstat needs content confirmation for binary stat-only rows.
+        cmd = ["git", "diff", "--numstat", "-z", "--no-renames", baseline, "--"]
         diff = subprocess.run(
-            ["git", "diff", "--name-only", "-z", "--no-renames", baseline, "--"],
+            cmd,
             cwd=str(target), capture_output=True, check=False, env=git_env,
         )
         if diff.returncode != 0:
             evidence["error"] = git_error(diff, f"git diff exited {diff.returncode}")
             return evidence
         evidence["paths"].extend(
-            item.decode("utf-8", errors="surrogateescape")
-            for item in diff.stdout.split(b"\0")
-            if item and item.decode("utf-8", errors="surrogateescape") not in baseline_untracked
+            path for path in numstat_paths(diff.stdout, cmd, lambda args: subprocess.run(
+                args, cwd=str(target), capture_output=True, check=True, env=git_env, timeout=30,
+            ).stdout) if path not in baseline_untracked
         )
         untracked = subprocess.run(
             ["git", "ls-files", "-z", "--others", "--exclude-standard"],

@@ -333,6 +333,11 @@ class WindowChrome:
             except Exception:
                 log.warning("A title bar switch could not be restored.", exc_info=True)
 
+    def zoom_changed(self) -> None:
+        """The window's page zoom changed (main thread, ``launcher_page_zoom``): the band, in CSS px, changes with it."""
+        if not self._closed and self._webview is not None:
+            self._publish()
+
     def _publish(self) -> None:
         """Tell the current document what the window actually covers; the page reserves nothing else."""
         if not math.isfinite(self._doc) or self._webview is None:

@@ -43,11 +43,12 @@ def load_swarm_rollup(drive_root, task_id):
     return facts
 
 
-def fold_event_suffix(root, through, consume):
+def fold_event_suffix(root, through, consume, *, source=None, max_bytes=None):
     """Visit complete unconsumed lines; the caller commits effects and cursor together."""
-    source = JsonlChainSnapshot(pathlib.Path(root) / "logs/events.jsonl")
+    source = source or JsonlChainSnapshot(pathlib.Path(root) / "logs/events.jsonl")
     if through > source.upper:
         raise ValueError("swarm event chain shortened")
+    start = through
     for index in range(len(source.entries)):
         _, end = source.segment(index)
         if through >= end:
@@ -55,6 +56,10 @@ def fold_event_suffix(root, through, consume):
         with jsonl_chain_handles(source.path, strict=True, start_offset=through, snapshot=source.snapshot) as handles:
             handle = handles[0][1]
             while through < end:
+                # A memory bound on a batch, never a partial JSON row. One oversized
+                # event is still consumed whole, so a cursor always makes progress.
+                if max_bytes is not None and through - start >= max_bytes:
+                    return through
                 raw = handle.readline(end - through)
                 if not raw.endswith(b"\n"):
                     if source.entries[index][2]:

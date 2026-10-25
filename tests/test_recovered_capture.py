@@ -14,6 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests._delegate_capture_child import capture_child  # noqa: F401
+
 from ouroboros import delegate_collection as body, delegate_custody as c, delegate_custody_current as current
 from ouroboros import review_checking as rc, review_checking_prune as prune, server_maintenance as maintenance
 from ouroboros.subagents import delegated_run_shape
@@ -333,11 +335,7 @@ def test_supervisor_reaches_ready_and_real_assignment_while_both_captures_are_bl
         _until(lambda: not maintenance._CUSTODY_SWEEP_LOCK.locked())
 
 
-@pytest.mark.xfail(strict=True, reason=(
-    "22.10 hotfix: the rule that kept partial named evidence collectable re-offered every unchanged "
-    "partial capture on the 20 s body cadence and saturated the server; recapture after an interrupted "
-    "retention returns with the follow-up that makes one attempt per evidence generation"))
-def test_body_stop_mid_capture_keeps_named_files_pending_for_the_next_generation(tmp_path, monkeypatch):
+def test_body_stop_mid_capture_keeps_named_files_pending_for_the_next_generation(tmp_path, monkeypatch, capture_child):  # noqa: F811
     from ouroboros import headless
 
     root = tmp_path / "data"
@@ -357,12 +355,15 @@ def test_body_stop_mid_capture_keeps_named_files_pending_for_the_next_generation
     try:
         assert entered.wait(5)
         body.stop_body_runtime(root, wait=False)
-        assert not release.is_set() and runtime.thread.is_alive() and not runtime.active
+        assert not release.is_set() and not runtime.active
+        assert any(thread.is_alive() for thread in capture_child.threads.values())
     finally:
         release.set()
         runtime.close(wait=True)
+        capture_child.drain(root)
     saved = current.run(root, entry.run_id)
-    assert saved.patch_captured and current.collection_pending(saved, root) and area.is_dir()
+    assert saved.capture_job["state"] == "ready" and current.collection_pending(saved, root) and area.is_dir()
+    assert body._read_source(root, saved, saved.capture_job["source"])["capture_interrupted"]
     assert not body.saved_named_evidence(root, saved)[1]
     # A new body resumes just the owed retention from the existing copy/receipts.
     monkeypatch.setattr(headless, "write_workspace_patch_artifacts", lambda *a, **kw: pytest.fail("product patch already retained"))

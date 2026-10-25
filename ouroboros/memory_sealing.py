@@ -1,32 +1,39 @@
 """Own-work candidate selection and terminal links; neither invents page coverage."""
 from __future__ import annotations
 
+import json
+
 from ouroboros import chat_chain, dialogue_store, memory_inventory
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
 
 
 def failed_work_units(root, store):
-    from ouroboros.task_results import list_task_results
+    """Candidates over the open rows of finished failures (failed or cancelled) the mind never sealed.
+
+    Every post-task run asks this while consciousness is on, a direct turn's in the server after its
+    answer, so it is addressed by the open rows: they name their tasks, whose typed status alone is
+    read (never a task body); only when one of them failed does the chronicle answer which of them
+    the mind sealed (its page author index) and which rows a pending candidate of their room covers."""
     from ouroboros.memory_fallback import FallbackUnit
     from ouroboros.memory_inventory import OpenSegment
+    from ouroboros.task_store import task_facts
 
-    failed = {str(row.get("task_id") or row.get("id")): row for row in list_task_results(
-        root, statuses=["failed", "cancelled"], strict=True)}
-    if not failed:
-        return []
-    pages = store.records(kinds=["page"])
-    sealed_by_mind = {str(record.get("author", {}).get("task_id") or "") for record in pages
-                      if record.get("author", {}).get("kind") == "mind"}
-    pending = {}
-    for record in store.pending_candidates():
-        pending.setdefault(record["room_id"], set()).update(record["covers"]["rows"])
+    open_rows = memory_inventory.open_rows_by_room(root)
+    named = sorted({str(entry[1].get("task_id") or "") for entries in open_rows.values() for entry in entries} - {""})
+    # The named rows alone, through the primary key: a status filter in SQL lets the planner walk
+    # every failed task through the status index instead.
+    facts = task_facts(root, where="task_id IN (SELECT value FROM json_each(?))", params=(json.dumps(named),)) if named else {}
+    failed = {task_id for task_id, fact in facts.items() if fact["status"] in ("failed", "cancelled")}
+    if failed:
+        failed -= store.mind_page_authors(failed)
     units = []
-    for room, entries in memory_inventory.open_rows_by_room(root).items():
+    for room, entries in open_rows.items():
+        entries = [entry for entry in entries if str(entry[1].get("task_id") or "") in failed]
+        pending = {ref for record in store.pending_candidates(room) for ref in record["covers"]["rows"]} if entries else set()
         by_task = {}
         for entry in entries:
-            task_id = str(entry[1].get("task_id") or "")
-            if task_id in failed and task_id not in sealed_by_mind and entry[0]["row_sha256"] not in pending.get(room, ()):
-                by_task.setdefault(task_id, []).append(entry)
+            if entry[0]["row_sha256"] not in pending:
+                by_task.setdefault(str(entry[1].get("task_id") or ""), []).append(entry)
         for task_id, rows in by_task.items():
             segment = OpenSegment(room, rows[0][0], rows[-1][0], tuple(rows), store.room_head(room))
             units.append(FallbackUnit("page", room, f"candidate:{task_id}:{rows[0][0]['row_sha256'][:12]}",

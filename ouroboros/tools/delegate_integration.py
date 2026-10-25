@@ -530,6 +530,7 @@ def _capture_block(entry: _RunCustody, cap_dir: pathlib.Path,
                        if has_patch else None),
         "manifest_read": {"root": "artifact_store", "path": f"{read_prefix}/workspace_patch.json"},
         "sha256": str(manifest.get("sha256") or ""),
+        "patch_size": manifest.get("patch_size"),
         "diffstat": str(manifest.get("diffstat") or ""),
         "file_outputs": list(manifest.get("file_outputs") or []),
         "file_output_count": len(manifest.get("file_output_changes") or []),
@@ -619,7 +620,7 @@ def _capture_terminal_patch(ctx: ToolContext, entry: Optional[_RunCustody], *, g
 
 
 def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=None,
-                                     retain_investigation: bool = True) -> Optional[Dict[str, Any]]:
+                                     retain_investigation: bool = True, publish: bool = True) -> Optional[Dict[str, Any]]:
     """The drive-rooted core of the terminal capture — same contract, no ToolContext.
 
     One ordinary capture author for foreground collection, the body and disposition;
@@ -631,13 +632,14 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
     retry point stays open), and a pre-R3 row over a failed manifest falls through to a fresh capture.
     """
     from ouroboros.delegate_directory import is_directory_run, capture_directory_result, directory_capture_block
+    from ouroboros.delegate_capture_attempt import failure_retry
     from ouroboros.tools.subagent_integration_delegated import retain_run_evidence
 
     if entry is None or entry.review_owned:
         return None  # the review owner compares against its frozen subject, never a product baseline
 
     def finish(block, transport=None):
-        return retain_run_evidence(drive, entry, block, transport) if retain_investigation else block
+        return retain_run_evidence(drive, entry, block, transport) if retain_investigation and publish else block
 
     if entry is not None and entry.mode == "plan":
         return None  # A read-only plan retains its workspace for a later implement turn.
@@ -647,10 +649,11 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             if gateway is None:
                 from ouroboros.claudexor_daemon import read_owned_gateway
                 owned_gateway = gateway = read_owned_gateway()
-            block = directory_capture_block(drive, entry, capture_directory_result(drive, entry, gateway))
+            block = directory_capture_block(drive, entry, capture_directory_result(drive, entry, gateway, publish=publish))
             return finish(block, gateway)
         except Exception as exc:
             return {"status": "failed", "capture_kind": "engine_directory", "authority_target_root": entry.target_root,
+                    "retry": failure_retry(exc),
                     "note": f"Directory capture unavailable: {type(exc).__name__}: {exc}. The engine result is retained; no new run was started."}
         finally:
             if owned_gateway is not None:
@@ -726,6 +729,7 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
         log.warning("Delegated run patch capture failed for %s", entry.run_id, exc_info=True)
         return {
             "status": "failed",
+            "retry": failure_retry(exc),
             "baseline_id": entry.baseline_sha,
             "execution_root": entry.execution_root,
             "authority_target_root": entry.target_root,
@@ -748,7 +752,7 @@ def capture_terminal_patch_for_drive(drive: Any, entry: _RunCustody, *, gateway=
             manifest["authority_drift"] = drift_evidence
             manifest["note"] = "Authority drift could not be durably recorded; snapshot preserved."
             return _capture_block(entry, cap_dir, manifest, drift_evidence)
-    if str(manifest.get("status") or "") in ready:
+    if publish and str(manifest.get("status") or "") in ready:
         custody.record_patch_captured(
             drive, entry,
             status=str(manifest.get("status") or ""),

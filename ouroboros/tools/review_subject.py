@@ -81,7 +81,8 @@ _HARDENED_DIFF_FLAGS = (
 
 def _git_bytes(repo_dir, args: List[str]) -> Tuple[int, bytes, str]:
     """Run git in ``repo_dir`` without GIT_DIFF_OPTS; return (rc, stdout, stderr)."""
-    env = {k: v for k, v in os.environ.items() if k != "GIT_DIFF_OPTS"}
+    from ouroboros.git_observation import host_git_env
+    env = host_git_env({k: v for k, v in os.environ.items() if k != "GIT_DIFF_OPTS"})
     try:
         result = subprocess.run(
             ["git", *args], cwd=str(repo_dir),

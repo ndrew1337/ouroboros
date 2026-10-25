@@ -185,7 +185,7 @@ def _download(gateway, run_id, source, destination, expected=None):
         temporary.unlink(missing_ok=True)
 
 
-def capture_directory_result(drive, entry, gateway):
+def capture_directory_result(drive, entry, gateway, *, publish=True):
     """Capture observed terminal work independently of its pending money record.
 
     A finished run whose engine reports no file work product is captured ready, never retried
@@ -221,8 +221,9 @@ def capture_directory_result(drive, entry, gateway):
         }
         cap_dir.mkdir(parents=True, exist_ok=True)
         atomic_write_json(manifest_path, manifest, trailing_newline=True)
-        custody.record_patch_captured(drive, entry, status="ready", sha256="", capture_dir=str(cap_dir),
-                                     execution_root="", no_changes=succeeded)
+        if publish:
+            custody.record_patch_captured(drive, entry, status="ready", sha256="", capture_dir=str(cap_dir),
+                                         execution_root="", no_changes=succeeded)
         return manifest
     source = (product.get("files") or {}).get("manifest")
     digest = str((product.get("meta") or {}).get("manifest_sha256") or "").removeprefix("sha256:")
@@ -265,8 +266,9 @@ def capture_directory_result(drive, entry, gateway):
                  if direct else "The engine copy is not applied. Inspect the complete manifest and files before disposition."),
     }
     atomic_write_json(manifest_path, manifest, trailing_newline=True)
-    custody.record_patch_captured(drive, entry, status="ready", sha256=digest,
-                                 capture_dir=str(cap_dir), execution_root=original["executionRoot"])
+    if publish:
+        custody.record_patch_captured(drive, entry, status="ready", sha256=digest,
+                                     capture_dir=str(cap_dir), execution_root=original["executionRoot"])
     return manifest
 
 
@@ -275,6 +277,8 @@ def directory_capture_block(drive, entry, manifest):
 
     cap_dir = custody.delegated_capture_dir(drive, entry.task_id, entry.run_id)
     return {"status": manifest["status"], "capture_kind": "engine_directory",
+            "sha256": manifest.get("engine_manifest_sha256", ""),
+            **({"no_changes": manifest["no_changes"]} if "no_changes" in manifest else {}),
             "execution_root": manifest["workspace_root"], "authority_target_root": entry.target_root,
             "manifest_artifact": str(cap_dir / "workspace_patch.json"),
             "manifest_read": {"root": "artifact_store", "path": f"delegated_runs/{cap_dir.name}/workspace_patch.json"},

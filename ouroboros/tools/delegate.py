@@ -1070,7 +1070,7 @@ def _delegate_wait(ctx: ToolContext, run_id: str, wait_sec: Optional[int] = None
         return (not_mine or _fail("delegate_wait", "run_ownership_unknown",
                                   "custody unresolved", run_id=rid)).text
     from ouroboros.tools.delegate_terminal_evidence import retained_terminal_result
-    retained = retained_terminal_result(ctx, rid)
+    retained = retained_terminal_result(ctx, rid, retry_money=True)
     if retained is not None:
         return json.dumps(retained, ensure_ascii=False, indent=2)
     ceiling = get_delegate_wait_max_sec()

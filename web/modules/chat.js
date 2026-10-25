@@ -516,13 +516,13 @@ export function createChatInstance({
         }
     }
 
-    function setStatus({ kind, text, tone, mark, owner, amber, title = '' }) {
+    function setStatus({ kind, text, step = '', tone, mark, owner, amber, title = '' }) {
         // Replay frames never touch the badge; syncChatStatus writes it once.
         if (!statusBadge) return;
         statusBadge.className = `status-badge ${kind}`;
         statusBadge.textContent = text;
         statusBadge.title = title; // a failed boot step's cause; empty otherwise
-        Object.assign(statusBadge.dataset, { tone, mark, owner: owner ? '1' : '', amber });
+        Object.assign(statusBadge.dataset, { tone, mark, owner: owner ? '1' : '', amber, step });
         roomWork?.update();
     }
 

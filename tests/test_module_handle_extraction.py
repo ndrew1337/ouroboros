@@ -221,7 +221,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_list_remotes", "_managed_remote_branch_for", "_managed_remote_name",
         "_read_managed_repo_meta", "_run_git_process_bounded", "append_jsonl",
         "atomic_write_text", "rescue_before_destructive_rollback",
-        "rescue_git_capture", "utc_now_iso",
+        "rescue_git_capture", "utc_now_iso", "host_git_env",
     })),
     "supervisor/git_ops_reset.py": ("supervisor/git_ops.py", "_go", frozenset({
         "BOOTSTRAP_PIN_MARKER_NAME", "BRANCH_DEV", "BRANCH_STABLE", "DRIVE_ROOT", "REPO_DIR",
@@ -235,7 +235,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_preserve_branch_for_official_reset", "_read_managed_repo_meta",
         "_read_update_intent", "_ref_points_at_ref", "_rescue_untracked_incomplete",
         "_run_git_resilient", "_update_source", "append_jsonl", "git_capture",
-        "checkout_and_reset", "current_drive_root", "import_test",
+        "checkout_and_reset", "current_drive_root", "current_repo_dir", "import_test",
         "preserve_local_ref_branch", "rescue_git_capture", "update_state",
         "sync_runtime_dependencies", "utc_now_iso",
     })),

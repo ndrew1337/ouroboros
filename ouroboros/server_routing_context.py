@@ -215,10 +215,11 @@ def _result_reference(facts: Dict[str, Any]) -> Dict[str, Any]:
 def _is_child_result(facts: Dict[str, Any]) -> bool:
     """A result that is NOT an owner root: it has a parent, or the subagent role.
 
-    ONE predicate for every reader of that fact - the manifest window that skips
-    children (owner decision batch 3, answer 6b=A), the pointer stamp that only a
-    root moves, and the promote receipt, which continues a named child with its
-    root disclosed. Reads a memoized fact row or a full result row.
+    ONE predicate for every reader of that fact - the pointer stamp that only a
+    root moves and the promote receipt, which continues a named child with its
+    root disclosed; the manifest window that skips children (owner decision batch
+    3, answer 6b=A) selects by the same fact over typed columns in the store
+    (``task_store.ROOT_RESULT_WHERE``). Reads a memoized fact row or a full result row.
     """
     return bool(str(facts.get("parent_task_id") or "").strip()) or str(
         facts.get("delegation_role") or "") == "subagent"
@@ -233,42 +234,34 @@ def _recent_root_results(ctx: Any, project_id: str = "") -> tuple:
     offered (owner decision batch 3, answer 6b=A): a swarm wave's children are the
     newest results of ANY kind, so they evicted the owner's own roots from this
     window - which is how a root the same actor had just read stopped being
-    offerable. The typed columns answer both the filter and the count without a
-    body read. The count runs over the WHOLE candidate list, not inside the capped
-    loop: children older than the last shown root are skipped just the same, and
-    counting them only until the cap reported zero while folding them into the
-    cap's own number.
+    offerable. Owner-message intake runs on the supervisor loop, so the store
+    selects only the rows the window can offer (``newest_root_ids``): typed columns,
+    bodies decoded only for the rows shown. The two omissions stay separate and
+    truthful: a project room counts its own roots and children over its own index;
+    Main's scope is the whole store, so its window proves only whether more roots
+    exist (``0`` or ``None``, not counted) and leaves its children uncounted, like
+    the dialogue rows it does not visit.
     """
     from ouroboros.runtime_limits import get_routing_manifest_result_rows
     from ouroboros.store import StoreError
     from ouroboros.task_results import load_task_result
-    from ouroboros.task_store import task_facts
+    from ouroboros.task_store import newest_root_ids, project_result_counts
 
-    results_error = ""
-    try:
-        facts = task_facts(ctx.DRIVE_ROOT, **({"where": "project_id=?", "params": (project_id,)} if project_id else {}))
-        unreadable = False
-    except StoreError as exc:
-        facts, unreadable = {}, True
-        results_error = f"result_store_unreadable: {exc}"
-    pool = sorted(facts, key=lambda task_id: facts[task_id]["ts"] or facts[task_id]["updated_at"], reverse=True)
-    children = sum(1 for task_id in pool if _is_child_result(facts[task_id]))
     cap = get_routing_manifest_result_rows()
-    finals: list = []
-    for task_id in pool:
-        if _is_child_result(facts[task_id]):
-            continue
-        row = load_task_result(ctx.DRIVE_ROOT, task_id)
-        if row is not None:
-            finals.append(_task_result_ground_truth(row))
-        if len(finals) == cap:
-            break
+    try:
+        ids = newest_root_ids(ctx.DRIVE_ROOT, cap + 1, project_id=project_id)
+        counted = project_result_counts(ctx.DRIVE_ROOT, project_id) if project_id else None
+    except StoreError as exc:
+        return [], {"final_results": None, "final_results_error": f"result_store_unreadable: {exc}", "children": None}
+    finals = [_task_result_ground_truth(row) for row in
+              (load_task_result(ctx.DRIVE_ROOT, task_id) for task_id in ids[:cap]) if row is not None]
+    roots, children = counted if counted is not None else (None, None)
     return finals, {
-        # Kept meaning: results cut by the row cap. The children skipped above are
-        # a DIFFERENT omission and are counted as such, never folded in here.
-        "final_results": None if unreadable else max(0, len(pool) - children - len(finals)),
-        "final_results_error": results_error,
-        "children": None if unreadable else children,
+        # Kept meaning: results cut by the row cap. Skipped children are a DIFFERENT
+        # omission, never folded in here.
+        "final_results": max(0, roots - len(finals)) if roots is not None else (0 if len(ids) <= cap else None),
+        "final_results_error": "",
+        "children": children,
     }
 
 
@@ -328,7 +321,7 @@ def _latest_project_task_result(ctx: Any, project_id: str) -> Optional[Dict[str,
     read FIRST — one indexed row read, immune to how many newer foreign
     results exist. Only when the pointer is absent or stale (missing/foreign
     row) does the fallback run: the project's root rows newest first by the
-    durable ``ts`` (``updated_at`` when ``ts`` is absent, the task id last), read
+    durable ``ts`` (``newest_root_ids``: its own index, never every root), read
     in that order until the first that is not a promote's emitted stub. Only the
     ABSENT-pointer case writes the pointer back: a non-empty pointer that failed
     to resolve is usually a split-drive result in flight (finalization stamps
@@ -337,7 +330,7 @@ def _latest_project_task_result(ctx: Any, project_id: str) -> Optional[Dict[str,
     hit and let the pointer resolve itself."""
     from ouroboros.projects_registry import get_project, update_project
     from ouroboros.task_results import load_task_result
-    from ouroboros.task_store import ROOT_RESULT_WHERE, newest_ids
+    from ouroboros.task_store import newest_root_ids
 
     try:
         pointer = str((get_project(ctx.DRIVE_ROOT, project_id) or {}).get(
@@ -356,7 +349,7 @@ def _latest_project_task_result(ctx: Any, project_id: str) -> Optional[Dict[str,
         )
 
     row = None
-    for task_id in newest_ids(ctx.DRIVE_ROOT, where=f"project_id=? AND {ROOT_RESULT_WHERE}", params=(project_id,)):
+    for task_id in newest_root_ids(ctx.DRIVE_ROOT, project_id=project_id):
         candidate = load_task_result(ctx.DRIVE_ROOT, task_id)
         if candidate is None or _not_a_root_result(candidate):
             continue

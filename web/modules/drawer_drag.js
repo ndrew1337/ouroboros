@@ -17,7 +17,9 @@
  * the veil over its words). On release the drawer settles at the finger's speed (`--drawer-settle`). The owner of the drawer's state
  * commits the result, so history, focus and inert stay the layer stack's, and a gesture that does not commit leaves
  * no trace. The drag is a shortcut: every gesture has a visible control (☰ and ×). One constant switches it off in
- * one line: DRAWER_DRAG. */
+ * one line: DRAWER_DRAG. While a pinch magnifies the page, a sideways finger pans it, as the browser means it to. */
+
+import { pinchMagnified } from './layout.js';
 
 export const DRAWER_DRAG = true;
 
@@ -177,7 +179,7 @@ export function bindDrawerDrag({
         const count = event.touches?.length || 0;
         // A second finger, or a new touch after a gesture whose end never came: back to the start.
         if (g) { restore(); if (count > 1) return; }
-        if (count !== 1 || !isStack() || !isCoarse()) return;
+        if (count !== 1 || !isStack() || !isCoarse() || pinchMagnified(win)) return;
         const touch = event.changedTouches?.[0] || event.touches?.[0];
         const target = event.target;
         if (!touch || !target) return;

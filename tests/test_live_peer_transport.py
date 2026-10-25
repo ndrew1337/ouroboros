@@ -119,6 +119,7 @@ def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path
     import threading
     from concurrent.futures import ThreadPoolExecutor
     from ouroboros import dialogue_store
+    from ouroboros.chat_references import reference_from_row
     from ouroboros.presence_call import record_call_utterance
     from ouroboros.presence_runner import presence_chat_id
     from tests._dialogue import chat_rows
@@ -159,7 +160,13 @@ def test_call_utterance_waits_for_dialogue_writer_and_keeps_attribution(tmp_path
         assert record()
     [row] = chat_rows(tmp_path)
     assert row["text"] == "Caption under contention." and row["direction"] == direction
-    assert row["sender_label"] == ("meeting audio" if direction == "in" else "Meeting")
+    assert row["transport"]["actor"]["display_name"] == ("meeting audio" if direction == "in" else "Meeting")
+    if direction == "in":
+        assert row["sender_label"] == "meeting audio"
+    else:
+        # #2236 keeps the conversation's actor as provenance, not the reply's author.
+        assert not row.get("sender_label") and not row.get("sender_session_id")
+    assert reference_from_row(row)["author_label"] == ("meeting audio" if direction == "in" else "Ouroboros")
     assert row["client_message_id"] == f"join:{'heard' if direction == 'in' else 'spoken'}:one"
     assert row["chat_id"] == task["chat_id"] and row["task_id"] == task["id"]
 

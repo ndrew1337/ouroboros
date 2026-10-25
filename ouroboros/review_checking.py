@@ -10,10 +10,10 @@ own refs/stash/config/hooks, borrowed read-only objects, HEAD at the parent and 
 at the frozen tree; a retained skill view; or an empty folder beside a live workspace.
 Rejoin keeps the copy; remaking uses its frozen tree, original root and retained views.
 
-At terminal, ``capture_seat_evidence`` retains whole Git deltas or changed skill entries
-(same-stat bytes compared), plus whole ``.review-evidence/``; workspace folders have no delta.
-Nothing is applied. Its receipt precedes one-shot deletion regardless of process census
-(owner 2026-10-12). Named gaps release; unreadable/unlistable paths keep copies for recovery.
+At terminal, ``capture_seat_evidence`` retains whole Git deltas or changed skill entries,
+comparing same-stat bytes, plus whole ``.review-evidence/``; workspace folders have no delta.
+Nothing is applied. Receipts precede one-shot deletion regardless of process census (owner 2026-10-12).
+Named gaps release; unreadable/unlistable paths keep copies for recovery.
 Threads keep their active copy; a failed predecessor moves under its operation for retry.
 Git omits untracked special entries, ignored outputs outside ``.review-evidence/`` (listed)
 and frozen ``.review-drive`` inputs. Full access is not an OS sandbox.
@@ -69,13 +69,8 @@ def _remove_checking_area(path: pathlib.Path) -> None:
     from ouroboros.subagent_worktrees import _force_rmtree
 
     _force_rmtree(path)  # best-effort; its return value is not a deletion receipt
-    try:
-        path.lstat()  # dangling links and unreadable paths are not absence
-    except FileNotFoundError:
-        return
-    except OSError as exc:
-        raise CheckingAreaUnavailable(f"checking cleanup unverified at {path}: {exc}") from exc
-    raise CheckingAreaUnavailable(f"checking cleanup left a residual at {path}")
+    if _checking_area_present(path):  # dangling links and unreadable paths are not absence
+        raise CheckingAreaUnavailable(f"checking cleanup unverified or residual at {path}")
 
 
 def _release_area(area: pathlib.Path, summary: Dict[str, Any]) -> Dict[str, Any]:
@@ -405,8 +400,10 @@ def checking_instructions(area: str, source: Mapping[str, Any], root: str = "", 
 
 
 def _retain_files(area: pathlib.Path, paths: List[str], files_dir: pathlib.Path, budget: List[float],
-                  gaps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+                  gaps: List[Dict[str, Any]], *, preserve_mode=True) -> List[Dict[str, Any]]:
     """Copy regular files byte-exact into the evidence store within the caller's byte budget."""
+    from ouroboros.delegate_named_evidence import private_directory
+
     kept: List[Dict[str, Any]] = []
     for relative in paths:
         source = area / relative
@@ -417,10 +414,15 @@ def _retain_files(area: pathlib.Path, paths: List[str], files_dir: pathlib.Path,
             gaps.append({"path": relative, "size": size, "reason": "evidence_budget_exceeded"})
             continue
         target = files_dir / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        private_directory(target.parent, files_dir.parent)
+        # Fresh regular files: ordinary delegates keep writable copies; reviewers preserve modes.
+        with _open_regular(source) as src, target.open("xb") as dst:
+            shutil.copyfileobj(src, dst, 1 << 20)
+        mode = stat.S_IMODE(source.stat().st_mode)
+        if preserve_mode:
+            target.chmod(mode)
         budget[0] -= size
-        kept.append({"path": relative, "size": size, "sha256": _sha(target)})
+        kept.append({"path": relative, "size": size, "sha256": _sha(target), "mode": mode})
     return kept
 
 
@@ -447,7 +449,7 @@ def named_evidence_witness(area: pathlib.Path) -> str:
 
 
 def retain_named_evidence(area: pathlib.Path, files_dir: pathlib.Path, budget: List[float],
-                          gaps: List[Dict[str, Any]], *, product_paths=()) -> List[Dict[str, Any]]:
+                          gaps: List[Dict[str, Any]], *, product_paths=(), preserve_mode=True) -> List[Dict[str, Any]]:
     """Retain declared checking outputs independently of product-patch filters.
 
     Links are not dereferenced: a linked output is a gap and keeps the working
@@ -478,7 +480,7 @@ def retain_named_evidence(area: pathlib.Path, files_dir: pathlib.Path, budget: L
                     paths.append(relative)
                 elif name in files:
                     gaps.append({"path": relative, "reason": "unsupported_entry_type"})
-    return _retain_files(area, sorted(paths), files_dir, budget, gaps)
+    return _retain_files(area, sorted(paths), files_dir, budget, gaps, preserve_mode=preserve_mode)
 
 
 def _git_delta(area: pathlib.Path, source: Mapping[str, Any], evidence: pathlib.Path,
@@ -585,12 +587,10 @@ def _open_regular(path: pathlib.Path) -> Any:
 def _same_bytes(left: pathlib.Path, right: pathlib.Path) -> bool:
     """Chunked equality; an unreadable side raises, because uncompared bytes are not unchanged."""
     with _open_regular(left) as one, _open_regular(right) as two:
-        while True:
-            chunk = one.read(1 << 20)
+        for chunk in iter(lambda: one.read(1 << 20), b""):
             if chunk != two.read(1 << 20):
                 return False
-            if not chunk:
-                return True
+        return not two.read(1)
 
 
 def _directory_delta(area: pathlib.Path, source: Mapping[str, Any], evidence: pathlib.Path,

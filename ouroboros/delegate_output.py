@@ -678,10 +678,14 @@ def _resolve_full_primary_output(gateway: Any, run_id: str,
                                   "path": path, "reported_bytes": reported_bytes}
     if not path or gateway is None:
         disclosure["reason"] = "no_artifact_path" if not path else "no_transport"
+        disclosure["retry"] = "changed_input" if not path else "transient"
         return primary, False, disclosure
     try:
         raw = gateway.get_run_artifact(run_id, path)
     except Exception as exc:
+        from ouroboros.delegate_capture_attempt import failure_retry
+
+        disclosure["retry"] = failure_retry(exc)
         disclosure["reason"] = truncate_review_artifact(
             f"{getattr(exc, 'code', type(exc).__name__)}: {exc}", 300)
         return primary, False, disclosure

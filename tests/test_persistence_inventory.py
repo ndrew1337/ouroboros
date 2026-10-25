@@ -860,8 +860,15 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # and a candidate run's named-evidence ``.../delegated_runs/*/evidence/summary.json`` reread.
 # 416 -> 417 (this branch): retained bootstrap identity ``state/delegate_bootstrap/*.json`` and per-target
 # payload mutation locks ``state/delegate_payload_mutations/*.lock``; the retired global claim spelling is gone.
-# 417 -> 420: merge live wire evidence, the extension import lock and live tariff cache.
-EXPECTED_SCAN_PATHS = 420
+# 417 -> 418: the desktop window's Interface size ``state/desktop_page_zoom.json`` (``launcher_page_zoom.py``,
+# its section-2 row).
+# 418 -> 421: immutable delegated evidence generations and their unpublished staging.
+# 421 -> 420: ``logs/task_reflections.jsonl`` lost its last named writer with ``ouroboros/reflection.py``
+# (the retired automatic reflection's routed store); its row stays, exempted below with its reason.
+# 420 -> 419: ``memory/knowledge/patterns.md`` lost its fixed-path readers (the resident context section,
+# the deep-review whitelist and the project-fork seed): it is an ordinary note read through knowledge tools.
+# 419 -> 422: live wire evidence, the extension import lock and live tariff cache.
+EXPECTED_SCAN_PATHS = 422
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
@@ -1108,6 +1115,12 @@ STALE_ROW_EXEMPTIONS = frozenset({
     # population saw this plane only through the retired acceptance tool-trajectory
     # literal.
     "task_results/artifacts/*/source_handles/tool_results",
+    # The row states no writer in this tree: the automatic post-task reflection and
+    # its routed store (``ouroboros/reflection.py``) are gone. The history is still
+    # read (``journal_read(source='reflections')``, ``read_file``), and server.py
+    # rotates it through ``rotate_jsonl_log_if_needed``, which takes the name as a
+    # parameter the scan does not resolve.
+    "logs/task_reflections.jsonl",
 })
 
 

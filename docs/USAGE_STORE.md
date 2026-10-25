@@ -44,10 +44,10 @@ owner succeeds; no failure authorizes unsafe WAL continuation.
 
 | table | holds |
 |---|---|
-| `attempts` | one row per attempt id, UPDATEd on every transition; `revision` counts its transitions (the old `expected_seq` role). Typed columns for ids, state, attribution, timestamps (`ts_reserved`, `ts_dispatched`, `ts_final`, `ts_last`), money as canonical decimal text, tokens (NULL = not reported), caps, review/route attribution, local-answer owner; `weight` (1, or the folded attempt count of an imported aggregate); every other field verbatim in `extra`, so a row decodes to exactly what was written. Indexes: root, group, task, the open set (partial: reserved/dispatched/unresolved and abandoned settlements), `(category, ts_last)`, review wave, route. |
+| `attempts` | one row per attempt id, UPDATEd on every transition; `revision` counts its transitions (the old `expected_seq` role). Typed columns for ids, state, attribution, timestamps (`ts_reserved`, `ts_dispatched`, `ts_final`, `ts_last`), money as canonical decimal text, tokens (NULL = not reported), caps, review/route attribution, local-answer owner; `weight` (1, or the folded attempt count of an imported aggregate); every other field verbatim in `extra`, so a row decodes to exactly what was written. Indexes: root, `(root, ts_last)`, group, task, the open set (partial: reserved/dispatched/unresolved and abandoned settlements), `(category, ts_last)`, review wave, route. |
 | `summaries` | `(scope, key)` → the full bucket the readers render: the cash 5-tuple as decimal text, state counts, unknown/priced/open/non-final counters, sessions and windows, processing summary, token sums with presence counts, physical calls, cache TTLs and the cap multiset; `accounted_num` (REAL) orders the costliest tasks and is never read as an amount. |
 | `bindings` | the earliest root/group cap binding (`BindingIndex` semantics: carried, `legacy_live`, `legacy_default`, explicit unlimited `None`). |
-| `dirty_owners` | task and root ids whose stored cost projection may be behind, with the revision that dirtied them. |
+| `dirty_owners` | task/root projection debt, indexed by its dirty revision; one entry per owner, removed with acknowledged debt. |
 | `one_shots` | the identity of single-row kinds (external dispatch, subscription session, legacy rows). |
 | `meta` | `schema_version`, `lock_tier`, the import provenance and the publication marker. |
 
@@ -117,15 +117,15 @@ network-bound runs inside it.
 Money and displays read the same rows. A display read (`allow_stale`) waits
 only the short display wait, then reports the fact unavailable — never zero.
 `read_usage_records` (every row) serves the explicit audit and the export; a
-test pins its call sites. The consciousness allowance selects its roots and
-window rows through the `(category, ts_last)` and root indexes. Terminal
-maintenance takes recovery candidates from the open-set index and projection
-candidates from `Txn.dirty_owners()`. After an addressed projection succeeds or
-is equal, `ack_dirty_owner(owner_id, revision)` removes only that revision; a
-new receipt, failure, missing result or live ownership keeps the debt. A
-batched task-store query finds missing results before ownership reads. Their
-exact revisions stay, so a result landing after the last receipt (child
-copyback or quarantine restore) is projected later without a new receipt.
+test pins its call sites. The consciousness allowance selects its roots through
+the `(category, ts_last)` index and each root's window rows through `(root,
+ts_last)`, so a tick reads a root still at work for its last day, never its whole
+life. Terminal maintenance reads the open-attempt index and `Txn.dirty_owners()`.
+Money-only passes select dirty revisions newer than the saved marker plus present
+owners. A successful/equal projection calls `ack_dirty_owner(owner_id, revision)`;
+newer receipts, failures, missing results and live ownership keep debt. One batched
+presence query precedes ownership reads. Absence retains the exact revision, so
+late copyback or quarantine restore projects without another receipt.
 `review_price.py` prices one review by one reviewer row from the same rows:
 `review_seat_costs` groups the review category's attempts by
 `(review_wave_id, review_slot_id)` through the `(category, ts_last)` index,
@@ -211,8 +211,10 @@ cannot be read is `UsageLedgerCorrupt` for every caller and is never replaced.
 The server runs `migrate_from_journal(root, initialize_journal=True)` at lifespan
 start on every door (a providerless install included), before any request,
 worker or supervisor, which is also where an existing store gets this runtime's
-journal (§1); the supervisor's liveness phase `startup:usage_store` then finds
-it completed and keeps the journal as it is.
+journal (§1) and missing `(root, ts_last)`/dirty-owner revision indexes once
+(failed builds keep broader scans until the next boot);
+the supervisor's liveness phase `startup:usage_store` then finds it completed and
+keeps the journal as it is.
 A display read (`allow_stale=True`) never imports: while a journal or a
 pre-ledger event chain awaits that job it reports the store unavailable, and with
 neither it creates the empty store. A non-display reader that finds no store (a tool or a test without a
@@ -388,6 +390,6 @@ operator's separate authorization; installation alone changes no old money.
   name lock is per host).
 - Result-only edits do not dirty money: ordinary receipts maintain projection debt;
   a result-only accounting repair belongs to explicit repair/import.
-- An owner whose result never appears stays in `dirty_owners` and is re-checked
-  by the pass's one batched presence query; absence is never acknowledged, so only
-  a projection (or that explicit repair) retires it.
+- Absent owners keep `dirty_owners` debt. Successful absence rests until arrival,
+  their own money change, repair or restart; a changed ledger epoch reselects all.
+  Only a successful projection or explicit repair retires debt.

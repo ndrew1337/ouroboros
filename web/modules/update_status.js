@@ -54,6 +54,61 @@ export function verifiedUpdatePlan(preflight) {
     return { plan, strategy };
 }
 
+export function bindPreflightDescription(status, preflight) {
+    const plan = preflight?.merge_plan || {};
+    const letter = preflight?.letter;
+    const matches = letter?.key?.base_sha === plan.base_sha && letter?.key?.target_sha === plan.target_sha;
+    return { ...status, preflight_range: plan, checked_target_sha: plan.target_sha,
+        latest_sha: plan.target_sha, letter: matches ? letter : null };
+}
+
+export function preflightEvidenceText(preflight) {
+    const plan = preflight?.merge_plan || {};
+    const letter = bindPreflightDescription({}, preflight).letter;
+    const facts = preflight?.qualification;
+    const lines = [letter?.description_current && letter.text
+        ? letter.text : 'No description is available for this exact preflight range.'];
+    if (!facts || facts.base_sha !== plan.base_sha || facts.target_sha !== plan.target_sha) {
+        lines.push('Qualification for this range is unknown.');
+        return lines.join('\n');
+    }
+    for (const commit of facts.commits || []) {
+        const name = `${String(commit.sha).slice(0, 8)} ${commit.subject || ''}`;
+        if (!commit.receipt) {
+            lines.push(`${name}: ${commit.body_read === false ? 'commit body not read; qualification unknown' : 'no qualification receipt'}.`);
+            continue;
+        }
+        for (const check of commit.receipt.checks || []) {
+            lines.push(`${name}: ${check.name} ${check.status} (${check.source || 'unknown source'})${check.detail ? `; ${check.detail}` : ''}.`);
+        }
+        const review = commit.receipt.review || {};
+        lines.push(`${name}: review observed ${review.observed || 'unknown'}, author declared ${review.declared || 'unknown'}.`);
+    }
+    const github = facts.github || {};
+    lines.push(`GitHub checks: ${github.status || 'unknown'}${github.reason ? `; ${github.reason}` : ''}.`);
+    for (const run of github.runs || []) {
+        lines.push(`${String(run.sha).slice(0, 8)} post-merge: ${run.conclusion || run.status || 'unknown'} ${run.url || ''}`);
+        if (run.covered_shas?.length) lines.push(`This run also covers: ${run.covered_shas.map((sha) => sha.slice(0, 8)).join(', ')}.`);
+    }
+    if (github.missing_shas?.length) lines.push(`No matching run observed: ${github.missing_shas.map((sha) => sha.slice(0, 8)).join(', ')}.`);
+    return lines.join('\n');
+}
+
+export function afterUpdateFactsText(facts) {
+    if (!facts) return '';
+    const number = (value, unit) => typeof value === 'number' ? `${value.toFixed(2)} ${unit}` : 'unobserved';
+    return ['before', 'after'].map((side) => {
+        const sample = facts[side];
+        if (!sample) return `${side}: unobserved.`;
+        const direct = sample.direct_message_first_dispatch;
+        return `${side} (${sample.source_sha || 'unknown source'}, ${sample.observed_at || 'unknown time'}; server process): `
+            + `RSS${sample.rss_measure === 'peak' ? ' peak' : ''} ${number(sample.rss_bytes == null ? null : sample.rss_bytes / 1048576, 'MiB')}; `
+            + `CPU ${number(sample.cpu_seconds, 'seconds')}, ${number(sample.cpu_percent, '%')} over ${number(sample.cpu_interval_seconds, 'seconds')}; `
+            + `duty overruns ${sample.duty_overruns == null ? 'unobserved' : JSON.stringify(sample.duty_overruns)}; `
+            + `direct message to first dispatch ${number(direct?.seconds, 'seconds')}${direct?.task_id ? ` (${direct.task_id})` : ''}.`;
+    }).join('\n');
+}
+
 // The executor's real stages (no percentages or timers): the panel headline, and the pill's shorter word.
 export const UPDATE_STAGE_LABELS = {
     draining_writers: 'Finishing current work…',
@@ -165,6 +220,7 @@ export function updateAttemptView(progress) {
     const outcome = OUTCOMES[key];
     if (outcome && !progress.active) {
         return { ...base, terminal: true, tone: outcome.tone, pill: outcome.pill, headline: outcome.headline,
+            restoreTarget: key === 'applied' ? String(progress.base_sha || '') : '',
             text: [attemptText({ ...progress, outcome: key }), retention].filter(Boolean).join(' ') };
     }
     // Not concluded: this server's stage, a restart it needs, a reviewed resolution, or a later server's checks.

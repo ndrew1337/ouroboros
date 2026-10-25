@@ -94,10 +94,16 @@ def test_the_status_word_clips_past_its_line_so_descenders_stay_whole():
     assert "padding-block: 0.15em" in badge and "margin-block: -0.15em" in badge
 
 
-def test_the_desktop_title_band_keeps_an_empty_header_as_a_plain_strip():
+def test_the_desktop_title_band_over_an_empty_header_is_the_windows_handle_not_a_row():
+    # Owner 22.10: the empty strip an empty header kept for the band cut the Widgets board. The band is the window's:
+    # the empty header lies over the top of its page as the window's handle (out of the flow, above the content, clear
+    # of the scrollbar), and the page's scroll body starts at the top edge with its first row padded below the band.
     css = _read("web/style.css")
     band = _rule(css, ':root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-empty] {')
-    assert "display: block" in band and "height: var(--window-chrome-top)" in band and "padding: 0" in band
+    assert "position: absolute" in band and "inset: 0 6px auto 0" in band and "z-index: 2" in band, band
+    assert "height: var(--window-chrome-top)" in band and "padding: 0" in band, band
+    board = _rule(css, ':root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-empty] ~ .widgets-scroll {')
+    assert "padding-top: calc(var(--space-4) + var(--window-chrome-top))" in board, board
     # Outside the desktop window an empty header still takes no room.
     assert "display: none" in _rule(css, 'html[data-layout="docked"] .app-page-header[data-empty] {')
 
@@ -110,8 +116,14 @@ def test_a_desk_bar_starts_with_its_pages_navigation_and_ends_with_its_actions()
     bar = _rule(css, 'html[data-layout="docked"] .app-page-header[data-lead] {')
     assert 'grid-template-areas: "title toolbar"' in bar and "padding-block: 0" in bar and "min-height: 50px" in bar
     # The band's height only where the shell measured it (tests/test_launcher_window_chrome.py: no phantom spacer).
+    # At every Interface size the row is the band and the tabs' top inset shrinks with it (10px at 100 %), so the
+    # tabs stay level with the traffic lights where a 50px floor left them below once the band shrank.
     band = _rule(css, ':root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-lead] {')
-    assert "min-height: max(50px, var(--window-chrome-top))" in band
+    assert "min-height: var(--window-chrome-top)" in band and "50px" not in band, band
+    assert "--lead-inset: min(10px, max(0px, calc((var(--window-chrome-top) - var(--chrome-control-h)) / 2)))" in band
+    inset = _rule(css, ':root[data-window-chrome="integrated"][data-layout="docked"] .app-page-lead .app-tab-strip {')
+    # Both insets shrink together, so the actions centred in the row stay level with the tabs.
+    assert "padding-top: var(--lead-inset)" in inset and "padding-bottom: calc(16px + var(--lead-inset))" in inset
     controls = _rule(css, 'html[data-layout="docked"] .app-page-header[data-lead] > .app-page-toolbar :is(.btn, button) {')
     tab = _rule(css, 'html[data-layout="docked"] .app-page-lead .app-tab {')
     assert "height: var(--chrome-control-h)" in controls and "height: var(--chrome-control-h)" in tab

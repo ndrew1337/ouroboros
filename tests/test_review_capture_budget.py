@@ -147,7 +147,7 @@ def test_reviewer_capture_out_of_space_keeps_copy_without_complete_receipt(
 ):
     drive = tmp_path / "drive"
     source = rc.freeze_checking_source(author, data_root=drive, subject=rc.SUBJECT_INDEX)
-    real_git, real_copy, real_write = rc._git, rc.shutil.copy2, rc.atomic_write_json
+    real_git, real_copy, real_write = rc._git, rc.shutil.copyfileobj, rc.atomic_write_json
 
     def git(cwd, *args, **kwargs):
         if args[:1] == ("diff",) and "--binary" in args:
@@ -156,8 +156,8 @@ def test_reviewer_capture_out_of_space_keeps_copy_without_complete_receipt(
         return real_git(cwd, *args, **kwargs)
 
     def copy(src, dst, *args, **kwargs):
-        if Path(dst).parent.name == rc.EVIDENCE_DIRNAME:
-            Path(dst).write_bytes(b"<cover")
+        if Path(dst.name).parent.name == rc.EVIDENCE_DIRNAME:
+            dst.write(b"<cover")
             _no_space()
         return real_copy(src, dst, *args, **kwargs)
 
@@ -170,7 +170,7 @@ def test_reviewer_capture_out_of_space_keeps_copy_without_complete_receipt(
         (area / "probe_test.py").write_bytes(b"assert True\n")
         (area / rc.EVIDENCE_DIRNAME).mkdir()
         (area / rc.EVIDENCE_DIRNAME / "coverage.xml").write_bytes(b"<coverage/>\n")
-        target, name, fault = {"patch": (rc, "_git", git), "named_output": (rc.shutil, "copy2", copy),
+        target, name, fault = {"patch": (rc, "_git", git), "named_output": (rc.shutil, "copyfileobj", copy),
                                "summary": (rc, "atomic_write_json", write)}[boundary]
         monkeypatch.setattr(target, name, fault)  # only capture writes after materialization fail
 

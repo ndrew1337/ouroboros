@@ -124,7 +124,6 @@ D20 = "Presence"
 "ouroboros/owner_pause.py" = "D01"
 "ouroboros/plan_intention_ledger.py" = "D06"
 "ouroboros/plan_record.py" = "D06"
-"ouroboros/plan_review_facts.py" = "D06"
 "ouroboros/tool_custody.py" = "D01"
 "ouroboros/owner_continue.py" = "D01"
 "ouroboros/model_sleep.py" = "D01"
@@ -139,6 +138,7 @@ D20 = "Presence"
 "ouroboros/launcher_appearance.py" = "D18"
 "ouroboros/launcher_readiness.py" = "D18"
 "ouroboros/launcher_window_chrome.py" = "D18"
+"ouroboros/launcher_page_zoom.py" = "D18"
 "ouroboros/desktop_notifications.py" = "D18"
 "ouroboros/desktop_media.py" = "D18"
 "ouroboros/desktop_autostart.py" = "D18"
@@ -173,6 +173,7 @@ D20 = "Presence"
 "ouroboros/claudexor_exit_facts.py" = "D07"
 "ouroboros/claudexor_runtime.py" = "D07"
 "ouroboros/claudexor_runtime_retention.py" = "D07"
+"ouroboros/engine_pin_policy.py" = "D07"  # one engine pin rule shared by update preflight and restart
 "ouroboros/claudexor_startup_failure.py" = "D07"
 "ouroboros/cli.py" = "D18"
 "ouroboros/client_surface.py" = "D11"
@@ -203,6 +204,8 @@ D20 = "Presence"
 "ouroboros/chronicle_store.py" = "D15"
 "ouroboros/chronicle_import.py" = "D15"
 "ouroboros/late_review_marks.py" = "D15"  # late reviewer feedback kept in view as a host mark in its owning room
+"ouroboros/plan_collection_job.py" = "D15"
+"ouroboros/mark_anchors.py" = "D15"  # a mark the mind ties to an action trails that call's result once per task
 "ouroboros/consolidator.py" = "D15"
 "ouroboros/knowledge.py" = "D15"
 "ouroboros/memory_publication.py" = "D15"
@@ -247,6 +250,9 @@ D20 = "Presence"
 "ouroboros/delegate_plan.py" = "D07"
 "ouroboros/delegate_custody.py" = "D07"
 "ouroboros/delegate_collection.py" = "D07"
+"ouroboros/delegate_capture_attempt.py" = "D07"
+"ouroboros/delegate_capture_job.py" = "D07"
+"ouroboros/delegate_named_evidence.py" = "D07"
 "ouroboros/delegate_state_sweep.py" = "D07"
 "ouroboros/delegate_custody_reconcile.py" = "D07"
 "ouroboros/delegate_custody_usage.py" = "D07"
@@ -317,6 +323,7 @@ D20 = "Presence"
 "ouroboros/gateway/extension_receipts.py" = "D11"
 "ouroboros/gateway/files.py" = "D11"
 "ouroboros/gateway/history.py" = "D11"
+"ouroboros/gateway/place_history.py" = "D11"
 "ouroboros/gateway/history_paging.py" = "D11"
 "ouroboros/gateway/history_contracts.py" = "D11"
 "ouroboros/gateway/host_service.py" = "D11"
@@ -373,6 +380,7 @@ D20 = "Presence"
 "ouroboros/gateways/claudexor_routing.py" = "D07"
 "ouroboros/llm_claudexor.py" = "D02"
 "ouroboros/git_shell_policy.py" = "D13"
+"ouroboros/git_observation.py" = "D18"
 "ouroboros/headless.py" = "D17"
 "ouroboros/headless_status.py" = "D17"
 "ouroboros/history_retention.py" = "D17"
@@ -518,7 +526,6 @@ D20 = "Presence"
 "ouroboros/protected_artifacts.py" = "D04"
 "ouroboros/provider_models.py" = "D02"
 "ouroboros/process_interpreters.py" = "D05"  # F6 sync: upstream retired python_interpreter.py into this two-family (python/node) resolver
-"ouroboros/reflection.py" = "D15"
 "ouroboros/repo_remotes.py" = "D10"
 "ouroboros/request_wire_attempt.py" = "D02"
 "ouroboros/request_wire_contract.py" = "D02"
@@ -820,6 +827,9 @@ D20 = "Presence"
 "ouroboros/ui_translation.py" = "D12"
 "ouroboros/update_channels.py" = "D12"
 "ouroboros/update_letter.py" = "D12"
+"ouroboros/update_qualification.py" = "D12"
+"ouroboros/update_generation_facts.py" = "D12"
+"ouroboros/update_impact.py" = "D12"
 "ouroboros/usage_accounting.py" = "D16"
 "ouroboros/usage_origin.py" = "D16"
 "ouroboros/usage_admission.py" = "D16"
@@ -848,6 +858,7 @@ D20 = "Presence"
 "ouroboros/server_boot.py" = "D11"
 "ouroboros/server_maintenance.py" = "D11"
 "ouroboros/maintenance.py" = "D11"
+"ouroboros/maintenance_retirement.py" = "D11"
 "ouroboros/terminal_cost_reconciliation.py" = "D11"
 "ouroboros/server_owner_routing.py" = "D11"
 "ouroboros/server_process.py" = "D11"
@@ -1163,6 +1174,7 @@ allowed = [
   "D18->D09",
   "D18->D10",
   "D18->D12",
+  "D18->D13",
   "D19->D14",
   "D19->D18",
   "D20->D04",
@@ -1268,6 +1280,7 @@ lazy_only = [
   "D15->D08",
   "D15->D09",
   "D15->D10",
+  "D15->D11",
   "D15->D13",
   "D15->D20",
   "D16->D01",

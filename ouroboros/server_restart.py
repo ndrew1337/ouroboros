@@ -287,7 +287,7 @@ def _stop_owned_daemon_for_new_pin() -> None:
     startup sweep and resumed parents close them as absent (no invented spend).
     """
     from ouroboros.claudexor_daemon import owned_daemon_provisioned, read_owned_gateway
-    from ouroboros.claudexor_runtime import release_below
+    from ouroboros.engine_pin_policy import engine_pin_transition
 
     if not owned_daemon_provisioned():
         return
@@ -301,12 +301,12 @@ def _stop_owned_daemon_for_new_pin() -> None:
         log.info("Planned restart keeps the owned Claudexor daemon: the engine pin comparison is "
                  "unavailable (%s)", exc)
         return
-    if serving == (pin.version, pin.build_sha):
-        return
-    # The owner's Restart keeps this second attested stop after its own, which may be unconfirmed.
-    if not _OWNER_STOP_BEGAN.is_set() and release_below(pin.version, serving[0]):
+    transition = engine_pin_transition(pin, serving, owner_restart=_OWNER_STOP_BEGAN.is_set())
+    if transition["action"] == "keep" and transition["direction"] == "backward":
         log.warning("Planned restart keeps newer owned Claudexor %s: checkout pin %s would downgrade "
                     "its data root; cold start still requires a compatible pin", serving[0], pin.version)
+        return
+    if transition["action"] != "replace":
         return
     log.warning("Planned restart stops the owned Claudexor daemon: engine %s (%s) is serving while the "
                 "checkout pins %s (%s); the next generation starts the pinned engine and the runs "

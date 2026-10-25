@@ -5,7 +5,11 @@ is admitted (``_admit_chat_task``: the seed, the census registration, the
 actor, the start receipt) and then executed (``_execute_chat_task``); the
 owner's message runs both in one call (``handle_chat_direct``), while a
 self-initiated wake-up (``handle_wake_direct``) admits synchronously and
-answers with a typed receipt before the body runs on its own thread.
+answers with a typed receipt before the body runs on its own thread. The
+thread running a turn carries its ``TurnExecution`` (identity, thread, start
+facts), begun at the turn's first statement, adopted by its registration and
+advanced at admission, at ``handle_task`` and by the turn's own context and
+dispatch frames.
 Turns are refused while the repo-writer gate is closed
 for a DESTRUCTIVE update window (apply/replace prologue, materialization,
 rollback), so a managed update never races a turn that could touch the checkout
@@ -157,13 +161,24 @@ def handle_chat_direct(
     task_metadata: Optional[dict] = None,
     realtime_turn: Any = None,
 ) -> None:
-    if not owner_conversation_admitted(chat_id, str((task_metadata or {}).get("client_message_id") or "")):
-        return
-    _handle_chat_direct_locked(
-        chat_id, text, image_data,
-        task_constraint=task_constraint, task_metadata=task_metadata,
-        **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
-    )
+    # The turn's own thread begins its execution at its first statement, so a turn that
+    # stops before admission decides it still says where it stands (server_liveness);
+    # its registration adopts it.
+    from supervisor.active_activity import get_direct_activity_registry
+
+    client_msg_id = str((task_metadata or {}).get("client_message_id") or "")
+    registry = get_direct_activity_registry()
+    execution = registry.begin_execution(chat_id, client_message_id=client_msg_id)
+    try:
+        if not owner_conversation_admitted(chat_id, client_msg_id):
+            return
+        _handle_chat_direct_locked(
+            chat_id, text, image_data,
+            task_constraint=task_constraint, task_metadata=task_metadata,
+            **({"realtime_turn": realtime_turn} if realtime_turn is not None else {}),
+        )
+    finally:
+        registry.end_execution(execution)
 
 
 def _handle_chat_direct_locked(
@@ -303,7 +318,7 @@ def _admit_chat_task(
     admitted: Dict[str, Any] = {
         "task": task, "agent": agent, "activity": activity, "registry": registry,
         "chat_id": chat_id, "client_msg_id": client_msg_id, "kind": kind,
-        "task_metadata": task_metadata, "realtime_turn": realtime_turn,
+        "task_metadata": task_metadata, "realtime_turn": realtime_turn, "execution": activity.execution,
     }
     try:
         if agent is None:
@@ -486,7 +501,7 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
     registry entry is released here, whichever way the turn ends.
     """
     task, agent, chat_id = admitted["task"], admitted["agent"], admitted["chat_id"]
-    registry = admitted["registry"]
+    registry, execution = admitted["registry"], admitted.get("execution")
     ok = False
     try:
         # The turn's live emits (loop_llm_call and friends publish
@@ -504,9 +519,13 @@ def _execute_chat_task(admitted: Dict[str, Any]) -> bool:
             _pool().get_event_q(), task["id"], chat_id,
             initiator=str((admitted.get("task_metadata") or {}).get("initiator") or ""),
             on_first_work=on_first_work,
+            on_frame=execution.observe if execution is not None else None,
         )
         prev_queue = getattr(agent, "_event_queue", None)
         agent._event_queue = turn_queue
+        if execution is not None:
+            execution.bind_thread()
+            execution.advance("started")
         try:
             events = agent.handle_task(task)
         finally:

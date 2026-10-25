@@ -155,7 +155,7 @@ def test_the_working_sources_line_lists_exactly_what_the_spec_loads():
     loaded, missing = line.split("Loaded above: ", 1)[1].split(" Not loaded: ", 1)
     assert "the top level of your story" in loaded and "the page of your parent's room" in loaded
     assert "the words of my human that caused this work" in loaded and "raw conversations" in missing
-    assert "knowledge (overview, index, patterns)" in missing and "knowledge" not in loaded
+    assert "knowledge (overview, index)" in missing and "knowledge" not in loaded
     assert "shared biography" not in line
     # Each field moves its item: the line changes with the spec, never independently of it.
     for field, value, gone, now_missing in (
@@ -171,8 +171,8 @@ def test_the_working_sources_line_lists_exactly_what_the_spec_loads():
         if now_missing:
             assert now_missing in new_missing, field
         if field == "knowledge":
-            assert "knowledge (overview, index, patterns)" in new_loaded
-            assert "knowledge (overview, index, patterns)" not in new_missing
+            assert "knowledge (overview, index)" in new_loaded
+            assert "knowledge (overview, index)" not in new_missing
     nanny = mv.working_sources_line(dataclasses.replace(mv.ROLE_DEFAULTS["nanny"], room_id="1"))
     assert "the top level of your story" in nanny.split(" Not loaded: ", 1)[1]
     # With a captured view the owner's words are named only when their block was drawn.

@@ -1,11 +1,10 @@
 # Module Size & Complexity
 
 This chapter owns the deterministic size gates and their debt manifest, paydown by
-simplifying in place rather than extracting passthroughs, and the reading-cost
-invariants reviewers check against: hot-reader projections, the source-complete
-decision pipeline, continuation authority, live-only notifications, UI disposers and
-embedded-surface geometry. Each rule bounds reading cost and names its enforcement or
-its absence.
+simplifying in place, and the reading-cost invariants reviewers check against: hot-reader
+projections, the source-complete decision pipeline, continuation authority, live-only
+notifications, UI disposers and embedded-surface geometry. Each rule bounds reading cost
+and names its enforcement or its absence.
 
 P7 makes context fit a maintenance constraint, not a line-count aesthetic. Python
 modules everywhere (`tests/` and `devtools/` included) and first-party `web/**/*.js`
@@ -19,7 +18,7 @@ A stale or newly oversized entry fails; regenerate with
 `scripts/regenerate_size_ratchet.py` (mechanics: ARCHITECTURE §6 "Review stack").
 Methods over 150 lines or eight parameters are decomposition signals, not gates
 (CHECKLISTS item 11(c); BIBLE P7). Runtime function totals are descriptive, with no
-aggregate ceiling, because a repository-wide count penalizes useful decomposition.
+aggregate ceiling: a repository-wide count penalizes useful decomposition.
 
 Enforcement: manual/tag CI runs `size_ratchet` (ARCHITECTURE §8). Without an event
 base its transition check compares only HEAD's parent, not all intervening commits;
@@ -32,12 +31,12 @@ ARCHITECTURE §6 "Commit preflight").
 A change that runs into a band, the hard cap, the function gate or the byte debt pays it
 down by simplifying where the change lives (simpler control and data flow, dead code and
 duplicates removed, an existing SSOT reused, prose made compact), so the module reads
-better afterwards. Extraction is the last resort and counts only for a natural boundary
-that would stay correct with the parent far below the cap: its own reason to change, an
-explicit contract, a real caller. A cap-driven bucket, a one-caller passthrough, or
-bytes bought by deleting contract-bearing comments, docstrings, messages or tests is a
-defect to report, not paydown (BIBLE P7 «first simplify what exists»). Enforcement:
-CHECKLISTS item 27 `size_cap_paydown`, advisory when applicable.
+better. Extraction is the last resort and counts only for a natural boundary that would
+stay correct with the parent far below the cap: its own reason to change, an explicit
+contract, a real caller. A cap-driven bucket, a one-caller passthrough, or bytes bought by
+deleting contract-bearing comments, docstrings, messages or tests is a defect to report,
+not paydown (BIBLE P7 «first simplify what exists»). Enforcement: CHECKLISTS item 27
+`size_cap_paydown`, advisory when applicable.
 
 ### Pragmatic SOLID
 
@@ -81,7 +80,7 @@ addressed store, outside queue locks, released before display consumers; unavail
 unknown for that request (`tests/test_hot_facts*.py` fix Stop/custody results while settled
 history grows 20→2,000 rows). Main batches question display views and warms lineage by
 generation, keeping strict per-member gaps if a batch fails (`tests/test_main_decisions_reads.py`);
-B3/B3w in `tests/test_cost_contract.py` fix visible questions while delivered history grows.
+`tests/test_cost_contract.py` fixes every boundary and recurring pass as history grows.
 
 - **Measure the growing operation:** history, object count, nesting, cold caches and
   contention. Where responsiveness suffers, use existing spans and real-reader spies;
@@ -167,14 +166,15 @@ summary or a canonical-result mutation (ARCHITECTURE §1 "CLI / Headless Boundar
 optional exact read is `get_task_result(include_authority=True)`.
 
 Every predecessor consumer (the successor's start, children, external work orders) gets
-the same pure, idempotent brief `main_context_authority.project_helper_predecessor_authority`
-of the one envelope producer `contracts.task_contract.bounded_continuation_envelope` (fields
-whole-or-pointer under the serialized budget; previews carry `full_chars` and a
-`source_ref`). Durable `task_results` bodies stay the SSOT; the brief names each omitted
-field and size and never stands in for it. No hop cap, no chain walk: a successor reads its
-predecessor through `get_task_result(include_authority=True)`, and the predecessor mind's
-notes follow the assignment as one foldable row. Enforcement:
-`tests/test_continuation_context_authority.py`, `tests/test_helper_predecessor_history.py`.
+the same pure, idempotent brief
+`main_context_authority.project_helper_predecessor_authority` of the one envelope producer
+`contracts.task_contract.bounded_continuation_envelope` (fields whole-or-pointer under the
+serialized budget; previews carry `full_chars` and a `source_ref`). Durable `task_results`
+bodies stay the SSOT; the brief names each omitted field and size and never stands in for
+it. No hop cap, no chain walk: a successor reads its predecessor through the exact read
+above, and the predecessor mind's notes follow the assignment as one foldable row.
+Enforcement: `tests/test_continuation_context_authority.py`,
+`tests/test_helper_predecessor_history.py`.
 
 ### Invariant: notifications ring for live events only
 
@@ -207,8 +207,8 @@ owns a `destroy()` that releases everything it acquired: WS subscriptions
 `MutationObserver`, `IntersectionObserver`), timers, `requestAnimationFrame` loops and
 `EventSource`/streaming connections.
 
-An instance that can be closed, hidden or replaced (project chat panels are the
-canonical case) is destroyable without leaving an acquisition behind. It may survive
+An instance that can be closed, hidden or replaced (canonically, project chat
+panels) is destroyable without leaving an acquisition behind. It may survive
 being hidden only under an explicit, owner-visible retention reason (a project chat
 with pending work, a widget card set to Keep running); even then it owns its disposer,
 and Stop, unload, reload and shutdown stay force-destroy boundaries. "Hide the DOM
@@ -228,19 +228,18 @@ geometry/overflow contract, a paired disposer for every long-lived resource, dec
 refresh/stream/error semantics, and a named real-consumer visual verification path; an
 intentional omission records why deferring it is safe.
 
-For Widgets, framed `height` values are bounded and module auto-height is
-host-controlled below a finite ceiling. Below that ceiling, updates preserve the
-child's inline-size basis; the host controls vertical scrollbar mode while preserving
-horizontal overflow. Feedback-sensitive verification is event-driven on the relevant engine and proves
-convergence to a quiet fixed point with a real consumer or production-derived fixture
-that crosses the known wrapping threshold, not two snapshots. A module widget's own faults
-use `ouro-widget-error`; the builtin page sends bounded, best-effort reports to the
-existing event log (ARCHITECTURE §3 "Skills and Widgets"). These page-reported diagnostics
-are not task-execution evidence. Module source loading and declarative requests have a
-bounded host timeout; declarative job widgets keep their `job_id` and bounded
-retry/timeout behavior in the refresh contract, where missing or malformed job status
-is an immediate protocol error and an unknown in-progress label is a bounded pending
-state.
+For Widgets, framed `height` values are bounded and module auto-height is host-controlled
+below a finite ceiling, where updates preserve the child's inline-size basis; the host
+controls vertical scrollbar mode while preserving horizontal overflow. Feedback-sensitive
+verification is event-driven on the relevant engine and proves convergence to a quiet
+fixed point with a real consumer or production-derived fixture that crosses the known
+wrapping threshold, not two snapshots. A module widget's own faults use
+`ouro-widget-error`; the builtin page sends bounded, best-effort reports to the existing
+event log (ARCHITECTURE §3 "Skills and Widgets"). These page-reported diagnostics are not
+task-execution evidence. Module source loading and declarative requests have a bounded
+host timeout; declarative job widgets keep their `job_id` and bounded retry/timeout
+behavior in the refresh contract, where missing or malformed job status is an immediate
+protocol error and an unknown in-progress label is a bounded pending state.
 
 Enforcement: CHECKLISTS item 9 `perf_lifecycle` points lifecycle changes here; the
 widget geometry/refresh contracts are pinned in `tests/test_widgets_ui_static.py` and

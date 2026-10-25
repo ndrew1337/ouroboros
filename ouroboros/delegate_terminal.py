@@ -60,11 +60,26 @@ def terminal_reconcile_task(
         )
     except Exception:
         log.warning("Terminal delegated custody reconciliation failed for %s", mine, exc_info=True)
+    try:
+        _name_unread_results(drive_root, mine)
+    except Exception:
+        log.warning("Never-read disclosure failed for %s", mine, exc_info=True)
     if audit:
         _audit_task_custody(drive_root, mine, result)
     else:
         result["audit_status"] = "pending"
     return result
+
+
+def _name_unread_results(drive_root: Any, task_id: str) -> None:
+    """The attempt ends with a settled result staged in full and never read: name it once (D7, #1573).
+    Since #2205 the body's collector, not this boundary, retains outputs; the omission is still this
+    boundary's fact, so the next context shows NEVER READ instead of an available result."""
+    from ouroboros.delegate_custody_current import task_snapshot
+
+    for run in task_snapshot(drive_root, task_id)["runs"].values():
+        if not run.review_owned:
+            custody.record_settled_unread(drive_root, run)
 
 
 def terminal_custody_disclosure(

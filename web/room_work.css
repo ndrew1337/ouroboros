@@ -85,7 +85,10 @@ html[data-layout="docked"] .chat-page-header .app-page-title-row {
     margin-block: -0.15em;
 }
 /* A row too short for the name, the word and the mark keeps the name and the mark: the word goes whole instead of
-   showing a cut fragment ("Wor…"); room_work.js measures it (fitWord). */
+   showing a cut fragment ("Wor…"), after a preparing turn's start step beside it (setStatus's data-step);
+   room_work.js measures them (fitWord). */
+.status-badge[data-step]:not([data-step=""])::after { content: " · " attr(data-step); }
+.rw-trigger[data-step="off"] .status-badge::after { content: none; }
 .rw-trigger[data-word="off"] .status-badge { display: none; }
 /* (0,5,0) outranks the light theme's connection colours (0,4,0): the tone below owns the word's ink. */
 :root .rw-trigger[data-tone] .status-badge.status-badge { color: inherit; }

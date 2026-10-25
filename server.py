@@ -1252,6 +1252,8 @@ async def lifespan(app):
         body_stop.set()  # the body runtime and the boot coordinator stop with the generation
         from ouroboros.delegate_collection import stop_body_runtime
         stop_body_runtime(lifespan_drive_root, wait=False)
+        from ouroboros.maintenance import child as maintenance_child
+        maintenance_child.stop()
         begin_owned_stop(lifespan_drive_root)  # the grace starts here; pending stops are recorded before any wait
         log.info("Server shutting down...")
         # Let the loop leave its current tick BEFORE workers are killed and the

@@ -23,7 +23,7 @@ def test_book_maps_keep_their_chapters_and_paths_and_retain_the_map(tmp_path):
     assert not isinstance(full[0], HostSection) or full[0].operative_view is None  # Max keeps the book resident
 
 
-def test_world_subagents_and_reflections_keep_names_and_state(tmp_path, monkeypatch):
+def test_world_and_subagents_keep_names_and_state(tmp_path, monkeypatch):
     from ouroboros import context
     from tests.test_cache_optimization import _make_env_and_memory
 
@@ -53,13 +53,6 @@ def test_world_subagents_and_reflections_keep_names_and_state(tmp_path, monkeypa
     assert [part.section_id for part in core.semi_stable_sections if part.section_id in ("identity", "subagents")] \
         == ["subagents", "identity"]
 
-    rows = [{"ts": "2026-10-16T10:00:00Z", "type": "late_review_settlement", "task_type": "task", "task_id": f"t{i}",
-             "reflection": "What happened and what I learned. " * 30} for i in range(2)]
-    section = context._reflections_section("execution_reflections", "## Execution reflections", rows,
-                                           "the whole text", "Historical automatic reflections: 4 row(s) ...")
-    assert section.full_text == "## Execution reflections\n\nthe whole text"
-    assert section.operative_view == ("## Execution reflections\n\n- 2026-10-16T10:00 | task | t0\n"
-                                      "- 2026-10-16T10:00 | task | t1\nHistorical automatic reflections: 4 row(s) ...")
 
 
 def test_runtime_view_counts_schedules_candidates_and_the_letter_and_keeps_authority_exact():

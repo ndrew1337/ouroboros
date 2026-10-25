@@ -57,7 +57,14 @@ REASON_TEXT = {
     "queued": "Waiting for a free worker",
     "review_work_finishing": "Review work finishing",
     "external_runs_unconfirmed": ("1 external run may still be running", "{count} external runs may still be running"),
+    # A preparing direct turn's start step (census ``turn_phase``, supervisor.active_activity.TURN_PHASES).
+    "turn_admitted": "Setting up the turn",
+    "turn_started": "Starting the turn",
+    "turn_context_building": "Building context",
+    "turn_context_built": "Context ready",
 }
+_TURN_STEPS = ("admitted", "started", "context_building", "context_built")
+_CALL_STEPS = ("requested", "dispatched")  # its Main call started (supervisor.active_activity.CALL_PHASES)
 
 
 def reason(code: str, *, count: Optional[int] = None, ids: Iterable[str] = (), since: Any = None,
@@ -107,10 +114,11 @@ def _current_waits(row: Mapping[str, Any]) -> List[tuple]:
 
 
 def _call(row: Mapping[str, Any]) -> str:
-    """The exact-call word a working member is in (the cards' modelActivityPresentation)."""
+    """The exact-call word a working member is in (the cards' modelActivityPresentation); a direct turn
+    whose own call start precedes its census phase's move says the word that move gives, never more."""
     phase = row.get("phase")
     if phase == "preparing":
-        return "preparing"
+        return "working" if row.get("turn_phase") in _CALL_STEPS else "preparing"
     activity = row.get("model_activity") if isinstance(row.get("model_activity"), dict) else {}
     operation = activity.get("phase")
     if operation in {"dispatching", "awaiting_response"}:
@@ -210,6 +218,9 @@ def classify_member(row: Mapping[str, Any], raw: Optional[Mapping[str, Any]] = N
         return state
     if phase in {"working", "thinking", "preparing"}:
         state.update(activity="working", call=_call(row), live=True)
+        step = str(row.get("turn_phase") or "")
+        if phase == "preparing" and step in _TURN_STEPS:
+            state["reasons"].append(reason(f"turn_{step}"))
         return state
     state["confirmed"] = False
     return state

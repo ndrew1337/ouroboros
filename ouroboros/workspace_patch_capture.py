@@ -26,6 +26,7 @@ from typing import Any, BinaryIO, Dict, Iterable, List, Optional, Sequence, Tupl
 
 from ouroboros.artifact_storage import compress_in_place
 from ouroboros.contracts.task_constraint import normalize_task_constraint
+from ouroboros.git_observation import numstat_paths
 from ouroboros.headless_status import (
     ARTIFACT_STATUS_FAILED,
     ARTIFACT_STATUS_READY_NO_CHANGES,
@@ -122,11 +123,10 @@ def write_workspace_patch_artifacts(
     except (OSError, ValueError) as exc:
         errors.append({"type": "file_capture_failed", "message": f"{type(exc).__name__}: {exc}"})
         file_baseline = {}
-    changed_tracked = _git_path_list(
-        ["git", "diff", "--name-only", "--no-renames", "-z", "--no-ext-diff", "--no-color", base_ref, "--"],
-        root,
-        errors,
-    )
+    # Confirm binary rows too, keeping unchanged large files out of outputs without index writes.
+    cmd = ["git", "diff", "--numstat", "--no-renames", "-z", "--no-ext-diff", "--no-color", base_ref, "--"]
+    changed_tracked = numstat_paths(_git_bytes(cmd, root, errors=errors), cmd,
+                                   lambda args: _git_bytes(args, root, errors=errors))
     # A tracked WAL index (committed beside its database, or staged in a copy) is shared memory as an
     # untracked one is: never diffed, and never named for an integration to stage over the target's own.
     wal_indexes = {rel: reason for rel in changed_tracked if (reason := _wal_index_reason(root, rel))}
@@ -547,12 +547,14 @@ def _git_bytes(
     allow_rc: Iterable[int] = (0,),
     errors: Optional[List[Dict[str, Any]]] = None,
 ) -> bytes:
+    from ouroboros.git_observation import host_git_env
     try:
         result = subprocess.run(
             list(cmd),
             cwd=str(cwd),
             capture_output=True,
             timeout=30,
+            env=host_git_env(),
         )
     except subprocess.TimeoutExpired:
         if errors is not None:
@@ -583,6 +585,7 @@ def _append_git_output(
     errors: List[Dict[str, Any]],
     diagnostics: List[Dict[str, Any]],
 ) -> int:
+    from ouroboros.git_observation import host_git_env
     written_box = {"value": 0}
     read_errors: List[str] = []
     try:
@@ -592,6 +595,7 @@ def _append_git_output(
                 cwd=str(cwd),
                 stdout=subprocess.PIPE,
                 stderr=stderr_fh,
+                env=host_git_env(),
             )
             assert proc.stdout is not None
 

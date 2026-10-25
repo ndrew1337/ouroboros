@@ -9,6 +9,15 @@ const observed = (stage, extra = {}) => ({
     update_progress: { operation_id: 'operation-a', generation: 'server-a', stage, active: true, ...extra },
 });
 
+test('only a completed update with a known base offers its local Restore target', () => {
+    for (const outcome of ['applied', 'not_applied', 'rolled_back', 'failed', 'unknown']) {
+        const view = updateAttemptView({ operation_id: 'a', outcome, active: false, base_sha: 'a'.repeat(40) });
+        assert.equal(view.restoreTarget, outcome === 'applied' ? 'a'.repeat(40) : '');
+    }
+    assert.equal(updateAttemptView({ operation_id: 'a', outcome: 'applied', active: false }).restoreTarget, '');
+    assert.equal(updateAttemptView({ operation_id: 'a', active: true, base_sha: 'a'.repeat(40) }).restoreTarget, undefined);
+});
+
 test('server stages refine the pending apply and survive reopening before a transaction exists', () => {
     for (const phase of ['updating', '', 'loading']) {
         const verdict = updateVerdict(observed('stopping_workers'), phase);

@@ -171,10 +171,9 @@ def prune_stale_code_intel_roots(
     """
     import shutil
 
-    from ouroboros.retention import age_cutoff, get_gc_retention_days
+    from ouroboros.retention import age_cutoff, get_gc_retention_days, keep_until
 
-    if retention_days is None:
-        retention_days = get_gc_retention_days()
+    retention_days = get_gc_retention_days() if retention_days is None else retention_days
     cutoff = age_cutoff(retention_days, now)
     report: Dict[str, Any] = {"removed": [], "kept": 0, "errors": []}
     cache_root = pathlib.Path(drive_root) / "state" / "code_intel"
@@ -190,6 +189,7 @@ def prune_stale_code_intel_roots(
             report["kept"] += 1
             continue
         if mtime >= cutoff:
+            keep_until(report, mtime, retention_days)
             report["kept"] += 1
             continue
         try:
@@ -883,8 +883,9 @@ def build_code_inventory(
         stored = replace(inventory, files=kept, coverage=dict(Counter(f.disposition for f in kept)))
     # A caller-scoped view must not replace the shared full-source cache.
     if persist and parse and drive_root is not None and not filtered and stored != cached:
-        path = inventory_cache_path(root, pathlib.Path(drive_root))
-        atomic_write_json(path, stored.to_json(), trailing_newline=True)
+        atomic_write_json(inventory_cache_path(root, pathlib.Path(drive_root)), stored.to_json(), trailing_newline=True)
+        from ouroboros.maintenance_retirement import artifact_changed
+        artifact_changed(drive_root)
     return inventory
 
 

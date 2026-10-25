@@ -285,7 +285,7 @@ def test_a_capture_interrupted_before_retention_is_finished_by_the_next_capture(
     try:
         # A crash after PATCH_CAPTURED landed and before the evidence was retained.
         monkeypatch.setattr(subagent_integration_delegated, "retain_investigation_evidence",
-                            lambda drive, entry, block, gateway=None: block)
+                            lambda drive, entry, block, gateway=None, **kwargs: block)
         capture_terminal_patch_for_drive(drive, entry)
         assert entry.patch_captured and not entry.patch_disposed and copy.is_dir()
         monkeypatch.setattr(subagent_integration_delegated, "retain_investigation_evidence", retain)

@@ -99,9 +99,9 @@ def candidate_apply_possible(record: Any) -> bool:
 
 def _recorded_readonly_ask(record: Any) -> bool:
     """The read-only reviewer's own recorded shape: a STARTED row's granted
-    ``access``/``mode``, or a pending row's stored wire request, is readonly Ask
+    ``access``/``mode``, or a pending row's wire shape, is readonly Ask
     with no private execution binding. Absent shape facts prove nothing."""
-    request = _fact(record, "request")
+    request = _fact(record, "request_shape") or _fact(record, "request")
     request = request if isinstance(request, dict) else {}
     return (str(_fact(record, "access") or request.get("access") or "") == "readonly"
             and str(_fact(record, "mode") or request.get("mode") or "") == "ask"

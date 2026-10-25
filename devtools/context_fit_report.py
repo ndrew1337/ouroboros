@@ -92,9 +92,6 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max', prepared=N
                                    (core.dynamic_head_sections, core.dynamic_head_text, 'knowledge'),
                                    (core.dynamic_sections, core.dynamic_text, 'host')):
         for part in parts:
-            if selected == 'nano' and part.section_id == 'pattern_register':
-                add('pattern_register', cf.PATTERN_REGISTER_POINTER, 'reader')
-                continue
             add(part.section_id, addressed.get(part.section_id, part.full_text),
                 'operative' if part.section_id in addressed else 'whole')
         if not parts and fallback:

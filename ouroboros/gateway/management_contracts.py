@@ -843,6 +843,7 @@ class UpdateProgress(TypedDict, total=False):
     stash_note: str
 
     retention_unconfirmed: bool  # live only: saving this observation failed, not the update itself
+    generation_facts: Optional[Dict[str, Any]]
 
 
 class UpdateLetter(TypedDict):
@@ -862,6 +863,7 @@ class UpdateLetter(TypedDict):
     description_current: bool
     failed_at: str
     latest_failed_key: Optional[Dict[str, Any]]
+    qualification: NotRequired[Optional[Dict[str, Any]]]
 
 
 class UpdateTransactionState(TypedDict, total=False):
@@ -889,6 +891,7 @@ class UpdateStatusResponse(TypedDict, total=False):
     update_tx: Required[UpdateTransactionState]
     update_progress: Required[UpdateProgress]
     letter: Optional[UpdateLetter]
+    after_update: Optional[Dict[str, Any]]
     managed: bool
     remote: str
     remote_branch: str

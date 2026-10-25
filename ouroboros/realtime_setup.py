@@ -165,17 +165,17 @@ def session_candidate(host, factory, options, *, observation_fp=None):
                                            estimate_tokens=estimate, view_kind=plan.view_kind)
                 if facts.basis == "provider" else (1.0, "cold_estimate"))
     ratio, basis = density(raw)
-    deficit, previous = 0, None
+    deficit, previous, measured_input = 0, None, None
     while True:
         plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
             output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode=plan.initial_mode,
-            current_messages=rows, refused_tokens=deficit)
+            current_messages=rows, refused_tokens=deficit, measured_input_tokens=measured_input)
         if plan.initial_mode != host._schemas_mode:
             # The ordinary ladder chose this mode. Rebind its starting tools,
             # keeping explicit discovery, then fit the changed envelope once.
             host._reselect_tools(plan.initial_mode)
             rows = [*host.messages, *extra]
-            previous, deficit = None, 0
+            previous, deficit, measured_input = None, 0, None
             continue
         current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
@@ -229,7 +229,7 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
                 output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode="max",
                 current_messages=rows, select_mode="low")
-            previous, deficit = None, 0
+            previous, deficit, measured_input = None, 0, None
             continue
         if previous is not None and measured >= previous:
             from ouroboros.observability import persist_physical_candidate
@@ -245,4 +245,4 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             host.trace["fit_refusal"] = event
             host.observe("host", canonical_json(event))
             raise RealtimeSetupError("context_capacity", CONTEXT_CAPACITY_DETAIL)
-        previous, deficit = measured, max(1, -refusal["free_tokens"] + 1)
+        previous, deficit, measured_input = measured, max(1, -refusal["free_tokens"] + 1), raw

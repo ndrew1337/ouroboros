@@ -12,6 +12,10 @@ dialog { margin: auto; }
     display: none !important;
 }
 
+/* A page laid out wider than its screen (Interface size below 100 %, theme.js) keeps its type scale: a phone's
+   text inflation would enlarge long text against the owner's size. At 100 % the phone's own text settings stand. */
+:root[data-interface-smaller] { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
     background: var(--bg-primary);
@@ -95,24 +99,26 @@ html[data-layout="stack"] .shell-icon-control {
     display: none;
 }
 
-/* The sidebar is three zones (docs/DESIGN.md "Shell"): a pinned head (Main Chat), the Projects list as the ONE
-   scroller, and the tools, the version and the update right after it; free room stays under the last row. Row
+/* The sidebar's zones (docs/DESIGN.md "Shell"): a pinned head (Main Chat), the Projects list as the ONE scroller, the
+   tools right after it, and the foot (the version and the update) at the bottom edge; free room lies between the
+   tools and the foot, never between the list and the tools. Row
    heights follow the pointer: a finger gets the touch minimum, a mouse a quieter row, and a short window with a
    mouse compacts the rows first. A window too short even for that falls back to the whole column scrolling with
-   the head sticky. */
+   the head sticky and the foot still on the bottom edge. */
 #primary-sidebar {
     --nav-row-h: 44px;       /* a place: Main Chat, Files … */
     --nav-item-h: 32px;      /* a Project row */
     --nav-control-h: 28px;   /* a row's ⋯ and the header's + */
     --nav-kebab-w: var(--nav-control-h);  /* the column a Project row's ⋯ takes (none on touch: a long press opens it) */
     --nav-label-x: calc(var(--space-3) + 18px + var(--space-3));  /* the one text column every label starts on */
+    --sidebar-pad-bottom: var(--space-3);  /* the foot's inset from the bottom edge; the drawer adds the safe area */
     width: var(--drag-width, var(--sidebar-width));
     height: var(--vvh);
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
     min-width: 0;
-    padding: 0 var(--space-3) var(--space-3);
+    padding: 0 var(--space-3) var(--sidebar-pad-bottom);
     background: var(--surface-side);
     border-right: 1px solid rgba(var(--neutral-rgb), 0.05);
     z-index: var(--z-sidebar);
@@ -130,10 +136,29 @@ html[data-layout="stack"] .shell-icon-control {
 /* A window too short for the zones (the head, three list rows and the foot no longer fit): the whole column is
    the ONE scroller with the head sticky, and the list shows every row in flow, so a finger or a wheel moves one
    thing (the gate counts the sidebar's scrollers). Finger rows are 44px, so a touch column runs out of room
-   sooner (measured: 586px of zones with 30 Projects). */
+   sooner (measured: 586px of zones with 30 Projects). The foot, the version and the update, stays on the bottom
+   edge there too (owner 23.10): the tools' box steps aside (its rows become the column's), so the foot sticks to
+   the column itself and the rows pass under it as they pass under the head. Its offset and negative margin reach
+   through the column's bottom padding, which it takes as its own, so its text sits where a tall window puts it.
+   The two bars' measured heights (layout.js measurePinnedBars) are the scroll margin of the rows that pass under
+   them, so a row reached with Tab is never left under either bar, while a bar's own control (Main, the update)
+   leaves the column where it is (a scroll padding on the column would count the bars as covered and move it). */
 @media (max-height: 540px), (pointer: coarse) and (max-height: 600px) {
+    #primary-sidebar :is(.nav-projects *, .sidebar-foot > [data-nav-page]) {
+        scroll-margin-block: var(--sidebar-head-h, 0px) var(--sidebar-foot-h, 0px);
+    }
     #primary-sidebar .nav-projects { flex: 0 0 auto; min-height: 0; }
     #primary-sidebar .nav-projects-list { flex: 0 0 auto; overflow-y: visible; }
+    #primary-sidebar .sidebar-foot { display: contents; }
+    #primary-sidebar .sidebar-foot > :first-child { margin-top: var(--space-2); }  /* the box's padding-top */
+    #primary-sidebar .sidebar-foot-meta {
+        position: sticky;
+        bottom: calc(-1 * var(--sidebar-pad-bottom));
+        z-index: 1;
+        margin-bottom: calc(-1 * var(--sidebar-pad-bottom));
+        padding-bottom: var(--sidebar-pad-bottom);
+        background: var(--surface-side);
+    }
 }
 
 .sidebar-head {
@@ -148,8 +173,11 @@ html[data-layout="stack"] .shell-icon-control {
     background: var(--surface-side);
 }
 
+/* The tools follow the Projects; the box takes the column's free room, so its last row, the version and the update,
+   rests on the bottom edge (owner 22.10) whether the list is collapsed, short or scrolling. A window too short for
+   the zones scrolls the whole column instead, and the foot sticks to the bottom edge (the fallback above). */
 .sidebar-foot {
-    flex: 0 0 auto;
+    flex: 1 0 auto;
     display: flex;
     flex-direction: column;
     gap: var(--space-1);
@@ -157,6 +185,7 @@ html[data-layout="stack"] .shell-icon-control {
 }
 
 .sidebar-foot-meta {
+    margin-top: auto;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
@@ -583,7 +612,7 @@ html[data-layout="stack"] .resize-handle { display: none; }
 }
 /* A limitation and its disclosure own the space before Project; never paint over their words. */
 .chat-bubble.project-answer:has(> .project-answer-limitation, > .project-ending-details) { --project-answer-tail: 0px; }
-.chat-bubble.project-answer.is-folded:has(> .project-answer-limitation, > .project-ending-details) > .message {
+.chat-bubble.project-answer.is-folded > .message:has(~ .project-answer-limitation, ~ .project-ending-details) {
     -webkit-mask-image: linear-gradient(180deg, black 60%, transparent 100%);
     mask-image: linear-gradient(180deg, black 60%, transparent 100%);
 }
@@ -1115,12 +1144,25 @@ html[data-layout="docked"] .app-page-header[data-empty] {
     display: none;
 }
 /* In the macOS desktop window the band under the transparent title bar is the window's handle
-   (launcher_window_chrome.py: a plain press there moves the window, a press on a control stays the page's). A
-   header with nothing to show (Widgets) keeps that band as a plain strip, so the page starts below it. */
+   (launcher_window_chrome.py: a plain press there moves the window, a press on a control stays the page's). The band
+   is the window's, not a row of the page: a header with nothing to show lies over the top of its page as that handle
+   (clear of the scrollbar, as a room's strip is), the page's first row starts below the band, and scrolled content
+   passes under it with crisp edges, as a room's feed does. */
 :root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-empty] {
     display: block;
+    position: absolute;
+    inset: 0 6px auto 0;
+    z-index: 2;
     height: var(--window-chrome-top);
     padding: 0;
+}
+:root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-empty] ~ .widgets-scroll {
+    padding-top: calc(var(--space-4) + var(--window-chrome-top));
+}
+/* While a card is dragged the band lets the pointer through to the board, whose top edge is where the engine scrolls
+   a drag upward; at rest the band is the window's handle. */
+:root[data-window-chrome="integrated"][data-layout="docked"] #page-widgets .app-page-header[data-empty]:has(~ .widgets-scroll .widgets-card.dragging) {
+    pointer-events: none;
 }
 
 .app-page-toolbar,
@@ -1181,8 +1223,17 @@ html[data-layout="docked"] .app-page-header[data-lead] {
     min-height: 50px;
     padding-block: 0;
 }
+/* In the macOS window the row is the window's band, so its tabs and actions sit level with the traffic lights at every
+   Interface size: a larger size shrinks the band in CSS px, and the strip's insets shrink with it, the bottom one
+   keeping the tabs' 16px of shadow room (at 100 % they are the 10px and 26px above; once the band is shorter than a
+   control the row grows below the band). */
 :root[data-window-chrome="integrated"][data-layout="docked"] .app-page-header[data-lead] {
-    min-height: max(50px, var(--window-chrome-top));
+    --lead-inset: min(10px, max(0px, calc((var(--window-chrome-top) - var(--chrome-control-h)) / 2)));
+    min-height: var(--window-chrome-top);
+}
+:root[data-window-chrome="integrated"][data-layout="docked"] .app-page-lead .app-tab-strip {
+    padding-top: var(--lead-inset);
+    padding-bottom: calc(16px + var(--lead-inset));
 }
 html[data-layout="docked"] .app-page-header[data-lead] > .app-page-leading { display: none; }
 html[data-layout="docked"] .app-page-header[data-lead] > .app-page-toolbar :is(.btn, button) {
@@ -2998,7 +3049,7 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     display: none;
 }
 
-.chat-live-card.subagent:not(:has(> .chat-live-foot > .chat-live-meta:not(:empty), > .chat-live-foot > .chat-live-foot-end > .chat-live-review-summary:not([hidden]), > .chat-live-foot > .chat-live-foot-end > .chat-live-actions:not(:empty))) > .chat-live-summary-button {
+.chat-live-card.subagent > .chat-live-summary-button:not(:has(~ .chat-live-foot > .chat-live-meta:not(:empty), ~ .chat-live-foot > .chat-live-foot-end > .chat-live-review-summary:not([hidden]), ~ .chat-live-foot > .chat-live-foot-end > .chat-live-actions:not(:empty))) {
     padding-bottom: var(--space-2);
 }
 
@@ -3624,10 +3675,12 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     line-height: var(--line-meta);
 }
 
-/* A touch keyboard zooms into a field under 16px: the guard follows the pointer, not a width. */
+/* A touch keyboard zooms into a field under 16px: the guard follows the pointer, not a width. Below 100 % interface
+   size (theme.js) the field keeps 16 device px, so a smaller page never makes the keyboard zoom in. */
 @media (pointer: coarse) {
-    textarea, input[type="text"], input[type="password"], input[type="email"], select {
-        font-size: 16px !important;
+    textarea, select, input:not([type]), [contenteditable]:not([contenteditable="false"]),
+    input:is([type="text"], [type="search"], [type="email"], [type="url"], [type="tel"], [type="password"], [type="number"]) {
+        font-size: max(16px, calc(16px / var(--interface-scale, 1))) !important;
     }
 }
 
@@ -3719,7 +3772,8 @@ html[data-layout="stack"] #primary-sidebar {
     opacity: 0.5;
     transition: transform var(--drawer-settle, var(--motion-close)) var(--ease-sheet),
         opacity var(--drawer-settle, var(--motion-close)) ease;
-    padding-bottom: calc(var(--space-3) + var(--inset-bottom));
+    --sidebar-pad-bottom: calc(var(--space-3) + var(--inset-bottom));
+    padding-bottom: var(--sidebar-pad-bottom);
     touch-action: pan-y;  /* a sideways finger is the drawer's (drawer_drag.js); up and down scroll the list */
 }
 /* The same on the room: a page's vertical scroller hands a sideways finger to the drawer. touch-action starts over
@@ -7328,7 +7382,7 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
     align-items: stretch;
     margin: var(--space-1) 0 var(--space-2);
     /* As tall as its rows, shrinking to scroll them when they do not fit: the tools follow it, so a short or
-       collapsed list leaves its room under the last row, never between the zones. */
+       collapsed list leaves its room above the foot, never between the list and the tools. */
     flex: 0 1 auto;
     min-height: 0;
 }
@@ -7475,8 +7529,8 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
 
 @media (hover: hover) {
     .nav-projects-facts:hover,
-    .nav-projects-header:has(> .nav-projects-facts:hover) > .nav-section-toggle,
-    .nav-projects-header:has(> .nav-section-toggle:hover) > .nav-projects-facts {
+    .nav-projects-header > .nav-section-toggle:has(~ .nav-projects-facts:hover),
+    .nav-projects-header > .nav-section-toggle:hover ~ .nav-projects-facts {
         background: var(--tone-quiet-hover);
         color: var(--text-primary);
     }
@@ -7864,11 +7918,12 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
     padding-bottom: 0;
 }
 .project-panel .chat-instance-panel .chat-messages {
-    padding-top: var(--chat-header-reserve, 56px);
+    padding-top: var(--chat-feed-reserve, var(--chat-header-reserve, 56px));
 }
-/* The note already reserves the floating bar. With a keyboard both are in flow. */
-.project-panel .chat-panel-statusbar:has(> :not([hidden])) + .chat-messages {
-    padding-top: 8px;
+/* The note already reserves the floating bar. With a keyboard both are in flow. The room asks and its feed inherits
+   the answer: :has() stays in its subject compound (DEVELOPMENT "Design System"). */
+.project-panel .chat-instance-panel:has(> .chat-panel-statusbar > :not([hidden])) {
+    --chat-feed-reserve: 8px;
 }
 body.keyboard-open .project-panel .chat-panel-statusbar { padding-top: 8px; }
 body.keyboard-open .project-panel .chat-instance-panel .chat-messages {
@@ -9873,7 +9928,7 @@ body.keyboard-open .project-panel {
    the time under the doubt's actions then keeps clear of the Reply / Copy targets that sit on its line. */
 @media (pointer: coarse) {
     .chat-clamp-toggle, .msg-pending .btn { min-height: var(--touch-target-min); }
-    .chat-bubble:is(.has-reply, .has-copy) > .msg-pending:has(.btn) + .msg-time { margin-top: var(--space-3); }
+    .chat-bubble:is(.has-reply, .has-copy) > .msg-pending:has(.btn):has(+ .msg-time) { margin-bottom: var(--space-3); }
 }
 
 .chat-copy-fallback {

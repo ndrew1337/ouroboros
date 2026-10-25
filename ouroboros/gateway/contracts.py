@@ -686,6 +686,7 @@ class ActiveDirectTurn(TypedDict):
     model_waits: NotRequired[Dict[str, Any]]
     model_activity: NotRequired[Dict[str, Any]]  # content-free observation bound to the active Main call
     task_attempt: NotRequired[int]
+    turn_phase: NotRequired[str]  # the last start fact its execution passed (TURN_PHASES); display only
 
 
 class ActiveChatActivity(ActiveDirectTurn):  # global root census; phase and control facts keep their own authority

@@ -78,6 +78,7 @@ _SCHEMA = """
         room TEXT NOT NULL, target TEXT NOT NULL, body TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS room_records ON records(room, kind, sequence);
     CREATE INDEX IF NOT EXISTS target_records ON records(target, sequence);
+    CREATE INDEX IF NOT EXISTS page_authors ON records(json_extract(body, '$.author.task_id')) WHERE kind='page';
     CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS active_marks (
         id TEXT PRIMARY KEY, room TEXT NOT NULL, scope TEXT NOT NULL,
@@ -530,9 +531,12 @@ class ChronicleStore:
                                       "accepted": bool(accepted), "reason": reason, "author": author}])
 
     def mark(self, target_ref: Dict[str, Any], text: str, author: Dict[str, Any], *, room_id: Any,
-             scope: str = "room", quote: Optional[str] = None, record_id: Optional[str] = None) -> PublishResult:
+             scope: str = "room", quote: Optional[str] = None, record_id: Optional[str] = None,
+             anchor: Optional[Dict[str, Any]] = None) -> PublishResult:
         record = {"kind": "mark", "room_id": str(room_id), "target_ref": target_ref, "text": text,
                   "author": author, "scope": scope, "quote": quote, "visibility": "full"}
+        if anchor is not None:
+            record["anchor"] = anchor  # an action the mark meets me at (``mark_anchors``)
         if record_id:
             record["id"] = str(record_id)
         return self.publish([record])
@@ -775,6 +779,11 @@ class ChronicleStore:
     def _rule_mark(self, db, record):
         if record.get("scope", "room") not in ("room", "global"):
             return _refuse("invalid", "scope is room or global")
+        if "anchor" in record:
+            from ouroboros.mark_anchors import anchor_problem
+
+            if problem := anchor_problem(record["anchor"]):
+                return _refuse("invalid", problem)
         target = record.get("target_ref")
         if not isinstance(target, dict) or not target:
             return _refuse("invalid", "target_ref names a chronicle record, chat row, task or retained source")
@@ -1066,12 +1075,23 @@ class ChronicleStore:
             effective = [r for r in (self._interpret(db, row) for row in rows) if r.get("status") not in ("rejected", "candidate")]
             return sorted(effective, key=lambda r: self._order_key(db, r, cache))
 
-    def pending_candidates(self) -> List[Dict[str, Any]]:
-        """Signed drafts visible to a wake for decision, without acting coverage or story residency."""
+    def pending_candidates(self, room_id: Any = None) -> List[Dict[str, Any]]:
+        """Signed drafts visible to a wake for decision (one room's when named), without acting
+        coverage or story residency."""
         with self._index() as db:
             rows = [{**json.loads(body), "sequence": seq} for seq, body in db.execute(
-                "SELECT sequence,body FROM records WHERE kind='page' ORDER BY sequence")]
+                "SELECT sequence,body FROM records WHERE kind='page'" + (" AND room=?" if room_id is not None else "")
+                + " ORDER BY sequence", () if room_id is None else (str(room_id),))]
             return [self._interpret(db, row) for row in rows if self._status(db, row) == "candidate"]
+
+    def mind_page_authors(self, task_ids: Iterable[str]) -> set:
+        """Which of these tasks published a page as the mind: an addressed lookup on the page
+        author index, never a read of every page."""
+        with self._index() as db:
+            return {author for (author,) in db.execute(
+                "SELECT DISTINCT json_extract(body, '$.author.task_id') FROM records WHERE kind='page' "
+                "AND json_extract(body, '$.author.task_id') IN (SELECT value FROM json_each(?)) "
+                "AND json_extract(body, '$.author.kind')='mind'", (_json(sorted(map(str, task_ids))),))}
 
     def accounts(self) -> List[Dict[str, Any]]:
         """Every account, interpreted (sources with their later changes, the acting selection), in publication order."""

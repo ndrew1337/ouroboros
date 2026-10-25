@@ -87,19 +87,6 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
     print('PARITY ' + json.dumps(dict(extra_chars=extra_chars, fresh=fresh, session=result), sort_keys=True))
 
 
-def test_nano_composition_names_the_reader_not_the_unheld_pattern_body(tmp_path):
-    from ouroboros.section_floor import HostSection
-
-    core = scale.core(tmp_path)
-    core = replace(core, dynamic_head_sections=(*core.dynamic_head_sections,
-                   HostSection('pattern_register', 'Patterns ' * 8000)))
-    result = measure_core(core, scale.tools(), root=tmp_path, window=92000, reserve=10000)
-    row, = [row for row in result['blocks'] if row['block'] == 'pattern_register']
-    assert result['mode'] == 'nano' and row['form'] == 'reader' and row['tokens'] < 100
-    assert all(row['tokens'] >= 0 for row in result['blocks']), result
-    assert sum(row['tokens'] for row in result['blocks']) == result['input_tokens']
-
-
 @pytest.mark.parametrize('provider', ['gemini_live', 'grok_realtime', 'openai_realtime'])
 def test_bundled_session_diagnostic_is_offline_and_discloses_its_inputs(tmp_path, monkeypatch, provider):
     import socket

@@ -684,19 +684,23 @@ export function createRoomWork({
     }
 
     // The word goes whole or not at all (DESIGN "Shell"): shown, measured, dropped when the row would cut it, in one
-    // task so nothing paints between; the mark stays and the control's name keeps the word. Measured again when the
-    // word, mark or available width changes. Remember the capsule's width AFTER fitting, so observing its
-    // content-sized box does not feed a hide/show cycle back into the ResizeObserver.
+    // task so nothing paints between; a preparing turn's start step beside it (the badge's data-step) goes first. The
+    // mark stays and the control's name keeps the whole status. Measured again when the word, step, mark or available
+    // width changes. Remember the capsule's width AFTER fitting, so observing its content-sized box does not feed a
+    // hide/show cycle back into the ResizeObserver.
     let fittedWord = null, fittedWidth = null, fitNeeded = false;
     function fitWord() {
         if (destroyed) return;
         delete trigger.dataset.word;
-        if (statusBadge.scrollWidth > statusBadge.clientWidth + 1) trigger.dataset.word = 'off';
+        delete trigger.dataset.step;
+        const cut = () => statusBadge.scrollWidth > statusBadge.clientWidth + 1;
+        if (statusBadge.dataset.step && cut()) trigger.dataset.step = 'off';
+        if (cut()) trigger.dataset.word = 'off';
         fittedWidth = titleRow?.clientWidth;
     }
 
     function paintTrigger() {
-        const text = clean(statusBadge.textContent);
+        const text = [clean(statusBadge.textContent), clean(statusBadge.dataset.step)].filter(Boolean).join(' · ');
         const listed = rows.length > 0;
         // Word, tone, mark and what waits for the owner come together from the chat's producer
         // (work_status.roomStatusView via setStatus); the control paints them and never ranks row tones or reads a
@@ -707,7 +711,7 @@ export function createRoomWork({
         trigger.dataset.tone = tone;
         trigger.dataset.open = open ? '1' : '0';
         trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
-        trigger.title = text;  // the whole status word, never clipped away (an extra, not the only path)
+        trigger.title = text;  // the whole status, never clipped away (an extra, not the only path)
         caret.hidden = !listed;
         // The work's shape in the word's ink; while something in the room waits for the owner (a question, or an action
         // only the owner takes) the amber dot takes its place and the word keeps its own ink: Working with a question

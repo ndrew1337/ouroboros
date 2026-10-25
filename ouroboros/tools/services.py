@@ -247,6 +247,8 @@ def _finalize_service_log_for_drive(
             result["errors"].append(f"delete: {type(exc).__name__}: {exc}")
     elif log_path.exists():
         result["retained_live_log_path"] = str(log_path)
+        from ouroboros.maintenance_retirement import artifact_changed
+        artifact_changed(drive_root, timestamp=log_path.stat().st_mtime)
     return result
 
 
@@ -606,6 +608,8 @@ def _start_service(
     service_base_env = candidate_env if candidate_env is not None else _service_env()
 
     log_fh = log_path.open("ab")
+    from ouroboros.maintenance_retirement import artifact_changed
+    artifact_changed(ctx.drive_root)
     try:
         bootstrap_process_path()
         # Supervised spawn: the durable custody record means a SIGKILLed worker
@@ -1054,7 +1058,7 @@ def prune_service_logs(
 ) -> Dict[str, Any]:
     """Archive old logs only after local and durable process custody release their writers."""
     from ouroboros import body_candidate
-    from ouroboros.retention import age_cutoff, get_gc_retention_days
+    from ouroboros.retention import age_cutoff, get_gc_retention_days, keep_until
 
     # Explicit overrides are honored as-is (age_cutoff floors at 0 => explicit 0
     # prunes everything before `now`), uniform with the worktree/task prunes; only
@@ -1087,6 +1091,8 @@ def prune_service_logs(
                     child_stat = child.lstat()
                 except OSError:
                     continue
+                if stat.S_ISREG(child_stat.st_mode) and child_stat.st_mtime >= cutoff:
+                    keep_until(report, child_stat.st_mtime, retention_days)
                 if stat.S_ISREG(child_stat.st_mode) and child_stat.st_mtime < cutoff:
                     facts = service_execution_facts(f"{task_dir.name}:{child.stem}")
                     if facts is None and child.stem.endswith(".executor"):
