@@ -48,6 +48,7 @@ class PresenceTurnEvent:
     # (``presence_continuation``): 1 lets the transport take the initial envelope early.
     continuation_version: int = 0
     facts: tuple[str, ...] | None = None
+    identity: Mapping[str, Any] | None = None
 
 
 def presence_event_origin(payload: Any) -> dict[str, str]:
