@@ -411,10 +411,9 @@ def register(api):
         key = api.get_settings(['XAI_API_KEY']).get('XAI_API_KEY')
         if not isinstance(key, str) or not key.strip():
             raise RealtimeSetupError('credential', 'Grok Voice requires a granted XAI_API_KEY')
-        from websockets.legacy.client import connect
-        async with connect(ENDPOINT + '?' + urlencode({'model': model}),
-                           extra_headers={'Authorization': 'Bearer ' + key},
-                           open_timeout=10, close_timeout=3, max_size=None) as ws:
+        from ouroboros.realtime_session import connect_provider
+        async with connect_provider(ENDPOINT + '?' + urlencode({'model': model}),
+                                    headers={'Authorization': 'Bearer ' + key}) as ws:
             yield ws
 
     def session(selected, options, *, observe, connect=None):

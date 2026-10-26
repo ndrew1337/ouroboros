@@ -12,6 +12,20 @@ import json
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 
 
+def connect_provider(uri, *, headers):
+    """Share flow control for data, keepalive and automatic control frames.
+
+    The asyncio connection owns one drain waiter per writer and removes it on
+    cancellation. Legacy's single waiter races with ping/pong even when our JSON
+    sends are locked. Keep native heartbeat detection and the prior direct route.
+    """
+    from websockets.asyncio.client import connect
+
+    return connect(uri, additional_headers=headers, proxy=None,
+                   open_timeout=10, close_timeout=3, max_size=None,
+                   ping_interval=20, ping_timeout=20)
+
+
 async def joined(awaitable):
     """Settle owned work, then propagate cancellation of its waiter."""
     task = asyncio.ensure_future(awaitable)

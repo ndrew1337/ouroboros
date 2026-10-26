@@ -580,9 +580,8 @@ def register(api):
         key = api.get_settings(['GEMINI_API_KEY']).get('GEMINI_API_KEY')
         if not isinstance(key, str) or not key.strip():
             raise RealtimeSetupError('credential', 'Gemini Live requires a granted GEMINI_API_KEY')
-        from websockets.legacy.client import connect
-        async with connect(ENDPOINT, extra_headers={'x-goog-api-key': key},
-                           open_timeout=10, close_timeout=3, max_size=None) as ws:
+        from ouroboros.realtime_session import connect_provider
+        async with connect_provider(ENDPOINT, headers={'x-goog-api-key': key}) as ws:
             yield ws
 
     def session(selected, options, *, observe, connect=None):

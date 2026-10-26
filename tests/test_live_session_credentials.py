@@ -55,12 +55,12 @@ def test_open_pins_the_reprepared_account_despite_another_settings_edit(host_wor
     @asynccontextmanager
     async def socket(url, **kwargs):
         expected = 'synthetic-second' if not opened else 'synthetic-third'
-        assert kwargs['extra_headers']['Authorization'] == 'Bearer ' + expected
+        assert kwargs['additional_headers']['Authorization'] == 'Bearer ' + expected
         opened.append(expected)
         yield Wire('openai')
 
-    import websockets.legacy.client
-    monkeypatch.setattr(websockets.legacy.client, 'connect', socket)
+    import websockets.asyncio.client
+    monkeypatch.setattr(websockets.asyncio.client, 'connect', socket)
     monkeypatch.setattr(host, 'check', edit_before_open)
     monkeypatch.setattr(observability, 'persist_physical_candidate', edit_while_reprepared)
 

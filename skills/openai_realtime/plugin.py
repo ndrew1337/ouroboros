@@ -147,12 +147,11 @@ def register(api):
         key = api.get_settings(["OPENAI_API_KEY"]).get("OPENAI_API_KEY")
         if not isinstance(key, str) or not key.strip():
             raise RealtimeSetupError("credential", "OpenAI Realtime requires a granted OPENAI_API_KEY")
-        from websockets.legacy.client import connect
+        from ouroboros.realtime_session import connect_provider
 
-        async with connect(
+        async with connect_provider(
             ENDPOINT + "?" + urlencode({"model": model}),
-            extra_headers={"Authorization": "Bearer " + key},
-            open_timeout=10, close_timeout=3, max_size=None,
+            headers={"Authorization": "Bearer " + key},
         ) as ws:
             yield ws
 

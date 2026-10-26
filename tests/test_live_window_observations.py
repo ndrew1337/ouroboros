@@ -183,12 +183,12 @@ def test_acceptance_belongs_to_the_account_the_connector_opened(host_world, monk
     async def fake_socket(url, **kwargs):
         # Exercise the shipped connector, including its late get_settings read.
         # The header is synthetic; no real credential or network is involved.
-        assert kwargs['extra_headers']['Authorization'] == 'Bearer second-synthetic-account'
+        assert kwargs['additional_headers']['Authorization'] == 'Bearer second-synthetic-account'
         opened_scopes.append(host.turn.observation_fingerprint())
         yield Wire('openai')
 
-    import websockets.legacy.client
-    monkeypatch.setattr(websockets.legacy.client, 'connect', fake_socket)
+    import websockets.asyncio.client
+    monkeypatch.setattr(websockets.asyncio.client, 'connect', fake_socket)
 
     async def controls_with_settings_edit():
         nonlocal checks
