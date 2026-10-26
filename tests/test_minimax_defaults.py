@@ -3,9 +3,9 @@ import json
 
 import pytest
 
-from tests._safety_fixtures import settings_install
+from tests._safety_fixtures import settings_install as install_fixture
 
-install = settings_install
+install = install_fixture
 
 
 MAIN = "minimax::MiniMax-M3"
