@@ -350,6 +350,7 @@ ouroboros/ — agent core and shared runtime (§6)
   extension_plugin_api.py, extension_registry_state.py, extension_liveness.py, extension_child_catalog.py, extension_import_staging.py, extension_surface_names.py — the extension runtime's leaves: the `PluginAPI`, live-surface registries, liveness, child-catalog validation, staged import trees, surface naming
   live_conversation.py — Ordinary actor host port: common context, tools, history, money and Stop (§13)
   realtime_session.py — Joined native socket teardown and JSON transport mechanics
+  realtime_item_echo.py — Shared item acknowledgement comparison: image parts by type, other payloads exact
   call_peers.py, call_protocol.py — Media peers, PCM mixing and the companion codec (§12)
   presence_call.py, presence_events.py — Presence call admission and shared event identity (§12)
   realtime_turn.py, realtime_setup.py, realtime_credentials.py — call route evidence, host-selected provider input and the one credential capture a session prepares and opens with (§13)

@@ -30,6 +30,8 @@ Thoughts/completion read bounded chat/progress windows from `state/dialog.sqlite
 
 Updates compare candidate/optional local digests: Replace keeps `.previous`, Keep skips, Merge starts an owner task. `pending_update` names the candidate release; payload/lifecycle snapshots are retained separately for review-basis updates. Completion/Skip/startup settle in the lane: accept executable bytes or restore/reconcile; review/preflight/landing/dependency failures record `update_rejected`. Startup spares live reviews. The pre-update record restores an interrupted landing; superseded installs discard snapshots. Partial restores keep evidence, never replace twice. No-review updates bind `owner_skip` to bytes. Starters accept any source (absent/blank: defaults; `[]`: none); `OUROBOROS_STARTER_SKILLS_TURN_ON` defaults true (§7). Built-ins precede Git fetches.
 
+A changed built-in payload must bump its manifest version, or existing installs keep the old files; owner-edited copies remain protected.
+
 ClawHub lands atomically with file hashes; direct review attempts precede `skill_dependencies.ensure_skill_dependencies`, callers own deferred review/acceptance. It uses current hash-bound admission despite review errors. Accepted specs allow literal build/check argv (`marketplace/install_specs.py`); manual steps are guidance. Caches: `state/skills/<name>/dependency_cache`; results: `deps.json`; absent checks stay unknown, drift invalidates readiness. `removal_action` names removal; `provenance.py` clears only the local receipt. Runtimes: `tools/skill_exec.py`, `docs/CREATING_SKILLS.md`.
 
 ### Tool result views

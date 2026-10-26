@@ -14,6 +14,7 @@ from dataclasses import replace
 from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 from ouroboros.realtime_session import JsonSession
+from ouroboros.realtime_item_echo import item_matches
 from . import _OUTPUT_FIELD_MAX, _tools, _usage, layout
 
 
@@ -145,7 +146,7 @@ class OpenAISession(JsonSession):
                     break
                 if kind == "conversation.item.done" and outgoing.get("item", {}).get("id") == event.get("item", {}).get("id"):
                     actual, sent = event["item"], outgoing["item"]
-                    if any(actual.get(k) != v for k, v in sent.items()):
+                    if not item_matches(sent, actual):
                         raise RealtimeSetupError("item_mismatch", "OpenAI changed selected input")
                     expected = outgoing["previous_item_id"]
                     if event.get("previous_item_id") not in ({None, "root"} if expected == "root" else {expected}):
@@ -241,7 +242,7 @@ class OpenAISession(JsonSession):
         if kind == "conversation.item.done":
             actual = event.get("item", {})
             sent = self.outstanding.pop(actual.get("id"), None)
-            if sent and any(actual.get(k) != v for k, v in sent.items()):
+            if sent and not item_matches(sent, actual):
                 raise RealtimeSetupError("item_mismatch", "OpenAI changed host context or tool output")
         if kind == "conversation.item.deleted":
             raise RealtimeSetupError("provider_truncation", "OpenAI deleted conversation input")

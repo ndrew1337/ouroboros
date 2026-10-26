@@ -14,6 +14,7 @@ from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrup
 from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
                                           RouteFacts, canonical_json)
 from ouroboros.realtime_session import JsonSession
+from ouroboros.realtime_item_echo import item_matches
 
 ENDPOINT = 'wss://api.x.ai/v1/realtime'
 ROUTE = RealtimeRoute('grok_realtime', ENDPOINT, 'xai::')
@@ -196,7 +197,7 @@ class GrokSession(JsonSession):
                     break
                 if item_ack(incoming) and incoming.get('item', {}).get('id') == outgoing.get('item', {}).get('id'):
                     actual = incoming['item']
-                    if any(actual.get(k) != v for k, v in outgoing['item'].items()):
+                    if not item_matches(outgoing['item'], actual):
                         raise RealtimeSetupError('item_mismatch', 'Grok changed selected input')
                     break
                 if kind and kind.startswith('response.'):
@@ -304,7 +305,7 @@ class GrokSession(JsonSession):
         if item_ack(event):
             actual = event.get('item', {})
             sent = self.outstanding.pop(actual.get('id'), None)
-            if sent and any(actual.get(k) != v for k, v in sent.items()):
+            if sent and not item_matches(sent, actual):
                 raise RealtimeSetupError('item_mismatch', 'Grok changed host context or tool output')
         if kind == 'conversation.item.deleted':
             raise RealtimeSetupError('provider_truncation', 'Grok removed selected conversation input')

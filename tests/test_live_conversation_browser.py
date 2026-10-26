@@ -466,6 +466,7 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     by_id = {catalog['id']: catalog for catalog in catalogs}
     expect(form.locator('[name="provider"] option')).to_have_count(len(catalogs))
     assert form.locator('[name="provider"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == list(by_id)
+    expect(form.locator('.settings-extension-actions > button[type="submit"]')).to_be_enabled()
 
     def assert_catalog_model(catalog, model):
         assert form.locator('[name="model"] option').evaluate_all('(nodes) => nodes.map(n => n.value)') == [
@@ -540,6 +541,62 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     navigate(page, 'chat')
     assert page.locator("[data-call-entry='talk']").count() == 0
     assert not subscription_ui['errors']
+
+
+@pytest.mark.parametrize('provider', ['gemini_live:gemini', 'grok_realtime:grok'])
+def test_settings_engine_switch_saves_through_config_and_survives_reload(subscription_ui, monkeypatch, tmp_path, provider):
+    """Real Settings DOM and config persistence; media and credential availability are synthetic."""
+    from concurrent.futures import ThreadPoolExecutor
+    from playwright.sync_api import expect
+    from skills.live_conversation import plugin
+    from tests.test_live_conversation_config import API, request
+
+    catalogs = [(f'{skill}:{name}', importlib.import_module(f'skills.{skill}.plugin').CATALOG)
+                for skill, name in [('gemini_live', 'gemini'), ('grok_realtime', 'grok'), ('openai_realtime', 'openai')]]
+    monkeypatch.setattr(plugin, 'registered_catalogs', lambda: catalogs)
+    monkeypatch.setattr(plugin, 'call_offer', lambda config: {'offered': config.enabled})
+    api = API(tmp_path)
+    plugin.register(api)
+    page, _ = open_call_ui(subscription_ui, monkeypatch, width=1280, scheme='light', engine='openai')
+    # Playwright's sync callbacks run on its event loop. The real async config
+    # handler runs in this owned thread, writing only this test's state directory.
+    with ThreadPoolExecutor(max_workers=1) as server:
+        status, _ = server.submit(request, api, {'enabled': True, 'provider': 'openai_realtime:openai'}).result(timeout=5)
+        assert status == 200
+
+        def config_route(route):
+            body = route.request.post_data_json if route.request.method == 'POST' else None
+            status, value = server.submit(request, api, body).result(timeout=5)
+            route.fulfill(status=status, content_type='application/json', body=json.dumps(value))
+
+        page.route('**/api/extensions/live_conversation/config', config_route)
+        navigate(page, 'settings')
+        page.locator('[data-settings-tab="advanced"]').click()
+        form = page.locator('[data-extension-settings-form][data-skill="live_conversation"]')
+        choices = form.locator('[name="provider"]')
+        save = form.locator('.settings-extension-actions > button[type="submit"]')
+        expect(choices.locator('option')).to_have_count(len(catalogs))
+        assert choices.locator('option').evaluate_all('(nodes) => nodes.map(n => n.value)') == [key for key, _ in catalogs]
+        expect(choices).to_have_value('openai_realtime:openai')
+        expect(save).to_be_enabled()
+        choices.select_option(provider)
+        with page.expect_response(lambda response: response.url.endswith('/live_conversation/config')
+                                  and response.request.method == 'POST'
+                                  and response.request.post_data_json.get('provider') == provider) as saved:
+            save.click()
+        assert saved.value.status == 200
+        assert saved.value.json()['provider'] == provider
+        assert json.loads((tmp_path / 'feature/conversation.json').read_text())['provider'] == provider
+        assert api.feature['configure']().provider == provider
+        page.reload()
+        page.wait_for_selector('#chat-input')
+        navigate(page, 'settings')
+        page.locator('[data-settings-tab="advanced"]').click()
+        expect(choices).to_have_value(provider)
+        expect(choices.locator('option')).to_have_count(len(catalogs))
+        expect(save).to_be_enabled()
+        assert not subscription_ui['errors']
+        page.unroute('**/api/extensions/live_conversation/config', config_route)
 
 
 def test_settings_device_change_reaches_live_call_without_stealing_its_capture(subscription_ui, monkeypatch):
