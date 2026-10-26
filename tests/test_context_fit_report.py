@@ -30,7 +30,8 @@ def test_measurement_uses_ordinary_scale_fitter_and_composition(tmp_path, monkey
     print('SCALE_COMPARISON ' + json.dumps({'before': before, 'after': result}, sort_keys=True))
 
 
-def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize('stored_tail', [False, True])
+def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys, stored_tail):
     import socket
     from ouroboros import agent_startup_checks
     from devtools.context_fit_report import main
@@ -40,6 +41,18 @@ def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(socket.socket, 'connect', forbidden)
     monkeypatch.setattr(agent_startup_checks, 'check_stray_server_processes', forbidden)
     root = scale.write_root(tmp_path / 'data')
+    if stored_tail:
+        from ouroboros import dialogue_store, memory_inventory
+        from ouroboros.chronicle_store import ChronicleStore
+
+        filled = memory_inventory.fill_tail(root, lambda: False)
+        assert filled['state'] == 'done' and filled['items'] > 0, filled
+        assert ChronicleStore(root).tail_state()['complete']
+        # The server opportunistically extends this complete cache on its next
+        # read. The diagnostic must read the new row without publishing a cache.
+        dialogue_store.append(root, 'chat', {'chat_id': 1, 'direction': 'in',
+            'text': 'The owner spoke after the stored tail was filled.',
+            'ts': '2026-10-23T01:00:00+00:00', 'client_message_id': 'after-tail'})
     before = fingerprint(root)
     connected = []
     original = sqlite3.connect
@@ -68,6 +81,20 @@ def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys):
     assert fingerprint(root) == before_snapshot
     print('SCALE_ROOT_REPORT ' + json.dumps(result, sort_keys=True))
     print('SCALE_ROOT_SNAPSHOT_REPORT ' + json.dumps(copied, sort_keys=True))
+
+
+def test_readonly_tail_reads_new_rows_without_extending_the_stored_cache(tmp_path):
+    from ouroboros import dialogue_store, memory_inventory
+    from tests import _memory_inventory_shared as shared
+
+    shared.world(tmp_path)
+    assert memory_inventory.fill_tail(tmp_path, lambda: False) == {'state': 'done', 'items': 10}
+    dialogue_store.append(tmp_path, 'chat', shared.msg('2026-10-23T01:00:00+00:00', 'After the stored tail'))
+    before = fingerprint(tmp_path)
+    with readonly_inputs(tmp_path):
+        rows = memory_inventory.rows_after_frontier(tmp_path)
+        assert len(rows) == 11
+    assert fingerprint(tmp_path) == before
 
 
 def test_live_pid_and_kernel_lock_refuse_without_snapshot(tmp_path):

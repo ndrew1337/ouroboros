@@ -882,7 +882,8 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # (the records row), and the seat homes the owner's Storage -> Free lists
 # (``review_checking_prune.finished_seat_homes``, the seats row).
 # 425 -> 428: live wire evidence, the extension import lock and live tariff cache.
-EXPECTED_SCAN_PATHS = 428
+# 428 -> 429: state/openrouter_models.json, the shared OpenRouter catalogue.
+EXPECTED_SCAN_PATHS = 429
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
