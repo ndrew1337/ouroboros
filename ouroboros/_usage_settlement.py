@@ -11,8 +11,7 @@ import copy
 from collections.abc import Mapping
 from typing import Any, Dict
 
-from ouroboros._usage_response import _reported_token_count, processing_receipt, observed_processing_mode
-from ouroboros.usage_ledger import _number
+from ouroboros._usage_response import _reported_token_count, processing_receipt, observed_processing_mode, provider_cost_value
 
 
 def has_nontext_usage(usage) -> bool:
@@ -48,7 +47,9 @@ def settlement_fields(reservation, usage, cost_usd, cost_final, *, estimate_cost
     completion_tokens = _reported_token_count(normalized, "completion_tokens", "output_tokens")
     cached_tokens = _reported_token_count(normalized, "cached_tokens")
     cache_write_tokens = _reported_token_count(normalized, "cache_write_tokens")
-    cost = _number(cost_usd)
+    cost = provider_cost_value(cost_usd)
+    if cost_usd is not None and cost is None:
+        normalized["cost_invalid"] = True
     pricing_mode = observed_processing_mode(reservation.provider, normalized)
     has_usage = bool((prompt_tokens or 0) or (completion_tokens or 0))
     if cost is None and str(reservation.provider or "").lower() == "local":
@@ -87,6 +88,6 @@ def settlement_fields(reservation, usage, cost_usd, cost_final, *, estimate_cost
         cached_tokens=cached_tokens,
         cache_write_tokens=cache_write_tokens,
         prompt_cache_ttl=str(normalized.get("prompt_cache_ttl") or ""),
-        **{key: copy.deepcopy(normalized[key]) for key in ("effort", "effort_resolution", "processing", "speed", "service_tier", "cost_basis", "cost_coverage", "price_source")
+        **{key: copy.deepcopy(normalized[key]) for key in ("effort", "effort_resolution", "processing", "speed", "service_tier", "cost_basis", "cost_coverage", "price_source", "cost_invalid")
            if key in normalized},
     )

@@ -133,7 +133,8 @@ def test_foreign_work_retains_server_pointer_in_scratch_not_inline_json(tmp_path
             return measure_core(core, scale.tools(), root=root, window=92000, reserve=10000)
         old_fit, new_fit = measured(old), measured(actual)
     assert fingerprint(root) == before
-    assert len(old) > 24000 and len(actual) < 500
+    # The target's geometry/write-rights guidance also belongs in the diagnostic.
+    assert len(old) > 24000 and len(actual) == 519
     assert old_fit['verdict'] == 'MinimumViewUnfit', old_fit
     assert new_fit['verdict'] == 'fits', new_fit
     assert new_fit['profile'] == 'task_local_nano'

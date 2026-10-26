@@ -100,7 +100,8 @@ export function mountCallSettings(form, { skill, env = globalThis, read = () => 
         paint();
         devices = form.ownerDocument.createElement('div');
         devices.innerHTML = devicesHtml();
-        form.insertBefore(devices, save);
+        // The host groups Save with optional actions such as Edit anyway.
+        form.insertBefore(devices, save.closest('.settings-extension-actions') || save);
         stopDevices = bindDeviceSettings(devices, env);
         delete form.dataset.extensionSettingsBlocked;
         save.disabled = false;

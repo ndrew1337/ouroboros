@@ -11,7 +11,8 @@ test('only a successful extension form Save announces changed settings', async (
     const status = { dataset: {}, textContent: '' }, button = {};
     const form = { dataset: { skill:'test-skill', route:'save', extensionSettingsKey:'test-skill:save' },
         addEventListener(name, handler) { if (name === 'submit') submit = handler; },
-        querySelector: selector => selector.includes('status') ? status : button };
+        querySelector: selector => selector === '[data-extension-settings-status]' ? status
+            : selector === 'button[type="submit"]' ? button : null };
     const host = { innerHTML:'', querySelectorAll: () => [form] };
     const root = { querySelector: () => host };
     try {
