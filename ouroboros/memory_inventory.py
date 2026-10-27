@@ -68,7 +68,7 @@ MAIN_ROOM = 1
 _META_FIELDS = ("chat_id", "ts", "type", "direction", "task_id", "parent_task_id", "root_task_id",
                 "client_message_id", "subagent_task_id", "delegation_role", "subagent_role", "initiator",
                 "summary_kind", "sender_label", "username", "author", "source", "transport",
-                "status", "outcome", "outcome_phase", "reason_code", "result_ref", "presence", "presence_provenance")
+                "status", "outcome", "outcome_phase", "reason_code", "result_ref", "presence", "presence_provenance", "host_fact")
 _MEMBERSHIP_FIELDS = ("chat_id", "ts", "type", "task_id", "parent_task_id", "root_task_id", "source_keys")
 
 Entry = Tuple[Dict[str, Any], Dict[str, Any], int]
@@ -192,6 +192,7 @@ def _tail_source(root: Any, frontier: Mapping[str, Any]) -> Dict[str, Any]:
     from ouroboros.store import file_identity
 
     return {"store": list(file_identity(ds.path(root)) or ()), "frontier": int(frontier["pos"]),
+            "meta_fields": list(_META_FIELDS),  # old stored projections must not lose newly retained provenance
             "text_revision": int(ds.meta(root, "chat_text_revision") or 0)}
 
 

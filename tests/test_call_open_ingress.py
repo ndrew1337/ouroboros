@@ -113,3 +113,39 @@ def test_browser_fields_cannot_mint_a_host_opening(monkeypatch, tmp_path, forged
     [update] = bridge.get_updates(offset=0, timeout=0)
     assert "host_fact" not in update["message"]["task_metadata"]
     assert update["message"]["accepted_source_ref"]["client_message_id"] == frame["client_message_id"]
+
+
+@pytest.mark.parametrize("stored", [False, True])
+def test_memory_capture_keeps_call_open_provenance_and_exact_address(tmp_path, monkeypatch, stored):
+    from ouroboros import chat_chain, memory_floor, memory_inventory, memory_view
+    from tests import _memory_inventory_shared as shared
+
+    shared.world(tmp_path)
+    text = "The owner has just opened this call and can hear you now."
+    shared.append(tmp_path / 'logs/chat.jsonl',
+        shared.msg('2026-10-27T00:00:00Z', text, client_message_id='marked',
+                   host_fact={'kind': 'call_open'}, source='web'),
+        shared.msg('2026-10-27T00:00:01Z', text, client_message_id='legacy', source='web'))
+    if stored:
+        # The previous version retained a projection without host_fact. A warm
+        # index must be invalidated too, not only rows appended after the update.
+        with monkeypatch.context() as old:
+            old.setattr(memory_inventory, '_META_FIELDS', tuple(
+                key for key in memory_inventory._META_FIELDS if key != 'host_fact'))
+            memory_inventory.fill_tail(tmp_path, lambda: False)
+    task = {'id': 'next', 'chat_id': 1, '_is_direct_chat': True}
+    snapshot = memory_view.capture_memory_view(tmp_path, task, memory_view.view_spec_for_task(task, tmp_path))
+    lane1, lane2 = snapshot.room['lane1'], snapshot.room['lane2']
+    legacy = next(row for row in lane1 if row['ref'] == 'chat 1 / legacy')
+    assert legacy['owner_side'] and legacy['immune'], 'Unmarked text remains owner speech, even if its words match.'
+    assert not any(row['ref'] == 'chat 1 / marked' for row in lane1), 'Host events are not immune owner words.'
+    host = next(row for row in lane2 if text in row['line'])
+    assert '; host; row:' in host['line'] and host['first'] in host['line']
+    address = next(address for address, meta, _ in memory_inventory.rows_after_frontier(tmp_path)
+                   if meta.get('client_message_id') == 'marked')
+    assert chat_chain.format_address(address) == host['first']
+    assert chat_chain.resolve_row(tmp_path, address)[0]['text'] == text
+    assert all(ident != host['first'] for _, ident, *_ in memory_floor.uncovered_owner_rows(snapshot))
+    memory_inventory.fill_tail(tmp_path, lambda: False)
+    again = memory_view.capture_memory_view(tmp_path, task, memory_view.view_spec_for_task(task, tmp_path))
+    assert again.room == snapshot.room
