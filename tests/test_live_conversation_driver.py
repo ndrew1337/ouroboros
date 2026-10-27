@@ -179,19 +179,36 @@ def test_resumable_close_ends_native_work_and_refit_discards_the_old_handle():
     asyncio.run(scenario())
 
 
-def test_unsupported_vision_and_nonresumable_close_refuse_without_retry():
-    async def scenario(kind):
+def test_a_nonresumable_close_refuses_without_retry():
+    async def scenario():
+        host = Host()
+        task, session = await started(host)
+        session.emit('ready', input_rate=24000, output_rate=24000)
+        session.emit('closed', reason='lost', resumable=False)
+        with pytest.raises(RealtimeSetupError, match='provider_closed'):
+            await asyncio.wait_for(task, 2)
+        assert len(host.sessions) == 1
+    asyncio.run(scenario())
+
+
+def test_a_blind_engines_shared_screen_keeps_the_call_and_tells_the_voice_once():
+    """A shared screen ended a blind engine's call (I1 opus-1); the owner's 27.10 answer is captions, so the call goes on."""
+    async def scenario():
         host = Host()
         host.model = replace(host.model, vision=False)
         task, session = await started(host)
-        session.emit('ready', input_rate=24000, output_rate=24000, vision=True)
-        if kind == 'vision':
-            host.hub.events.append(cp.PeerVideo('peer', cp.PEER_OWNER, 'image/jpeg', b'fake-image'))
-        else: session.emit('closed', reason='lost', resumable=False)
-        with pytest.raises(RealtimeSetupError, match='vision_unsupported|provider_closed'):
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            for _ in range(3):
+                host.hub.events.append(cp.PeerVideo('peer', cp.PEER_OWNER, 'image/jpeg', b'fake-image'))
+            await until(lambda: host.context)
+            await asyncio.sleep(.05)
+            assert not task.done() and not any(isinstance(x, Video) for x in session.sent)
+            assert len(host.context) == 1 and 'cannot see' in host.context[0]['content']
+        finally:
+            host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
-        assert len(host.sessions) == 1
-    for kind in ('vision', 'closed'): asyncio.run(scenario(kind))
+    asyncio.run(scenario())
 
 
 def test_languages_are_validated_persisted_and_separate_for_each_binding(tmp_path):
@@ -957,7 +974,8 @@ def test_call_text_speaks_before_slow_tools_offers_sight_and_keeps_the_language_
     # The owner's 18.10 remarks: silence while a tool runs, and a voice unaware it could ask to see.
     text = " ".join(CALL_INSTRUCTIONS.split())  # the block is wrapped by hand
     assert "first say in a few words what I am doing, then call it" in text
-    assert "show the screen or camera (Show) or take a screenshot" in text
+    assert "tools never pause the talk" not in text  # OpenAI withholds a response while a tool runs (I1 astra F7)
+    assert "When seeing would help, I take a screenshot" in text  # Show lives in the vision engine's sentence
     # 27.10: the OpenAI voice told the owner three times it had no desktop tools before it ever looked.
     assert "so I never say I cannot do something before I have looked" in text
     assert "never changes the language I speak" in text

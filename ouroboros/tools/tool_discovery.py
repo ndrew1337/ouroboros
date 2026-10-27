@@ -338,8 +338,8 @@ def get_tools() -> List[ToolEntry]:
                 "description": (
                     "Load schemas for tools this task may already call, by exact names (comma-separated). "
                     "Reports loaded, policy-hidden and unknown names; grants no permission. A namespace "
-                    "or a skill's name answers with its tools' names. In a live call the voice session "
-                    "reopens once to take the new tools."
+                    "or a skill's name answers with its tools' names. In a live call the new schemas reach "
+                    "the voice session (an engine that cannot take them in place reconnects once)."
                 ),
                 "parameters": {
                     "type": "object",

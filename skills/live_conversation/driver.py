@@ -43,13 +43,14 @@ the spoken conversation whatever the interface language, and call tools
 myself. Work still running is pending, never done; long work becomes a task
 through `schedule_subagent` while we keep talking, and its result reaches me in the
 call; `get_task_result` reads its retained result. When a tool will
-take a moment, I first say in a few words what I am doing, then call it: tools
-never pause the talk. Tools not loaded yet are still mine: `list_available_tools`
+take a moment, I first say in a few words what I am doing, then call it; a long
+piece of work becomes a task so the talk goes on. Tools not loaded yet are still mine: `list_available_tools`
 names them (a desktop skill, for one, takes screenshots and presses keys) and
 `enable_tools` loads them, so I never say I cannot do something before I have
 looked. A tool result in another language never changes the language I speak.
-When seeing would help, I ask the owner to show the
-screen or camera (Show) or take a screenshot through a desktop skill. Links,
+My memory, this room and the other rooms are reachable here as in any turn,
+through their own tools. When seeing would help, I take a screenshot through a
+desktop skill. Links,
 code and lists go to the room's chat through `send_user_message`: saying a
 message or a URL aloud does not deliver it, so when asked to send something I use that
 tool and confirm its result. Typed messages and other turns' replies in the
@@ -63,7 +64,8 @@ def engine_sentence(model):
     """The engine and its senses are facts of this call: the owner asks "which model are you on?",
     and a blind engine must not be asked to look at a screenshot (27.10: a Grok call named an
     invented vendor and a screenshot's image closed the call)."""
-    senses = ("it hears speech and sees images: the owner's shared screen or camera and images that tools attach"
+    senses = ("it hears speech and sees images: the owner's shared screen or camera (Show) and images that tools "
+              "attach; with no frame from Show yet, you have not seen the screen"
               if model.vision else
               "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
               "naming the saved file, which analyze_screenshot or vlm_query read as text")
@@ -187,6 +189,7 @@ class _Call:
         self.playing_item = ""
         self.empty_since = time.monotonic()
         self.ever_attached = False
+        self.told_blind_share = False
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -552,7 +555,15 @@ class _Call:
                     await self.session.send(Audio(event.pcm, self.input_rate))
                 elif isinstance(event, cp.PeerVideo):
                     if not self.host.model.vision:
-                        raise RealtimeSetupError("vision_unsupported", "selected engine does not accept images")
+                        # Owner's 27.10 answer 1A: a blind engine works from text, the call goes on (I1 opus-1).
+                        if not self.told_blind_share:
+                            self.told_blind_share = True
+                            row = {"role": "user", "content": "[Host fact; not owner words]\nThe owner is sharing a "
+                                   "screen or camera this engine cannot see. A desktop screenshot read with "
+                                   "analyze_screenshot shows it as text; or ask what is on it."}
+                            await self.host.observe_context(row)
+                            await self.context_update((row,))
+                        continue
                     await self.session.send(Video(event.data, event.mime))
                 elif isinstance(event, cp.PeerControl):
                     message = event.message
