@@ -20,7 +20,7 @@ const FOLLOW_SLACK_PX = 48;
 const KEPT_CALLS = 4;
 
 /** What a mounted room node is to a call: `{task, kind, call?}` or null for any other row. */
-export function callMemberOf(node, callTasks) {
+export function callMemberOf(node, callTasks, openings = null) {
     const list = node?.classList;
     if (!list || !(list.contains('chat-bubble') || list.contains('chat-live-card'))) return null;
     if (list.contains('call-caption')) return null;
@@ -32,6 +32,12 @@ export function callMemberOf(node, callTasks) {
     }
     if (task && list.contains('user') && clientId.startsWith(CALL_PREFIX)) {
         return { task, kind: 'owner', call: clientId.slice(CALL_PREFIX.length).split(':')[0] };
+    }
+    if (task && list.contains('system') && openings) {
+        // A closing notice answers the opening row (its quote names that row): the reply names the call,
+        // so a call nobody joined still gathers its notice and its work card.
+        const call = openings.get(String(node.querySelector?.('.chat-quote')?.dataset?.address || ''));
+        if (call) return { task, kind: 'notice', call };
     }
     if (!task || !callTasks.has(task)) return null;
     if (list.contains('chat-live-card')) return { task, kind: 'work' };
@@ -83,12 +89,17 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         const head = element('button', 'call-card-head');
         head.type = 'button';
         const facts = element('span', 'call-card-facts');
+        const title = element('span', 'call-card-title', 'Call');
+        // The engine line (from the opening row's "Engine:" sentence) reads under the title.
+        const engineLine = element('span', 'call-card-engine');
         // The call's own small sign (the visual's, as on Talk) leads the card.
-        head.append(sign?.() || element('span', 'call-entry-mark'), element('span', 'call-card-title', 'Call'), facts);
+        head.append(sign?.() || element('span', 'call-entry-mark'), title, facts, engineLine);
         const lines = element('div', 'call-card-lines');
         node.append(head, lines);
-        const card = { id, task: '', call: '', node, head, facts, lines, open: null, count: 0, span: 0 };
+        const card = { id, task: '', call: '', node, head, title, facts, engineLine, lines, open: null, count: 0, span: 0,
+            engine: '', silent: '', hasNotice: false };
         head.addEventListener?.('click', () => {
+            if (card.silent) return;  // one notice line has nothing to open
             const was = following();
             card.open = !isOpen(card);
             paint(card);
@@ -103,11 +114,18 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
 
     function paint(card) {
         const liveNow = isLive(card);
-        card.node.dataset.callCard = liveNow ? 'live' : 'ended';
+        // A call nobody joined (or that ended before a word) is one notice line, not a card of nothing;
+        // an ended call with neither words nor notice shows nothing until its rows arrive.
+        const kind = liveNow ? 'live' : card.silent ? 'silent' : (!card.count && !card.hasNotice ? 'empty' : 'ended');
+        card.node.dataset.callCard = kind;
+        card.node.hidden = kind === 'empty';
         card.node.dataset.callOpen = isOpen(card) ? '1' : '0';
         card.head.setAttribute?.('aria-expanded', isOpen(card) ? 'true' : 'false');
         const lines = `${card.count} ${card.count === 1 ? 'line' : 'lines'}`;
-        card.facts.textContent = liveNow ? `Live · ${lines}` : (card.span ? `${callSpan(card.span)} · ${lines}` : lines);
+        card.title.textContent = card.silent || 'Call';
+        card.facts.textContent = card.silent ? '' : liveNow ? `Live · ${lines}` : (card.span ? `${callSpan(card.span)} · ${lines}` : lines);
+        card.engineLine.textContent = card.engine;
+        card.engineLine.hidden = !card.engine;
     }
 
     function line(speaker, text) {
@@ -152,13 +170,19 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         const was = following();
         const anchor = was ? null : readingAnchor();
         const nodes = [...feed.children];
+        const openings = new Map();  // opening row address → call id, for the notices that answer it
         for (const node of nodes) {
             const member = callMemberOf(node, callTasks);
+            if (member?.kind === 'opening' && node.dataset?.rowAddress) openings.set(node.dataset.rowAddress, member.call);
+            if (member?.call && member.task) callTasks.set(member.task, member.call);
+        }
+        for (const node of nodes) {
+            const member = callMemberOf(node, callTasks, openings);
             if (member?.call && member.task) callTasks.set(member.task, member.call);
         }
         const groups = new Map();
         for (const node of nodes) {
-            const member = callMemberOf(node, callTasks);
+            const member = callMemberOf(node, callTasks, openings);
             if (!member) continue;
             const call = member.call || callTasks.get(member.task);
             if (!groups.has(call)) groups.set(call, []);
@@ -183,22 +207,30 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         let first = NaN;
         let last = NaN;
         const notices = [];
+        const noticeTexts = [];
         for (const member of members) {
             member.node.classList.add('call-folded');
-            if (member.kind === 'work' || member.kind === 'opening') continue;
+            if (member.kind === 'opening') {
+                const engine = /Engine: ([^]+?)\.?$/u.exec(spokenText(member.node));
+                if (engine) card.engine = engine[1];
+                continue;
+            }
+            if (member.kind === 'work') continue;
             const text = spokenText(member.node);
             if (!text) continue;
             // The span runs from the first words to the call's end, its closing notice.
             const ts = Number(member.node.dataset.ts);
             if (Number.isFinite(ts)) last = Math.max(Number.isFinite(last) ? last : ts, ts);
             // The closing notice says how the call ended; it reads under the words, not as one of them.
-            if (member.kind === 'notice') { notices.push(line('notice', text)); continue; }
+            if (member.kind === 'notice') { notices.push(line('notice', text)); noticeTexts.push(text); continue; }
             spoken.push(line(member.kind, text));
             if (Number.isFinite(ts)) first = Number.isFinite(first) ? Math.min(first, ts) : ts;
         }
         const streaming = [...captions.values()].filter(entry => entry.call === card.call).map(entry => entry.node);
         card.lines.replaceChildren(...spoken, ...streaming, ...notices);
         card.count = spoken.length;
+        card.hasNotice = notices.length > 0;
+        card.silent = !isLive(card) && !spoken.length && !streaming.length && noticeTexts.length ? noticeTexts[0] : '';
         card.span = Number.isFinite(first) && Number.isFinite(last) ? last - first : 0;
         if (Number.isFinite(first)) card.node.dataset.ts = String(first);
         paint(card);

@@ -58,3 +58,20 @@ def test_an_engine_that_closes_its_socket_hands_its_own_words_to_the_owner(host_
     assert endings[0][1]['detail'] == '1011 Your prepayment credits are depleted. Please go to AI Studio.'
     assert sentence == 'Call ended: 1011 Your prepayment credits are depleted. Please go to AI Studio. Its transcript is in this room.'
     assert 'failure' not in metadata and 'failure' not in trace
+
+
+def test_a_call_nobody_joined_is_cancelled_as_one_notice(host_world, monkeypatch):
+    """A call whose client never attached (27.10: an admission 500) ended `peers_left` as a failure and left a
+    Failed card, an empty call card and a transcript notice; nobody joining is one short notice, not a failure."""
+    from ouroboros import call_peers
+    host = host_world.host
+    endings = []
+    monkeypatch.setattr(call_peers, 'get_hub', lambda _: host.hub)
+    monkeypatch.setattr(call_peers, 'close_hub', lambda *a, **kw: endings.append((a, kw)))
+    async def nobody(port):
+        raise RealtimeSetupError('not_connected', 'no one joined the call')
+    monkeypatch.setitem(host.turn.feature, 'handler', nobody)
+    sentence, metadata, trace = host.turn.run(host.ctx, host.messages, host.tools, task=host.task, initial_effort='')
+    assert sentence == 'The call did not start: no one joined the call.'
+    assert (metadata['reason_code'], metadata['execution_status']) == ('not_connected', 'cancelled')
+    assert 'failure' not in metadata and endings[0][0][1] == 'not_connected'

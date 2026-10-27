@@ -556,8 +556,23 @@
     color: rgb(var(--call-ouro-rgb));
 }
 
-.call-card[data-call-open="0"] .call-card-lines {
+.call-card[data-call-open="0"] .call-card-lines,
+.call-card[data-call-card="silent"] .call-card-lines {
     display: none;
+}
+
+.call-card[data-call-card="silent"] .call-card-head {
+    cursor: default;
+}
+
+.call-card-head {
+    flex-wrap: wrap;
+}
+
+.call-card-engine {
+    flex-basis: 100%;
+    color: var(--text-meta);
+    font-size: var(--type-meta);
 }
 
 .call-card-lines {

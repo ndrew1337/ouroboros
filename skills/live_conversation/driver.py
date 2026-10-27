@@ -31,6 +31,10 @@ CALL_ENDING_GUIDANCE = (
 
 INITIAL_TOOLS = ("send_user_message", "schedule_subagent", "get_task_result")
 
+# How long a call waits for its peers before ending: nobody joining is `not_connected`, everyone
+# leaving is `peers_left` (a transport bound, not a judgment).
+EMPTY_CALL_GRACE_S = 15
+
 CALL_INSTRUCTIONS = """## Live calls
 
 In a call my model is a realtime speech model, and I am still myself: the
@@ -177,6 +181,7 @@ class _Call:
         self.meeting_audio = False
         self.playing_item = ""
         self.empty_since = time.monotonic()
+        self.ever_attached = False
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -500,9 +505,12 @@ class _Call:
                 # pending refit for the resumed response's quiet boundary.
                 return
             if self.hub.peers():
+                self.ever_attached = True
                 self.empty_since = time.monotonic()
-            elif time.monotonic() - self.empty_since >= 15:
-                raise RealtimeSetupError("peers_left", "no peer is attached")
+            elif time.monotonic() - self.empty_since >= EMPTY_CALL_GRACE_S:
+                if self.ever_attached:
+                    raise RealtimeSetupError("peers_left", "no peer is attached")
+                raise RealtimeSetupError("not_connected", "no one joined the call")
             if self.hub.ended_by_ouroboros:
                 if not self.unheard():
                     # Do not wait for extended thinking, more input, or another

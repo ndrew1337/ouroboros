@@ -1046,3 +1046,22 @@ def test_a_blind_engine_is_told_so_in_its_instructions():
     text = session_options(host).instructions
     assert 'This call runs on Test; it hears speech and does not see images' in text
     assert 'analyze_screenshot or vlm_query' in text
+
+
+@pytest.mark.parametrize('joined', [False, True])
+def test_nobody_joining_ends_as_not_connected_and_leaving_as_peers_left(monkeypatch, joined):
+    """The same empty hub meant two things (27.10): a call nobody ever joined and a call everyone left."""
+    from skills.live_conversation import driver as module
+    monkeypatch.setattr(module, 'EMPTY_CALL_GRACE_S', 0.05)
+    async def scenario():
+        host = Host()
+        present = {'on': joined}
+        host.hub.peers = lambda: [SimpleNamespace(role=cp.PEER_OWNER, mic=True)] if present['on'] else []
+        task, session = await started(host)
+        session.emit('ready', input_rate=24000, output_rate=24000)
+        if joined:
+            await asyncio.sleep(0.1)
+            present['on'] = False
+        with pytest.raises(RealtimeSetupError, match='peers_left' if joined else 'not_connected'):
+            await asyncio.wait_for(task, 3)
+    asyncio.run(scenario())

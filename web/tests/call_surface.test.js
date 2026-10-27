@@ -112,7 +112,7 @@ test('a reasonless or unknown ending still shows the capsule: the call ended, an
     const unknown = callPresentation(ended('a_code_from_the_future'));
     assert.deepEqual([unknown.mode, unknown.title, unknown.small], ['sheet', 'The call ended', '']);
     // Ending codes stay internal; the owner sees words.
-    for (const code of ['owner_bye', 'max_minutes', 'peers_left', 'budget_exceeded', 'missing_credential', 'authentication',
+    for (const code of ['owner_bye', 'max_minutes', 'peers_left', 'not_connected', 'budget_exceeded', 'missing_credential', 'authentication',
         'rate_limit', 'provider_closed', 'engine_unavailable', 'reconnect_failed',
         'preparation_failed', 'call_not_started', 'invalid_request', 'protocol', 'backpressure', 'provider_error',
         'engine_refused', 'socket_closed', 'socket_silent', 'microphone_busy', 'permission_denied', 'old_app']) {
@@ -679,4 +679,34 @@ test('obsolete time caps have no ending words or action; a deliberate goodbye na
     assert.equal(bye.title, 'Ouroboros ended the call');
     assert.equal(bye.tone, '');
     assert.equal(callPresentation(ended('owner_bye')).title, 'Call ended');
+});
+
+test('a call nobody joined folds to one notice line, and the engine line reads from the opening row', () => {
+    const { feed, cards, card, lines, row } = feedFixture({ live: () => '' });
+    const opening = row('system', 'The owner has just opened this call and can hear you now. Engine: Grok · xAI, grok-voice-3.0; no screen vision.',
+        { clientMessageId: 'call:c9:open', systemType: 'call_open', rowAddress: 'row:1@t#9' }, 1000);
+    const work = new FakeNode('div', feed.ownerDocument);
+    work.className = 'chat-live-card';
+    work.dataset.taskId = 't9';
+    feed.append(work);
+    // The closing notice answers the opening row: its quote names that row, and so the call.
+    const notice = row('system', 'The call did not start: no one joined the call.', { taskId: 't9' }, 21000);
+    const quote = new FakeNode('div', feed.ownerDocument);
+    quote.className = 'chat-quote';
+    quote.dataset.address = 'row:1@t#9';
+    notice.append(quote);
+    cards.scan();
+    assert.ok(opening.classList.contains('call-folded') && work.classList.contains('call-folded') && notice.classList.contains('call-folded'));
+    assert.equal(card().dataset.callCard, 'silent');
+    assert.equal(card().querySelector('.call-card-title').textContent, 'The call did not start: no one joined the call.');
+    assert.equal(card().querySelector('.call-card-facts').textContent, '');
+    assert.equal(card().querySelector('.call-card-engine').textContent, 'Grok · xAI, grok-voice-3.0; no screen vision');
+    card().querySelector('.call-card-head').click();
+    assert.equal(card().dataset.callOpen, '0');  // one line has nothing to open
+    // Words make it a call card again: the title returns, the engine line stays.
+    row('user', 'Hello?', { clientMessageId: 'call:c9:o1', taskId: 't9' }, 2000);
+    cards.scan();
+    assert.deepEqual([card().dataset.callCard, card().querySelector('.call-card-title').textContent], ['ended', 'Call']);
+    assert.equal(card().querySelector('.call-card-facts').textContent, '19 s · 1 line');
+    assert.deepEqual(lines().map(([, text]) => text), ['YouHello?', 'The call did not start: no one joined the call.']);
 });

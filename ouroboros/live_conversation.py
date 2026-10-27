@@ -105,10 +105,13 @@ class LiveConversationTurn(RealtimeTurn):
         self.native_model = self.catalog_model.id
         self.model = self.route.model_prefix + self.native_model
         self.spec = replace(spec, model=self.native_model)
-        # One short sentence: it is also the call's first owner-visible chat row. The engine and
-        # its senses reach the model through the call instructions (skills/live_conversation/driver.py).
-        self.opening = ("This call is now live: the other side can hear you." if spec.opened_by == "skill"
-                        else "The owner has just opened this call and can hear you now.")
+        # The call's first owner-visible chat row: the cue plus one owner-facing "Engine:" sentence that the
+        # room's call card shows as its engine line (owner's choice 27.10). The model's own senses reach it
+        # through the call instructions (skills/live_conversation/driver.py).
+        self.opening = (("This call is now live: the other side can hear you." if spec.opened_by == "skill"
+                         else "The owner has just opened this call and can hear you now.")
+                        + f" Engine: {provider['catalog'].label}, {self.catalog_model.label or self.native_model}; "
+                        + ("sees the shared screen." if self.catalog_model.vision else "no screen vision."))
         self.request = {"kind": "live_conversation", "feature": feature["key"], "provider": self.provider,
                         "model": self.native_model, "call_id": spec.call_id}
         self.admitted_at = time.time()  # the turn is built at admission, before the task is queued and prepared
@@ -199,7 +202,8 @@ class LiveConversationTurn(RealtimeTurn):
                                   if part).strip()
             else:
                 reason = str(getattr(exc, "code", "") or "") or ("cancelled" if isinstance(exc, asyncio.CancelledError) else "call_failed")
-                status = "cancelled" if reason in {"cancelled", "finalize_requested", "owner_stop"} else "infra_failed"
+                status = ("cancelled" if reason in {"cancelled", "finalize_requested", "owner_stop", "not_connected"}
+                          else "infra_failed")
                 detail = str(exc).removeprefix(reason + ": ") if isinstance(exc, RealtimeSetupError) else ""
             if reason == "call_failed":
                 import traceback
@@ -233,8 +237,11 @@ class LiveConversationTurn(RealtimeTurn):
                 finally:
                     self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
                                   "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
-        words = ("Call ended. Its transcript is in this room." if status == "ok" or not detail
-                 else f"Call ended: {detail.rstrip('.')}. Its transcript is in this room.")
+        if reason == "not_connected":  # nobody joined: one short notice, no transcript to point at
+            words = f"The call did not start: {detail.rstrip('.')}."
+        else:
+            words = ("Call ended. Its transcript is in this room." if status == "ok" or not detail
+                     else f"Call ended: {detail.rstrip('.')}. Its transcript is in this room.")
         return words, {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
             **({"failure": failure} if failure is not None else {}),

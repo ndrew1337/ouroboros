@@ -629,10 +629,12 @@ def test_a_blind_engine_receives_tool_images_as_captions(host_world, vision):
     assert ('does not see images' in session.selected.messages_json) is not vision
 
 
-def test_the_opening_stays_one_owner_visible_sentence_and_the_turn_tells_its_vision(host_world):
-    """The opening is the call's first chat row: engine facts belong to the instructions, not to the owner's chat
-    (27.10: a long opening showed up as System bubbles). gateway/call_ws.py answers the call-open request with
-    `supports_images`; dropping it broke every call on the stand ("The call could not start")."""
+def test_the_opening_is_the_cue_plus_the_engine_line_and_the_turn_tells_its_vision(host_world):
+    """The opening is the call's first chat row: the cue for the model plus one owner-facing "Engine:" sentence
+    that the room's call card shows (owner's choice 27.10); model instructions never ride in it (a long opening
+    showed up as System bubbles). gateway/call_ws.py answers the call-open request with `supports_images`;
+    dropping it broke every call on the stand ("The call could not start")."""
     host = host_world.host
-    assert host.turn.opening == 'The owner has just opened this call and can hear you now.'
+    assert host.turn.opening == ('The owner has just opened this call and can hear you now. '
+                                 'Engine: Fixture engine, Voice test; sees the shared screen.')
     assert host.turn.supports_images is host.turn.catalog_model.vision is True

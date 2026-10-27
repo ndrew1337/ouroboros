@@ -66,6 +66,7 @@ const ENDINGS = {
     ouroboros_bye: { words: 'Ouroboros ended the call', calm: true },
     owner_stop: { words: 'Call ended', calm: true },
     peers_left: { words: 'Everyone left the call', calm: true },
+    not_connected: { words: 'The call did not start: no one joined', calm: true },
     budget_exceeded: SPENDING_LIMIT,
     budget_exhausted: SPENDING_LIMIT,
     missing_credential: NO_KEY,
