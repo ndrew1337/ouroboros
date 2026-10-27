@@ -29,16 +29,19 @@ def rows_for_engine(rows: list[dict], *, vision: bool) -> list[dict]:
     for row in rows:
         content = row.get("content")
         if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
-            row = {**row, "content": [_image_caption(p) if isinstance(p, dict) and p.get("type") == "image_url" else p
-                                      for p in content]}
+            texts = {str(p.get("text") or "").strip() for p in content if isinstance(p, dict) and p.get("type") == "text"}
+            row = {**row, "content": [_image_caption(p, texts) if isinstance(p, dict) and p.get("type") == "image_url"
+                                      else p for p in content]}
         out.append(row)
     return out
 
 
-def _image_caption(part: dict) -> dict:
-    caption = str(part.get("_caption") or "").strip() or f"saved at {part.get('_source_path') or 'the attached file'}"
-    return {"type": "text", "text": (f"[Image not shown: this voice engine does not see images. {caption} "
-                                     "analyze_screenshot or vlm_query read the saved file as text.]")}
+def _image_caption(part: dict, texts: set) -> dict:
+    caption = str(part.get("_caption") or "").strip()
+    where = ("the file named above" if caption and caption in texts  # the attach caption already names it
+             else caption or f"the file saved at {part.get('_source_path') or 'the attachment'}")
+    return {"type": "text", "text": (f"[Image not shown: this voice engine does not see images; analyze_screenshot "
+                                     f"or vlm_query read {where} as text.]")}
 
 
 def input_from_context_plan(plan, *, model: str, selected_tools: list[dict],

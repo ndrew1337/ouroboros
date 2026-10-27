@@ -185,3 +185,16 @@ def test_parent_echo_representation_preserves_schema_checks(providers, captured,
     else:
         module.check_session_echo(requested, actual)
     captured.append({"requested": requested, "actual": actual})
+
+
+def test_a_message_of_several_text_parts_is_one_part_on_the_wire():
+    """xAI joins a message's text parts into one in its acknowledgement; several parts failed the exact echo check
+    and closed both Grok calls of 27.10 right after a screenshot (its caption row has two text parts)."""
+    from ouroboros.realtime_item_echo import item_matches
+    from skills.grok_realtime.plugin import item_rows
+    [sent] = item_rows({'role': 'user', 'content': [{'type': 'text', 'text': '[image: a.png]'},
+                                                     {'type': 'text', 'text': '[Image not shown]'}]})
+    assert sent['content'] == [{'type': 'input_text', 'text': '[image: a.png]\n\n[Image not shown]'}]
+    assert item_matches(sent, {**sent, 'status': 'completed', 'content': [dict(sent['content'][0])]})
+    [single] = item_rows({'role': 'user', 'content': 'Exact words'})
+    assert single['content'] == [{'type': 'input_text', 'text': 'Exact words'}]

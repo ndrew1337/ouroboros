@@ -621,7 +621,8 @@ def test_a_blind_engine_receives_tool_images_as_captions(host_world, vision):
     parts = sent[-1]['content']
     assert any(part.get('type') == 'image_url' for part in parts) is vision
     if not vision:
-        assert '/tmp/shot.png' in parts[-1]['text'] and 'does not see images' in parts[-1]['text']
+        text = ' '.join(part['text'] for part in parts)
+        assert 'does not see images' in text and text.count('/tmp/shot.png') == 1  # the file is named once
     kept = [row for row in host.messages if row.get('role') == 'user' and isinstance(row.get('content'), list)][-1]
     assert any(part.get('type') == 'image_url' for part in kept['content'])  # the ordinary history keeps the image
     session, _, _ = session_candidate(host, host_world.provider['session'], LiveOptions())

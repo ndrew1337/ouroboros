@@ -92,8 +92,11 @@ def item_rows(message):
         parts = [{'type': 'text', 'text': content}] if isinstance(content, str) else content
         if not isinstance(parts, list) or any(p.get('type') != 'text' or not isinstance(p.get('text'), str) for p in parts):
             raise RealtimeSetupError('vision_unsupported', 'Grok Voice does not accept images')
+        # xAI joins a message's text parts into one in its acknowledgement, so several parts would
+        # fail the exact echo check and close the call (27.10: a screenshot's caption rows). Send one.
+        texts = [p['text'] for p in parts] if len(parts) <= 1 else ['\n\n'.join(p['text'] for p in parts)]
         result.append({'type': 'message', 'role': role, 'content': [
-            {'type': 'input_text' if role == 'user' else 'text', 'text': p['text']} for p in parts]})
+            {'type': 'input_text' if role == 'user' else 'text', 'text': text} for text in texts]})
     for call in message.get('tool_calls', []):
         result.append({'type': 'function_call', 'call_id': call['id'], **call['function']})
     return result

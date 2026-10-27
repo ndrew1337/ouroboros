@@ -953,6 +953,9 @@ def test_call_text_speaks_before_slow_tools_offers_sight_and_keeps_the_language_
     text = " ".join(CALL_INSTRUCTIONS.split())  # the block is wrapped by hand
     assert "first say in a few words what I am doing, then call it" in text
     assert "show the screen or camera (Show) or take a screenshot" in text
+    # 27.10: the OpenAI voice told the owner three times it had no desktop tools before it ever looked.
+    assert "so I never say I cannot do something before I have looked" in text
+    assert "never changes the language I speak" in text
     recorded = languages_opening_sentence(["ru-RU"])
     assert "expects ru-RU" in recorded and "ask rather than switch" in recorded
     assert "ask when unsure" in languages_opening_sentence([])
