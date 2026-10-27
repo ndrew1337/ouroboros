@@ -289,8 +289,12 @@ export class CallSession {
         }
         if (data.type !== 'capture' || this.muted || data.generation !== this.captureGeneration
             || this.state !== 'live' || this.socket?.readyState !== 1) return;
-        // One second of unsent microphone PCM is a broken uplink, not useful live speech.
-        if (this.socket.bufferedAmount > data.rate * 2) { this.fail('slow_uplink'); return; }
+        // One second of unsent microphone PCM is a broken uplink, not useful live speech. A screen or camera
+        // frame queued in the same socket (up to 512 KiB) is not speech: its bytes are left out, so sharing the
+        // screen never ends the call (owner's stand test, 27.10).
+        if (this.socket.bufferedAmount - this.vision.pending(this.socket.bufferedAmount) > data.rate * 2) {
+            this.fail('slow_uplink'); return;
+        }
         this.socket.send(encodeFrame({ epoch: this.epoch, seq: this.seq++, rate: data.rate, pcm: data.pcm }));
     }
 

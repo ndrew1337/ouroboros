@@ -50,6 +50,13 @@ export class CallVision {
         this.sample = null;
         this.busy = false;
         this.cameraId = '';
+        this.pendingBytes = 0;  // the last frame's bytes still queued in the call socket (upper bound)
+    }
+
+    /** Video bytes still in the socket: never more than the socket holds, zero once it drained. */
+    pending(bufferedAmount) {
+        this.pendingBytes = Math.min(this.pendingBytes, bufferedAmount);
+        return this.pendingBytes;
     }
 
     notify() { this.session.changed(this.session.view()); }
@@ -119,6 +126,7 @@ export class CallVision {
         const changed = Boolean(this.kind || this.error);
         this.kind = this.error = '';
         this.sample = null;
+        this.pendingBytes = 0;
         if (changed && notify) this.notify();
     }
 
@@ -126,7 +134,10 @@ export class CallVision {
         const token = this.token;
         const session = this.session;
         if (this.busy || !this.kind || session.state !== 'live' || session.socket?.readyState !== 1
-            || session.socket.bufferedAmount > 1024 * 1024 || Date.now() - this.lastSentAt < FRAME_MS) return;
+            || Date.now() - this.lastSentAt < FRAME_MS) return;
+        // One frame in flight at a time: a frame still queued in the socket is not followed by another,
+        // so video never piles up behind live speech on a slow uplink.
+        if (this.pending(session.socket.bufferedAmount) > 0) return;
         const width = this.video?.videoWidth || 0, height = this.video?.videoHeight || 0;
         if (!width || !height) return;
         this.busy = true;
@@ -156,6 +167,7 @@ export class CallVision {
             const data = new Uint8Array(await blob.arrayBuffer());
             if (token !== this.token || session.state !== 'live' || session.socket?.readyState !== 1) return;
             session.socket.send(encodeVideoFrame({ epoch: session.epoch, seq: this.seq++, mime: 'image/jpeg', data }));
+            this.pendingBytes = data.byteLength;
             this.lastSentAt = Date.now();
             this.sample = new Uint8ClampedArray(pixels);
         } catch {

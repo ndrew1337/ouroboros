@@ -441,6 +441,28 @@ test('item binding, final captions, playback acknowledgements and stale epochs n
     } finally { f.session.stop(); }
 });
 
+test('a screen frame queued in the call socket is not a slow audio uplink', async () => {
+    const f = fixture();
+    try {
+        await f.session.start(); f.sockets[0].connect();
+        f.state({ state: 'live' });
+        const capture = () => f.session.onAudio({ type: 'capture', generation: f.session.captureGeneration, rate: 24000, pcm: new Int16Array(480) });
+        // A 300 KiB JPEG just went into the socket (owner's screen share, 27.10): audio is not behind.
+        f.session.vision.pendingBytes = 300 * 1024;
+        f.sockets[0].bufferedAmount = 300 * 1024 + 960;
+        capture();
+        assert.equal(f.session.state, 'live');
+        // The frame drains; the pending bound follows the socket down and never grows back on its own.
+        f.sockets[0].bufferedAmount = 960; capture();
+        assert.equal(f.session.vision.pendingBytes, 960);
+        f.sockets[0].bufferedAmount = 0; capture();
+        assert.equal(f.session.vision.pendingBytes, 0);
+        // Real audio backlog with no frame in flight still ends the call as before.
+        f.sockets[0].bufferedAmount = 24000 * 2 + 1; capture();
+        assert.equal(f.session.code, 'slow_uplink');
+    } finally { f.session.stop(); }
+});
+
 test('permission and transport failures release everything; the microphone has one owner, then the next', async () => {
     const f = fixture(), other = fixture();
     try {
