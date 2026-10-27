@@ -118,8 +118,8 @@ def test_start_uses_one_floor_walk_and_calibrates_before_book_choice(tmp_path, m
         calls.append(1)
         return walk(*args, **kwargs)
     monkeypatch.setattr(mf, "fit_memory_view", measured)
-    assert build(360_000).initial_mode == "max"
+    assert build(330_000).initial_mode == "max"
     assert len(calls) == 1
     monkeypatch.setattr("ouroboros.context_fit._route_calibration_ratio", lambda *_a, **_kw: 4 / 2.7)
-    assert build(360_000).initial_mode == "low"
+    assert build(330_000).initial_mode == "low"
     assert len(calls) == 2

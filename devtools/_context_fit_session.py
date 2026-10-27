@@ -36,7 +36,9 @@ def measure_session(host, factory, options, *, observation_fp=None):
     result = measure_core(host.plan.core, host.schemas, root=host.ctx.drive_root,
         window=measurement['capacity_total_tokens'], reserve=measurement['response_reserve_tokens'],
         mode=host.plan.preferred_mode, prepared=host.plan, fit=evidence['fit'])
-    result.update(phase='session_candidate', diagnostic_notes=[])
+    work = evidence['work_room']
+    result.update(phase='session_candidate', diagnostic_notes=[], work_room=work,
+        start_work_room_tokens=work['requested_tokens'], work_room_deficit_tokens=work['deficit_tokens'])
     return result
 
 
@@ -95,7 +97,7 @@ def report_session(core, tools, *, root, scratch, window, reserve, mode, provide
     from ouroboros.live_conversation import ConversationHost
     from ouroboros.memory_view import snapshot_from_json
     from ouroboros.tools.tool_context import ToolContext
-    from skills.live_conversation.driver import call_tools, session_options
+    from skills.live_conversation.driver import INITIAL_TOOLS, call_tools, session_options
 
     transport, model, route, output, factory = session_inputs(provider, window, reserve, root)
     evidence = declared_evidence(window, reserve, asdict(model.facts), output)
@@ -113,7 +115,8 @@ def report_session(core, tools, *, root, scratch, window, reserve, mode, provide
         config = LiveConfig(enabled=True, provider=provider + ':offline')
         spec = CallSpec('context-fit-report', task['chat_id'], config.provider, model.id, '')
         turn = SimpleNamespace(config=config, catalog_model=model, route=transport, model=route['model'],
-            native_model=model.id, spec=spec, opening='', feature={'call_tools': call_tools(scratch / 'feature')})
+            native_model=model.id, spec=spec, opening='', feature={
+                'call_tools': call_tools(scratch / 'feature'), 'initial_tools': INITIAL_TOOLS})
         ctx = ToolContext(repo_dir=REPO, drive_root=scratch / 'host', task_id=task['id'],
                           current_chat_id=task['chat_id'], is_direct_chat=True)
         ctx.context_fit_plan = plan

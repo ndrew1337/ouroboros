@@ -357,6 +357,8 @@ def test_physical_dispatch_minus_one_refuses_and_positive_passes(host_world, mon
     assert not any(session.opened for session in host_world.sessions)
     host.model = replace(host.model, facts=replace(host.model.facts,
         conversation_window_tokens=raw + 10000 + 1))
+    notices = []
+    host.ctx.emit_progress_fn = notices.append
     async def allowed(session):
         assert session.opened
         host.response_started('fits')
@@ -366,6 +368,8 @@ def test_physical_dispatch_minus_one_refuses_and_positive_passes(host_world, mon
     row, = read_usage_records(host.ctx.drive_root)
     assert row['physical_context']['capacity_total_tokens'] == raw + 10001
     assert row['physical_context']['measurement_density'] == 1.0
+    assert any('Start room is smaller than requested' in notice for notice in notices)
+    assert host._prepared_view[0]['work_room']['reason'] == 'start_room_shortfall'
 
 
 def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_world):
@@ -380,7 +384,7 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     host.messages.append({'role': 'user', 'content': 'Native audio caption ' * 300})
     host.response_started('density')
     estimate = host._response_text_estimates['density']
-    assert estimate == host._selected_text_estimate
+    assert estimate == host._selected_raw_estimate  # the complete text-only provider envelope
     host.messages.pop()
     host.response_done('density', usage={'text_input_tokens': estimate * 2,
         'audio_input_tokens': 99999, 'image_input_tokens': 88888, 'video_input_tokens': 77777},

@@ -162,7 +162,9 @@ def test_foreign_work_retains_server_pointer_in_scratch_not_inline_json(tmp_path
     assert fingerprint(root) == before
     # The target's geometry/write-rights guidance also belongs in the diagnostic.
     assert len(old) > 24000 and len(actual) == 519
-    assert old_fit['verdict'] == 'MinimumViewUnfit', old_fit
+    assert old_fit['verdict'] == 'fits' and old_fit['work_room_deficit_tokens'] > 0, old_fit
+    health = lambda fit: next(row['tokens'] for row in fit['blocks'] if row['block'] == 'health')
+    assert health(old_fit) > health(new_fit) + 5000  # the walk may spend that saving on more whole memory
     assert new_fit['verdict'] == 'fits', new_fit
     assert new_fit['profile'] == 'task_local_nano'
     assert new_fit['fit']['measurement']['response_reserve_tokens'] == 10000

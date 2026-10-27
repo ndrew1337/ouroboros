@@ -8,7 +8,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 
 | domain | name | modules | proposed |
 |---|---|---:|---:|
-| D01 | Agent core & main loop | 58 | 0 |
+| D01 | Agent core & main loop | 59 | 0 |
 | D02 | LLM client, routing & providers | 47 | 0 |
 | D03 | Context assembly, fit & compaction | 28 | 0 |
 | D04 | Tool execution: registry, access & typed results | 23 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 36 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
 | D20 | Presence | 21 | 0 |
-| **total** | | **922** | **0** |
+| **total** | | **923** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -65,7 +65,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
 
 ## Hidden coupling (classified out of the strict graph)
 
-- lazy-only cross-domain pairs: **123**
+- lazy-only cross-domain pairs: **124**
   - D01->D10
   - D01->D11
   - D02->D05
@@ -82,6 +82,7 @@ Rows may import columns (`[graph].allowed`). `·` = forbidden direction.
   - D03->D16
   - D03->D20
   - D04->D01
+  - D04->D03
   - D04->D06
   - D04->D07
   - D04->D09
@@ -214,6 +215,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/delivery_seal.py`
 - `ouroboros/external_runs.py`
 - `ouroboros/focus.py`
+- `ouroboros/live_context_view.py`
 - `ouroboros/live_conversation.py`
 - `ouroboros/live_works.py`
 - `ouroboros/loop.py`

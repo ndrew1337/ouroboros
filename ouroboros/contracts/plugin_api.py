@@ -29,7 +29,7 @@ from ouroboros.skill_token import SkillToken
 # refused a NEW PASS at issuance (``extension_new_pass_admission_error``).
 # 2.0 absorbs 1.4's presence capability (reviewed transport skills may submit
 # authenticated non-owner presence events through the Host Service ceiling).
-PLUGIN_API_VERSION = "2.1"  # additive: in-process realtime voice providers and the live conversation feature
+PLUGIN_API_VERSION = "2.2"  # additive: conversation frames declare their initial ordinary tool schemas
 # The generation an extension WITHOUT the manifest field binds against —
 # "absent ≡ 1.3 by construction" (owner-ratified §6.1-Δ; deliberately NOT 1.4).
 LEGACY_PLUGIN_API_GENERATION = "1.3"
@@ -201,6 +201,7 @@ def plugin_api_surface_fingerprint() -> str:
 # change without a version bump) refuses negotiation until the version is
 # bumped and the new fingerprint recorded here.
 PLUGIN_API_SURFACE_FINGERPRINTS: Dict[str, str] = {
+    "2.2": "46ee2d134ca3c3957adef9366b326b97a84abaae757e8e9d18030a7838329506",
     "2.1": "648ecc02839e2ef5fc7bb18bb14f66acf6836f0ce041da9c6b19d3d2e143f336",
     "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
 }
@@ -358,12 +359,14 @@ class PluginAPI(Protocol):
 
     def register_live_conversation(self, name: str, handler: Callable[..., Awaitable[Any]],
                                    *, configure: Callable[[], LiveConfig],
-                                   call_tools: Sequence[CallTool] = ()) -> None:
+                                   call_tools: Sequence[CallTool] = (), initial_tools: Sequence[str] = ()) -> None:
         """Register the Live Conversation feature. Requires live_conversation, in-process.
 
         ``configure()`` returns the owner's LiveConfig for the next call;
         ``handler(host)`` runs an admitted call over its LiveHost port.
-        ``call_tools`` exist only inside this feature's calls. No serializable
+        ``call_tools`` exist only inside this feature's calls. ``initial_tools``
+        names ordinary permitted schemas the feature's frame needs from its first send.
+        Residency grants no additional authority. No serializable
         request grants the port.
         """
         ...

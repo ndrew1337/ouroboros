@@ -44,7 +44,7 @@ def _core(mature):
     snap = syn.snapshot(role="consciousness", story=syn.pages(103 if mature else 2, 200),
         room_facts=syn.room(lane1=spoken, lane2=359 if mature else 2),
         live=[{**syn.live_room(i), "directory": True, "words": [], "notes": []} for i in range(164 if mature else 2)])
-    snap = dataclasses.replace(snap, spec=dataclasses.replace(snap.spec, work_room_levels=2))
+    snap = dataclasses.replace(snap, spec=dataclasses.replace(snap.spec, work_room_levels=1))
     core = cf.ContextCore("Required core", "Constitution", "b" * 600_000, "",
         "Identity", "f" * 1_000, '"Assignment"', False, memory_view_json=mv.snapshot_json(snap))
     return core, snap
@@ -67,7 +67,7 @@ def test_fresh_and_mature_envelopes_leave_one_work_room(window, density, mature,
     plan = _start(core, window, monkeypatch, density, kind)
     shown = plan.projection(plan.initial_mode)
     reply = plan.output_reserve_tokens if kind == "total" else 0
-    assert shown.calibrated_tokens + reply + 2 * -(-window // 8) <= window
+    assert shown.calibrated_tokens + reply + -(-window // 8) <= window
     assert plan.core.memory_view_json == core.memory_view_json
     facts = shown.memory_facts["floor"]
     assert facts["target_tokens"] is None
@@ -156,7 +156,7 @@ def test_owner_memory_selection_requires_and_retains_the_minds_account(tmp_path,
         assert note in json.dumps(seed)
 
 
-def test_core_without_memory_still_reserves_two_eighths_for_a_root(monkeypatch):
+def test_core_without_memory_reserves_one_eighth_for_roots_and_direct_turns(monkeypatch):
     core = cf.ContextCore("c" * 160_000, "", "", "", "", "", '"Assignment"', False)
     monkeypatch.setattr(cf, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     def start(task):
@@ -165,8 +165,9 @@ def test_core_without_memory_still_reserves_two_eighths_for_a_root(monkeypatch):
                 ce.CapabilityEvidence(128_000, "confirmed", "metadata", "core-route")))
     assert start({"type": "task", "_is_direct_chat": True}).initial_mode == "low"  # a direct chat turn
     for root in ({"type": "task"}, {"type": "evolution"}):
-        with pytest.raises(cf.MinimumViewUnfit, match="Core, assignment, resident control tools and work room"):
-            start(root)
+        plan = start(root)
+        assert plan.initial_mode == "low"
+        assert plan.projection("low").calibrated_tokens + plan.output_reserve_tokens + 128_000 // 8 <= 128_000
 
 
 @pytest.mark.parametrize("replies,mode", [(2_400, "max"), (400, "max"), (24, "max")])
@@ -175,7 +176,7 @@ def test_owner_max_is_judged_on_the_completed_start_view_with_the_real_catalog(m
     monkeypatch.setattr(cf, "_route_calibration_ratio", lambda *_a, **_kw: 1.0)
     snap = syn.snapshot(role="integrator", story=syn.pages(2, 200),
         room_facts=syn.room(lane1=[syn.spoken(i, "ouroboros", 400) for i in range(replies)], lane2=2))
-    snap = dataclasses.replace(snap, spec=dataclasses.replace(snap.spec, work_room_levels=2))
+    snap = dataclasses.replace(snap, spec=dataclasses.replace(snap.spec, work_room_levels=1))
     core = cf.ContextCore("Required core", "Constitution", "b" * 600_000, "", "Identity", "f" * 1_000,
         '"Assignment"', False, memory_view_json=mv.snapshot_json(snap))
     plan = cf.build_context_fit_plan(None, core, {"id": "authored-main", "type": "task"}, preferred_mode="max",
@@ -189,7 +190,7 @@ def test_owner_max_is_judged_on_the_completed_start_view_with_the_real_catalog(m
     if replies == 2400:
         assert plan.projection(mode).memory_facts['floor']['steps']['F7a'] == 1
     assert (core.architecture_md in json.dumps(f.inputs[0]["messages"])) is (mode == "max")
-    assert sent + plan.output_reserve_tokens + 2 * 400_000 // 8 <= 400_000
+    assert sent + plan.output_reserve_tokens + 400_000 // 8 <= 400_000
 
 
 @pytest.mark.parametrize("refused", [True, False])

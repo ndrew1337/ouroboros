@@ -1448,13 +1448,13 @@ The frozen ABI is documented in
 This section shows the practical shape.
 
 Extensions declare the PluginAPI generation they bind against in the manifest
-(PluginAPI 2.1; declarations of 2.0 remain supported):
+(PluginAPI 2.2; declarations of 2.0 and 2.1 remain supported):
 
 ```yaml
-plugin_api: "2.1"            # major strict; minor = required minimum
+plugin_api: "2.2"            # major strict; minor = required minimum
 # or, with required capabilities (closed set, validated per execution mode):
 # plugin_api:
-#   version: "2.1"
+#   version: "2.2"
 #   capabilities: [register_tool, subscribe_event]
 ```
 
@@ -1471,9 +1471,13 @@ names models, default, voices, vision, honoured settings and credential setting 
 units (`provider` or `estimator`), source and date. Acceptance never raises or invalidates the window.
 An unknown window stays unknown. Credentials use ordinary `get_settings` grants.
 
-`register_live_conversation(name, handler, *, configure, call_tools=())` registers the
+`register_live_conversation(name, handler, *, configure, call_tools=(), initial_tools=())` registers the
 in-process feature, requiring `live_conversation`. `configure()` returns `LiveConfig`;
 an empty model selects the catalog default, an unknown model refuses admission.
+The optional `initial_tools` names ordinary schemas needed by the feature's frame;
+they join discovery and feature tools before the first fit, including Nano. The bundled
+Live calls frame loads `send_user_message`, `schedule_subagent` and `get_task_result`
+this way, so its first named action needs no schema-enablement reconnect.
 `call_offer(config)` in `ouroboros.live_conversation` computes availability from enabled,
 loaded provider and its credential grants. Beta defaults off. No connection duration
 or per-call dollar limit exists; responses share the ordinary spending limit.
@@ -1488,7 +1492,12 @@ sentence if the ladder cannot fit it. Provider windows use the route's ordinary 
 (cold 1.0); split text-input usage calibrates selected text only, never media. Estimator
 windows use raw chars/4; Grok usage excludes instructions and never teaches density.
 The sealed wire, including provider language additions, is budgeted before opening.
-The final physical guard honours the route reserve.
+The final physical guard honours the route reserve. The first full candidate also tries
+to leave one eighth for work through the ordinary ladder; missing room starts with a
+notice when input plus reserve still fits. Reconnects measure remaining room without
+charging another start. Opened prefixes become ordinary observed views for
+`compact_context`; the driver applies queued authored views through the shared text
+application at its quiet boundary and reconnects with the measured result.
 
 The session factory receives immutable `RealtimeInput`, options and a wire recorder.
 It declares its native output bound or `None`; the host supplies fresh exact-route

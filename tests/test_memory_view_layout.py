@@ -397,14 +397,18 @@ def test_a_nano_floor_names_only_the_path_its_own_request_sends(tmp_path, monkey
     roomy = plan(10_000_000)  # Nano's fixed part and reserve, read off a roomy plan; then a window only Nano fits
     window = (10_000_000 - roomy.projection("nano").memory_facts["floor"]["physical_allowance_tokens"]
               + minimal_view_tokens(snapshot_from_json(core.memory_view_json), window_tokens=10_000_000) + 50)
-    from ouroboros.context_fit import MinimumViewUnfit
-    with pytest.raises(MinimumViewUnfit, match="Core, assignment, resident control tools and work room"):
-        plan(window)
+    start = plan(window)
+    from ouroboros.context_budget import context_mode_limits
+    from ouroboros.context_fit import tool_schema_tokens
+    shown = start.projection(start.initial_mode)
+    reserve = context_mode_limits(start.initial_mode, owner, start.output_reserve_tokens)[1]
+    assert shown.calibrated_tokens + tool_schema_tokens(list(select_tool_schemas(
+        schemas, context_mode=start.initial_mode).schemas)) + reserve <= window
     sent_tools = list(select_tool_schemas(schemas, context_mode="nano").schemas)
     built = roomy.reproject_for_route(window_tokens=window, known_window=True, ratio=1.0,
         output_reserve=roomy.output_reserve_tokens, tool_schemas=sent_tools, start_mode="nano",
         select_mode="nano", refused_tokens=2**31 - 1)
-    assert built.initial_mode == "nano"  # physical recovery, not an undersized start
+    assert built.initial_mode == "nano"  # both a short-room start and physical recovery keep the same reader path
     floor = section(built.messages_for("nano")[0]["content"][-1]["text"], "### Physical floor")
     sent = select_tool_schemas(schemas, context_mode="nano").chosen
     assert "memory_read" not in sent and ("enable_tools" in floor) == ("enable_tools" in sent), (sent, floor)
@@ -518,9 +522,9 @@ def test_direct_openai_and_openrouter_keep_all_stable_items_and_one_notice(tmp_p
 def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_resident_schemas(tmp_path, monkeypatch):
     """A11, #1527 (owner 2026-10-13, A). The owner's words reach Nano as text whatever the 85K target: the
     pointer replaces them only when a known fresh window cannot physically hold the Nano request (the schemas
-    it sends and its reply floor; the start work room is not part of this test) and the pointer request, work
-    room included, does fit it. A window that holds the request but not its work room names the start with the
-    words whole (7A). An unknown window keeps the words; a pointer that does not fit either, or a failed source
+    it sends and its reply floor) and the pointer request does fit it. A window that holds the request but not
+    its work room starts with a notice and the words whole (owner 5b A). An unknown window keeps the words;
+    a pointer that does not fit either, or a failed source
     write, names the impossible start. The pointer's reader reaches the end of the exact input. Route recovery
     still counts the current resident schemas without reapplying the start allowance."""
     import math
@@ -574,17 +578,22 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
     page = _read_file(reader, locator["path"], root="artifact_store", start_line=1, max_lines=1,
                       start_char=at, max_chars=len(final))
     assert page.endswith(final) and at > 240_000  # the reader reaches the input's last constraint
-    # Owner 7A: a window that holds the whole request but not its start work room names the start; the words stay whole.
+    # Owner 5b A: missing start room is a notice; the physically fitting words stay whole.
     writes = []
     store = artifacts.store_actor_source_bytes
     monkeypatch.setattr(artifacts, "store_actor_source_bytes", lambda *a, **kw: (writes.append(a) if kw.get("source_id") == "task_input" else None) or store(*a, **kw))
-    with pytest.raises(context_fit.MinimumViewUnfit, match="Core, assignment, resident control tools and work room") as unfit:
-        plan(heavy_meta, 1.0, full + 10_000)  # holds the request, not its ~21K start work room
-    assert not unfit.value.physical and writes == []
+    short_room = plan(heavy_meta, 1.0, full + 10_000)  # holds the request, not its ~21K start work room
+    assert total(short_room, heavy_meta, 1.0) <= full + 10_000
+    assert not pointer(short_room) and writes == []
+    assert 'Start room is smaller than requested' in short_room.nano_projection.system_content_json
     assert not pointer(plan(heavy_meta, 1.0, full + 30_000)) and writes == []  # and with the room: text, as above
     # Owner 7A: a window that cannot hold the pointer request either names the impossible frame before any send.
-    with pytest.raises(context_fit.MinimumViewUnfit, match="Core, assignment, resident control tools and work room"):
-        plan(heavy_meta, 1.0, total(rescued, heavy_meta, 1.0) - 1)
+    # Price a genuinely impossible fixed frame, not an earlier candidate whose
+    # remaining memory can still narrow when the start margin is soft.
+    fixed_bound = context_fit.tool_schema_tokens(heavy_meta) + NANO_MIN_HEADROOM_TOKENS
+    with pytest.raises(context_fit.MinimumViewUnfit, match="Core, assignment, resident control tools and work room") as unfit:
+        plan(heavy_meta, 1.0, fixed_bound - 1)
+    assert unfit.value.physical and unfit.value.deficit_tokens > 0
     # An unknown or stale window never hides the words.
     assert not pointer(plan(heavy_meta, 1.0, window, status="failed"))
     assert not pointer(plan(heavy_meta, 1.0, window, stale=True))
@@ -601,10 +610,14 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
     on = lambda tools, **kw: built.reproject_for_route(window_tokens=kw.pop("window", middle), known_window=True,  # noqa: E731
                                                        ratio=1.0, output_reserve=65_536, tool_schemas=tools, start_mode="nano", **kw)
     assert on(meta).nano_projection.system_content_json == built.nano_projection.system_content_json
-    # This owner-Nano start already addressed every eligible memory element. More resident schemas
-    # cannot create another cut; the physical measurement must still expose their complete cost.
+    # Extra resident schemas put this previously fitting view under physical pressure.
+    # The shared host/memory ladder narrows it and the entire schema cost remains measured.
     loaded = on(meta + big)
-    assert loaded.nano_projection.system_content_json == built.nano_projection.system_content_json
+    assert loaded.nano_projection.memory_facts['floor']['steps']
+    for step, count in built.nano_projection.memory_facts['floor']['steps'].items():
+        assert loaded.nano_projection.memory_facts['floor']['steps'].get(step, 0) >= count
+    assert loaded.nano_projection.estimated_tokens < built.nano_projection.estimated_tokens
+    assert loaded.core == built.core
     def measured(tools):
         return context_fit.measure_main_fit(on(tools), built.messages_for("nano"), tools,
             profile="owner_nano", rendered_mode="nano", round_id="1").measurement

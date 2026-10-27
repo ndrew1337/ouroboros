@@ -6,14 +6,16 @@ from tests import _memory_scale_fixture as scale
 
 
 def test_owner_max_remaining_work_room_deficit_is_not_hidden(tmp_path, monkeypatch):
-    # The new lists fit physically. The existing Low start-work-room rule still
-    # refuses; changing that policy is an owner decision, not another memory cut.
-    with pytest.raises(cf.MinimumViewUnfit) as raised:
-        scale.build(tmp_path, monkeypatch, reply_limit=16384)
-    error = raised.value
-    assert not error.physical and error.deficit_tokens == 0
-    assert error.work_room_deficit_tokens == 1355
-    assert error.memory_view_tokens < 10000
+    from ouroboros.context_budget import context_mode_limits
+    plan = scale.build(tmp_path, monkeypatch, reply_limit=16384)
+    shown = plan.projection(plan.initial_mode)
+    tokens = shown.calibrated_tokens + cf.tool_schema_tokens(list(select_tool_schemas(
+        scale.tools(), context_mode=plan.initial_mode).schemas))
+    reserve = context_mode_limits(plan.initial_mode, plan.preferred_mode, plan.output_reserve_tokens,
+                                  working_reserve_tokens=plan.working_reserve_tokens)[1]
+    margin = 92000 - reserve - tokens
+    assert 0 <= margin < 11500, f'input={tokens}, reserve={reserve}, window=92000, margin={margin}'
+    assert 'Start room is smaller than requested' in shown.system_content_json
 
 
 @pytest.mark.parametrize('mode', ['max', 'nano'])

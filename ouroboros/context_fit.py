@@ -113,7 +113,7 @@ class ContextFitPlan:
                             tool_schemas: Optional[List[Dict[str, Any]]], start_mode: Optional[str] = None,
                             current_messages: Optional[List[Dict[str, Any]]] = None,
                             refused_tokens: int = 0, select_mode: Optional[str] = None,
-                            measured_input_tokens: Optional[int] = None) -> "ContextFitPlan":
+                            measured_input_tokens: Optional[int] = None, start_work: bool = False) -> "ContextFitPlan":
         """Fit shown bytes; an actual envelope's raw estimate also prices its extra framing.
 
         The measurement belongs to this candidate, includes tools and excludes the reply.
@@ -154,6 +154,8 @@ class ContextFitPlan:
             overhead = max(0, int(measured_input_tokens or 0) - raw)
             request = math.ceil((raw + overhead) * ratio)
             request += context_mode_limits(start, self.preferred_mode, output_reserve, **reserve_args)[1]
+            if start_work and known_window:
+                request += math.ceil((record.boundary if record else window_tokens) / context_budget.RECLAIM_LOW_WATER_DIVISOR)
             deficit = max(request - window_tokens if known_window and window_tokens else 0, int(refused_tokens or 0))
             if deficit > 0 or select_mode:
                 snapshot = snapshot_from_json(self.core.memory_view_json) if self.core.memory_view_json else None
@@ -164,6 +166,7 @@ class ContextFitPlan:
                     window_tokens=window_tokens, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
                     window_record=record,
                     envelope_overhead_tokens=overhead,
+                    start_work=start_work,
                     resident=True, current_messages=current_messages,  # actual running tail, enable_tools included
                     kept={mode: memory_floor.kept_level(snapshot, self.projection(mode).memory_facts) if snapshot else None
                           for mode in memory_floor.MODES},
@@ -631,7 +634,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
                       kept: Optional[Mapping[str, Any]] = None, saving: Optional[Mapping[str, int]] = None,
                       select: Optional[str] = None, kept_sections: Optional[Mapping[str, Iterable[Mapping]]] = None,
                       working_reserve_tokens: Optional[int] = None, window_record: Optional[WindowRecord] = None, work_room_levels: int = 1,
-                      envelope_overhead_tokens: int = 0,
+                      envelope_overhead_tokens: int = 0, start_work: bool = False,
                       ) -> Tuple[Dict[str, Tuple[List[Dict[str, Any]], Dict]], str]:
     """Select books once, walk memory once. Unsent book forms share the selected memory, not another budget."""
     from dataclasses import replace
@@ -674,7 +677,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             measure=lambda addressed: measure(addressed, story_before, room_before),
             window=window if known_window else None, reserve=reserve, ratio=ratio,
             saving=(saving or {}).get(start or preferred, 0), root=core.section_root, task_id=core.section_task_id,
-            allowance=host_allowances["margin" if kept is None else "physical"])
+            allowance=host_allowances["margin" if kept is None or start_work else "physical"])
         fixed = measure(section_views(sections[selected], receipts))
         allowances = floor.floor_allowances(window_tokens=window if known_window else None,
             output_reserve_tokens=reserve, non_memory_tokens=fixed, target_tokens=target if kept is None else None,
@@ -699,7 +702,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
 
     # Max names whole books. Story is the last rung: change books before taking its pages.
     whole_story = render_story(snapshot) if snapshot else ""
-    if kept is None and mode == "max" and allowances["margin"] is not None:
+    if (kept is None or start_work) and mode == "max" and allowances["margin"] is not None:
         if floor.view_tokens(whole_story) > allowances["margin"] or math.ceil(fixed * ratio) + reserve + work() > window:
             mode = "low"
             sent, fixed, reserve, window, boundary, allowances = frame(mode)
@@ -708,7 +711,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             and math.ceil((fixed + (floor.minimal_view_tokens(snapshot, window_tokens=window) if snapshot else 0)) * ratio) + reserve > window):
         mode = "nano"
         sent, fixed, reserve, window, boundary, allowances = frame(mode)
-    if kept is None and known_window and math.ceil(fixed * ratio) + reserve + work() > window:
+    if kept is None and known_window and math.ceil(fixed * ratio) + reserve > window:
         minimum = floor.minimal_view_tokens(snapshot, window_tokens=window) if snapshot else 0
         unfit = MinimumViewUnfit("Core, assignment, resident control tools and work room cannot fit",
                                  fixed_tokens=fixed, memory_tokens=minimum, reserve_tokens=reserve,
@@ -724,6 +727,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             non_memory_tokens=fixed, lowered_from=preferred if mode != preferred else None,
             tool_names=None if tool_schemas is None else sent.chosen,
             kept=None if kept is None else kept.get(start or preferred), saving=saved, boundary_tokens=boundary,
+            start_work=start_work,
             working_reserve_tokens=working_reserve_tokens,
             measure_text=lambda story, room: _request_tokens(_system_blocks(core, governance[form[mode]], story, room,
                 mode=mode, addressed=section_views(sections[mode], receipts)), user_content_json,
@@ -732,7 +736,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
     if snapshot:
         story, room, facts = render()
         # Judged on the completed start view: Max keeps whole books only beside the whole story and the work room.
-        if kept is None and mode == "max" and allowances["margin"] is not None and (
+        if (kept is None or start_work) and mode == "max" and allowances["margin"] is not None and (
                 story != whole_story or floor.view_tokens(story) + floor.view_tokens(room) > allowances["margin"]):
             mode = "low"
             sent, fixed, reserve, window, boundary, allowances = frame(mode)

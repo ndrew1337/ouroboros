@@ -31,7 +31,7 @@ def test_incident_start_keeps_story_before_old_replies(tmp_path, monkeypatch):
     print("INCIDENT_START", json.dumps({"floor": steps, "input": shown.calibrated_tokens, "mode": plan.initial_mode}))
     assert steps.get("F2", 0) > 0 and steps.get("F5", 0) < 103
     assert steps != {"F1": 359, "F5": 103}
-    assert shown.calibrated_tokens + 65_536 + 218_000 <= 872_000
+    assert shown.calibrated_tokens + 65_536 + 109_000 <= 872_000  # one eighth for wakes too
 
 
 def test_incident_chosen_range_survives_zero_result_room(tmp_path, monkeypatch):

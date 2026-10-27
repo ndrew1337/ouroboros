@@ -21,8 +21,8 @@ def test_agent_context_budget_values_pinned():
     # is two low-water levels under a window, one under an owner Low/Nano target.
     assert cb.OWNER_LOW_TARGET_TOKENS == 250_000
     assert cb.OWNER_NANO_TARGET_TOKENS == 85_000
-    assert cb.start_room_levels("integrator") == cb.start_room_levels("consciousness") == 2
-    assert cb.start_room_levels("presence", focus_wake=True) == 2
+    assert cb.start_room_levels("integrator") == cb.start_room_levels("consciousness") == 1
+    assert cb.start_room_levels("presence", focus_wake=True) == 1
     assert cb.start_room_levels("integrator", direct_chat=True) == cb.start_room_levels("presence") == 1
     assert cb.start_room_levels("child") == cb.start_room_levels("nanny") == 1
     for retired in ("BG_CONTEXT_WARN_CHARS", "BG_CONTEXT_MAX_CHARS", "BG_STATE_JSON_WARN_CHARS", "BG_OBSERVATIONS_WARN_BYTES"):

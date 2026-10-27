@@ -52,14 +52,14 @@ def test_session_seal_obeys_window_record_and_reserve(host_world, monkeypatch, w
     assert rotated.physical_context.capacity_total_tokens == window
 
 
-def test_work_room_only_preparation_refusal_finishes_once_without_pause_recovery(direct_call, tmp_path, monkeypatch):
+def test_legacy_nonphysical_preparation_refusal_is_still_terminalized_once(direct_call, tmp_path, monkeypatch):
     from ouroboros import agent_task_pipeline as pipeline
     from ouroboros.context_fit import MinimumViewUnfit
     from ouroboros.task_results import load_task_result, write_task_result
     from ouroboros.tools.tool_context import ToolContext
     from ouroboros.utils import append_jsonl
     from supervisor import direct_pause, worker_chat_lane, workers
-    from tests.test_context_minimum_view_unfit import FACTS, build_minimum_view
+    from tests.test_context_minimum_view_unfit import FACTS
 
     world = direct_call
     bus, finished, failures = queue.Queue(), [], []
@@ -73,12 +73,13 @@ def test_work_room_only_preparation_refusal_finishes_once_without_pause_recovery
 
     def prepare(task):
         write_task_result(tmp_path, task["id"], "running", chat_id=1, _is_direct_chat=True)
-        try:
-            build_minimum_view(tmp_path, monkeypatch, "work_room", task=task)
-        except MinimumViewUnfit as error:
-            failures.append(error)
-            raise
-        pytest.fail("the synthetic work-room shortfall unexpectedly fitted")
+        # The new ordinary fitter admits this soft shortfall. Keep compatibility
+        # with an already prepared legacy refusal and its once-only terminalization.
+        error = MinimumViewUnfit('Legacy work-room refusal', fixed_tokens=75_000, memory_tokens=1_000,
+            reserve_tokens=10_000, window_tokens=92_000, work_room_tokens=11_500, ratio=1.0)
+        error.physical = False
+        failures.append(error)
+        raise error
 
     agent = SimpleNamespace(handle_task=prepare, env=SimpleNamespace(drive_root=tmp_path, repo_dir=tmp_path),
                             memory=None, llm=None, tools=SimpleNamespace(_ctx=None))

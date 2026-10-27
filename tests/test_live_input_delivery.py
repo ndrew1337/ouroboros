@@ -17,7 +17,7 @@ def test_fifty_frame_capture_reaches_slow_provider_in_order(delay):
     from skills.live_conversation.driver import _Call
     async def run():
         hub = LiveCallHub(cp.CallSpec('input-delivery', 1, 'fixture', 'voice'))
-        host = SimpleNamespace(hub=hub, state={}, renewal_due=lambda: False)
+        host = SimpleNamespace(hub=hub, state={}, renewal_due=lambda: False, context_view_pending=lambda: False)
         call = _Call(host)
         call.input_rate = 24000
         received, incoming = [], asyncio.Queue()

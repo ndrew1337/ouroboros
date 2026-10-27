@@ -169,18 +169,17 @@ def test_ordinary_measurement_keeps_reserve_and_density_with_accepted_input_lowe
 @pytest.mark.parametrize("mode", ["max", "low", "nano"])
 @pytest.mark.parametrize("window", [0, 50_000, 2_000_000])
 def test_ordinary_projection_matches_equivalent_declared_route(tmp_path, monkeypatch, mode, window):
-    """The same units and reserve use one ladder; an impossible core names the same failure."""
+    """The same units and reserve use one ladder, including a soft start-room shortfall."""
     monkeypatch.setattr(fit, "_route_calibration_ratio", lambda *_a, **_kw: 1.5)
     captured = replace(core(tmp_path, memory=True), section_root="", dynamic_sections=())
     facts = RouteFacts(conversation_window_tokens=window or None, acceptance_can_raise=True)
-    if window == 50_000:
-        for route_facts in (None, facts):
-            with pytest.raises(fit.MinimumViewUnfit):
-                plan(captured, window, mode=mode, facts=route_facts)
-        return
     ordinary = plan(captured, window, mode=mode)
     declared = plan(captured, window, mode=mode, facts=facts)
     assert ordinary.initial_mode == declared.initial_mode
+    if window == 50_000:
+        measured = fit.measure_main_fit(ordinary, ordinary.messages_for(ordinary.initial_mode), [],
+            profile='task_local_nano', rendered_mode=ordinary.initial_mode, round_id='equivalence')
+        assert measured.measurement.capacity_deficit_tokens == 0
     for selected in ("max", "low", "nano"):
         assert ordinary.messages_for(selected) == declared.messages_for(selected)
         assert ordinary.projection(selected).memory_facts == declared.projection(selected).memory_facts

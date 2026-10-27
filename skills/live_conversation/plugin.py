@@ -50,7 +50,7 @@ def configuration_view(config, catalogs):
 
 
 def register(api):
-    from .driver import call_tools, run
+    from .driver import INITIAL_TOOLS, call_tools, run
     from ouroboros.utils import atomic_write_json
 
     state_dir = Path(api.get_state_dir())
@@ -101,7 +101,8 @@ def register(api):
             return JSONResponse(configuration_view(config, catalogs))
         return JSONResponse(configuration_view(configure(), catalogs))
 
-    api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir))
+    api.register_live_conversation("call", handle, configure=configure, call_tools=call_tools(state_dir),
+                                   initial_tools=INITIAL_TOOLS)
     api.register_route("config", settings, methods=["GET", "POST"])
     api.register_settings_section("conversation", title="Calls (beta)", schema={"components": [
         {"type": "markdown", "text": "The call skills are on by default. To talk, turn on Calls (beta), choose an engine "

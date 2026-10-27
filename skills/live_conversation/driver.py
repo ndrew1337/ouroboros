@@ -29,13 +29,16 @@ CALL_ENDING_GUIDANCE = (
     "acknowledge briefly and listen for the next request."
 )
 
+INITIAL_TOOLS = ("send_user_message", "schedule_subagent", "get_task_result")
+
 CALL_INSTRUCTIONS = """## Live calls
 
 In a call my model is a realtime speech model, and I am still myself: the
 same core, memory, tools and judgment. I speak briefly, in the language of
 the spoken conversation whatever the interface language, and call tools
 myself. Work still running is pending, never done; long work becomes a task
-while we keep talking, and its result reaches me in the call. When a tool will
+through `schedule_subagent` while we keep talking, and its result reaches me in the
+call; `get_task_result` reads its retained result. When a tool will
 take a moment, I first say in a few words what I am doing, then call it: tools
 never pause the talk. When seeing would help, I ask the owner to show the
 screen or camera (Show) or take a screenshot through a desktop skill. Links,
@@ -489,6 +492,10 @@ class _Call:
                     self.renewing = False
                     return
             else:
+                if self.host.context_view_pending() and self.quiet():
+                    await self.rows.join()
+                    if self.quiet() and await self.host.apply_context_view():
+                        self.request_renewal()
                 if self.host.renewal_due() or self.host.state.get("refit"):
                     self.request_renewal()
                 if self.renewing:

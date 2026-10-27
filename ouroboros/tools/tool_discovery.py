@@ -253,6 +253,29 @@ def _named_namespace_guidance(registry: "ToolRegistry", names: List[str], *, dis
     return lines
 
 
+def update_resident_notice(registry, resident, messages):
+    """One host fact about the schemas actually sent, including feature tools."""
+    from ouroboros.context_budget import bound_host_row
+
+    names = [schema["function"]["name"] for schema in resident]
+    remaining = {schema["function"]["name"] for schema in registry.schemas()} - set(names)
+    notice = (bound_host_row("tool_manifest", "[SYSTEM NOTICE]\n"
+            f"You have {len(names)} tools loaded: {', '.join(names)}. "
+            f"There are {len(remaining)} additional tools available; "
+            "use `list_available_tools` to see them and `enable_tools` to load their schemas.") if remaining else None)
+    updated = []
+    for row in messages:
+        if row.get('_host_context_kind') == 'tool_manifest':
+            if notice is not None:
+                updated.append(notice)
+                notice = None
+        else:
+            updated.append(row)
+    if notice is not None:
+        updated.append(notice)
+    messages[:] = updated
+
+
 def bind_resident_schemas(registry: "ToolRegistry", resident: List[Dict[str, Any]]) -> set:
     """Bind both handlers of ``registry`` to one loop's resident schema list."""
     enabled_late: set = set()

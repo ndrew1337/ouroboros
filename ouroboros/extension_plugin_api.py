@@ -379,7 +379,8 @@ class PluginAPIImpl:
             }, "realtime provider")
 
     def register_live_conversation(self, name: str, handler: Callable[..., Any], *,
-                                   configure: Callable[[], Any], call_tools: Sequence[Any] = ()) -> None:
+                                   configure: Callable[[], Any], call_tools: Sequence[Any] = (),
+                                   initial_tools: Sequence[str] = ()) -> None:
         """An in-process conversation feature; ordinary admission grants its host port."""
         from ouroboros.contracts.live_conversation import CallTool
 
@@ -389,6 +390,9 @@ class PluginAPIImpl:
         if not inspect.iscoroutinefunction(handler) or not callable(configure):
             raise ExtensionRegistrationError("conversation requires an async handler and configuration reader")
         tools = tuple(call_tools)
+        if isinstance(initial_tools, str):
+            raise ExtensionRegistrationError("initial_tools must be a sequence of ordinary tool names")
+        initial = tuple(dict.fromkeys(_assert_tool_name(name) for name in initial_tools))
         for tool in tools:
             if not isinstance(tool, CallTool) or not inspect.iscoroutinefunction(tool.handler):
                 raise ExtensionRegistrationError("call tools must be contracts.live_conversation.CallTool with async handlers")
@@ -399,7 +403,7 @@ class PluginAPIImpl:
             self._stage_surface_locked(_conversation_features, self._staged.conversation_features,
                 f"{self._skill}:{short}", {"skill": self._skill,
                 "handler": self._wrap_runtime_handler(handler), "configure": configure,
-                "call_tools": tools}, "conversation feature")
+                "call_tools": tools, "initial_tools": initial}, "conversation feature")
 
     def register_tool(
         self,

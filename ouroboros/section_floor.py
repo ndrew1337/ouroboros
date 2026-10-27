@@ -79,6 +79,32 @@ def render_sections(sections: Iterable[HostSection], fallback: str, addressed: M
     return "\n\n".join(addressed.get(part.section_id, part.full_text) for part in parts) if parts else fallback
 
 
+def section_inventory(plan, mode, facts):
+    """The captured host forms and their resident prices, for the ordinary view inventory.
+
+    These are producer-owned forms selected by the shared floor, not dialogue
+    units the mind can replace with a note. The reader retains the exact full source.
+    """
+    from ouroboros.context_fit import _governance_blocks
+    from ouroboros.utils import estimate_tokens
+
+    core = plan.core
+    governance = _governance_blocks(None, core, mode='low' if mode == 'nano' else mode)
+    sections = (*core.semi_stable_sections, *core.dynamic_head_sections, *core.dynamic_sections,
+                *(governance[0] if not isinstance(governance[0], str) else ()))
+    receipts = {row['section_id']: row for row in facts.get('host_sections_addressed', ())}
+    rendered = section_views(sections, receipts.values())
+    return [{'view_address': 'host:' + section.section_id, 'section_id': section.section_id,
+             'kind': 'host', 'tokens': estimate_tokens(section.full_text),
+             'resident_tokens': estimate_tokens(rendered.get(section.section_id, section.full_text)),
+             'form': 'operative' if section.section_id in rendered else 'whole',
+             'operative_tokens': estimate_tokens(section.operative_view) if section.operative_view is not None else None,
+             'selected': section.section_id in rendered, 'eligible': False,
+             'protected': section.section_id in PROTECTED,
+             **({'source_ref': receipts[section.section_id]['source_ref']} if section.section_id in receipts else {})}
+            for section in sections]
+
+
 def _governance_blocks(env: Any, core: Any, *, mode: str, reference_docs: Callable) -> Tuple[Any, ...]:
     # D-ARCH (owner, 2026-08-08): the reference-doc form follows the RENDERED
     # mode directly — ARCHITECTURE is full in max for every task class and the

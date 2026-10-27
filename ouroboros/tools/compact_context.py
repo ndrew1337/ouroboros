@@ -17,7 +17,8 @@ _NOTE_REQUIRED = ("authored_note_required: inspect the working view, then supply
                   "(keep_unit_ids or keep_last_n select what stays raw); no helper writes it for you.")
 
 
-def record_context_view(ctx, messages, tool_schemas, *, physical_capture=_CANONICAL_OBSERVATION) -> None:
+def record_context_view(ctx, messages, tool_schemas, *, physical_capture=_CANONICAL_OBSERVATION,
+                        fit_measurement=None) -> None:
     """Capture a usable turn's canonical source; prospective pricing never calls this.
 
     Nothing is added to the prompt or cache identity. Inspect pins this one
@@ -36,7 +37,8 @@ def record_context_view(ctx, messages, tool_schemas, *, physical_capture=_CANONI
         # Continuations retain values, never the live plan. The same core can
         # render this captured selection even after another form was chosen.
         "memory_core_sha256": plan.core_sha256 if memory else "",
-        "memory_facts": {"floor": copy.deepcopy(plan.projection(mode).memory_facts.get("floor") or {})} if memory else {},
+        "memory_facts": copy.deepcopy(plan.projection(mode).memory_facts) if memory else {},
+        "fit_measurement": copy.deepcopy(fit_measurement),
     }
     if physical_capture is _CANONICAL_OBSERVATION:
         return  # Existing non-Main actors retain their own observation boundary.
@@ -135,9 +137,20 @@ def _inspect(ctx, observed: dict, *, offset: int) -> str:
     memory_rows = view_inventory(plan if memory_available else None, getattr(ctx, "active_context_mode", "") or "max",
                                  memory_facts=observed.get("memory_facts"))
     rows.extend(memory_rows)
-    counts["memory"] = len(memory_rows)
-    tokens["memory"] = sum(row["tokens"] for row in memory_rows)
+    counts['memory'] += 0
+    tokens['memory'] += 0
+    for row in memory_rows:
+        counts[row['kind']] += 1
+        tokens[row['kind']] += row['tokens']
+    measurement = observed.get('fit_measurement')
+    if measurement is None:
+        from ouroboros.loop_model_call import _measure_main_context_view
+        measurement = _measure_main_context_view(plan, messages, observed['tool_schemas'],
+            getattr(ctx, 'active_context_mode', '') or 'max', getattr(ctx, 'active_effort', ''), 'inspect')
     body = {
+        "fit_measurement": measurement,
+        "work_room": observed.get('work_room'),
+        "resident_memory": (observed.get('memory_facts') or {}).get('blocks', {}),
         **({"review_attachment_transfer": transfers} if transfers else {}),
         **({"review_decisions": decisions} if decisions else {}),
         "view_revision": observed["revision"],

@@ -98,6 +98,9 @@ class DriverHost:
     def renewal_due(self):
         return False
 
+    def context_view_pending(self):
+        return False
+
     async def session(self, consume, options):
         transport = self.transport if not self.sessions else EventSession()
         self.sessions.append(transport)

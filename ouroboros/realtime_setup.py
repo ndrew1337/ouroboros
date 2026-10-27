@@ -126,6 +126,61 @@ def observe_live_input(host, raw_usage):
         resolve_window(host.plan, reserve, root=host.ctx.drive_root), host.model.facts)
 
 
+def _session_density(host, plan, estimate):
+    from ouroboros.capability_evidence import resolve_main_token_density
+    return (resolve_main_token_density(host.ctx.drive_root, plan.route_fp, plan.model,
+                                      estimate_tokens=estimate, view_kind=plan.view_kind)
+            if host.model.facts.basis == "provider" else (1.0, "cold_estimate"))
+
+
+def measure_session_wire(host, plan, messages, schemas, factory, options):
+    """Seal and price one complete candidate, without selecting a view or opening a socket.
+
+    Admission and authored-view receipts use this same envelope measurement.
+    Instantiating a provider session is inert; only its host-owned open starts I/O.
+    """
+    import math
+    from dataclasses import asdict, replace
+    from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
+    from ouroboros.context_window import resolve_window
+    from ouroboros.context_view_facts import window_projection
+    from ouroboros.loop_model_call import _main_context_profile, _physical_context_for_fit
+    from ouroboros.usage_accounting import AttemptRequest
+
+    facts = host.model.facts
+    rows = [*messages, *([{"role": "system", "content": options.instructions}] if options.instructions else [])]
+    fit = measure_main_fit(plan, rows, schemas, profile=_main_context_profile(plan, plan.initial_mode),
+        rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
+    selected = input_from_context_plan(plan, model=host.turn.native_model, selected_tools=schemas,
+        output_allowance_tokens=fit.measurement.reply_allowance_tokens, messages=messages)
+    session = factory(selected, options, observe=host.observe)
+    bound = session.output_bound_tokens
+    if bound is not None and (type(bound) is not int or bound < 1):
+        raise RealtimeSetupError("output_bound", "provider output bound must be positive or unknown")
+    wire = canonical_json(session.wire)
+    raw = max(estimate_context_prompt_tokens(rows, schemas), estimate_context_prompt_tokens([session.wire]))
+    ratio, basis = _session_density(host, plan, raw)
+    measured = math.ceil(raw * ratio)
+    working = max(facts.working_reserve_tokens or plan.output_reserve_tokens, bound or 0)
+    window = resolve_window(plan, working, root=host.ctx.drive_root, bound=plan.window_witness_bound)
+    capacity = window.total_equivalent if window.usable is not None else None
+    deficit = max(0, measured + working - capacity) if capacity is not None else None
+    measurement = replace(fit.measurement, estimated_input_tokens=measured, raw_input_tokens=raw,
+        measurement_density=ratio, measurement_basis=basis, response_reserve_tokens=working,
+        window=window_projection(window), capacity_total_tokens=capacity, capacity_deficit_tokens=deficit)
+    fit = replace(fit, measurement=measurement, predicted_capacity_miss=bool(deficit))
+    request = AttemptRequest(model=host.turn.model, provider=host.turn.route.accounting_provider,
+        drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, source="agent.live_conversation",
+        prompt_tokens_estimate=measured, prompt_tokens_bounded_estimate=raw,
+        max_completion_tokens=bound or selected.output_allowance_tokens, working_reserve_tokens=working,
+        allow_live_fetch=False, candidate_raw_sha256=sha256(wire), candidate_raw_size_bytes=len(wire.encode()),
+        candidate_context_sha256=selected.sha256, candidate_context_size_bytes=len(selected.messages_json.encode()),
+        candidate_measurement_kind="canonical_json_v1", physical_context=_physical_context_for_fit(fit))
+    evidence = {"fit": asdict(fit), "route_facts": asdict(facts), "tool_count": len(schemas),
+                "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "units": facts.basis}
+    return session, request, evidence, window
+
+
 def session_candidate(host, factory, options, *, observation_fp=None):
     """Refit current canonical rows through the ordinary window ladder, then seal.
 
@@ -134,14 +189,15 @@ def session_candidate(host, factory, options, *, observation_fp=None):
     asks the existing ladder for that measured deficit; unchanged bytes refuse.
     """
     import math
-    from dataclasses import asdict, replace
-    from ouroboros.capability_evidence import is_known, resolve_main_token_density
-    from ouroboros.context_fit import estimate_context_prompt_tokens, measure_main_fit
+    from dataclasses import replace
+    from ouroboros.context_budget import RECLAIM_LOW_WATER_DIVISOR, bound_host_row
+    from ouroboros.context_fit import estimate_context_prompt_tokens
     from ouroboros.context_window import WindowLimit, WindowRecord, resolve_window
     from ouroboros.llm_attempt import main_context_fit_refusal
-    from ouroboros.loop_model_call import _main_context_profile, _physical_context_for_fit
-    from ouroboros.usage_accounting import AttemptRequest
 
+    if any(row.get('_host_context_kind') == 'tool_manifest' for row in host.messages):
+        from ouroboros.tools.tool_discovery import update_resident_notice
+        update_resident_notice(host.tools, host.schemas, host.messages)
     plan, facts = host.plan, host.model.facts
     known = facts.conversation_window_tokens is not None
     window = facts.conversation_window_tokens or 0
@@ -157,19 +213,16 @@ def session_candidate(host, factory, options, *, observation_fp=None):
     record = resolve_window(plan, reserve, root=host.ctx.drive_root, bound=plan.window_witness_bound)
     window, known = record.total_equivalent, record.usable is not None
     plan = replace(plan, window_record=record, window_tokens=window)
+    start_work = not getattr(host, "_session_opened", False)
     extra = [{"role": "system", "content": options.instructions}] if options.instructions else []
     rows = [*host.messages, *extra]
     raw = estimate_context_prompt_tokens(rows, host.schemas)
-    def density(estimate):
-        return (resolve_main_token_density(host.ctx.drive_root, plan.route_fp, plan.model,
-                                           estimate_tokens=estimate, view_kind=plan.view_kind)
-                if facts.basis == "provider" else (1.0, "cold_estimate"))
-    ratio, basis = density(raw)
+    ratio, _ = _session_density(host, plan, raw)
     deficit, previous, measured_input = 0, None, None
     while True:
         plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
             output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode=plan.initial_mode,
-            current_messages=rows, refused_tokens=deficit, measured_input_tokens=measured_input)
+            current_messages=rows, refused_tokens=deficit, measured_input_tokens=measured_input, start_work=start_work)
         if plan.initial_mode != host._schemas_mode:
             # The ordinary ladder chose this mode. Rebind its starting tools,
             # keeping explicit discovery, then fit the changed envelope once.
@@ -179,44 +232,41 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             continue
         current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
-        fit = measure_main_fit(plan, rows, host.schemas, profile=_main_context_profile(plan, plan.initial_mode),
-            rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
-        selected = input_from_context_plan(plan, model=host.turn.native_model, selected_tools=host.schemas,
-            output_allowance_tokens=fit.measurement.reply_allowance_tokens, messages=current)
-        session = factory(selected, options, observe=host.observe)
-        bound = session.output_bound_tokens
-        if bound is not None and (type(bound) is not int or bound < 1):
-            raise RealtimeSetupError("output_bound", "provider output bound must be positive or unknown")
-        wire = canonical_json(session.wire)
-        raw = estimate_context_prompt_tokens(rows, host.schemas)
-        # Budget the sealed envelope as well as the ordinary selection. This
-        # includes provider-added instructions/language sentences without core
-        # knowing provider field names. The ordinary ladder reclaims any deficit.
-        raw = max(raw, estimate_context_prompt_tokens([session.wire]))
-        ratio, basis = density(raw)
-        measured = math.ceil(raw * ratio)
-        working = max(reserve, bound or 0)
-        physical_window = resolve_window(plan, working, root=host.ctx.drive_root, bound=plan.window_witness_bound)
-        measurement = replace(fit.measurement, estimated_input_tokens=measured, raw_input_tokens=raw,
-            measurement_density=ratio, measurement_basis=basis,
-            response_reserve_tokens=working,
-            capacity_total_tokens=physical_window.total_equivalent if is_known(plan) else None)
-        fit = replace(fit, measurement=measurement)
-        request = AttemptRequest(model=host.turn.model, provider=host.turn.route.accounting_provider,
-            drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, source="agent.live_conversation",
-            prompt_tokens_estimate=measured, prompt_tokens_bounded_estimate=raw,
-            max_completion_tokens=bound or selected.output_allowance_tokens, working_reserve_tokens=working,
-            allow_live_fetch=False, candidate_raw_sha256=sha256(wire), candidate_raw_size_bytes=len(wire.encode()),
-            candidate_context_sha256=selected.sha256, candidate_context_size_bytes=len(selected.messages_json.encode()),
-            candidate_measurement_kind="canonical_json_v1", physical_context=_physical_context_for_fit(fit))
+        session, request, evidence, physical_window = measure_session_wire(host, plan, current, host.schemas, factory, options)
+        measurement = evidence['fit']['measurement']
+        measured, raw = measurement['estimated_input_tokens'], measurement['raw_input_tokens']
+        ratio = measurement['measurement_density']
+        available = physical_window.total_equivalent - measured - physical_window.reserve if known else None
+        wanted = math.ceil(physical_window.boundary / RECLAIM_LOW_WATER_DIVISOR) if start_work and known else 0
+        shortage = max(0, wanted - available) if available is not None else 0
+        evidence['work_room'] = dict(first_send=start_work, requested_tokens=wanted,
+            remaining_tokens=available, deficit_tokens=shortage)
         refusal = main_context_fit_refusal(request)
-        evidence = {"fit": asdict(fit), "route_facts": asdict(facts), "tool_count": len(host.schemas),
-                    "input_sha256": selected.sha256, "wire_sha256": sha256(wire), "units": facts.basis}
+        if refusal is None and shortage:
+            if previous is None or measured < previous:
+                previous, deficit, measured_input = measured, shortage, raw
+                continue  # price late tools, instructions and provider framing in the ordinary start walk
+            detail = ('Start room is smaller than requested: the complete input and reply/working reserve '
+                      'leave less than one eighth of the window. The physical request fits; this work starts with less room.')
+            evidence['work_room'].update(reason='start_room_shortfall', detail=detail)
+            if not any(row.get('_host_context_kind') == 'context_start_room' for row in current):
+                notice = bound_host_row('context_start_room', detail)
+                _, with_notice, _, _ = measure_session_wire(host, plan, [*current, notice], host.schemas, factory, options)
+                if main_context_fit_refusal(with_notice) is None:
+                    host.messages.append(notice)
+                    rows = [*host.messages, *extra]
+                    continue  # count the notice too, but never turn a soft shortfall into a refusal
         if refusal is None:
             host._renewal_window, host._renewal_facts = _renewal_window(physical_window, facts), facts
             host._session_instructions = options.instructions
             host._selected_text_estimate = text_input_estimate(rows, host.schemas)
-            host._density_input = host._selected_text_estimate
+            # A text-only response measures the complete text envelope, including
+            # provider framing. Learning from the smaller pre-envelope denominator
+            # would price an identical accepted renewal above its own acceptance.
+            # Media bytes cannot teach text density; retain the text-only basis there.
+            has_media = any(isinstance(row.get('content'), list) and any(
+                not isinstance(part, dict) or part.get('type') != 'text' for part in row['content']) for row in rows)
+            host._density_input = host._selected_text_estimate if has_media else raw
             host._selected_raw_estimate = raw
             host.plan = host.ctx.context_fit_plan = plan
             host.messages[:] = current
@@ -228,7 +278,7 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             # Low is selected the same physical floor can continue to Nano.
             plan = plan.reproject_for_route(window_tokens=window, known_window=known, ratio=ratio,
                 output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode="max",
-                current_messages=rows, select_mode="low")
+                current_messages=rows, select_mode="low", start_work=start_work)
             previous, deficit, measured_input = None, 0, None
             continue
         if previous is not None and measured >= previous:

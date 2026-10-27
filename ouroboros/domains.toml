@@ -76,6 +76,7 @@ D20 = "Presence"
 "ouroboros/gateway/call_ws.py" = "D11"
 "ouroboros/gateway/host_call.py" = "D11"
 "ouroboros/live_conversation.py" = "D01"
+"ouroboros/live_context_view.py" = "D01"
 "ouroboros/live_usage.py" = "D16"
 "ouroboros/presence_call.py" = "D20"
 "ouroboros/presence_events.py" = "D20"
@@ -1223,6 +1224,7 @@ lazy_only = [
   "D03->D16",
   "D03->D20",
   "D04->D01",
+  "D04->D03",
   "D04->D06",
   "D04->D07",
   "D04->D09",

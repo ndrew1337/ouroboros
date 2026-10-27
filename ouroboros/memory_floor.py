@@ -321,8 +321,13 @@ def owner_note_capsule(plan, addresses, note, request, *, drive_root, task_id, m
 
 
 def view_inventory(plan, mode: str, *, memory_facts=None) -> List[Dict[str, Any]]:
-    if plan is None or getattr(plan, "core", None) is None or not plan.core.memory_view_json:
+    if plan is None or getattr(plan, "core", None) is None:
         return []
+    from ouroboros.section_floor import section_inventory
+    facts = plan.projection(mode).memory_facts if memory_facts is None else memory_facts
+    host_rows = section_inventory(plan, mode, facts)
+    if not plan.core.memory_view_json:
+        return host_rows
     snapshot = mv.snapshot_from_json(plan.core.memory_view_json)
     level = kept_level(snapshot, plan.projection(mode).memory_facts if memory_facts is None else memory_facts)
     chosen = {(step, ident) for step, ids in level.addressed for ident in ids}
@@ -331,7 +336,7 @@ def view_inventory(plan, mode: str, *, memory_facts=None) -> List[Dict[str, Any]
              **({"restore_view_address": f"F8:{ident}:whole", "form":
                  'whole' if (step, ident) not in chosen else 'aggregate' if dict(level.addressed).get('F8a') else 'line'}
                 if step == 'F8' else {})}
-            for step, ident, whole, short in degradable_elements(snapshot)]
+            for step, ident, whole, short in degradable_elements(snapshot)] + host_rows
 
 
 def memory_read_path(tool_names: Optional[Iterable[str]]) -> str:
@@ -419,7 +424,8 @@ def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mo
                          lowered_from: Optional[str] = None, tool_names: Optional[Iterable[str]] = None,
                          kept: Optional[mv.FloorLevel] = None, saving: int = 0, boundary_tokens: Optional[int] = None,
                          working_reserve_tokens: Optional[int] = None,
-                         measure_text: Optional[Callable[[str, str], int]] = None) -> Tuple[str, str, Dict[str, Any]]:
+                         measure_text: Optional[Callable[[str, str], int]] = None,
+                         start_work: bool = False) -> Tuple[str, str, Dict[str, Any]]:
     """``(story text, room text, facts)`` of one mode's projection, the floor decided once.
 
     The window counts only when known and fresh (``known_window``). An owner target binds
@@ -438,7 +444,7 @@ def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mo
     allowances = floor_allowances(window_tokens=window, output_reserve_tokens=reserve, non_memory_tokens=non_memory_tokens,
                                   target_tokens=None if kept is not None else target, calibration_ratio=ratio,
                                   work_room_levels=snapshot.spec.work_room_levels, boundary_tokens=boundary_tokens)
-    if kept is not None:
+    if kept is not None and not start_work:
         allowances = {**allowances, "margin": allowances["physical"]}
     size = lambda shown: view_tokens(mv.render_story(snapshot, shown)) + view_tokens(mv.render_room(snapshot, shown))
     uncovered = uncovered_owner_rows(snapshot)

@@ -16,7 +16,7 @@ def frame(bound, physical=10**9):
 
 
 def test_role_budget_is_one_frame_and_reply_is_charged_once():
-    for role, facts, levels in (("integrator", {}, 2), ("consciousness", {"direct_chat": True}, 2),
+    for role, facts, levels in (("integrator", {}, 1), ("consciousness", {"direct_chat": True}, 1),
                                 ("integrator", {"direct_chat": True}, 1), ("child", {}, 1)):
         actual = mf.floor_allowances(window_tokens=200_000, output_reserve_tokens=65_536,
             non_memory_tokens=10_000, work_room_levels=cb.start_room_levels(role, **facts))

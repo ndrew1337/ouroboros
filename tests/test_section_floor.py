@@ -219,7 +219,7 @@ def test_tool_schema_cost_and_route_density_both_count_toward_physical_pressure(
     tokens = _plan(core, 0).max_projection.estimated_tokens
     schemas = [{"type": "function", "function": {"name": "read_file", "description": "schema detail " * 3_000,
                                                 "parameters": {"type": "object", "properties": {}}}}]
-    window = (tokens + RESERVE) * 4 // 3 + 10  # root starts leave two eighths for work
+    window = (tokens + RESERVE) * 8 // 7 + 10  # every start leaves one eighth for work
     assert not _host_facts(_plan(core, window))
     with_tools = fit.build_context_fit_plan(SimpleNamespace(drive_root=tmp_path), core, {"id": "task-1"},
         preferred_mode="max", tool_schemas=schemas,
@@ -332,7 +332,7 @@ def test_retained_host_source_is_exact_immutable_and_readable(tmp_path, monkeypa
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "light")
     repo, root = tmp_path / "repo", tmp_path / "data"
     repo.mkdir()
-    section = _service(size=400)
+    section = _service(size=6_000)  # still forces the host form with the shared one-eighth start room
     plan = _plan(_core(root, [section]), 12_000)
     row = _host_facts(plan)[0]
     ref = row["source_ref"]

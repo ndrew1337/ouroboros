@@ -52,11 +52,9 @@ def test_both_raise_sites_name_their_measured_input_reserve_window_and_deficit(t
         assert f"{label}={value}" in str(error)
 
 
-def test_a_work_room_only_refusal_keeps_its_nonphysical_disposition(tmp_path, monkeypatch):
-    with pytest.raises(fit.MinimumViewUnfit) as raised:
-        build_minimum_view(tmp_path, monkeypatch, "work_room")
-    error = raised.value
-    assert not error.physical and error.deficit_tokens == 0
-    assert error.estimated_input_tokens + error.response_reserve_tokens <= error.window_tokens
-    assert error.work_room_tokens > 0 and error.work_room_deficit_tokens > 0
-    assert f"fixed/work-room deficit={error.work_room_deficit_tokens}" in str(error)
+def test_a_work_room_only_shortfall_starts_with_the_existing_notice(tmp_path, monkeypatch):
+    plan = build_minimum_view(tmp_path, monkeypatch, "work_room")
+    shown = plan.projection(plan.initial_mode)
+    margin = 92_000 - 10_000 - shown.calibrated_tokens
+    assert 0 <= margin < 92_000 // 8, f'physical margin={margin}; requested work room={92_000 // 8}'
+    assert 'Start room is smaller than requested' in shown.system_content_json

@@ -46,9 +46,9 @@ Per-call children reuse the loader/scrubbed env, proxying tools/routes/WS/UI/set
 
 `skill_repair_admission.py` admits managed repair against exact bytes (§6). Bucket/name produces `skill_repair`, promoted to `normal`: payload selection, not a reduced tool profile. Installed payloads need no Git copy; review never forces unload for repair.
 
-### Live Conversation and provider packages (PluginAPI 2.1)
+### Live Conversation and provider packages (PluginAPI 2.2)
 
-Features register `LiveConfig`/call tools, owning media/UI; providers register route/session/catalog, owning wire/usage/route facts. `call_offer` checks calls enabled, provider and credential grants.
+Features register `LiveConfig`/call tools and optional ordinary `initial_tools`, owning media/UI; providers register route/session/catalog, owning wire/usage/route facts. PluginAPI 2.2 adds the initial-tool declaration; existing 2.1 providers remain supported. The live-conversation payload is 0.1.2. Its Live calls frame names `send_user_message`, `schedule_subagent` and `get_task_result`, whose schemas load on the first candidate alongside discovery and feature tools. The resident notice counts and names the actual manifest and explains discovery/enablement. `call_offer` checks calls enabled, provider and credential grants.
 
 `gateway/call_ws.py` admits an owner turn with a `call:<call_id>:open` host fact, answered once by `Respond`. `LiveHost` owns ordinary history/tools/mailbox/money/Stop with process-local authority. `realtime_setup.py` refits current history/schemas/instructions per connection through the ordinary ladder/physical guard. Supported acceptance raises only raiseable route windows through the account-scoped `context_window` record; retention and estimator limits stay declared. Preparation, connector credentials and completion evidence share one session capture (`realtime_credentials.py`); renewal polls a cached resolved window. Provider windows use text density; estimator windows, raw chars/4. Grok usage excludes instructions, never calibrating density. Route reserves survive Nano's reply cap; unresolved overflow refuses typed.
 

@@ -239,6 +239,12 @@ class LiveHost(Protocol):
     async def tool_batch(self, calls: Sequence[dict]) -> list[dict]:
         """Run ordinary and call tools on the serialized lane; return the history changes."""
 
+    def context_view_pending(self) -> bool:
+        """An authored view is queued; a cached check with no store read."""
+
+    async def apply_context_view(self) -> bool:
+        """At a quiet boundary, apply the ordinary authored view; True requires a fresh prefix."""
+
     async def caption(self, speaker: str, text: str, item_id: str, *, heard: bool = False, played_ms: int = 0,
                       interrupted: bool = False, completed: bool = False, replace: bool = False) -> None:
         """Write one final caption to history: owner words, a heard participant, or spoken output."""

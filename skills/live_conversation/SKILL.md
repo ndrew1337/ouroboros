@@ -1,12 +1,12 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.1
+version: 0.1.2
 type: extension
 runtime: python3
 entry: plugin.py
 plugin_api:
-  version: "2.1"
+  version: "2.2"
   capabilities: [register_live_conversation, register_route, register_settings_section]
 permissions: [live_conversation, route, widget, page_module]
 contributes:

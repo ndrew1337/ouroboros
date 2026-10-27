@@ -75,6 +75,7 @@ class Host:
     def response_started(self, response_id): self.usage.append(('start', response_id))
     def response_done(self, response_id, **values): self.usage.append(('done', response_id, values))
     def renewal_due(self): return self.due
+    def context_view_pending(self): return False
 
 
 async def until(predicate):

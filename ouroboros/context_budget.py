@@ -90,13 +90,8 @@ RECLAIM_LOW_WATER_DIVISOR = 8
 WHOLE_CATEGORY = 2**31 - 1
 
 def start_room_levels(role: str, *, focus_wake: bool = False, direct_chat: bool = False) -> int:
-    """Roots and wakes leave two eighths; direct chat turns, other Presence turns and helpers leave one.
-
-    Decided from task facts, never the task type (``memory_view.start_room`` reads them).
-    """
-    if role == "consciousness" or (role == "presence" and focus_wake):
-        return 2
-    return 2 if role == "integrator" and not direct_chat else 1
+    """Every new work starts with one eighth, including roots and wakes (owner, 27 October)."""
+    return 1
 
 
 def context_mode_limits(mode: str, owner_mode: str, output_reserve_tokens: int, *,

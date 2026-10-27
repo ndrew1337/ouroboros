@@ -189,7 +189,7 @@ def test_response_reservation_survives_resumed_connection(host_world, abandonmen
     async def begin(session):
         host.response_started('resumed-answer')
         first['row'], = ua.read_usage_records(host.ctx.drive_root)
-        first['text_estimate'] = host._selected_text_estimate
+        first['text_estimate'] = host._selected_raw_estimate  # complete text-only envelope
         return 'fixture-resume-handle'
     async def complete(session):
         assert session.options.resume_handle == 'fixture-resume-handle'

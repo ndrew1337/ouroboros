@@ -1,4 +1,4 @@
-"""The voice contract (PluginAPI 2.1): provider catalogs, route facts, call configuration, registration."""
+"""The voice contract (PluginAPI 2.2): provider catalogs, route facts, call configuration, registration."""
 from __future__ import annotations
 
 import importlib.util
@@ -138,14 +138,15 @@ def test_built_in_engines_declare_labelled_dated_windows(skill, window, credenti
     assert catalog.privacy
 
 
-def test_plugin_api_2_1_is_one_additive_generation_over_the_negotiable_2_0_surface():
+def test_plugin_api_2_2_keeps_the_prior_generations_negotiable():
     from ouroboros.contracts.plugin_api import (PLUGIN_API_SURFACE_FINGERPRINTS, PLUGIN_API_VERSION,
                                                 VALID_EXTENSION_PERMISSIONS, plugin_api_surface_fingerprint)
 
     # The additive voice generation keeps the 2.0 surface negotiable; one generation, one fingerprint.
-    assert PLUGIN_API_VERSION == "2.1"
+    assert PLUGIN_API_VERSION == "2.2"
     assert PLUGIN_API_SURFACE_FINGERPRINTS == {
         "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
-        "2.1": plugin_api_surface_fingerprint(),
+        "2.1": "648ecc02839e2ef5fc7bb18bb14f66acf6836f0ce041da9c6b19d3d2e143f336",
+        "2.2": plugin_api_surface_fingerprint(),
     }
     assert {"realtime_provider", "live_conversation", "call_peer"} <= VALID_EXTENSION_PERMISSIONS

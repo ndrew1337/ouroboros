@@ -249,16 +249,17 @@ class ConversationHost:
         self.plan = ctx.context_fit_plan
         if self.plan.model != turn.model or self.plan.provider != turn.route.accounting_provider:
             raise RealtimeSetupError("route", "call input must use the selected realtime route")
-        self.schemas = initial_tool_schemas(tools, context_mode=self.plan.initial_mode)
+        self.schemas = initial_tool_schemas(tools, context_mode=self.plan.initial_mode,
+                                           schema_names=turn.feature.get("initial_tools", ()))
         self._schemas_mode = self.plan.initial_mode
         _reset_turn_state(ctx)
-        self.schemas, _ = _setup_dynamic_tools(tools, self.schemas, messages, context_mode=self.plan.initial_mode)
         self.call_tools = {tool.name: tool for tool in turn.feature.get("call_tools", ())}
         collisions = self.call_tools.keys() & {schema["function"]["name"] for schema in tools.schemas()}
         if collisions:
             raise RealtimeSetupError("tool_collision", "Call tools collide with ordinary tools: " + ", ".join(sorted(collisions)))
         self.schemas.extend({"type": "function", "function": {"name": tool.name, "description": tool.description,
             "parameters": dict(tool.parameters)}} for tool in self.call_tools.values())
+        self.schemas, _ = _setup_dynamic_tools(tools, self.schemas, messages, context_mode=self.plan.initial_mode)
         if turn.spec.presence_binding_id:
             from ouroboros.context import build_user_content
             from ouroboros.context_budget import bound_host_row
@@ -290,6 +291,7 @@ class ConversationHost:
         self._response_text_estimates = {}
         self._density_input = 0
         self._connection_accounting = False
+        self._session_opened = False
         self._connection_quote = None
         self._meter_watermark = 0.0
         self._caption_dirty = False
@@ -303,7 +305,8 @@ class ConversationHost:
         from ouroboros.tool_policy import initial_tool_schemas
 
         enabled = set(self.ctx._actor_loaded_tool_names)
-        selected = initial_tool_schemas(self.tools, context_mode=mode)
+        selected = initial_tool_schemas(self.tools, context_mode=mode,
+                                        schema_names=self.turn.feature.get("initial_tools", ()))
         names = {schema["function"]["name"] for schema in selected}
         selected.extend(schema for schema in self.schemas
                         if schema["function"]["name"] in (enabled | self.call_tools.keys()) - names)
@@ -473,6 +476,8 @@ class ConversationHost:
                 candidate=session.wire, candidate_facts=evidence)
             self.observe("host", canonical_json({"type": "call.prepared", **evidence,
                                                  "manifest_ref": receipt["manifest_ref"]}))
+            self._view_session_factory, self._view_session_options = provider['session'], options
+            self._prepared_view = evidence, receipt['manifest_ref']
             return session, request
 
         with extension_work_scope(provider, work):
@@ -501,6 +506,8 @@ class ConversationHost:
                     self._connection_accounting = True
                     with credentials.activate():
                         await session.open()
+                    from ouroboros.live_context_view import record_session_view
+                    record_session_view(self, *self._prepared_view)
                     connection["open_at"] = time.time()
                     self.timing.setdefault("session_open_at", connection["open_at"])
                     return await consume(session)
@@ -626,6 +633,15 @@ class ConversationHost:
         held = self._held_input or math.ceil(self._selected_raw_estimate * density)
         pending = math.ceil(max(0, self._history_estimate() - self._history_at_receipt) * density)
         return held + pending + self._growth + reserve >= window
+
+    def context_view_pending(self):
+        from ouroboros.live_context_view import pending_context_view
+        return pending_context_view(self)
+
+    async def apply_context_view(self):
+        from ouroboros.live_context_view import apply_context_view
+        async with self._tools_lock:
+            return await joined(asyncio.to_thread(apply_context_view, self))
 
     async def observe_context(self, row):
         from ouroboros.context_budget import bound_host_row

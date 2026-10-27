@@ -53,7 +53,9 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
             tools = ToolRegistry(REPO, tmp_path)
             monkeypatch.setattr(tools, 'schemas', scale.tools)
             tools.set_context(ctx)
-            return ConversationHost(turn, ctx, plan.messages_for(plan.initial_mode), tools, task, '', LiveCallHub(spec))
+            host = ConversationHost(turn, ctx, plan.messages_for(plan.initial_mode), tools, task, '', LiveCallHub(spec))
+            host._session_opened = True  # this parity case explicitly models a renewal
+            return host
 
         server, diagnostic = make_host(), make_host()
         try:
@@ -73,7 +75,7 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
     assert result['reserve'] == measured['response_reserve_tokens']
     assert result['profile'] == measured['profile'] == 'task_local_nano'
     assert not result['work_room_applies_to_verdict']
-    assert fresh['work_room_applies_to_verdict']
+    assert not fresh['work_room_applies_to_verdict']  # a soft start target, never a capacity veto
     assert result['work_room_levels'] == mv.snapshot_from_json(core.memory_view_json).spec.work_room_levels
     if fits:
         from ouroboros.context_window import resolve_window
@@ -81,7 +83,7 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
                                                                root=tmp_path, bound=False))
         assert not result['window_record']['total']['acceptance_can_raise']
     if extra_chars == 24000:
-        assert fresh['verdict'] == 'MinimumViewUnfit' and fresh['work_room_deficit_tokens'] > 0, fresh
+        assert fresh['verdict'] == 'fits' and fresh['work_room_deficit_tokens'] > 0, fresh
         assert fresh['deficit_tokens'] == 0 and result['margin_tokens'] >= 0
         assert fresh['phase'] == 'task_preparation' and result['phase'] == 'session_candidate'
     print('PARITY ' + json.dumps(dict(extra_chars=extra_chars, fresh=fresh, session=result), sort_keys=True))
