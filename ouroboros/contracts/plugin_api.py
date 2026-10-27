@@ -29,7 +29,9 @@ from ouroboros.skill_token import SkillToken
 # refused a NEW PASS at issuance (``extension_new_pass_admission_error``).
 # 2.0 absorbs 1.4's presence capability (reviewed transport skills may submit
 # authenticated non-owner presence events through the Host Service ceiling).
-PLUGIN_API_VERSION = "2.2"  # additive: conversation frames declare their initial ordinary tool schemas
+# 2.1: in-process realtime voice providers and the live conversation feature.
+# 2.2: additive: conversation frames declare their initial ordinary tool schemas.
+PLUGIN_API_VERSION = "2.2"
 # The generation an extension WITHOUT the manifest field binds against —
 # "absent ≡ 1.3 by construction" (owner-ratified §6.1-Δ; deliberately NOT 1.4).
 LEGACY_PLUGIN_API_GENERATION = "1.3"

@@ -289,15 +289,18 @@ class GeminiSession(JsonSession):
         reading, self.read_task = self.read_task, None
         try:
             event = reading.result()
-        except (OSError, ConnectionClosed):
+        except (OSError, ConnectionClosed) as exc:
             self.resume_requested = bool(self.resume_handle)
+            rcvd = getattr(exc, 'rcvd', None)  # Google's close code and sentence (billing, policy) for the owner
+            detail = ' '.join(part for part in (str(rcvd.code) if rcvd else '', (rcvd.reason or '') if rcvd else '') if part)
             result = []
             if self.response and not self.response_complete and not self.resume_requested:
                 result.append(LiveEvent('response_done', {'response_id': self.response,
                     'usage': self.normalized_usage(), 'raw_usage': dict(self.usage),
                     'status': 'incomplete', 'continues': False}))
                 self.response_complete = True
-            return [*result, LiveEvent('closed', {'reason': 'transport_lost', 'resumable': self.resume_requested})]
+            return [*result, LiveEvent('closed', {'reason': 'transport_lost', 'resumable': self.resume_requested,
+                                                  **({'detail': detail} if detail else {})})]
         return await self.convert(event)
 
     def normalized_usage(self):
@@ -549,11 +552,29 @@ class GeminiSession(JsonSession):
                 self.held_context.append(command)
             else:
                 self.turn_busy = True
-                text = ('[Host fact; not owner words]\n' + command.fact if isinstance(command, Respond) else
-                        'Host context update; preserve each original role and trust boundary:\n' +
-                        canonical_json(command.messages))
-                await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{
-                    'text': text}]}],
+                images = []
+                if isinstance(command, Respond):
+                    text = '[Host fact; not owner words]\n' + command.fact
+                else:
+                    # An image in a live update (a screenshot's result, a picture typed into the room) goes as an
+                    # inline image part, as at setup; JSON text would carry its base64 as words (I1-gemini F1).
+                    records = []
+                    for message in command.messages:
+                        record = dict(message)
+                        if isinstance(record.get('content'), list):
+                            shaped = []
+                            for part in record['content']:
+                                if isinstance(part, dict) and part.get('type') == 'image_url':
+                                    images.append(image_part(part))
+                                    shaped.append({'type': 'text', 'text': f'[Attached image {len(images)} follows]'})
+                                else:
+                                    shaped.append(part)
+                            record['content'] = shaped
+                        records.append(record)
+                    text = 'Host context update; preserve each original role and trust boundary:\n' + canonical_json(records)
+                    if images:
+                        self.input_modalities.add('image')
+                await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{'text': text}, *images]}],
                     'turnComplete': True}})
         else:
             raise RealtimeSetupError('command', 'unsupported Gemini live command')

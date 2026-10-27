@@ -41,6 +41,9 @@ export function callMemberOf(node, callTasks, openings = null) {
     }
     if (!task || !callTasks.has(task)) return null;
     if (list.contains('chat-live-card')) return { task, kind: 'work' };
+    // A meeting participant's words are the call's transcript (System rows only to keep them apart from the owner's
+    // instructions), never its closing notice (R15-3).
+    if (list.contains('system') && node.dataset.systemType === 'call_heard') return { task, kind: 'heard' };
     if (list.contains('assistant') && node.dataset.systemType === NARRATION) return { task, kind: 'ouroboros' };
     if (list.contains('system')) return { task, kind: 'notice' };
     return null;
@@ -116,7 +119,8 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         const liveNow = isLive(card);
         // A call nobody joined (or that ended before a word) is one notice line, not a card of nothing;
         // an ended call with neither words nor notice shows nothing until its rows arrive.
-        const kind = liveNow ? 'live' : card.silent ? 'silent' : (!card.count && !card.hasNotice ? 'empty' : 'ended');
+        const kind = liveNow ? 'live' : card.silent ? 'silent'
+            : (!card.count && !card.hasNotice && !card.lines.children?.length ? 'empty' : 'ended');
         card.node.dataset.callCard = kind;
         card.node.hidden = kind === 'empty';
         card.node.dataset.callOpen = isOpen(card) ? '1' : '0';
@@ -130,7 +134,9 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
 
     function line(speaker, text) {
         const node = element('div', `call-line ${speaker}`);
-        if (speaker !== 'notice') node.append(element('span', 'call-line-who', speaker === 'owner' ? 'You' : 'Ouroboros'));
+        if (speaker !== 'notice' && speaker !== 'heard') {
+            node.append(element('span', 'call-line-who', speaker === 'owner' ? 'You' : 'Ouroboros'));
+        }
         node.append(element('span', 'call-line-text', text));
         return node;
     }
@@ -230,7 +236,8 @@ export function createCallCards({ feed, ws = null, doc = feed?.ownerDocument, li
         card.lines.replaceChildren(...spoken, ...streaming, ...notices);
         card.count = spoken.length;
         card.hasNotice = notices.length > 0;
-        card.silent = !isLive(card) && !spoken.length && !streaming.length && noticeTexts.length ? noticeTexts[0] : '';
+        // Exactly one notice and no words: the call is that line; a second notice keeps an openable card (R15 opus-2).
+        card.silent = !isLive(card) && !spoken.length && !streaming.length && noticeTexts.length === 1 ? noticeTexts[0] : '';
         card.span = Number.isFinite(first) && Number.isFinite(last) ? last - first : 0;
         if (Number.isFinite(first)) card.node.dataset.ts = String(first);
         paint(card);

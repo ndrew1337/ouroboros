@@ -724,6 +724,11 @@ def test_context_additions_refit_before_delivery_when_the_window_is_full(source,
                 await until(lambda: len(host.sessions) == 2)
                 assert host.options[1].resume_handle == ''
                 assert not any(isinstance(x, ContextUpdate) for x in first.sent)
+                # The addition joined the fresh fit; the replacement answers it, as a delivered update would be (I1 m2).
+                second = host.sessions[1]
+                second.emit('ready', input_rate=24000, output_rate=24000)
+                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
+                assert 'completed tool results' in next(x for x in second.sent if isinstance(x, Respond)).fact
             else:
                 await asyncio.sleep(.05)
                 assert len(host.sessions) == 1
@@ -1067,4 +1072,31 @@ def test_nobody_joining_ends_as_not_connected_and_leaving_as_peers_left(monkeypa
             present['on'] = False
         with pytest.raises(RealtimeSetupError, match='peers_left' if joined else 'not_connected'):
             await asyncio.wait_for(task, 3)
+    asyncio.run(scenario())
+
+
+def test_a_silent_batch_that_finds_renewal_due_after_speech_asks_nothing_more(tmp_path):
+    """The other direction of the R15 conditional: once Ouroboros was heard, a silent tool batch that renews the
+    session for capacity opens no response on the replacement."""
+    async def scenario():
+        host = Host()
+        host.model = replace(host.model, honours=frozenset({'languages'}))
+        install_tools(host, tmp_path)
+        task, session = await started(host, state_dir=tmp_path)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.emit('audio', item_id='greeting', rate=24000, pcm=b'\0' * 4800)
+            session.emit('response_done', response_id='greeting', usage={}, raw_usage={}, status='completed', continues=True)
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type': 'played', 'item_id': 'greeting', 'played_ms': 100}))
+            await asyncio.sleep(.05)
+            host.due = True  # capacity: the batch takes the renewal branch
+            session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await asyncio.sleep(.05)
+            assert not any(isinstance(x, Respond) for x in second.sent)
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
     asyncio.run(scenario())

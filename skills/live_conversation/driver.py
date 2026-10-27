@@ -72,7 +72,8 @@ def engine_sentence(model):
 
 def languages_opening_sentence(languages):
     if languages:
-        return (f"Speech recognition expects {', '.join(languages)}, as you recorded for these calls; when someone "
+        return (f"Speech recognition expects {', '.join(languages)}, as you recorded for these calls; the first is "
+                f"the owner's language, so greet in it and stay in the spoken language. When someone "
                 "speaks a language that is not listed, record the new list with set_call_languages. Recognition "
                 "can still take one language for another: when unsure, ask rather than switch.")
     return ("Speech recognition has no languages recorded for these calls yet and guesses each utterance: assume "
@@ -281,6 +282,8 @@ class _Call:
         # them in its selected input instead.
         await self.connected.wait()
         if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
+            # The rows join the next fit; a typed message or a task's result there is answered, not left unheard.
+            self.answer_after_refit = self.answer_after_refit or not self.hub.ended_by_ouroboros
             self.request_renewal()
         else:
             await self.session.send(ContextUpdate(tuple(rows)))
@@ -366,11 +369,12 @@ class _Call:
                 changes = await self.host.tool_batch(calls)
                 if not self.tool_refit.is_set():
                     await self.connected.wait()
+                first_words = not self.audio_ms and not self.hub.ended_by_ouroboros  # Ouroboros has not spoken yet
                 if self.tool_refit.is_set() or self.host.renewal_due():
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.
-                        self.answer_after_refit |= any(call["id"] not in changes.silent for call in calls)
+                        self.answer_after_refit |= any(call["id"] not in changes.silent for call in calls) or first_words
                         self.request_renewal()
                         self.tool_refit.set()
                         self.connected.clear()
@@ -378,8 +382,7 @@ class _Call:
                     # native result or connection that could cut it short.
                 else:
                     await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
-                    if (self.host.state.get("refit") and len(changes.silent) == len(calls)
-                            and not self.audio_ms and not self.hub.ended_by_ouroboros):
+                    if self.host.state.get("refit") and len(changes.silent) == len(calls) and first_words:
                         # The reply was silent tool work that renews the session before Ouroboros ever spoke
                         # (Grok recorded the languages first, 27.10): the replacement connection asks for the
                         # first words, which a silent result alone would never open.
@@ -482,7 +485,8 @@ class _Call:
                     self.host.state["resume_handle"] = data["handle"]
                 elif event.kind == "closed":
                     if not data.get("resumable") or not self.host.state.get("resume_handle"):
-                        raise RealtimeSetupError("provider_closed", "provider ended the live connection")
+                        # The engine's own close words (code and sentence) are the owner's reason (R15-4).
+                        raise RealtimeSetupError("provider_closed", data.get("detail") or "provider ended the live connection")
                     self.unproven_resumes += 1
                     if self.unproven_resumes > UNPROVEN_RESUMES:
                         raise RealtimeSetupError("reconnect_failed",

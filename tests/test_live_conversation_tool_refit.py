@@ -104,10 +104,13 @@ def test_tool_growth_refits_without_a_quiet_boundary_and_answers_from_fitted_his
                 assert not second.sent, 'the replacement must be ready before opening a response'
                 second.emit('ready', input_rate=24000, output_rate=24000)
                 second.emit('ready', input_rate=24000, output_rate=24000)
-                if not silent: await until(lambda: any(isinstance(x, Respond) for x in second.sent))
+                # Nothing was spoken in this call yet: even a silent batch (Grok recorded the languages as its
+                # first reply, 27.10) makes the replacement ask for the first words (R15 conditional). After
+                # speech a silent batch opens nothing: test_live_conversation_driver.py, renewal-due variant.
+                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
                 await asyncio.sleep(.04)
                 responses = [x for x in second.sent if isinstance(x, Respond)]
-                assert len(responses) == (0 if silent else 1)
+                assert len(responses) == 1
                 if responses:
                     assert responses[0].fact.startswith('[Host fact; not owner words]')
                     assert 'completed tool results' in responses[0].fact

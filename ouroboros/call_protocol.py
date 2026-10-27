@@ -6,7 +6,7 @@ skill companions (system-audio capture, a browser participant, a Zoom SDK client
 — over one framed socket per peer. This module is the shared vocabulary: the call
 specification the host admits, the binary audio frame, and the small JSON control
 messages. Mixing, resampling and routing live in ``call_peers``; the socket routes
-live in the gateway; the turn itself lives in ``live_turn``.
+live in the gateway; the turn itself is ``live_conversation.LiveConversationTurn``.
 
 Who spoke is a host fact (the peer's authenticated identity), never a model claim.
 An owner surface's microphone is the owner; a meeting capture is "meeting audio"
@@ -42,7 +42,6 @@ CALL_STATES = (STATE_PREPARING, STATE_CONNECTING, STATE_LIVE, STATE_RECONNECTING
 TURN_AWAITING, TURN_ANSWERING, TURN_IDLE = "awaiting", "answering", "idle"
 CALL_TURNS = (TURN_AWAITING, TURN_ANSWERING, TURN_IDLE)
 # The one next step a surface offers beside a closed call's reason.
-ACTION_SETTINGS, ACTION_RETRY = "settings", "retry"
 
 # Binary frame: fixed 16-byte header + PCM16LE mono or JPEG/PNG payload.
 #   magic  2s  b"OC"
@@ -174,30 +173,6 @@ class CallSpec:
     instructions: str = ""
     pause: str = ""
     interruptions: bool = True
-
-    def as_metadata(self) -> Dict[str, Any]:
-        """Legacy descriptive carrier; loading it never selects or admits a driver."""
-        return {
-            "call_id": self.call_id, "chat_id": self.chat_id, "engine": self.engine,
-            "model": self.model, "voice": self.voice, "opened_by": self.opened_by,
-            "presence_binding_id": self.presence_binding_id, "max_minutes": self.max_minutes,
-            "label": self.label, "client_message_id": self.client_message_id,
-            "instructions": self.instructions, "pause": self.pause, "interruptions": self.interruptions,
-        }
-
-    @classmethod
-    def from_metadata(cls, data: Dict[str, Any]) -> "CallSpec":
-        return cls(
-            call_id=str(data["call_id"]), chat_id=int(data["chat_id"]), engine=str(data["engine"]),
-            model=str(data["model"]), voice=str(data.get("voice") or ""),
-            opened_by=str(data.get("opened_by") or OPENED_BY_OWNER),
-            presence_binding_id=str(data.get("presence_binding_id") or ""),
-            max_minutes=(int(data["max_minutes"]) if data.get("max_minutes") not in (None, "") else None),
-            label=str(data.get("label") or ""),
-            client_message_id=str(data.get("client_message_id") or ""),
-            instructions=str(data.get("instructions") or ""), pause=str(data.get("pause") or ""),
-            interruptions=data.get("interruptions") is not False,
-        )
 
 
 # ---- the peer side of one call, as the live driver sees it ------------------------

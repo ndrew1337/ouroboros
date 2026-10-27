@@ -177,6 +177,9 @@ def measure_session_wire(host, plan, messages, schemas, factory, options):
     from ouroboros.usage_accounting import AttemptRequest
 
     facts = host.model.facts
+    # Every candidate an engine receives passes here (setup, renewal, an authored view's measurement): a blind
+    # engine gets image parts as captions, the canonical history keeps the images (R15-1).
+    messages = rows_for_engine(messages, vision=host.model.vision)
     rows = [*messages, *([{"role": "system", "content": options.instructions}] if options.instructions else [])]
     fit = measure_main_fit(plan, rows, schemas, profile=_main_context_profile(plan, plan.initial_mode),
         rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
@@ -259,7 +262,7 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             rows = [*host.messages, *extra]
             previous, deficit, measured_input = None, 0, None
             continue
-        current = rows_for_engine(plan.reproject_transcript(host.messages, plan.initial_mode), vision=host.model.vision)
+        current = plan.reproject_transcript(host.messages, plan.initial_mode)
         rows = [*current, *extra]
         session, request, evidence, physical_window = measure_session_wire(host, plan, current, host.schemas, factory, options)
         measurement = evidence['fit']['measurement']

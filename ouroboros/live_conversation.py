@@ -240,7 +240,7 @@ class LiveConversationTurn(RealtimeTurn):
         if reason == "not_connected":  # nobody joined: one short notice, no transcript to point at
             words = f"The call did not start: {detail.rstrip('.')}."
         else:
-            words = ("Call ended. Its transcript is in this room." if status == "ok" or not detail
+            words = ("Call ended. Its transcript is in this room." if status in ("ok", "cancelled") or not detail
                      else f"Call ended: {detail.rstrip('.')}. Its transcript is in this room.")
         return words, {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
@@ -369,7 +369,9 @@ class ConversationHost:
             controls = await joined(asyncio.to_thread(drain))
             if controls.get("finalize_now") or controls.get("owner_stop"):
                 raise RealtimeSetupError("owner_stop", "ordinary owner control ended the call")
-            return rows
+            # A live delta reaches the engine as it can take it: an image attached in the room is a caption for a
+            # blind engine (R15-1); the canonical rows above keep the image.
+            return rows_for_engine(rows, vision=self.model.vision)
 
     def observe(self, direction, raw):
         with self.wire_path.open("a", encoding="utf-8") as stream:

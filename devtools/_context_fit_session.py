@@ -45,6 +45,12 @@ def measure_session(host, factory, options, *, observation_fp=None):
         work = evidence['work_room']
         result.update(work_room=work, start_work_room_tokens=work['requested_tokens'],
                       work_room_deficit_tokens=work['deficit_tokens'])
+        # The arithmetic line tells the same candidate's room as the session evidence (R15-5).
+        arithmetic = result['arithmetic']
+        arithmetic.update(start_work_room_tokens=work['requested_tokens'],
+                          start_room_shortfall_tokens=work['deficit_tokens'])
+        if work.get('remaining_tokens') is not None:
+            arithmetic['room_above_start_tokens'] = work['remaining_tokens'] - work['requested_tokens']
     return result
 
 

@@ -37,7 +37,8 @@ def cognitive_parent_context(ctx: Any = None, task: Any = None) -> Any:
                                          if key not in {"model", "use_local_model", "execution_transport"}},
         active_model=model, active_use_local=local,
         active_effort=getattr(ctx, "active_effort", "") or metadata.get("reasoning_effort", ""),
-        context_fit_plan=SimpleNamespace(model_role=role), route_choice=following(role))
+        context_fit_plan=SimpleNamespace(model_role=role), route_choice=following(role),
+        model_wait_context=getattr(ctx, "model_wait_context", None))  # the owner's wait-card replacement carries over
 
 
 def validate_cognitive_route(raw: Any) -> dict:

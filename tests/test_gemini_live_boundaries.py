@@ -211,3 +211,21 @@ def test_schema_wakeup_keeps_a_socket_frame_that_arrived_together(gemini):
         finally:
             await session.close()
     asyncio.run(run())
+
+
+def test_a_live_update_carries_images_as_inline_parts_not_base64_text(gemini):
+    """A screenshot's image row in a Gemini call went as JSON text, its base64 counted as words (I1 review, 27.10)."""
+    from ouroboros.contracts.live_conversation import ContextUpdate
+    async def scenario():
+        session, wire = make_session(gemini)
+        await session.open()
+        data = base64.b64encode(b"\x89PNG fake").decode()
+        await session.send(ContextUpdate(({"role": "user", "content": [
+            {"type": "text", "text": "[image: shot.png]"},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64," + data}}]},)))
+        turn = wire.sent[-1]["clientContent"]["turns"][0]
+        assert turn["parts"][1] == {"inlineData": {"mimeType": "image/png", "data": data}}
+        assert data not in turn["parts"][0]["text"] and "[Attached image 1 follows]" in turn["parts"][0]["text"]
+        await session.send(ContextUpdate(({"role": "user", "content": "Plain words"},)))
+        await session.close()
+    asyncio.run(scenario())

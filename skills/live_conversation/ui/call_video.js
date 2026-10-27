@@ -7,6 +7,9 @@ import { loadDevicePrefs, cameraConstraints } from './call_devices.js';
 import { acquire } from '/static/modules/media_capture.js';
 
 const FRAME_MS = 1000;
+// Audio keeps streaming beside a frame: a socket that never quite empties still lets the next frame go once
+// what remains of the previous one is at most this much (about 170 ms of 48 kHz speech; a transport bound).
+const QUEUED_AUDIO_SLACK_BYTES = 16 * 1024;
 const KEEPALIVE_MS = 15000;
 const SAMPLE_WIDTH = 16;
 const SAMPLE_HEIGHT = 9;
@@ -126,7 +129,8 @@ export class CallVision {
         const changed = Boolean(this.kind || this.error);
         this.kind = this.error = '';
         this.sample = null;
-        this.pendingBytes = 0;
+        // The last frame may still be queued in the call socket: its bytes stay counted until the socket drains
+        // them (`pending` decays with bufferedAmount), or stopping a share would read as a stalled uplink (R15-2).
         if (changed && notify) this.notify();
     }
 
@@ -137,7 +141,7 @@ export class CallVision {
             || Date.now() - this.lastSentAt < FRAME_MS) return;
         // One frame in flight at a time: a frame still queued in the socket is not followed by another,
         // so video never piles up behind live speech on a slow uplink.
-        if (this.pending(session.socket.bufferedAmount) > 0) return;
+        if (this.pending(session.socket.bufferedAmount) > QUEUED_AUDIO_SLACK_BYTES) return;
         const width = this.video?.videoWidth || 0, height = this.video?.videoHeight || 0;
         if (!width || !height) return;
         this.busy = true;
