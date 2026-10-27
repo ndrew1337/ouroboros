@@ -421,6 +421,8 @@ def current_cognitive_route_and_billing(
     task: Optional[Mapping[str, Any]] = None, *, ctx: Any = None,
 ) -> tuple[str, str]:
     """Resolve the caller's current cognitive route and billing basis for nanny supervision."""
+    from ouroboros.supervisor_route import cognitive_parent_context
+    ctx = cognitive_parent_context(ctx, task)
     task_map = task if isinstance(task, Mapping) else {}
     meta = task_map.get("task_metadata") if isinstance(task_map.get("task_metadata"), Mapping) else (
         getattr(ctx, "task_metadata", None) if isinstance(getattr(ctx, "task_metadata", None), Mapping) else {}
