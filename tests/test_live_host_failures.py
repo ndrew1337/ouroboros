@@ -38,3 +38,23 @@ def test_call_failure_preserves_sanitized_origin_and_stack(host_world, monkeypat
         assert metadata['reason_code'] == 'fixture_refusal'
         assert 'failure' not in ended and 'failure' not in trace
         assert endings[0][1]['detail'] == 'The fixture refused this call.'
+
+
+def test_an_engine_that_closes_its_socket_hands_its_own_words_to_the_owner(host_world, monkeypatch):
+    """Gemini closed the stand's call with 1011 'Your prepayment credits are depleted' (27.10); the owner
+    saw only a bare code. The close code and the engine's sentence are the ending's words."""
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+    from ouroboros import call_peers
+    host = host_world.host
+    endings = []
+    monkeypatch.setattr(call_peers, 'get_hub', lambda _: host.hub)
+    monkeypatch.setattr(call_peers, 'close_hub', lambda *a, **kw: endings.append((a, kw)))
+    async def closing_engine(port):
+        raise ConnectionClosedError(Close(1011, 'Your prepayment credits are depleted. Please go to AI Studio.'), None)
+    monkeypatch.setitem(host.turn.feature, 'handler', closing_engine)
+    sentence, metadata, trace = host.turn.run(host.ctx, host.messages, host.tools, task=host.task, initial_effort='')
+    assert metadata['reason_code'] == 'provider_closed' and metadata['execution_status'] == 'infra_failed'
+    assert endings[0][1]['detail'] == '1011 Your prepayment credits are depleted. Please go to AI Studio.'
+    assert sentence == 'Call ended: 1011 Your prepayment credits are depleted. Please go to AI Studio. Its transcript is in this room.'
+    assert 'failure' not in metadata and 'failure' not in trace

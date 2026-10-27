@@ -357,6 +357,12 @@ class _Call:
                     # native result or connection that could cut it short.
                 else:
                     await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
+                    if (self.host.state.get("refit") and len(changes.silent) == len(calls)
+                            and not self.audio_ms and not self.hub.ended_by_ouroboros):
+                        # The reply was silent tool work that renews the session before Ouroboros ever spoke
+                        # (Grok recorded the languages first, 27.10): the replacement connection asks for the
+                        # first words, which a silent result alone would never open.
+                        self.answer_after_refit = True
                 if len(changes.silent) == len(calls) and not self.active_responses:
                     self.response_open = False
             finally:

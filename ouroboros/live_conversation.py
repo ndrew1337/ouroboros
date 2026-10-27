@@ -187,9 +187,18 @@ class LiveConversationTurn(RealtimeTurn):
             reason, status = "budget_exhausted", "failed"
             raise
         except (Exception, asyncio.CancelledError) as exc:
-            reason = getattr(exc, "code", "") or ("cancelled" if isinstance(exc, asyncio.CancelledError) else "call_failed")
-            status = "cancelled" if reason in {"cancelled", "finalize_requested", "owner_stop"} else "infra_failed"
-            detail = str(exc).removeprefix(reason + ": ") if isinstance(exc, RealtimeSetupError) else ""
+            from websockets.exceptions import ConnectionClosed
+            if isinstance(exc, ConnectionClosed):
+                # The engine closed its socket itself (billing, policy, an internal error): its close
+                # code and its own sentence are what the owner needs to read, never a bare number.
+                rcvd = getattr(exc, "rcvd", None)
+                reason, status = "provider_closed", "infra_failed"
+                detail = " ".join(part for part in (str(rcvd.code) if rcvd else "", (rcvd.reason or "") if rcvd else "")
+                                  if part).strip()
+            else:
+                reason = str(getattr(exc, "code", "") or "") or ("cancelled" if isinstance(exc, asyncio.CancelledError) else "call_failed")
+                status = "cancelled" if reason in {"cancelled", "finalize_requested", "owner_stop"} else "infra_failed"
+                detail = str(exc).removeprefix(reason + ": ") if isinstance(exc, RealtimeSetupError) else ""
             if reason == "call_failed":
                 import traceback
                 from ouroboros.observability import redact_projection
@@ -222,7 +231,9 @@ class LiveConversationTurn(RealtimeTurn):
                 finally:
                     self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
                                   "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
-        return "Call ended. Its transcript is in this room.", {
+        words = ("Call ended. Its transcript is in this room." if status == "ok" or not detail
+                 else f"Call ended: {detail.rstrip('.')}. Its transcript is in this room.")
+        return words, {
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
             **({"failure": failure} if failure is not None else {}),
         }, host.trace if host is not None else {"reasoning_notes": [], "tool_calls": []}

@@ -977,3 +977,59 @@ def test_repeated_drops_without_an_answer_end_the_call_instead_of_resuming_forev
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+def test_a_silent_language_refit_before_any_speech_asks_the_model_to_continue_after_the_reconnect(tmp_path):
+    """Grok's first answer on 27.10 recorded the call languages (a silent tool) and the renewal that followed
+    asked for nothing: the owner heard silence. The replacement connection now asks for the first words."""
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        host.model = replace(host.model, honours=frozenset({'languages'}))
+        tools = install_tools(host, tmp_path)
+        assert tools['set_call_languages'].silent
+        task, session = await started(host, state_dir=tmp_path)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.renewal_ready = False
+            session.emit('response_done', response_id='tool-response', usage={}, raw_usage={}, status='completed', continues=True)
+            session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            assert [x for x in session.sent if isinstance(x, Respond)] == [Respond(host.opening)]
+            session.renewal_ready = True
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: any(isinstance(x, Respond) for x in second.sent))
+            assert 'Continue from those results' in next(x for x in second.sent if isinstance(x, Respond)).fact
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
+
+
+def test_a_silent_language_refit_after_ouroboros_spoke_asks_nothing_more(tmp_path):
+    from ouroboros.contracts.live_conversation import ToolOutputs
+    async def scenario():
+        host = Host()
+        host.model = replace(host.model, honours=frozenset({'languages'}))
+        install_tools(host, tmp_path)
+        task, session = await started(host, state_dir=tmp_path)
+        try:
+            session.emit('ready', input_rate=24000, output_rate=24000)
+            session.renewal_ready = False
+            session.emit('audio', item_id='greeting', rate=24000, pcm=b'\0' * 4800)
+            session.emit('response_done', response_id='greeting', usage={}, raw_usage={}, status='completed', continues=True)
+            session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
+            await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type': 'played', 'item_id': 'greeting', 'played_ms': 100}))
+            session.renewal_ready = True
+            await until(lambda: len(host.sessions) == 2)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await asyncio.sleep(.05)
+            assert not any(isinstance(x, Respond) for x in second.sent)
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())
