@@ -246,6 +246,10 @@ class GeminiSession(JsonSession):
     def renewal_ready(self):
         return not (self.input_pending or self.output_pending or self.turn_busy or self.calls or self.held_context)
 
+    def tools_need_renewal(self, tools):
+        """A live session keeps its declarations: different tools need a new session."""
+        return unique_tools(tools) != self.tools
+
     def queue_events(self, *events):
         self.pending.extend(events)
         self.pending_event.set()

@@ -229,3 +229,14 @@ def test_a_live_update_carries_images_as_inline_parts_not_base64_text(gemini):
         await session.send(ContextUpdate(({"role": "user", "content": "Plain words"},)))
         await session.close()
     asyncio.run(scenario())
+
+
+def test_a_tool_change_is_named_as_needing_a_new_session(gemini):
+    """28.10: a live Gemini session keeps its declarations; the driver asks this before delivering a result."""
+    tool = {"type": "function", "function": {"name": "send_user_message", "description": "Send",
+                                             "parameters": {"type": "object", "properties": {}}}}
+    added = {"type": "function", "function": {"name": "newly_enabled", "description": "New",
+                                              "parameters": {"type": "object", "properties": {}}}}
+    session, _wire = make_session(gemini, tools=(tool,))
+    assert session.tools_need_renewal((tool,)) is False
+    assert session.tools_need_renewal((tool, added)) is True

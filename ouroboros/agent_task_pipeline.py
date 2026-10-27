@@ -1364,9 +1364,9 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
 def build_review_context(env: Any) -> str:
     """Build a compact review continuity section for the main reasoning context."""
     try:
+        from ouroboros.context_sections import continuity_status_lines
         from ouroboros.review_state import (
             _LEGACY_CURRENT_REPO_KEY,
-            continuity_status_lines,
             format_status_section,
             load_state,
             make_repo_key,

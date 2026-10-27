@@ -283,3 +283,40 @@ def test_queued_end_call_preserves_goodbye_while_tool_refit_is_pending():
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('offline_tools', [False, True])
+def test_an_engine_that_cannot_change_tools_live_takes_them_at_the_tool_boundary(offline_tools):
+    """28.10: Gemini cannot change a live session's declarations. A Gemini call that enabled desktop tools
+    kept calling enable_tools for tools it never received, and the call ended 30 s later. The driver renews
+    at that tool boundary and answers from the fitted history; an engine that updates in place still gets
+    the result on the open connection."""
+    async def scenario():
+        host = Host()
+        async def batch(calls):
+            row = {'role': 'tool', 'tool_call_id': 'load', 'content': 'Tools are registered.'}
+            host.schemas.append({'type': 'function', 'function': {'name': 'newly_enabled', 'description': 'New schema'}})
+            return Batch([row])
+        host.tool_batch = batch
+        task, first = await started(host)
+        if offline_tools:
+            first.tools_need_renewal = lambda tools: any(t['function']['name'] == 'newly_enabled' for t in tools)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('response_started', response_id='tool-turn')
+            first.renewal_ready = False
+            first.emit('tool_call', call_id='load', name='enable_tools', arguments='{}')
+            await until(lambda: len(host.sessions) > 1 or any(isinstance(x, ToolOutputs) for x in first.sent))
+            if offline_tools:
+                assert not any(isinstance(x, ToolOutputs) for x in first.sent)
+                second = host.sessions[1]
+                second.emit('ready', input_rate=24000, output_rate=24000)
+                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
+                assert 'completed tool results' in next(x for x in second.sent if isinstance(x, Respond)).fact
+            else:
+                assert len(host.sessions) == 1
+                assert next(x for x in first.sent if isinstance(x, ToolOutputs)).tools == tuple(host.schemas)
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
+    asyncio.run(scenario())

@@ -4,7 +4,8 @@ Queues bound transport memory, not conversation length. Input applies backpressu
 discarded input has counted causes; control overflow refuses the slow peer.
 Mixing happens when the driver drains input, so simultaneously buffered microphones
 share one engine timeline instead of playing sequentially. A 20 ms mixer tick
-collects asynchronously arriving microphone frames before emitting each chunk. A mixed frame keeps a
+collects asynchronously arriving microphone frames before emitting each chunk; audio that arrived late
+is not held to the tick. A mixed frame keeps a
 single peer's identity when possible; otherwise its id is ``mixed`` and its role
 is meeting if any contributor is a meeting. Mixing never invents owner provenance.
 """
@@ -389,10 +390,16 @@ class LiveCallHub(cp.CallHub):
         if self._input_paused:
             return None
         tracks = [(p, t) for p in self._audio_peers() for t in p.tracks.values() if t.samples]
-        if not tracks or time.monotonic() < self._mix_at:
+        if not tracks:
             return None
-        self._mix_at += MIX_FRAME_MS / 1000
-        length = min(self._input_rate * MIX_FRAME_MS // 1000, max(len(t.samples) for _, t in tracks))
+        now, chunk = time.monotonic(), self._input_rate * MIX_FRAME_MS // 1000
+        # The tick gathers one chunk from every peer. Audio that arrived late (a delivery gap, a busy
+        # consumer, a renewal's held input) leaves at once instead of keeping that delay for the call:
+        # behind such a gap the 27.10 OpenAI calls lost 7.7 s and 26.4 s of barge-in speech.
+        if now < self._mix_at and max(len(t.samples) for _, t in tracks) <= chunk:
+            return None
+        self._mix_at = min(self._mix_at, now) + MIX_FRAME_MS / 1000
+        length = min(chunk, max(len(t.samples) for _, t in tracks))
         mixed = [0] * length
         for _, track in tracks:
             consumed = min(length, len(track.samples))

@@ -112,6 +112,7 @@ class OpenAISession(JsonSession):
         self.context_queue = []
         self.context_lock = asyncio.Lock()
         self.response_requested = self.want_response = self.speech_active = False
+        self.cancel_now = ""  # an answer the server opened while the owner was speaking
         self.waiting_tools = set()
         self.input_transcripts, self.output_transcripts = set(), set()
         self.ready = False
@@ -176,6 +177,10 @@ class OpenAISession(JsonSession):
             events, self.pending = self.pending, []
             return events
         events = self.convert(await self.read())
+        if self.cancel_now:
+            rid, self.cancel_now = self.cancel_now, ""
+            self.pending_cancel = rid
+            await self.write({"type": "response.cancel", "response_id": rid, "event_id": "cancel_" + rid})
         await self.advance_context()
         return events
 
@@ -253,6 +258,12 @@ class OpenAISession(JsonSession):
             self.pending_cancel = ""
             self.response_requested = False
             self.active_response = event["response"]["id"]
+            if self.speech_active and self.options.interruptions:
+                # 27.10 (383ca566): our response.create crossed the owner's next words. VAD cancels only a
+                # response that exists when speech starts, so this one would talk over him. Its audio is
+                # never played; the commit that ends his turn asks for the answer again.
+                self.cancelled.add(self.active_response)
+                self.cancel_now = self.active_response
             return [LiveEvent("response_started", {"response_id": self.active_response})]
         if kind == "input_audio_buffer.speech_started":
             self.speech_active = True

@@ -1002,7 +1002,8 @@ def _capture_context_core(
         dynamic_parts.append(review_section)
     else:
         try:
-            from ouroboros.review_state import review_status_host_section, load_state
+            from ouroboros.context_sections import review_status_host_section
+            from ouroboros.review_state import load_state
             advisory_state = load_state(canonical_root)
             if advisory_state.advisory_runs or advisory_state.latest_attempt():
                 advisory_section = review_status_host_section(

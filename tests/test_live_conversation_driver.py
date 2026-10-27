@@ -646,8 +646,11 @@ def test_goaway_without_a_current_handle_does_not_claim_a_resume(revoked):
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('provider_deadline', [False, True])
-def test_only_provider_renewal_has_a_deadline_and_final_captions_are_saved(provider_deadline):
+@pytest.mark.parametrize('trigger', ['host', 'provider', 'provider_resume_with_handle', 'provider_resume_without_handle'])
+def test_a_renewal_waits_for_quiet_past_its_deadline_unless_nothing_can_resume(trigger):
+    """28.10: a Gemini call ended mid-sentence ("session expired while work was pending") when the talk
+    left no quiet moment within 30 s of an audio-span renewal. Only a provider renewal that nothing can
+    resume ends the call at its deadline; every other renewal waits for the next quiet moment."""
     async def scenario():
         host = Host()
         task, first = await started(host)
@@ -657,20 +660,28 @@ def test_only_provider_renewal_has_a_deadline_and_final_captions_are_saved(provi
             return [LiveEvent('caption', {'speaker':'owner', 'item_id':'pending', 'text':'tail', 'final':True, 'incomplete':True})]
         first.final_captions = final_captions
         first.emit('ready', input_rate=24000, output_rate=24000)
+        if trigger == 'provider_resume_with_handle':
+            first.emit('resumable', handle='kept')
         first.renewal_ready = False
-        if provider_deadline: first.emit('renew', within_s=.02, resume=False, reason='audio_drop')
-        else: host.due = True
+        if trigger == 'host':
+            host.due = True
+        else:
+            first.emit('renew', within_s=.02, resume=trigger != 'provider',
+                       reason='audio_span' if trigger == 'provider' else 'go_away')
         try:
             await asyncio.sleep(.06)
-            if provider_deadline:
+            if trigger == 'provider_resume_without_handle':
                 with pytest.raises(RealtimeSetupError, match='renewal_pending_work'): await asyncio.wait_for(task, 2)
                 assert len(host.sessions) == 1
             else:
                 assert not task.done() and len(host.sessions) == 1
                 first.renewal_ready = True
                 await until(lambda: len(host.sessions) == 2)
-            assert final_calls == [True]
-            assert host.captions[0]['text'] == '[Partial transcript] tail'
+            if trigger == 'provider_resume_with_handle':
+                assert host.options[1].resume_handle == 'kept'  # the engine's own session goes on
+            else:
+                assert final_calls == [True]
+                assert host.captions[0]['text'] == '[Partial transcript] tail'
         finally:
             host.hub.ended_by_owner = True
             if not task.done(): await asyncio.wait_for(task, 2)
@@ -1123,3 +1134,17 @@ def test_a_silent_batch_that_finds_renewal_due_after_speech_asks_nothing_more(tm
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+def test_a_fully_played_item_is_heard_though_its_report_floors_a_millisecond_short():
+    """27.10 (383ca566): 9,800 ms of speech reports 9,799 played after the 24 -> 48 kHz resample. The item
+    stayed "unheard", so the call was never quiet for a renewal and a barge-in truncated a finished item."""
+    from skills.live_conversation.driver import _Call
+    call = _Call(Host())
+    call.audio_ms['said'] = 9800.0
+    call.played['said'] = 9799
+    assert call.heard('said') and not call.unheard()
+    call.played['said'] = 9400
+    assert not call.heard('said') and call.unheard()  # control: a real remainder is still unheard
+    call.interrupted.add('said')
+    assert not call.unheard()  # an interrupted item is never waited for

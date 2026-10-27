@@ -332,3 +332,37 @@ def runtime_host_section(data: dict, coordination: str = "") -> HostSection:
     heading = "## Runtime context\n\n"
     return HostSection("runtime", heading + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + coordination,
                        heading + json.dumps(projected, ensure_ascii=False, separators=(",", ":")) + coordination)
+
+
+# The review-continuity host section (moved from review_state, which keeps its extraction bound).
+def continuity_status_lines(state: Any, repo_dir: pathlib.Path) -> List[str]:
+    """Current debts and uncertainty once, whole; historical executions have a reader."""
+    from ouroboros.review_state import make_repo_key
+
+    repo_key = make_repo_key(repo_dir)
+    lines = ["## Review Continuity", f"- repo_key={repo_key}"]
+    if state.last_stale_from_edit_ts and state.last_stale_repo_key in ('', repo_key):
+        lines += [f"- stale_marker={state.last_stale_from_edit_ts}: {state.last_stale_reason}",
+                  f"  invalidated_by={state.stale_marker_attribution_note()}"]
+    debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
+    lines.append(f"- commit_readiness_debt={len(debts)}")
+    for debt in debts:
+        lines += [f"- [{debt.debt_id}] status={debt.status} category={debt.category} source={debt.source}",
+                  f"  {debt.title}: {debt.summary}"]
+        if debt.source_obligation_ids:
+            lines.append(f"  obligation_ids={', '.join(debt.source_obligation_ids)}")
+        lines.extend(f"  evidence={e}" for e in dict.fromkeys(debt.evidence or []) if e != debt.summary)
+    obligations = state.get_open_obligations(repo_key=repo_key)
+    lines.append(f"- open_obligations={len(obligations)}")
+    for ob in obligations:
+        lines += [f"- [{ob.obligation_id}] [{ob.severity}] {ob.item}: {ob.reason}",
+                  f"  Source: {ob.source_attempt_ts} — {ob.source_attempt_msg}"]
+    return lines
+
+
+def review_status_host_section(state: Any, repo_dir: pathlib.Path) -> str:
+    from ouroboros.review_state import format_status_section
+
+    return HostSection('review_continuity', format_status_section(state, repo_dir),
+                       '\n'.join(continuity_status_lines(state, repo_dir)
+                                 + ['Historical review ledger: review_status().']))

@@ -1,6 +1,7 @@
 """Accepted microphone input survives consumer lag and connection setup."""
 import asyncio
 import json
+import struct
 from types import SimpleNamespace
 
 import pytest
@@ -137,3 +138,56 @@ def test_final_evidence_includes_input_discarded_by_close(host_world, monkeypatc
     [evidence] = [event for event in events if event.get('type') == 'call.input_audio']
     assert evidence['drop_causes'] == {'call_closed': {'samples': 137, 'ms': 137 * 1000 / 24000}}
     assert hub.closed
+
+
+def test_delivered_microphone_audio_never_waits_behind_the_mixer_tick(monkeypatch):
+    """A delivery gap must not become lasting delay: behind one, the 27.10 OpenAI call lost 7.7 s of barge-in speech."""
+    from ouroboros import call_peers
+    clock = [100.0]
+    monkeypatch.setattr(call_peers.time, "monotonic", lambda: clock[0])
+    hub = LiveCallHub(cp.CallSpec('late-burst', 1, 'fixture', 'voice'))
+    hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), 24000)
+    hub.set_engine_rates(24000, 24000)
+    while hub.next_event(0) is not None:
+        pass
+    def drain():
+        count = 0
+        while (event := hub.next_event(0)) is not None:
+            count += isinstance(event, cp.PeerAudio)
+        return count
+    sent = got = 0
+    for seq in range(30):  # 600 ms of speech held up upstream, delivered together
+        assert hub.receive_audio('owner', audio(hub, seq, samples=480))
+        sent += 1
+    got += drain()
+    assert got >= sent - 1  # before the fix: 0 of 30
+    for seq in range(30, 80):  # one more second at real time
+        clock[0] += .02
+        assert hub.receive_audio('owner', audio(hub, seq, samples=480))
+        sent += 1
+        got += drain()
+    assert got >= sent - 1  # before the fix: 50 of 80, so 600 ms was still queued a second later
+    hub.close('test_finished')
+
+
+def test_mixer_tick_still_gathers_asynchronous_microphones(monkeypatch):
+    """Control for the catch-up: two peers whose frames arrive within one tick still mix into one chunk."""
+    from ouroboros import call_peers
+    clock = [100.0]
+    monkeypatch.setattr(call_peers.time, "monotonic", lambda: clock[0])
+    hub = LiveCallHub(cp.CallSpec('tick', 1, 'fixture', 'voice'))
+    for name, role in (('owner', cp.PEER_OWNER), ('guest', cp.PEER_MEETING)):
+        hub.join(cp.PeerInfo(name, role, True, True), 24000)
+    hub.set_engine_rates(24000, 24000)
+    while hub.next_event(0) is not None:
+        pass
+    pcm = lambda value: struct.pack('<480h', *[value] * 480)
+    assert hub.receive_audio('owner', cp.AudioFrame(cp.FRAME_AUDIO_IN, hub.epoch, 0, 24000, 0, pcm(1000)))
+    assert hub.next_event(0) is None
+    clock[0] += .005
+    assert hub.receive_audio('guest', cp.AudioFrame(cp.FRAME_AUDIO_IN, hub.epoch, 0, 24000, 0, pcm(2000)))
+    assert hub.next_event(0) is None
+    clock[0] += .016
+    assert struct.unpack('<480h', hub.next_event(0).pcm) == (3000,) * 480
+    assert hub.next_event(0) is None
+    hub.close('test_finished')

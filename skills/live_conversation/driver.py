@@ -302,9 +302,13 @@ class _Call:
             deadline = time.monotonic() + float(within)
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
 
+    def heard(self, item):
+        # Playback reports floor at the device rate: a fully played 9,800 ms item reads 9,799 after the
+        # 24 -> 48 kHz resample (27.10), so the caption rule's 20 ms tolerance decides here as well.
+        return self.played.get(item, 0) > 0 and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20
+
     def unheard(self):
-        return any(item not in self.interrupted and self.played.get(item, 0) < int(duration)
-                   for item, duration in self.audio_ms.items())
+        return any(item not in self.interrupted and not self.heard(item) for item in self.audio_ms)
 
     def quiet(self):
         return (not self.response_open and not self.input_open and not self.tools_running
@@ -374,7 +378,11 @@ class _Call:
                 if not self.tool_refit.is_set():
                     await self.connected.wait()
                 first_words = not self.audio_ms and not self.hub.ended_by_ouroboros  # Ouroboros has not spoken yet
-                if self.tool_refit.is_set() or self.host.renewal_due():
+                # 28.10: Gemini cannot change a live session's declarations; a call that enabled desktop
+                # tools kept asking for tools it never received. Such an engine renews at this boundary.
+                offline_tools = getattr(self.session, "tools_need_renewal", None)
+                if (self.tool_refit.is_set() or self.host.renewal_due()
+                        or (offline_tools is not None and offline_tools(tuple(self.host.schemas)))):
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.
@@ -403,7 +411,7 @@ class _Call:
         self.hub.flush()
         await self.session.send(Interrupt("", 0))
         for item in tuple(self.audio_ms):
-            if item in self.interrupted or self.played.get(item, 0) >= self.audio_ms[item]:
+            if item in self.interrupted or self.heard(item):
                 continue
             self.interrupted.add(item)
             await self.session.send(Interrupt(item, min(self.played.get(item, 0), int(self.audio_ms[item]))))
@@ -543,7 +551,12 @@ class _Call:
                         self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                         return
                     if self.renewal_deadline is not None and time.monotonic() >= self.renewal_deadline:
-                        raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
+                        if self.resume and not self.host.state.get("resume_handle"):
+                            raise RealtimeSetupError("renewal_pending_work", "session expired while work was pending")
+                        # 28.10: a Gemini call ended mid-sentence when the talk left no quiet moment
+                        # within 30 s of an audio-span renewal. The renewal waits for the next quiet
+                        # moment; a provider that closes first is resumed from its handle.
+                        self.renewal_deadline = None
             # Drain every currently due frame before polling renewal or sleeping.
             # A buffered websocket send need not suspend, so yield explicitly to
             # the provider and host watcher even while more media is due.

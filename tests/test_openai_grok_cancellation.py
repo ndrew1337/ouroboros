@@ -263,3 +263,40 @@ def test_shared_json_reader_keeps_errors_fatal_by_default():
         finally:
             await session.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize("owner_speaking", [True, False])
+@pytest.mark.parametrize("interruptions", [True, False])
+def test_openai_answer_that_starts_while_the_owner_speaks_is_cancelled(providers, owner_speaking, interruptions):
+    """27.10 (383ca566, wire 794-826): the host asked for an answer, the owner went on speaking, and the answer
+    opened after his speech had started. VAD cancels only a response that exists then, so it talked over him."""
+    async def run():
+        adapter, wire = make(providers, "openai", LiveOptions(interruptions=interruptions))
+        try:
+            await adapter.open()
+            assert (await adapter.receive())[0].kind == "ready"
+            for event in ({"type": "input_audio_buffer.speech_started", "item_id": "first"},
+                          {"type": "input_audio_buffer.speech_stopped", "item_id": "first"},
+                          {"type": "input_audio_buffer.committed", "item_id": "first"}):
+                await receive(adapter, wire, event)
+            if owner_speaking:
+                await receive(adapter, wire, {"type": "input_audio_buffer.speech_started", "item_id": "second"})
+            await receive(adapter, wire, {"type": "response.created", "response": {"id": "early"}})
+            audio = await receive(adapter, wire, {"type": "response.output_audio.delta",
+                                                  "response_id": "early", "item_id": "spoken", "delta": "AAA="})
+            cancels = [e for e in wire.sent if e["type"] == "response.cancel"]
+            if owner_speaking and interruptions:
+                assert cancels == [{"type": "response.cancel", "response_id": "early", "event_id": "cancel_early"}]
+                assert audio == []
+                done = await receive(adapter, wire, {"type": "response.done",
+                                                     "response": {"id": "early", "status": "cancelled"}})
+                assert done[0].data["status"] == "interrupted"
+                for event in ({"type": "input_audio_buffer.speech_stopped", "item_id": "second"},
+                              {"type": "input_audio_buffer.committed", "item_id": "second"}):
+                    await receive(adapter, wire, event)
+                assert [e["type"] for e in wire.sent].count("response.create") == 2  # one answer to the whole turn
+            else:  # control: nobody speaking, or the owner turned interruptions off
+                assert cancels == [] and audio[0].kind == "audio"
+        finally:
+            await adapter.close()
+    asyncio.run(run())

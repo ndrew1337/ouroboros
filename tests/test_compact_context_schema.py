@@ -18,7 +18,10 @@ def test_schema_cost_and_all_typed_bindings():
     digest = hashlib.sha256(json.dumps(_types(schema), sort_keys=True).encode()).hexdigest()
     assert digest == '79d0df7bfb9bfa55549cd972eb12068166814026e7098dc1e8a03e7fc5eb02c2'
     raw = json.dumps(schema, ensure_ascii=False)
-    assert 3800 <= len(raw) <= 4320  # 4,271 after the nano pass plus the two owner-approved phrases the compaction test pins
+    # 4,271 after the nano pass, plus the two owner-approved phrases the compaction test pins and the four
+    # working_note phrases test_main_authored_context pins (future reader, within those sources, unaffected
+    # branches, invent no detail), which the nano pass had dropped.
+    assert 3800 <= len(raw) <= 4360
     print(json.dumps({'before_chars': 5978, 'after_chars': len(raw), 'before_chars_div_4': 1494.5,
                       'after_chars_div_4': len(raw) / 4, 'before_server_tokens': 1495,
                       'after_server_tokens': estimate_tokens(raw)}, sort_keys=True))
