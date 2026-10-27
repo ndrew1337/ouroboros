@@ -12,6 +12,7 @@ from tests.test_live_conversation import ROOT, VoiceWire, host_world as host_wor
 
 
 def host_events(host):
+    host.wire.flush()
     return [json.loads(row['raw']) for line in host.wire_path.read_text(encoding="utf-8").splitlines()
             if (row := json.loads(line))['direction'] == 'host']
 
@@ -32,6 +33,7 @@ def test_refused_fit_is_durable_before_error_and_fitting_candidate_stays_quiet(h
         pytest.fail('overflowing candidate reached the provider')
     with pytest.raises(RealtimeSetupError, match='context_capacity'):
         asyncio.run(host.session(refused, LiveOptions()))
+    host.wire.flush()  # the journal's writer creates the file
     events = host_events(host) if host.wire_path.exists() else []
     refusals = [event for event in events if event['type'] == 'call.fit_refused']
     assert len(refusals) == 1, 'context_capacity lost the fit that it refused'

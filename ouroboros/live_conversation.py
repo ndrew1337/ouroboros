@@ -12,6 +12,7 @@ import functools
 import json
 import logging
 import math
+import queue
 import threading
 import time
 import weakref
@@ -235,6 +236,8 @@ class LiveConversationTurn(RealtimeTurn):
                         host.observe("host", canonical_json({"type": "call.input_audio",
                             **hub.input_audio_evidence()}))
                 finally:
+                    if host is not None:
+                        host.wire.close()  # the call's last records are on disk before it reports finished
                     self.publish({"type": "conversation_finished", "chat_id": self.spec.chat_id,
                                   "call_id": self.spec.call_id, "task_id": ctx.task_id, "reason": reason})
         if reason == "not_connected":  # nobody joined: one short notice, no transcript to point at
@@ -246,6 +249,98 @@ class LiveConversationTurn(RealtimeTurn):
             "terminal_origin": "host_notice", "execution_status": status, "reason_code": reason,
             **({"failure": failure} if failure is not None else {}),
         }, host.trace if host is not None else {"reasoning_notes": [], "tool_calls": []}
+
+
+class WireJournal:
+    """A call's wire evidence, written by its own thread: the call loop never waits on the disk.
+
+    27.10: an open-append-close for every 20 ms frame on the call thread stood 132 s of a 2.3-minute
+    OpenAI call under disk load; the browser's uplink backed up ("too slow to send live audio") and
+    barge-ins dropped seconds of the owner's speech. Records keep their order. The writer stops by
+    itself once nothing more arrives (a call streams frames until it ends), so no owner has to stop
+    it; ``flush`` waits for the records so far, and after ``close`` a record is written at once.
+    """
+
+    IDLE_SEC = 0.25  # the writer's linger after the last record, far below a frame gap's cost
+
+    def __init__(self, path):
+        self.path = path
+        self._queue = queue.SimpleQueue()
+        self._thread = None
+        self._closed = False
+        self._lock = threading.Lock()
+
+    def append(self, record):
+        with self._lock:
+            if self._closed:
+                self._write((record,))
+                return
+            self._queue.put(record)
+            if self._thread is None:
+                self._thread = threading.Thread(target=self._drain, name="call-wire-journal", daemon=True)
+                self._thread.start()
+
+    def flush(self, timeout=30.0):
+        """Wait until every record appended so far is on disk (a reader while the call is open)."""
+        with self._lock:
+            if self._thread is None:
+                return  # nothing queued: the writer stops only on an empty queue
+            written = threading.Event()
+            self._queue.put(written)
+        written.wait(timeout)
+
+    def close(self, timeout=30.0):
+        with self._lock:
+            self._closed = True
+            thread = self._thread
+            if thread is not None:
+                self._queue.put(None)
+        if thread is not None:
+            thread.join(timeout)
+            if thread.is_alive():
+                log.warning("call wire evidence still being written to %s after %.0f s", self.path, timeout)
+
+    def _records(self, batch):
+        """The records of ``batch`` in order; each flush marker is set once the records before it are written."""
+        records = []
+        for item in batch:
+            if isinstance(item, threading.Event):
+                self._write(records)
+                records = []
+                item.set()
+            elif item is not None:
+                records.append(item)
+        return records
+
+    def _drain(self):
+        while True:
+            try:
+                batch = [self._queue.get(timeout=self.IDLE_SEC)]
+            except queue.Empty:
+                with self._lock:
+                    if self._queue.empty():
+                        self._thread = None
+                        return
+                continue
+            while True:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            self._write(self._records(batch))
+            if None in batch:
+                with self._lock:
+                    self._thread = None
+                return
+
+    def _write(self, records):
+        if not records:
+            return
+        try:
+            with self.path.open("a", encoding="utf-8") as stream:
+                stream.writelines(canonical_json(record) + "\n" for record in records)
+        except OSError:
+            log.warning("call wire evidence not written to %s", self.path, exc_info=True)
 
 
 class ConversationHost:
@@ -293,6 +388,7 @@ class ConversationHost:
         self.tool_jobs = set()
         self.executed, self.captioned = {}, {}
         self.wire_path = task_artifact_dir_path(ctx.drive_root, ctx.task_id, create=True) / "conversation-wire.jsonl"
+        self.wire = WireJournal(self.wire_path)
         self.connection_number = 0
         self._tools_lock = asyncio.Lock()
         self._rows_lock = asyncio.Lock()
@@ -374,9 +470,7 @@ class ConversationHost:
             return rows_for_engine(rows, vision=self.model.vision)
 
     def observe(self, direction, raw):
-        with self.wire_path.open("a", encoding="utf-8") as stream:
-            stream.write(canonical_json({"connection": self.connection_number, "direction": direction, "raw": raw}) + "\n")
-            stream.flush()
+        self.wire.append({"connection": self.connection_number, "direction": direction, "raw": raw})
         if direction == "usage" and self._connection_accounting:
             sample = json.loads(raw)
             usage = sample.get("usage", {})
@@ -879,3 +973,4 @@ class ConversationHost:
                 self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
             except OSError:
                 log.warning("call %s: timing evidence not written", self.turn.spec.call_id, exc_info=True)
+            self.wire.close()  # the call's records are on disk; later teardown rows are written at once
