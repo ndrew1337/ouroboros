@@ -1488,9 +1488,7 @@ from ouroboros.gateway.endpoint_index import HTTP_ENDPOINTS
 from ouroboros.gateway.client_contracts import FileBrowserListResponse, ServedUiState  # noqa: E402,F401
 
 WS_MESSAGE_TYPES: tuple[str, ...] = (
-    "conversation_finished",
-    "chat",
-    "command",
+    "conversation_finished", "chat", "command",
     "panic_accepted",  # immediate acceptance only, not proof of process exit
     "photo",
     "video",
