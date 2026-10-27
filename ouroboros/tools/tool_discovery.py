@@ -24,6 +24,7 @@ from ouroboros.tool_policy import (
     format_capability_omissions as _format_omissions,
     select_tool_schemas,
     tool_namespace,
+    usable_selectors,
 )
 
 if TYPE_CHECKING:
@@ -125,7 +126,7 @@ def list_available_tools(
     if selected and selected not in groups and selected != BUILTIN_NAMESPACE:
         selected = _skill_namespace(selected, groups) or selected  # a skill names its extension namespace
     header = ("Current callable catalog (MCP rows from published listings); [loaded] = the schema is already in "
-              "your tool list, enable_tools loads a not-loaded one.")
+              "your tool list" + (", enable_tools loads a not-loaded one." if "enable_tools" in callable_rows else "."))
     if selected:
         chosen = groups.get(selected, [])
         if chosen:
@@ -196,7 +197,7 @@ def enable_tools(
     if hidden:
         parts.append("🚫 Hidden by policy (the tool exists but this task cannot use it): " + "; ".join(hidden))
     if not_found:
-        discovery = registry.get_schema_by_name("list_available_tools") is not None
+        discovery = "list_available_tools" in usable_selectors(registry)
         pointer = " list_available_tools shows the current callable names." if discovery else ""
         parts.append(f"❌ Not found: {', '.join(not_found)}.{pointer}")
         parts.extend(_named_namespace_guidance(registry, not_found, discovery=discovery))

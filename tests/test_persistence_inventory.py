@@ -881,9 +881,10 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # record file per private copy ``state/private_copies/*.json`` with its legacy-import receipt and lock
 # (the records row), and the seat homes the owner's Storage -> Free lists
 # (``review_checking_prune.finished_seat_homes``, the seats row).
-# 425 -> 428: live wire evidence, the extension import lock and live tariff cache.
-# 428 -> 429: state/openrouter_models.json, the shared OpenRouter catalogue.
-EXPECTED_SCAN_PATHS = 429
+# 425 -> 426: ``state/openrouter_models.json``, the OpenRouter catalogue every process adopts.
+# 426 -> 429 (live calls): live wire evidence, the extension import lock and the live tariff cache.
+# 429 -> 430: ``state/delegate_document_imports/*.lock``, one selected document's import decision.
+EXPECTED_SCAN_PATHS = 430
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
