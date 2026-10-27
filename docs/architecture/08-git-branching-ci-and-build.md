@@ -1,6 +1,6 @@
 # 8. Git Branching, CI, and Build
 
-Publication rules: three update feeds, CI/trust boundaries, keyless system E2E, builds, dependency locks and proof for seven required desktop assets plus an optional verified Android pair.
+Branches/feeds, CI trust boundaries, keyless E2E, builds, dependency locks and release proof: seven required desktop assets and an optional Android pair. Guarantees govern published claims.
 
 `ouroboros` is the local working branch. The runtime-selected official feed is independent: Stable = newest plain release tag reachable from both `main`/`ouroboros-stable`; QA = `ouroboros-stable` tip; Development = `ouroboros` tip (`update_channels.py`). Owner-controlled promotion and Restore bind exact SHAs; Restore preserves rescue/keep refs and never pushes. Restart keeps the local tip; explicit update owns fetch, validation, rescue, apply and rollback. `managed` reads/updates officially; optional `origin` persists personal work. Desktop/Colab targets need regular nonempty `BIBLE.md`. External PRs target `ouroboros`, leave versions alone; maintainers allocate collision-free versions on landing (CONTRIBUTING.md).
 
@@ -30,7 +30,7 @@ Shared UI and keyless wait/repair browser fixtures run the dirty Git candidate i
 
 Tool-schema compatibility has two layers. Local and manual/tag tests build the complete shipped catalog without MCP or extensions, validate every schema as JSON Schema plus the cross-provider subset, and need every provider projection to keep the complete tool-name set. Trusted `integration-test` sends that full registry, fitted to the route's schema ceiling as Main does, in one bounded, unexecuted `delegate_start` canary per route and needs positive usage, exact provider/model identity and a schema-valid call carrying exactly the requested arguments; quota, 429, 5xx and timeout outcomes stay typed inconclusive, while contract, auth, model, tool and reasoning 4xx are red (DEVELOPMENT "Provider Independence").
 
-Informational test reports, safe artifacts, step ceilings and partial UI checks: DEVELOPMENT "Reading CI failure evidence".
+`tests/ci_evidence.py` binds timeout callbacks to run/worker/test; the gate reads its crash rows, never stdout as cause. `tests/stack_samples.py` replaces the crash-prone native watchdog with GIL-held samples; native hangs holding the GIL remain unsampled. Reports/artifacts: DEVELOPMENT "Reading CI failure evidence".
 
 Each manual/tag `CI` run and re-run has its own concurrency group, so no qualification cancels another.
 
