@@ -285,10 +285,11 @@ def get_tools() -> List[ToolEntry]:
             schema={
                 "name": "compact_context",
                 "description": (
-                    "Fold context under your working_note; no helper summarizes. Only view_address or "
+                    "Fold context under your working_note; no helper summarizes for you. Only view_address or "
                     "restore_unit_refs may be used without a note. Core, assignment, owner words, typed owner-directed "
                     "dialogue and newer tail stay whole. Each older tool call and contiguous results is atomic; exact "
-                    "bytes are checkpointed with CAS provenance before replacement. Unselected notes stay; replacement "
+                    "bytes are checkpointed with CAS provenance before replacement, so raw evidence remains retrievable. "
+                    "Unselected notes stay; replacement "
                     "occupies the first selected unit. Batch usefully, shorter than sources: rewriting loses prefix-cache "
                     "reuse and signed reasoning from the earliest change. "
                     "Native review ignores schema_names, review_notes and review_transfers; its inspection reports "
