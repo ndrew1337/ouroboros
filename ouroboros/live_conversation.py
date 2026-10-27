@@ -20,7 +20,7 @@ from dataclasses import replace
 
 from ouroboros.contracts.live_conversation import LiveConfig, LiveOptions, ToolBatch
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json, sha256
-from ouroboros.realtime_setup import _LoopWork, loaded_provider
+from ouroboros.realtime_setup import _LoopWork, loaded_provider, rows_for_engine
 from ouroboros.realtime_session import joined
 from ouroboros.realtime_turn import RealtimeTurn
 
@@ -100,13 +100,20 @@ class LiveConversationTurn(RealtimeTurn):
         self.provider = config.provider
         provider = loaded_provider(self.provider)
         self.catalog_model = provider["catalog"].model(config.model)
-        self.supports_images = self.catalog_model.vision
         self.route, self._generation = provider["route"], provider["extension_generation"]
         self.native_model = self.catalog_model.id
         self.model = self.route.model_prefix + self.native_model
         self.spec = replace(spec, model=self.native_model)
-        self.opening = ("This call is now live: the other side can hear you." if spec.opened_by == "skill"
-                        else "The owner has just opened this call and can hear you now.")
+        # The engine and its senses are facts of this call, not of the room: the owner asks
+        # "which model are you on?" and a blind engine must not be asked to look at a screenshot.
+        senses = ("it hears speech and sees images: the owner's shared screen or camera and images that tools attach"
+                  if self.catalog_model.vision else
+                  "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
+                  "naming the saved file, which analyze_screenshot or vlm_query read as text")
+        self.opening = (("This call is now live: the other side can hear you." if spec.opened_by == "skill"
+                         else "The owner has just opened this call and can hear you now.")
+                        + f" This call runs on {provider['catalog'].label}, model "
+                        f"{self.catalog_model.label or self.native_model}; {senses}.")
         self.request = {"kind": "live_conversation", "feature": feature["key"], "provider": self.provider,
                         "model": self.native_model, "call_id": spec.call_id}
         self.admitted_at = time.time()  # the turn is built at admission, before the task is queued and prepared
@@ -721,8 +728,9 @@ class ConversationHost:
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
                     self._context_changed()
                     self.trace["tool_calls"].append({"name": tool.name, "call_id": call["id"], "result": str(result)})
-                changes = [copy.deepcopy(row) for i, row in enumerate(self.messages)
-                           if i >= len(before) or sha256(canonical_json(row)) != before[i]]
+                changes = rows_for_engine([copy.deepcopy(row) for i, row in enumerate(self.messages)
+                                           if i >= len(before) or sha256(canonical_json(row)) != before[i]],
+                                          vision=self.model.vision)
                 for call in fresh:
                     self.executed[call["id"]] = (canonical_json(call), [
                         row for row in changes if row.get("tool_call_id") == call["id"]])

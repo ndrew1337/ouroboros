@@ -235,7 +235,11 @@ def _build_installed_skills_section(env: Any, *, max_lines: int = 100, skills: O
             if token_effect:
                 lines.append(f"  Token effect: {token_effect}")
         if surfaces:
-            lines.append(f"  Tools: {', '.join(surfaces[:8])}")
+            shown, more = surfaces[:8], len(surfaces) - min(len(surfaces), 8)
+            # Eight names fit the legend; a silent cut read as the whole set (the 27.10 call enabled
+            # 7 of 24 desktop tools and told the owner the rest did not exist).
+            lines.append(f"  Tools: {', '.join(shown)}" + (
+                f"; and {more} more: list_available_tools(namespace={name!r}) names them all" if more else ""))
         elif skill.get("runnable_via_skill_exec"):
             lines.append("  Tools: skill_exec")
         if skill.get("type") == "extension" and not skill.get("live_loaded"):

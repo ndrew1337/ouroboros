@@ -15,6 +15,32 @@ from ouroboros.extension_registry_state import (
 )
 
 
+def rows_for_engine(rows: list[dict], *, vision: bool) -> list[dict]:
+    """What the speech engine receives from the ordinary history.
+
+    An engine whose catalog says it does not see images gets each image part as
+    the caption that names the saved file, so a screenshot taken in a Grok call
+    reaches the model as text instead of closing the call (owner's stand, 27.10).
+    The ordinary history keeps the image for the text model.
+    """
+    if vision:
+        return rows
+    out = []
+    for row in rows:
+        content = row.get("content")
+        if isinstance(content, list) and any(isinstance(p, dict) and p.get("type") == "image_url" for p in content):
+            row = {**row, "content": [_image_caption(p) if isinstance(p, dict) and p.get("type") == "image_url" else p
+                                      for p in content]}
+        out.append(row)
+    return out
+
+
+def _image_caption(part: dict) -> dict:
+    caption = str(part.get("_caption") or "").strip() or f"saved at {part.get('_source_path') or 'the attached file'}"
+    return {"type": "text", "text": (f"[Image not shown: this voice engine does not see images. {caption} "
+                                     "analyze_screenshot or vlm_query read the saved file as text.]")}
+
+
 def input_from_context_plan(plan, *, model: str, selected_tools: list[dict],
                             output_allowance_tokens: int, messages: list[dict] | None = None,
                             tool_reader: bool = True) -> RealtimeInput:
@@ -230,7 +256,7 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             rows = [*host.messages, *extra]
             previous, deficit, measured_input = None, 0, None
             continue
-        current = plan.reproject_transcript(host.messages, plan.initial_mode)
+        current = rows_for_engine(plan.reproject_transcript(host.messages, plan.initial_mode), vision=host.model.vision)
         rows = [*current, *extra]
         session, request, evidence, physical_window = measure_session_wire(host, plan, current, host.schemas, factory, options)
         measurement = evidence['fit']['measurement']

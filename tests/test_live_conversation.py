@@ -6,6 +6,7 @@ Raw wire/ledger receipts are exported even when assertions fail.
 from __future__ import annotations
 import asyncio
 import base64
+import copy
 import json
 import shutil
 import threading
@@ -596,3 +597,40 @@ def test_call_observations_are_bound_to_the_granted_account(host_world):
     assert host.plan.route_fp != first
     assert request.physical_context.window_observation_fp == host.plan.route_fp
     assert request.physical_context.capacity_total_tokens == host.model.facts.conversation_window_tokens
+
+
+@pytest.mark.parametrize('vision', [False, True])
+def test_a_blind_engine_receives_tool_images_as_captions(host_world, vision):
+    """A screenshot in a Grok call raised vision_unsupported and closed the call (27.10 stand);
+    the engine's catalog decides what it receives, the ordinary history keeps the image."""
+    from ouroboros.contracts.live_conversation import LiveOptions
+    from ouroboros.realtime_setup import session_candidate
+    host = host_world.host
+    host.model = replace(host.model, vision=vision)
+    image = {'role': 'user', 'content': [
+        {'type': 'text', 'text': '[image: shot.png; original: /tmp/shot.png]'},
+        {'type': 'image_url', 'image_url': {'url': 'data:image/png;base64,AAAA'},
+         '_caption': '[image: shot.png; original: /tmp/shot.png]', '_source_path': '/tmp/shot.png'}]}
+    async def shoot(host, args):
+        host.messages.append(copy.deepcopy(image))
+        return '{"ok": true}'
+    host.call_tools['set_test_language'] = replace(host.call_tools['set_test_language'], handler=shoot)
+    call = {'id': 'shot-1', 'type': 'function', 'function': {'name': 'set_test_language', 'arguments': '{}'}}
+    rows = asyncio.run(host.tool_batch([call]))
+    sent = [row for row in rows if row.get('role') == 'user']
+    parts = sent[-1]['content']
+    assert any(part.get('type') == 'image_url' for part in parts) is vision
+    if not vision:
+        assert '/tmp/shot.png' in parts[-1]['text'] and 'does not see images' in parts[-1]['text']
+    kept = [row for row in host.messages if row.get('role') == 'user' and isinstance(row.get('content'), list)][-1]
+    assert any(part.get('type') == 'image_url' for part in kept['content'])  # the ordinary history keeps the image
+    session, _, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+    assert ('"image_url"' in session.selected.messages_json) is vision
+    assert ('does not see images' in session.selected.messages_json) is not vision
+
+
+def test_the_opening_names_the_engine_and_its_senses(host_world):
+    """The owner asked a Grok call which model it was on and heard an invented vendor (27.10)."""
+    host = host_world.host
+    assert host.turn.opening.startswith('The owner has just opened this call and can hear you now.')
+    assert 'This call runs on Fixture engine, model Voice test; it hears speech and sees images' in host.turn.opening
