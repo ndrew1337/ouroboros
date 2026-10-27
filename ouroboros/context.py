@@ -913,17 +913,11 @@ def _capture_context_core(
 
     semi_stable_parts, subagent_catalog = [], None
     try:
-        from ouroboros.subagent_runtime import current_model_visible_subagent_catalog
+        from ouroboros.subagent_runtime import current_model_visible_subagent_catalog, subagent_catalog_section
 
         subagent_catalog = current_model_visible_subagent_catalog()
         if subagent_catalog:
-            heading = "## Available subagents\n\n"
-            rows = [f"- {row.get('subagent_id', '?')}: {row.get('route_class', '?')}, "
-                    f"effort {row.get('effort', '?')}" + (", reviews" if row.get("review_eligible") else "")
-                    + ("\n  recommended_use: " + row["recommended_use"] if row.get("recommended_use") else "")
-                    for row in subagent_catalog.get("rows", ())]
-            semi_stable_parts.append(HostSection("subagents",
-                heading + json.dumps(subagent_catalog, ensure_ascii=False, indent=1), heading + "\n".join(rows)))
+            semi_stable_parts.append(subagent_catalog_section(subagent_catalog))
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
     try:
@@ -999,17 +993,19 @@ def _capture_context_core(
     review_section = ""
     if review_context_builder is not None:
         try:
-            review_section = str(review_context_builder() or "").strip()
+            review_section = review_context_builder() or ""
+            if not isinstance(review_section, HostSection):
+                review_section = str(review_section).strip()
         except Exception:
             log.debug("Failed to build review continuity section", exc_info=True)
     if review_section:
         dynamic_parts.append(review_section)
     else:
         try:
-            from ouroboros.review_state import format_status_section, load_state
+            from ouroboros.review_state import review_status_host_section, load_state
             advisory_state = load_state(canonical_root)
             if advisory_state.advisory_runs or advisory_state.latest_attempt():
-                advisory_section = format_status_section(
+                advisory_section = review_status_host_section(
                     advisory_state,
                     repo_dir=pathlib.Path(env.repo_dir),
                 )

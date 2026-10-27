@@ -123,14 +123,20 @@ def _bound_delta_meta(meta: dict) -> None:
                                    json.dumps(headings, ensure_ascii=False).encode("utf-8")).hexdigest()}
 
 
-def _residency(note: knowledge_store.KnowledgeNote) -> str:
+def _residency(note: knowledge_store.KnowledgeNote, delta: dict | None = None) -> str:
     """Where the written note now sits in my contexts: a fact about its cost, never a limit."""
     if note.state == "archived":
         return "Residency: archived, so it is not in the active knowledge index; knowledge_read still opens it."
     body = note.source.text_at(note.source.body_span) if note.source else note.text
     loaders = "Main, tasks, wakes and Presence; helpers do not load it"
     if note.address.scope == "global" and note.address.topic == OVERVIEW_TOPIC:
-        return f"Residency: the overview body ({len(body)} chars) is loaded whole in every context that loads knowledge ({loaders})."
+        before = (delta or {}).get('old_body_chars', len(body))
+        after = len(body)
+        return (knowledge_store.overview_residency(note)
+                + f" Body {before} → {after} chars; estimate {before / 4:.2f} → {after / 4:.2f} tokens; "
+                f"delta {(after - before) / 4:+.2f} tokens (chars/4). "
+                "Effect applies at the next context build; an accepted session keeps its earlier capture. "
+                "Current route room: unknown here; compact_context inspects its actual observation.")
     where = (f"the global knowledge index ({loaders})" if note.address.scope == "global"
              else f"the {note.address.scope} knowledge index, loaded in that project's contexts")
     tail = f"the body ({len(body)} chars) is read on demand with knowledge_read."
@@ -224,7 +230,7 @@ def _knowledge_write(
         meta["knowledge_state"] = result.current.state
     if result.ok:
         if result.current is not None:  # before the bound, which then makes room for it
-            meta["knowledge_residency"] = _residency(result.current)
+            meta["knowledge_residency"] = _residency(result.current, result.delta)
         _bound_delta_meta(meta)
         return _publish_tool_result(ctx, ToolResult(
             status="ok", code="OK",

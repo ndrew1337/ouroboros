@@ -20,7 +20,7 @@ RESERVE = 8_192
 def test_host_ladder_lists_live_producers_and_keeps_only_the_actual_protected_core():
     from ouroboros.context_layout import TIER0_ALWAYS_FULL
 
-    assert memory_floor.HOST_STEPS == ("runtime", "registry", "installed_skills", "drive_state",
+    assert memory_floor.HOST_STEPS == ("runtime", "review_pool", "review_continuity", "registry", "installed_skills", "drive_state",
         "world", "subagents",
         "architecture_map", "development_map")
     assert section_floor.PROTECTED == TIER0_ALWAYS_FULL
@@ -286,7 +286,7 @@ def test_host_sections_then_index_precede_memory_and_people_step_last(tmp_path):
     assert smaller.max_projection.memory_facts["floor"]["steps"] == {}
     # At increasing physical pressure retold pages/replies go before human words.
     middle = _plan(core, 20_000)
-    assert "F5" in middle.max_projection.memory_facts["floor"]["steps"]
+    assert "F5l" in middle.max_projection.memory_facts["floor"]["steps"]
     assert "F7" not in middle.max_projection.memory_facts["floor"]["steps"]
     smallest = middle.reproject_for_route(window_tokens=RESERVE + 1, known_window=True, ratio=1,
         output_reserve=RESERVE, tool_schemas=[])
@@ -385,8 +385,11 @@ def test_declared_inputs_use_the_same_book_map_floor_without_loading_shared_memo
     small = unknown.reproject_for_route(window_tokens=RESERVE + 1, known_window=True, ratio=1,
         output_reserve=RESERVE, tool_schemas=[], start_mode="nano")
     assert _host_facts(small)
-    assert {row["section_id"] for row in _host_facts(small)} <= {"architecture_map", "development_map"}
-    assert core.dynamic_text in _text(small) and "Exact assignment" in core.user_content_json
+    addressed = {row["section_id"] for row in _host_facts(small)}
+    assert addressed <= {"architecture_map", "development_map", "runtime", "review_pool", "subagents"}
+    assert {'runtime', 'review_pool'} <= {p.section_id for p in (*core.dynamic_sections, *core.semi_stable_sections)}
+    assert all(p.full_text in _text(small) for p in core.dynamic_sections if p.section_id not in addressed)
+    assert "Exact assignment" in core.user_content_json
 
 
 def test_the_shared_understanding_overview_is_never_addressed_while_steppable_sections_are(tmp_path):

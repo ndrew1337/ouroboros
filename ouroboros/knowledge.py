@@ -648,6 +648,20 @@ class KnowledgeWriteResult:
     history_ref: dict[str, Any] | None = None
 
 
+def body_chars(note: KnowledgeNote | None) -> int:
+    """The same stored body the context loader carries, excluding parsed frontmatter."""
+    if note is None:
+        return 0
+    return len(note.source.text_at(note.source.body_span) if note.source else note.text)
+
+
+def overview_residency(note: KnowledgeNote) -> str:
+    """A revision-stable cost line, independent of route, clock or accepted session."""
+    chars = body_chars(note)
+    return (f"Residency: overview body {chars} chars; estimate {chars / 4:.2f} tokens (chars/4); "
+            "loaded whole in every integrating context (Main, tasks, wakes and Presence); helpers read on demand.")
+
+
 def write_knowledge_note(
     address: KnowledgeAddress, content: str, mode: str = "overwrite",
     expected_revision: str | None = None, task_id: str = "", old_str: str | None = None,
@@ -733,6 +747,7 @@ def write_knowledge_note(
                     return KnowledgeWriteResult(False, "publication_incomplete", current, revision)
             return KnowledgeWriteResult(True, "unchanged", current, revision,
                                         {"old_chars": len(current.text), "new_chars": len(current.text),
+                                         "old_body_chars": body_chars(current), "new_body_chars": body_chars(current),
                                          "change_chars": 0, "removed_headings": [],
                                          "body_changed": False, "summary_changed": False})
         # A body edit keeps the preamble bytes; a revised summary may re-render
@@ -758,6 +773,7 @@ def write_knowledge_note(
         old_body, old_summary = ((current.raw[current.source.body_span.start_byte:], current.summary)
                                  if current and current.source else (b"", ""))
         delta = {"old_chars": len(old_text), "new_chars": len(updated.text),
+                 "old_body_chars": body_chars(current), "new_body_chars": body_chars(updated),
                  "change_chars": len(updated.text) - len(old_text), "removed_headings": removed_headings,
                  "body_changed": old_body != raw[updated.source.body_span.start_byte:] if known else None,
                  "summary_changed": old_summary != updated.summary if known else None}

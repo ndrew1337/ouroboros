@@ -21,15 +21,14 @@ from ouroboros.section_floor import PROTECTED, retain_section, relocated_text, s
 
 log = logging.getLogger(__name__)
 
-LADDER = ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F7", "F7a", "F5", "F5a", "F8", "F8a")
+LADDER = ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F5l", "F5", "F5a", "F7", "F7a", "F8", "F8a")
 MODES = ("max", "low", "nano")
 _COLLAPSING = ("F1", "F1b", "F6a", "F7a", "F5a", "F8a")
-WINDOW_ONLY = frozenset({'F8', 'F8a'})
 _LIST_FORMS = {'F7a': ('F2', 'F7p', 'F7'), 'F5a': ('F5',), 'F8a': ('F8',)}
 _SHOWN = (("F2", "{} of my replies"), ("F7", "{} owner rows"), ("F7p", "{} other spoken rows"),
           ("F6r", "{} other rooms as ranges"), ("F6", "{} other rooms as directory lines"),
           ("F6a", "{} other rooms in an aggregate"), ("F4", "{} room records"),
-          ("F5", "{} pages, parts or accounts of my story"), ("F3", "{} retold rooms"),
+          ("F5l", "{} story pages by first sentence"), ("F5", "{} pages or parts of my story"), ("F3", "{} retold rooms"),
           ("F1", "{} task fact lines"), ("F1b", "{} quiet rooms"))
 _SHOWN += (("F7a", "{} aggregate row ranges"), ("F5a", "{} aggregate story lists"))
 _SHOWN += (("F8", "{} unsealed notes by label"), ("F8a", "{} aggregate note lists"))
@@ -67,8 +66,10 @@ def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str,
                 if i["kind"] != "ouroboros" and not i.get("owner_side", i["kind"] == "human")],
         "F7": [(i["address"], i["line"], mv._row_pointer(i, "words")) for i in lane1
                if i.get("owner_side", i["kind"] == "human") and not i.get("immune")],
+        "F5l": [(e["id"], "\n".join(mv._page_lines(e)), mv._page_label(e))
+                for e in snapshot.story if e.get("kind") == "page" and not e.get("told_by")],
         "F5": [(e["id"], "\n".join(mv._page_lines(e)), mv._page_pointer(e))
-               for e in snapshot.story if e.get("kind") != "legacy" and not e.get("told_by")],
+               for e in snapshot.story if e.get("kind") not in ("legacy", "account") and not e.get("told_by")],
         # These are forms of an already addressed set, never permission to cut another row/page.
         "F7a": [(str(room['room_id']), '', '')] if lane1 else [],
         "F5a": [('story', '', '')] if snapshot.story else [],
@@ -112,22 +113,24 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
                     measure: Optional[Callable[[mv.FloorLevel], int]] = None) -> mv.FloorLevel:
     """One ordered walk, then give back new cuts that fit. Previously chosen forms stay selected."""
     elements = degradable_elements(snapshot)
+    labels = {ident: short for step, ident, _whole, short in elements if step == 'F5l'}
     old = {(step, ident) for step, ids in kept.addressed for ident in ids}
     taken = set(old)
     measure = _memoized_measure(measure or (
         lambda level: view_tokens(mv.render_story(snapshot, level)) + view_tokens(mv.render_room(snapshot, level))))
     current = measure(kept)
-    bounds = [b for b in (allowances.get("margin"), allowances.get("budget")) if b is not None]
+    bounds = [b for b in (allowances.get("margin"), allowances.get("budget"), allowances.get("physical")) if b is not None]
     bound = min(bounds) if bounds else None
     target = min(bound if bound is not None else current, current - saving) if saving else bound
     budget = allowances.get("budget") is not None and allowances.get("budget") == bound
 
     def level(selected):
+        selected = {(s, i) for s, i in selected if s != 'F5l' or ('F5', i) not in selected}
         selected = {(s, i) for s, i in selected if s not in _LIST_FORMS or any(
             prior in _LIST_FORMS[s] for prior, _ in selected)}
         return mv.FloorLevel(tuple((s, tuple(i for step, i, *_ in elements if step == s and (s, i) in selected))
                                   for s in LADDER if any(step == s for step, _ in selected)),
-                             by_budget=kept.by_budget + (sum(s not in WINDOW_ONLY for s, _ in selected - old) if budget else 0))
+                             by_budget=kept.by_budget + (len(selected - old) if budget else 0))
 
     uncovered = uncovered_owner_rows(snapshot, elements)
     last = {(step, ident) for step, ident, *_ in uncovered}
@@ -137,18 +140,26 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
             current = measure(level(taken))  # aggregate boundaries and the receipt are part of the budget
             if current <= target:
                 break
-        if (step, ident) in taken or target is None or current <= target or (step, ident) in last or step in WINDOW_ONLY:
+        if (step, ident) in taken or target is None or current <= target or (step, ident) in last:
             continue
-        if step in _LIST_FORMS:
-            if not any(s in _LIST_FORMS[step] for s, _ in taken):
+        if step in _LIST_FORMS or step == 'F8':
+            trial = taken | {(step, ident)}
+            if step == 'F8a':
+                # Individually larger labels can still earn a smaller aggregate.
+                trial.update((s, i) for s, i, *_ in elements if s == 'F8')
+            if step in _LIST_FORMS and not any(s in _LIST_FORMS[step] for s, _ in trial):
                 continue
-            before, after = measure(level(taken)), measure(level(taken | {(step, ident)}))
+            before, after = measure(level(taken)), measure(level(trial))
             if after >= before:
                 continue
             current, delta = after, before - after
-            taken.add((step, ident))
+            taken = trial
             added.append((step, ident, delta))
             continue
+        if step == 'F5l' and ('F5', ident) in taken:
+            continue
+        if step == 'F5' and ('F5l', ident) in taken:
+            whole = labels[ident]
         delta = max(0, whole - short)
         taken.add((step, ident))
         added.append((step, ident, delta))
@@ -181,22 +192,6 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
                     if after < current:
                         taken.add(form)
                         current = after
-    # Held notes yield only after all earlier forms, never to a start target or requested saving.
-    if physical is not None:
-        current = measure(level(taken))
-    for step, ident, _whole, _short in elements:
-        if physical is None or current <= physical:
-            break
-        if step not in WINDOW_ONLY or (step, ident) in taken:
-            continue
-        trial = taken | {(step, ident)}
-        if step == 'F8a':
-            # A tiny note's label plus reader can cost more than its body; the combined
-            # list can still save space after all individual label forms were tried.
-            trial.update((s, i) for s, i, *_ in elements if s == 'F8')
-        after = measure(level(trial))
-        if after < current:
-            taken, current = trial, after
     return level(taken)
 
 
@@ -246,6 +241,8 @@ def level_with(snapshot: mv.MemoryViewSnapshot, kept: mv.FloorLevel, addresses: 
                 row.get("carried") for row in snapshot.room["lane1"] if row["address"] == ident):
             raise ValueError("Uncovered owner commitments require an authored working_note before changing their form")
         taken.add((step, ident))
+        if step in ('F5l', 'F5'):
+            taken.discard(('F5' if step == 'F5l' else 'F5l', ident))
         if step == 'F8':
             taken = {(s, i) for s, i in taken if s != 'F8a'}  # an explicit label selection unfolds the note list
         if step in ("F6", "F6a"):
@@ -386,7 +383,7 @@ def floor_note(level: mv.FloorLevel, *, window_tokens: Optional[int], mode: str,
                    "old pages (kind=part) can carry the commitments in my own words."
                    if names is None or _SEALING_TOOLS & set(names) else "")
         lines.append(f"This {name} view retains memory cuts for {subject}. "
-                     f"Shown above only by address: {shown}. The retained sources remain readable: memory_read reads "
+                     f"Shown above in reduced forms: {shown}. The retained sources remain readable: memory_read reads "
                      f"each.{sealing}")
     if lowered_from:
         lines.append("Low: the books did not fit beside the story and the work room." if mode == "low" else
@@ -415,7 +412,7 @@ def view_facts(snapshot: mv.MemoryViewSnapshot, level: mv.FloorLevel, *, window_
                       "target_tokens": target_tokens, "budget_allowance_tokens": allowances.get("budget"),
                       "by_budget": level.by_budget, "mode_switch": {"from": lowered_from, "to": mode} if lowered_from else None,
                       "newest_addressed_row": parse_address(max(rows)[1]) if rows else None,
-                      "pointer_records": [ident for step, ids in level.addressed if step in ("F4", "F5") for ident in ids]},
+                      "pointer_records": [ident for step, ids in level.addressed if step in ("F4", "F5l", "F5") for ident in ids]},
             "story_status": {"folded": status.get("folded", 0), "total": status.get("total", 0)}}
 
 
@@ -456,12 +453,9 @@ def render_view_for_mode(snapshot: mv.MemoryViewSnapshot, *, mode: str, owner_mo
             gone = dict(level.addressed)
             held = [f"F7:{ident}" for step, ident, *_ in uncovered if ident not in gone.get(step, ())]
             owners = held and size(level_with(snapshot, level, held, owner_note=True)) <= allowances["margin"]
-            notes = (snapshot.room or {}).get('notes', ())
-            held_notes = notes and (not gone.get('F8a') or any(n['id'] not in gone.get('F8', ()) for n in notes))
             note += "\nStart room is smaller than requested: " + (
                 "uncovered owner words remain in view; only physical pressure can turn their oldest rows into named addresses."
-                if owners else "unsealed notes remain in their selected forms; only physical pressure can narrow them."
-                if held_notes else "what my memory shows even in its shortest forms exceeds it.")
+                if owners else "what my memory shows even in its shortest forms exceeds it.")
         return note
     # The request owner can measure JSON separators and rounding in the actual envelope.
     measure_text = measure_text or (lambda story, room: view_tokens(story) + view_tokens(room))
@@ -503,10 +497,12 @@ def minimal_view_tokens(snapshot: mv.MemoryViewSnapshot, *, window_tokens: Optio
         taken.setdefault(step, []).append(ident)
     candidates = [taken]
     if taken.get('F8'):
-        whole_notes = {s: ids for s, ids in taken.items() if s not in WINDOW_ONLY}
+        whole_notes = {s: ids for s, ids in taken.items() if s not in ('F8', 'F8a')}
         lines = [i for s, i, whole, short in degradable_elements(snapshot) if s == 'F8' and short < whole]
         candidates += [whole_notes, {**whole_notes, 'F8': lines}]
     def price(selected):
+        selected = {s: [i for i in ids if s != 'F5l' or i not in selected.get('F5', ())]
+                    for s, ids in selected.items()}
         level = mv.FloorLevel(tuple((step, tuple(ids)) for step, ids in selected.items() if ids))
         note = max((floor_note(level, window_tokens=window_tokens, mode="nano", lowered_from="max", tool_names=names)
                     for names in _PATH_CASES), key=view_tokens)  # an upper bound, whatever schemas it sends
@@ -525,7 +521,7 @@ def minimal_view_tokens(snapshot: mv.MemoryViewSnapshot, *, window_tokens: Optio
 
 # Host producers before indexes, then the memory walk, all under the same start budget.
 # Running views narrow only under physical pressure or a refusal.
-HOST_STEPS = ("runtime", "registry", "installed_skills",
+HOST_STEPS = ("runtime", "review_pool", "review_continuity", "registry", "installed_skills",
               "drive_state", "world", "subagents", "architecture_map", "development_map")
 
 

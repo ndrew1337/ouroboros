@@ -391,7 +391,32 @@ def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None) -> str:
     }
     if migration.get("snapshot"):
         facts["migration_snapshot"] = migration["snapshot"]
-    return "## Review\n\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":"))
+    return review_pool_host_section(facts)
+
+
+def review_pool_host_section(facts: Mapping[str, Any]) -> str:
+    """The producer's one-line current pool, with exceptional configuration facts intact."""
+    from ouroboros.section_floor import HostSection
+
+    operative = (f"## Review\n\nenforcement={facts['enforcement']}; mode={facts['mode']}; "
+                 f"reviewers={', '.join(row['subagent_id'] for row in facts['pool']) or 'none'}; source={facts['source']}")
+    exceptions = {key: facts[key] for key in ('error', 'main_self_review', 'coupling_unanswerable',
+                  'pool_without_credentials', 'no_pool_row_has_credentials', 'migration_snapshot') if facts.get(key)}
+    if exceptions:
+        operative += "; " + json.dumps(exceptions, ensure_ascii=False, separators=(",", ":"))
+    return HostSection("review_pool", "## Review\n\n" + json.dumps(facts, ensure_ascii=False, separators=(",", ":")), operative)
+
+
+def subagent_catalog_section(catalog: Mapping[str, Any]) -> str:
+    """The roster in both forms, every ``recommended_use`` whole: the advice exists for routing decisions."""
+    from ouroboros.section_floor import HostSection
+
+    heading = "## Available subagents\n\n"
+    rows = [f"- {row.get('subagent_id', '?')}: {row.get('route_class', '?')}, effort {row.get('effort', '?')}"
+            + (", reviews" if row.get("review_eligible") else "")
+            + ("\n  recommended_use: " + row["recommended_use"] if row.get("recommended_use") else "")
+            for row in catalog.get("rows", ())]
+    return HostSection("subagents", heading + json.dumps(catalog, ensure_ascii=False, indent=1), heading + "\n".join(rows))
 
 
 def review_records_block(*, drive_root: Any, task_id: str) -> str:

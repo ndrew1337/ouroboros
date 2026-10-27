@@ -14,38 +14,38 @@ def measure_session(host, factory, options, *, observation_fp=None):
     from devtools.context_fit_report import measure_core
     from ouroboros.contracts.realtime import RealtimeSetupError
     from ouroboros.realtime_setup import session_candidate
+    from ouroboros.context_fit import ContextFitPlan
+    from unittest.mock import patch
 
-    try:
-        _, _, evidence = session_candidate(host, factory, options, observation_fp=observation_fp)
-    except RealtimeSetupError as exc:
-        if exc.code != 'context_capacity' or 'fit_refusal' not in host.trace:
-            raise
-        evidence = host.trace['fit_refusal']
-        measurement = evidence['fit']['measurement']
-        margin = measurement['capacity_total_tokens'] - measurement['response_reserve_tokens'] - measurement['estimated_input_tokens']
-        return dict(phase='session_candidate', verdict='context_capacity', fit=evidence['fit'],
-            input_tokens=measurement['estimated_input_tokens'], reserve=measurement['response_reserve_tokens'],
-            window=measurement['capacity_total_tokens'], margin_tokens=margin, deficit_tokens=max(0, -margin),
-            mode=measurement['rendered_mode'], requested_mode=host.plan.preferred_mode, profile=measurement['profile'],
-            work_room_levels=_levels(host.plan), work_room_deficit_tokens=0, blocks=[], ladder={},
-            work_room_applies_to_verdict=False, input_basis='measured_candidate',
-            total_tokens=measurement['estimated_input_tokens'] + measurement['response_reserve_tokens'],
-            density=measurement['measurement_density'], reply_allowance=measurement['reply_allowance_tokens'],
-            ladder_basis='refused wire; no published projection', diagnostic_notes=[])
+    candidates, refused = [], False
+    reproject = ContextFitPlan.reproject_for_route
+    def capture(plan, *args, **kwargs):
+        result = reproject(plan, *args, **kwargs)
+        candidates.append(result)
+        return result
+    # Refused candidates are deliberately not published onto the live host. Capture
+    # the real ladder's return for diagnostics, without inventing a second projection.
+    with patch.object(ContextFitPlan, 'reproject_for_route', capture):
+        try:
+            _, _, evidence = session_candidate(host, factory, options, observation_fp=observation_fp)
+        except RealtimeSetupError as exc:
+            if exc.code != 'context_capacity' or 'fit_refusal' not in host.trace:
+                raise
+            evidence, refused = host.trace['fit_refusal'], True
+    candidate = candidates[-1] if refused and candidates else host.plan
     measurement = evidence['fit']['measurement']
     result = measure_core(host.plan.core, host.schemas, root=host.ctx.drive_root,
         window=measurement['capacity_total_tokens'], reserve=measurement['response_reserve_tokens'],
-        mode=host.plan.preferred_mode, prepared=host.plan, fit=evidence['fit'])
-    work = evidence['work_room']
-    result.update(phase='session_candidate', diagnostic_notes=[], work_room=work,
-        start_work_room_tokens=work['requested_tokens'], work_room_deficit_tokens=work['deficit_tokens'])
+        mode=host.plan.preferred_mode, prepared=candidate, fit=evidence['fit'])
+    result.update(phase='session_candidate', diagnostic_notes=[])
+    if refused:
+        result.update(verdict='context_capacity', ladder_basis='refused candidate; not published to the host',
+                      work_room_deficit_tokens=0, work_room_applies_to_verdict=False)
+    else:
+        work = evidence['work_room']
+        result.update(work_room=work, start_work_room_tokens=work['requested_tokens'],
+                      work_room_deficit_tokens=work['deficit_tokens'])
     return result
-
-
-def _levels(plan):
-    from ouroboros.memory_view import snapshot_from_json
-
-    return snapshot_from_json(plan.core.memory_view_json).spec.work_room_levels
 
 
 def session_inputs(provider, window, reserve, root):

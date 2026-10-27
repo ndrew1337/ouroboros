@@ -95,7 +95,7 @@ def test_aggregate_lever_preserves_element_addresses_and_requires_uncovered_note
     first = floor.select_view(p, 'max', ['F5:page-000', 'F5a:story'])
     second = floor.select_view(first, 'max', ['F5:page-001'])
     assert dict(floor.kept_level(snap, second.max_projection.memory_facts).addressed)['F5'] == ('page-000', 'page-001')
-    assert '2 older pages, parts and accounts' in second.max_projection.system_content_json
+    assert '2 older pages and parts' in second.max_projection.system_content_json
     with pytest.raises(ValueError, match='already addressed'):
         floor.level_with(snap, mv.FULL_VIEW, ['F7a:1'])
 

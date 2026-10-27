@@ -11,8 +11,11 @@ from devtools._context_fit_session import measure_session, session_inputs
 from devtools.context_fit_report import REPO, measure_core
 
 
-@pytest.mark.parametrize('extra_chars, fits', [(0, True), (24000, True), (100000, False)])
-def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, extra_chars, fits):
+@pytest.mark.parametrize('window, extra_chars, fits, producers',
+    [(92000, 0, True, False), (92000, 24000, True, False), (92000, 100000, False, False)]
+    + [(window, extra, fits, True) for window in (85000, 92000, 133554)
+       for extra, fits in ((0, True), (400000, False))])
+def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, window, extra_chars, fits, producers):
     import socket
     from ouroboros import context_fit as cf, memory_view as mv
     from ouroboros.call_protocol import CallSpec
@@ -27,18 +30,22 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
     from skills.live_conversation.driver import call_tools, session_options
 
     monkeypatch.setattr(socket.socket, 'connect', lambda *a, **kw: pytest.fail('provider connection'))
-    core = scale.core(tmp_path / 'captures')
+    from tests import _nano_context_fixture as nano
+    core = nano.core(tmp_path / 'captures', monkeypatch) if producers else scale.core(tmp_path / 'captures')
+    schemas = nano.tools() if producers else scale.tools()
     core = replace(core, dynamic_sections=(*core.dynamic_sections,
                     HostSection('additional_held_context', scale.text('Other held facts', extra_chars))))
-    transport, model, route, output, factory = session_inputs('gemini_live', 92000, 10000, tmp_path)
+    transport, model, route, output, factory = session_inputs('gemini_live', window, 10000, tmp_path)
     # A resident view prepared under a wider window is not a fresh start. Renewal
     # retains its forms and pays physical P + R, not a second start work room.
-    evidence = declared_evidence(256000, 10000, asdict(replace(model.facts, conversation_window_tokens=256000)), output)
+    initial_window = 512000 if producers else 256000
+    evidence = declared_evidence(initial_window, 10000,
+        asdict(replace(model.facts, conversation_window_tokens=initial_window)), output)
     task = dict(id='parity', chat_id=1, type='task', _is_direct_chat=True)
     with cold_density():
         plan = cf.build_context_fit_plan(SimpleNamespace(drive_root=tmp_path), core, task,
-            preferred_mode='max', tool_schemas=scale.tools(), route_resolver=lambda *a, **kw: (route, evidence))
-        fresh = measure_core(core, scale.tools(), root=tmp_path, window=92000, reserve=10000,
+            preferred_mode='max', tool_schemas=schemas, route_resolver=lambda *a, **kw: (route, evidence))
+        fresh = measure_core(core, schemas, root=tmp_path, window=window, reserve=10000,
                              route=route, route_facts=asdict(model.facts), response_limit=output)
 
         def make_host():
@@ -51,7 +58,7 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
                               current_chat_id=1, is_direct_chat=True)
             ctx.context_fit_plan = plan
             tools = ToolRegistry(REPO, tmp_path)
-            monkeypatch.setattr(tools, 'schemas', scale.tools)
+            monkeypatch.setattr(tools, 'schemas', lambda: schemas)
             tools.set_context(ctx)
             host = ConversationHost(turn, ctx, plan.messages_for(plan.initial_mode), tools, task, '', LiveCallHub(spec))
             host._session_opened = True  # this parity case explicitly models a renewal
@@ -73,9 +80,18 @@ def test_retained_scale_candidate_matches_live_admission(tmp_path, monkeypatch, 
     assert result['verdict'] == ('fits' if fits else 'context_capacity'), result
     assert result['input_tokens'] == measured['estimated_input_tokens']  # same estimator, tolerance zero
     assert result['reserve'] == measured['response_reserve_tokens']
-    assert result['profile'] == measured['profile'] == 'task_local_nano'
+    assert result['profile'] == measured['profile']
+    if not producers:
+        assert result['profile'] == 'task_local_nano'
     assert not result['work_room_applies_to_verdict']
     assert not fresh['work_room_applies_to_verdict']  # a soft start target, never a capacity veto
+    for diagnostic in (fresh, result):
+        arithmetic = diagnostic['arithmetic']
+        assert arithmetic['requested_window_tokens'] == window
+        assert arithmetic['room_after_reserve_tokens'] == diagnostic['window'] - diagnostic['input_tokens'] - diagnostic['reserve']
+        assert arithmetic['room_above_start_tokens'] == diagnostic['margin_tokens'] - diagnostic['start_work_room_tokens']
+        story = next(b for b in diagnostic['blocks'] if b['block'] == 'story')
+        assert story['forms']['accounts whole'] == 1
     assert result['work_room_levels'] == mv.snapshot_from_json(core.memory_view_json).spec.work_room_levels
     if fits:
         from ouroboros.context_window import resolve_window

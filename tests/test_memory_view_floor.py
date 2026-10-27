@@ -33,7 +33,7 @@ def test_role_budget_is_one_frame_and_reply_is_charged_once():
 def test_order_conversation_before_my_pages_and_oldest_reply_first():
     replies = [syn.spoken(1, "ouroboros", 5_000), syn.spoken(2, "ouroboros", 50_000)]
     snapshot = syn.snapshot(story=syn.pages(2, 12_000), room_facts=syn.room("1", lane1=replies))
-    assert mf.LADDER == ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F7", "F7a", "F5", "F5a", "F8", "F8a")
+    assert mf.LADDER == ("F1", "F1b", "F6r", "F6", "F6a", "F3", "F2", "F4", "F7p", "F5l", "F5", "F5a", "F7", "F7a", "F8", "F8a")
     assert mf.fit_memory_view(snapshot, frame(tokens(snapshot))) == mv.FULL_VIEW
     level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 100))
     assert level.addressed == (("F2", (replies[0]["address"],)),)
@@ -188,23 +188,26 @@ def note_snapshot():
 
 
 @pytest.mark.parametrize('physical', [None, 10**9])
-def test_held_notes_ignore_start_targets_and_requested_savings(physical):
+def test_held_notes_follow_start_targets_and_requested_savings(physical):
     snap = note_snapshot()
     level = mf.fit_memory_view(snap, {'margin': 0, 'budget': 0, 'physical': physical}, saving=10**9)
-    assert not mf.WINDOW_ONLY.intersection(dict(level.steps))
-    assert all(mv._note_lines([note])[0] in mv.render_room(snap, level) for note in snap.room['notes'])
+    assert {'F8', 'F8a'} <= dict(level.steps).keys()
+    assert all(note['id'] in mv.render_room(snap, level) for note in snap.room['notes'])
+    roomy = mf.fit_memory_view(snap, {'margin': tokens(snap), 'budget': None, 'physical': physical})
+    assert roomy == mv.FULL_VIEW
 
 
-def test_notes_yield_after_address_lists_and_uncovered_rows_only_to_the_window():
+def test_notes_yield_late_to_shortage_without_taking_uncovered_owner_rows():
     snap = note_snapshot()
     prior = mf.level_with(snap, mv.FULL_VIEW, [f'{s}:{i}' for s, i, *_ in mf.floor_elements(snap)
-                                             if s not in mf.WINDOW_ONLY], owner_note=True)
-    physical = tokens(snap, prior) - 1
-    level = mf.fit_memory_view(snap, frame(0, physical))
+                                             if s not in ('F8', 'F8a', 'F7')], owner_note=True)
+    bound = tokens(snap, prior) - 1
+    level = mf.fit_memory_view(snap, frame(bound), kept=prior)
     assert dict(level.addressed)['F8'] == (snap.room['notes'][0]['id'],)
     assert 'F8a' not in dict(level.steps)
     assert all(dict(level.addressed)[step] == ids for step, ids in prior.addressed)
-    assert tokens(snap, level) <= physical
+    assert tokens(snap, level) <= bound
+    assert snap.room['lane1'][0]['line'] in mv.render_room(snap, level)
     assert all(mv._note_lines([note])[0] in mv.render_room(snap, level) for note in snap.room['notes'][1:])
     facts = mf.view_facts(snap, level, window_tokens=92000, mode='nano', allowances={})
     assert mf.kept_level(snap, facts) == level
@@ -214,10 +217,10 @@ def test_notes_yield_after_address_lists_and_uncovered_rows_only_to_the_window()
 def test_notes_aggregate_only_when_all_the_label_lines_still_do_not_fit():
     snap = note_snapshot()
     lines = mf.level_with(snap, mv.FULL_VIEW, [f'{s}:{i}' for s, i, *_ in mf.floor_elements(snap)
-                                             if s != 'F8a'], owner_note=True)
-    at_lines = mf.fit_memory_view(snap, frame(0, tokens(snap, lines)))
+                                             if s not in ('F8a', 'F7')], owner_note=True)
+    at_lines = mf.fit_memory_view(snap, frame(tokens(snap, lines)))
     assert dict(at_lines.steps)['F8'] == 6 and 'F8a' not in dict(at_lines.steps)
-    level = mf.fit_memory_view(snap, frame(0, tokens(snap, lines) - 1))
+    level = mf.fit_memory_view(snap, frame(tokens(snap, lines) - 1))
     assert dict(level.steps)['F8'] == 6 and dict(level.steps)['F8a'] == 1
     text = mv.render_room(snap, level)
     assert mv._notes_line(snap.room['notes']) in text
@@ -227,15 +230,15 @@ def test_notes_aggregate_only_when_all_the_label_lines_still_do_not_fit():
     assert mf.fit_memory_view(snap, frame(10**9), kept=level) == level
 
 
-def test_note_forms_are_not_attributed_to_the_owner_target():
+def test_note_forms_are_attributed_to_the_owner_target():
     snap = syn.snapshot(room_facts=syn.room(notes=1))
     snap.room['notes'][0]['text'] = 'Held meaning. ' + 'detail ' * 1000
     level = mf.fit_memory_view(snap, {'margin': 0, 'budget': 0, 'physical': 500})
-    assert dict(level.steps)['F8'] == 1 and level.by_budget == 0
+    assert dict(level.steps)['F8'] == 1 and level.by_budget > 0
     _, room, facts = mf.render_view_for_mode(snap, mode='nano', owner_mode='nano', window_tokens=1000000,
         known_window=True, output_reserve=65536, ratio=1, non_memory_tokens=66000)
-    assert 'only physical pressure can narrow them' in room
-    assert not mf.WINDOW_ONLY.intersection(facts['floor']['steps'])
+    assert 'only physical pressure can narrow them' not in room
+    assert facts['floor']['steps']['F8'] == 1 and facts['floor']['by_budget'] > 0
 
 
 def test_short_notes_still_have_selectable_forms_and_a_saving_aggregate():
@@ -256,6 +259,6 @@ def test_new_forms_do_not_inflate_a_short_notes_minimum_bound(monkeypatch):
     snap = syn.snapshot(room_facts=syn.room(notes=1))
     after = mf.minimal_view_tokens(snap, window_tokens=92000)
     with monkeypatch.context() as before:
-        before.setattr(mf, 'LADDER', tuple(step for step in mf.LADDER if step not in mf.WINDOW_ONLY))
+        before.setattr(mf, 'LADDER', tuple(step for step in mf.LADDER if step not in ('F8', 'F8a')))
         whole = mf.minimal_view_tokens(snap, window_tokens=92000)
     assert after == whole

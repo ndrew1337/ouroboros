@@ -73,6 +73,11 @@ def test_note_forms_preserve_earlier_bytes_across_start_allowances(aggregate):
     assert mv.render_room(mv.snapshot_from_json(mv.snapshot_json(snap)), level) == rendered
     for start in (0, 500000, 1000000):
         kept = mf.fit_memory_view(snap, {'margin': start, 'physical': 1000000, 'budget': start}, kept=level)
-        # Other, ordinary elements may yield to a start target; the note segment is unchanged.
+        # A fixed form is byte-stable; ordinary shortage may now choose a further form.
         note_part = lambda text: text.split('### My notes not yet sealed')[1].split('### Open conversation')[0]
-        assert note_part(mv.render_room(snap, kept)) == note_part(rendered)
+        if start:
+            assert note_part(mv.render_room(snap, kept)) == note_part(rendered)
+        else:
+            assert mv._notes_line(snap.room['notes']) in mv.render_room(snap, kept)
+            assert dict(kept.steps)['F8'] == 6 and dict(kept.steps)['F8a'] == 1
+            assert mv.render_room(snap, level) == rendered  # selected source form did not mutate

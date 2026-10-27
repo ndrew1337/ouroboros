@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sqlite3
+from contextlib import closing
 
 import pytest
 
@@ -14,6 +15,13 @@ from tests import _memory_scale_fixture as scale
 def fingerprint(root):
     return {str(path.relative_to(root)): (path.stat().st_mtime_ns, hashlib.sha256(path.read_bytes()).hexdigest())
             for path in root.rglob('*') if path.is_file()}
+
+
+def offline_fixture(root):
+    """Finish synthetic writers before testing an immutable, offline reader (also on macOS SQLite)."""
+    for path in root.rglob('*.sqlite'):
+        with closing(sqlite3.connect(path)) as db:
+            assert db.execute('PRAGMA wal_checkpoint(TRUNCATE)').fetchone()[0] == 0
 
 
 def test_measurement_uses_ordinary_scale_fitter_and_composition(tmp_path, monkeypatch):
@@ -53,6 +61,7 @@ def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys, stored_
         dialogue_store.append(root, 'chat', {'chat_id': 1, 'direction': 'in',
             'text': 'The owner spoke after the stored tail was filled.',
             'ts': '2026-10-23T01:00:00+00:00', 'client_message_id': 'after-tail'})
+    offline_fixture(root)
     before = fingerprint(root)
     connected = []
     original = sqlite3.connect
@@ -65,7 +74,9 @@ def test_real_scale_root_read_only_report(tmp_path, monkeypatch, capsys, stored_
     result = report(root, 1, 92000, 10000)
     assert connected and fingerprint(root) == before
     assert sum(row['count'] for row in result['blocks'] if row['block'] == 'live rooms') == 228
-    assert next(row for row in result['blocks'] if row['block'] == 'this room notes')['count'] == 6
+    assert sum(row['count'] for row in result['blocks'] if row['block'] == 'this room notes') == 6
+    assert any(row['count'] and row['form'] in ('line', 'aggregate') for row in result['blocks']
+               if row['block'] == 'this room notes')
     assert next(row for row in result['blocks'] if row['block'] == 'story')['count'] == 113
     assert result['verdict'] == 'fits' and result['margin_tokens'] >= 0, result
     with readonly_inputs(root), pytest.raises(PermissionError):
@@ -90,6 +101,7 @@ def test_readonly_tail_reads_new_rows_without_extending_the_stored_cache(tmp_pat
     shared.world(tmp_path)
     assert memory_inventory.fill_tail(tmp_path, lambda: False) == {'state': 'done', 'items': 10}
     dialogue_store.append(tmp_path, 'chat', shared.msg('2026-10-23T01:00:00+00:00', 'After the stored tail'))
+    offline_fixture(tmp_path)
     before = fingerprint(tmp_path)
     with readonly_inputs(tmp_path):
         rows = memory_inventory.rows_after_frontier(tmp_path)
@@ -116,16 +128,20 @@ def test_snapshot_includes_committed_wal_without_changing_original(tmp_path):
     root, copy = tmp_path / 'original', tmp_path / 'copy'
     (root / 'state').mkdir(parents=True)
     copy.mkdir()
-    db = sqlite3.connect(root / 'state/fixture.sqlite')
+    db = sqlite3.connect(root / 'state/dialog.sqlite')
     try:
         db.execute('PRAGMA journal_mode=WAL')
         db.execute('CREATE TABLE sample (value)')
         db.execute('INSERT INTO sample VALUES (123)')
         db.commit()
         before = fingerprint(root)
+        from ouroboros import dialogue_store
+        with readonly_inputs(root), pytest.raises(ValueError, match='WAL input requires --snapshot'):
+            with dialogue_store.transaction(root, write=False):
+                pytest.fail('uncheckpointed WAL must not be read as immutable')
         snapshot_root(root, copy)
         assert fingerprint(root) == before
-        with sqlite3.connect((copy / 'state/fixture.sqlite').as_uri() + '?mode=ro&immutable=1', uri=True) as frozen:
+        with sqlite3.connect((copy / 'state/dialog.sqlite').as_uri() + '?mode=ro&immutable=1', uri=True) as frozen:
             assert frozen.execute('SELECT value FROM sample').fetchone() == (123,)
     finally:
         db.close()
@@ -179,6 +195,7 @@ def test_session_report_uses_real_host_envelope_on_scale_root(tmp_path, monkeypa
         pytest.fail('offline session report attempted a provider connection')
     monkeypatch.setattr(socket.socket, 'connect', forbidden)
     root = scale.write_root(tmp_path / 'data')
+    offline_fixture(root)
     before = fingerprint(root)
     result = report(root, 1, 92000, 10000, session_provider='gemini_live')
     assert fingerprint(root) == before

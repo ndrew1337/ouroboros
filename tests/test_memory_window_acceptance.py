@@ -24,19 +24,20 @@ def test_million_token_text_root_wake_and_helper_keep_notes_whole(tmp_path, monk
     snap = dataclasses.replace(snap, spec=dataclasses.replace(mv.ROLE_DEFAULTS[role], room_id='1'))
     plan = scale.build(tmp_path, monkeypatch, snap=snap, window=1000000, reserve=None)
     shown = plan.projection(plan.initial_mode)
-    assert not mf.WINDOW_ONLY.intersection(shown.memory_facts['floor']['steps'])
+    assert not {'F8', 'F8a'}.intersection(shown.memory_facts['floor']['steps'])
     for note in snap.room['notes']:
         assert mv._note_lines([note])[0] in ''.join(part['text'] for part in json.loads(shown.system_content_json))
 
 
-def test_notes_remain_whole_even_when_an_owner_nano_target_is_smaller(tmp_path, monkeypatch):
+def test_notes_fold_when_an_owner_nano_target_is_smaller(tmp_path, monkeypatch):
     from tests import _memory_scale_fixture as scale
     snap = scale.snapshot()
     plan = scale.build(tmp_path, monkeypatch, snap=snap, window=1000000, reserve=None, mode='nano')
     shown = plan.projection(plan.initial_mode)
     assert shown.memory_facts['floor']['budget_allowance_tokens'] is not None
-    assert not mf.WINDOW_ONLY.intersection(shown.memory_facts['floor']['steps'])
-    assert all(note['text'] in shown.system_content_json for note in snap.room['notes'])
+    assert shown.memory_facts['floor']['steps']['F8'] == len(snap.room['notes'])
+    assert shown.memory_facts['floor']['by_budget'] > 0
+    assert all(note['id'] in shown.system_content_json for note in snap.room['notes'])
 
 
 def _core(mature):
