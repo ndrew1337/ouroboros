@@ -1190,8 +1190,7 @@ class TaskDetailResponse(TypedDict, total=False):
     continuation_offer: ContinuationOffer
     owner_hurry: OwnerHurryProjection
     owner_hurry_history: list[OwnerHurryProjection]
-    # While the queue snapshot lists a non-final row: its hold {reason, detail, label} or {}.
-    project_admission_hold: Dict[str, Any]
+    project_admission_hold: Dict[str, Any]  # While the queue snapshot lists a non-final row: its hold {reason, detail, label} or {}.
     error: str
 
 
