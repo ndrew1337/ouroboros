@@ -104,6 +104,8 @@ def test_port_greeting_options_usage_and_context():
             assert options.instructions.startswith('## Live calls')
             assert options.instructions.endswith(host.config.instructions)
             assert 'no languages recorded' in options.instructions
+            # The model learns its engine and senses here, not in the owner-visible opening row.
+            assert 'This call runs on Test; it hears speech and sees images' in options.instructions
             session.emit('ready', input_rate=24000, output_rate=24000, vision=False)
             session.emit('ready', input_rate=24000, output_rate=24000)
             session.emit('response_started', response_id='r1')
@@ -1033,3 +1035,14 @@ def test_a_silent_language_refit_after_ouroboros_spoke_asks_nothing_more(tmp_pat
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+def test_a_blind_engine_is_told_so_in_its_instructions():
+    """A Grok call named an invented vendor and took a screenshot it could not see (27.10)."""
+    from dataclasses import replace
+    from skills.live_conversation.driver import session_options
+    host = Host()
+    host.model = replace(host.model, vision=False)
+    text = session_options(host).instructions
+    assert 'This call runs on Test; it hears speech and does not see images' in text
+    assert 'analyze_screenshot or vlm_query' in text

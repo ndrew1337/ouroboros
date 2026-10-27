@@ -629,8 +629,10 @@ def test_a_blind_engine_receives_tool_images_as_captions(host_world, vision):
     assert ('does not see images' in session.selected.messages_json) is not vision
 
 
-def test_the_opening_names_the_engine_and_its_senses(host_world):
-    """The owner asked a Grok call which model it was on and heard an invented vendor (27.10)."""
+def test_the_opening_stays_one_owner_visible_sentence_and_the_turn_tells_its_vision(host_world):
+    """The opening is the call's first chat row: engine facts belong to the instructions, not to the owner's chat
+    (27.10: a long opening showed up as System bubbles). gateway/call_ws.py answers the call-open request with
+    `supports_images`; dropping it broke every call on the stand ("The call could not start")."""
     host = host_world.host
-    assert host.turn.opening.startswith('The owner has just opened this call and can hear you now.')
-    assert 'This call runs on Fixture engine, model Voice test; it hears speech and sees images' in host.turn.opening
+    assert host.turn.opening == 'The owner has just opened this call and can hear you now.'
+    assert host.turn.supports_images is host.turn.catalog_model.vision is True

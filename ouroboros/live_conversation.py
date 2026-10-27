@@ -100,20 +100,15 @@ class LiveConversationTurn(RealtimeTurn):
         self.provider = config.provider
         provider = loaded_provider(self.provider)
         self.catalog_model = provider["catalog"].model(config.model)
+        self.supports_images = self.catalog_model.vision  # read by the call-open admission reply (gateway/call_ws.py)
         self.route, self._generation = provider["route"], provider["extension_generation"]
         self.native_model = self.catalog_model.id
         self.model = self.route.model_prefix + self.native_model
         self.spec = replace(spec, model=self.native_model)
-        # The engine and its senses are facts of this call, not of the room: the owner asks
-        # "which model are you on?" and a blind engine must not be asked to look at a screenshot.
-        senses = ("it hears speech and sees images: the owner's shared screen or camera and images that tools attach"
-                  if self.catalog_model.vision else
-                  "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
-                  "naming the saved file, which analyze_screenshot or vlm_query read as text")
-        self.opening = (("This call is now live: the other side can hear you." if spec.opened_by == "skill"
-                         else "The owner has just opened this call and can hear you now.")
-                        + f" This call runs on {provider['catalog'].label}, model "
-                        f"{self.catalog_model.label or self.native_model}; {senses}.")
+        # One short sentence: it is also the call's first owner-visible chat row. The engine and
+        # its senses reach the model through the call instructions (skills/live_conversation/driver.py).
+        self.opening = ("This call is now live: the other side can hear you." if spec.opened_by == "skill"
+                        else "The owner has just opened this call and can hear you now.")
         self.request = {"kind": "live_conversation", "feature": feature["key"], "provider": self.provider,
                         "model": self.native_model, "call_id": spec.call_id}
         self.admitted_at = time.time()  # the turn is built at admission, before the task is queued and prepared

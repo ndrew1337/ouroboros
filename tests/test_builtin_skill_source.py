@@ -463,7 +463,7 @@ def test_call_skill_release_reseeds_the_old_payload_but_preserves_owner_edits(en
         assert compute_content_hash(installed) == previous_hash
         assert read_install_record(drive, name) == previous_record
     else:
-        version = '0.1.3' if name == 'live_conversation' else '0.1.1'
+        version = '0.1.4' if name == 'live_conversation' else '0.1.1'
         assert f"version: {version}\n" in (installed / "SKILL.md").read_text(encoding="utf-8")
         assert compute_content_hash(installed) == compute_content_hash(repo / "skills" / name)
         assert compute_content_hash(installed) != previous_hash

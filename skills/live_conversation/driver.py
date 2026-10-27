@@ -51,6 +51,17 @@ human. Words cut off by an interruption were not heard, so I do not count
 them as said.""" + "\n\n" + CALL_ENDING_GUIDANCE
 
 
+def engine_sentence(model):
+    """The engine and its senses are facts of this call: the owner asks "which model are you on?",
+    and a blind engine must not be asked to look at a screenshot (27.10: a Grok call named an
+    invented vendor and a screenshot's image closed the call)."""
+    senses = ("it hears speech and sees images: the owner's shared screen or camera and images that tools attach"
+              if model.vision else
+              "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
+              "naming the saved file, which analyze_screenshot or vlm_query read as text")
+    return f"This call runs on {model.label or model.id}; {senses}."
+
+
 def languages_opening_sentence(languages):
     if languages:
         return (f"Speech recognition expects {', '.join(languages)}, as you recorded for these calls; when someone "
@@ -139,7 +150,8 @@ def session_options(host, resume_handle=""):
         knobs["thinking"] = host.model.thinking_levels[0]
     return LiveOptions(voice=config.voice, resume_handle=resume_handle,
         languages=languages if "languages" in honours else (),
-        instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, languages_opening_sentence(languages), config.instructions))),
+        instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, engine_sentence(host.model),
+                                                languages_opening_sentence(languages), config.instructions))),
         **knobs)
 
 
