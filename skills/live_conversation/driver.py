@@ -68,7 +68,8 @@ def engine_sentence(model):
               "attach; with no frame from Show yet, you have not seen the screen"
               if model.vision else
               "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
-              "naming the saved file, which analyze_screenshot or vlm_query read as text")
+              "naming the saved file, and vlm_query with that file_path describes it in text (analyze_screenshot "
+              "reads only a browser screenshot)")
     return f"This call runs on {model.label or model.id}; {senses}."
 
 
@@ -559,8 +560,9 @@ class _Call:
                         if not self.told_blind_share:
                             self.told_blind_share = True
                             row = {"role": "user", "content": "[Host fact; not owner words]\nThe owner is sharing a "
-                                   "screen or camera this engine cannot see. A desktop screenshot read with "
-                                   "analyze_screenshot shows it as text; or ask what is on it."}
+                                   "screen or camera this engine cannot see. A desktop screenshot, read with "
+                                   "vlm_query and the screenshot's file_path, describes it in text; or ask what "
+                                   "is on it."}
                             await self.host.observe_context(row)
                             await self.context_update((row,))
                         continue

@@ -40,8 +40,8 @@ def _image_caption(part: dict, texts: set) -> dict:
     caption = str(part.get("_caption") or "").strip()
     where = ("the file named above" if caption and caption in texts  # the attach caption already names it
              else caption or f"the file saved at {part.get('_source_path') or 'the attachment'}")
-    return {"type": "text", "text": (f"[Image not shown: this voice engine does not see images; analyze_screenshot "
-                                     f"or vlm_query read {where} as text.]")}
+    return {"type": "text", "text": (f"[Image not shown: this voice engine does not see images; vlm_query with "
+                                     f"file_path describes {where} in text.]")}
 
 
 def input_from_context_plan(plan, *, model: str, selected_tools: list[dict],

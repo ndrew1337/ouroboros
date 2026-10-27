@@ -1071,7 +1071,12 @@ def test_a_blind_engine_is_told_so_in_its_instructions():
     host.model = replace(host.model, vision=False)
     text = session_options(host).instructions
     assert 'This call runs on Test; it hears speech and does not see images' in text
-    assert 'analyze_screenshot or vlm_query' in text
+    # 28.10: analyze_screenshot reads only this task's browser screenshot; a desktop screenshot's file
+    # is read with vlm_query, and the voice that followed the old wording got a refusal.
+    assert 'vlm_query with that file_path describes it in text' in text
+    assert 'analyze_screenshot reads only a browser screenshot' in text
+    seeing = session_options(Host()).instructions
+    assert 'vlm_query' not in seeing.split('This call runs on', 1)[1].split('.', 1)[0]
 
 
 @pytest.mark.parametrize('joined', [False, True])
