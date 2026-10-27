@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
-from websockets.frames import OP_CLOSE, OP_PING, OP_PONG, OP_TEXT
+from websockets.frames import Opcode
 from websockets.http11 import Request
 from websockets.server import ServerProtocol
 
@@ -40,7 +40,7 @@ class MemoryTransport(asyncio.Transport):
         for data in self.server.data_to_send():
             if not data:
                 self.loop.call_soon(self.close)
-            elif not (self.drop_pongs and data[0] & 0x0f == OP_PONG):
+            elif not (self.drop_pongs and data[0] & 0x0f == Opcode.PONG):
                 self.loop.call_soon(self.client.data_received, data)
 
     async def frame(self, opcode):
@@ -132,11 +132,11 @@ def test_paused_audio_and_second_writer_coexist_with_keepalive_and_peer_ping(pro
             audio = asyncio.create_task(session.write({'audio': 'continuous-input'}))
             tools = asyncio.create_task(session.write({'tool_output': 'ready'}))
             try:
-                await transport.frame(OP_TEXT)  # first writer is now waiting for drain
-                await transport.frame(OP_PING)  # the library's keepalive writes concurrently
+                await transport.frame(Opcode.TEXT)  # first writer is now waiting for drain
+                await transport.frame(Opcode.PING)  # the library's keepalive writes concurrently
                 transport.server.send_ping(b'provider-check')
                 transport.deliver()
-                assert (await transport.frame(OP_PONG)).data == b'provider-check'
+                assert (await transport.frame(Opcode.PONG)).data == b'provider-check'
                 keepalive = getattr(session.ws, 'keepalive_task', None)
                 if keepalive is None:
                     keepalive = session.ws.keepalive_ping_task
@@ -192,14 +192,14 @@ def test_cancelled_sender_removes_only_its_drain_waiter(provider, monkeypatch, c
             first = asyncio.create_task(session.write({'audio': 'first'}))
             second = asyncio.create_task(session.write({'audio': 'second'}))
             try:
-                await transport.frame(OP_TEXT)
-                await transport.frame(OP_PING)
+                await transport.frame(Opcode.TEXT)
+                await transport.frame(Opcode.PING)
                 victim, survivor = (first, second) if cancel == 'active' else (second, first)
                 victim.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await victim
                 if cancel == 'active':
-                    await transport.frame(OP_TEXT)
+                    await transport.frame(Opcode.TEXT)
                 assert len(session.ws.drain_waiters) == 2  # survivor and keepalive
                 assert not any(waiter.done() for waiter in session.ws.drain_waiters)
                 transport.resume()
@@ -233,7 +233,7 @@ def test_default_keepalive_detects_dead_peer_at_twenty_plus_twenty_seconds(provi
             await advance(19)
             assert transport.frames.empty() and not transport.closed
             await advance(1.1)
-            await transport.frame(OP_PING)
+            await transport.frame(Opcode.PING)
             await advance(19)
             assert not transport.closed  # the pong deadline hasn't elapsed
             await advance(1.1)
@@ -241,7 +241,7 @@ def test_default_keepalive_detects_dead_peer_at_twenty_plus_twenty_seconds(provi
                 assert not transport.closed
                 await session.write({'response': 'still-open'})
             else:
-                frame = await transport.frame(OP_CLOSE)
+                frame = await transport.frame(Opcode.CLOSE)
                 assert frame.data[:2] == (1011).to_bytes(2, 'big')
                 assert frame.data[2:] == b'keepalive ping timeout'
                 await asyncio.wait_for(session.ws.wait_closed(), 2)
