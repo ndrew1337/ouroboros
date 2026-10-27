@@ -125,11 +125,17 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max', prepared=N
     pointers = sum(row['id'] in gone.get('F4', ()) for row in pages)
     add('this room pages', '\n'.join(mv._retold(row, row['id'] in gone.get('F4', ())) for row in pages),
         'pointers' if pointers == len(pages) and pages else 'mixed' if pointers else 'whole', len(pages))
-    story_form = 'aggregate' if gone.get('F5a') else 'pointers' if gone.get('F5') else 'whole'
     visible = [entry for entry in snapshot.story if not entry.get('told_by')]
-    if story_form != 'whole' and any(entry['id'] not in gone.get('F5', ()) for entry in visible):
-        story_form += '+whole'
-    add('story', mv.render_story(snapshot, level), story_form, len(visible))
+    forms = {}
+    for entry in visible:
+        form = ('accounts whole' if entry['kind'] == 'account' else
+                'aggregate' if entry['id'] in gone.get('F5', ()) and gone.get('F5a') else
+                'pointers' if entry['id'] in gone.get('F5', ()) else
+                'first sentence' if entry['id'] in gone.get('F5l', ()) else
+                'retold pointer' if entry['kind'] == 'legacy' and entry['room_id'] in gone.get('F3', ()) else 'whole')
+        forms[form] = forms.get(form, 0) + 1
+    add('story', mv.render_story(snapshot, level), '+'.join(forms) or 'whole', len(visible))
+    blocks[-1]['forms'] = forms
     add('marks', mv._marks_text(list(snapshot.marks)) if snapshot.marks else '', count=len(snapshot.marks))
     sent = schemas if prepared is not None else list(select_tool_schemas(schemas, context_mode=selected).schemas)
     blocks.append(dict(block='tools', form='selected', tokens=cf.tool_schema_tokens(sent), count=len(sent)))
@@ -142,9 +148,10 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max', prepared=N
     record = replace(evidence.window_record, reserve=actual_reserve) if failure else cf.resolve_window(
         plan, actual_reserve, root=root, bound=plan.window_witness_bound)
     target = context_budget.context_mode_limits(selected, mode, actual_reserve)[0]
-    start_room = context_budget.request_context_budget(window_tokens=capacity, output_reserve_tokens=actual_reserve,
+    budget = context_budget.request_context_budget(window_tokens=capacity, output_reserve_tokens=actual_reserve,
         non_memory_tokens=0, target_tokens=target, margin_count=snapshot.spec.work_room_levels,
-        boundary_tokens=record.boundary)['working_margin_tokens']
+        boundary_tokens=record.boundary)
+    start_room = budget['working_margin_tokens']
     result = dict(mode=selected, requested_mode=mode, density=1.0, window=capacity, reserve=actual_reserve,
         input_tokens=input_tokens, total_tokens=input_tokens + actual_reserve, margin_tokens=margin,
         verdict='MinimumViewUnfit' if failure else 'context_capacity' if fit.get('refusal') else 'fits',
@@ -153,6 +160,12 @@ def measure_core(core, schemas, *, root, window, reserve, mode='max', prepared=N
         ladder=dict(level.steps), ladder_basis='selected' if projection or memory else 'minimum bound before ladder',
         blocks=blocks, profile=profile, work_room_levels=snapshot.spec.work_room_levels,
         start_work_room_tokens=start_room, work_room_applies_to_verdict=prepared is None,
+        arithmetic={'requested_window_tokens': window, 'capacity_tokens': capacity, 'boundary_tokens': record.boundary,
+                    'input_tokens': input_tokens, 'response_reserve_tokens': actual_reserve,
+                    'room_after_reserve_tokens': margin, 'start_work_room_tokens': start_room,
+                    'start_input_allowance_tokens': budget['with_margin_tokens'],
+                    'room_above_start_tokens': margin - start_room,
+                    'start_room_shortfall_tokens': max(0, start_room - margin)},
         window_record=asdict(record), fit=fit,
         phase='prepared_candidate' if prepared is not None else 'task_preparation',
         input_basis='minimum_bound_not_a_candidate' if failure else 'measured_candidate',
@@ -241,6 +254,10 @@ def main(argv=None):
               f"{result['verdict']}, margin {result['margin_tokens']}, work-room deficit {result['work_room_deficit_tokens']}")
         print('Ladder (' + result['ladder_basis'] + '): ' + json.dumps(result['ladder']))
         print(f"Phase: {result['phase']}; profile: {result['profile']}; work-room levels: {result['work_room_levels']}")
+        math = result['arithmetic']
+        print(f"Room: {math['capacity_tokens']} - input {math['input_tokens']} - reserve {math['response_reserve_tokens']} "
+              f"= {math['room_after_reserve_tokens']}; start room {math['start_work_room_tokens']}; "
+              f"shortfall {math['start_room_shortfall_tokens']}; start input allowance {math['start_input_allowance_tokens']}")
         for note in result['diagnostic_notes']:
             print('Diagnostic: ' + note)
     return 0 if result['verdict'] == 'fits' else 1

@@ -801,7 +801,7 @@ def test_a_presend_low_fold_keeps_every_address_narrowed_from_the_max_view(
     sent_fact = mf.trace_facts(tools._ctx.context_fit_plan.projection("low").memory_facts)
     assert trace[VIEW_TRACE_KEY] == tools._ctx.memory_view_facts == sent_fact
     assert sent_fact["floor"]["mode"] == "low" and sent_fact["floor"]["steps"].keys() >= {"F1", "F1b"}
-    assert shortage_from_trace(trace).kind == "narrative"  # the final retained floor includes story pages
+    assert shortage_from_trace(trace).kind == "open_rows"  # open conversation now survives beyond the late note cuts
     # A later fitting route keeps this historical note and every address without reasserting a new shortage.
     after = tools._ctx.context_fit_plan
     rebound = after.reproject_for_route(window_tokens=window * 2, known_window=True, ratio=1.0,

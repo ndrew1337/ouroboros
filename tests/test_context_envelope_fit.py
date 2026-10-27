@@ -1,4 +1,4 @@
-"""Measured envelope framing can press held memory; a requested saving cannot."""
+"""Measured framing and ordinary note shortage share the unchanged window arithmetic."""
 import json
 import math
 from types import SimpleNamespace
@@ -32,11 +32,13 @@ def test_measured_envelope_prices_physical_pressure_without_changing_window(monk
     args = dict(window_tokens=window, known_window=True, ratio=ratio, output_reserve=reserve,
                 tool_schemas=[], start_mode=plan.initial_mode, current_messages=messages, refused_tokens=501)
     body = room['notes'][0]['text'] if held == 'note' else row['line']
+    ample = plan.reproject_for_route(**{**args, 'refused_tokens': 0})
+    assert body in ample.projection(ample.initial_mode).system_content_json
     for witness in (None, raw):
         requested = plan.reproject_for_route(**args, measured_input_tokens=witness)
         shown = requested.projection(requested.initial_mode)
-        assert step not in shown.memory_facts['floor']['steps']
-        assert body in shown.system_content_json
+        assert (step in shown.memory_facts['floor']['steps']) is (held == 'note')
+        assert (body in shown.system_content_json) is (held == 'owner_row')
 
     fitted = plan.reproject_for_route(**args, measured_input_tokens=measured)
     shown = fitted.projection(fitted.initial_mode)

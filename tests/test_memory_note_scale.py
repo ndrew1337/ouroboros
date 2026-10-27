@@ -1,4 +1,4 @@
-"""Physical note pressure on the owner's room geometry, through the ordinary fitter."""
+"""Ordinary note shortage on the owner's room geometry, through the same fitter."""
 import json
 
 import pytest
@@ -9,8 +9,8 @@ from tests import _memory_scale_fixture as scale
 
 
 @pytest.mark.parametrize('extra_chars, note_lines, aggregate, fits', [
-    (0, 0, False, True), (32000, 1, False, True), (48000, 5, False, True),
-    (52000, 6, False, True), (53000, 6, True, True), (54000, 6, True, False),
+    (0, 6, True, True), (32000, 6, True, True), (48000, 6, True, True),
+    (52000, 6, True, False), (53000, 6, True, False), (54000, 6, True, False),
 ])
 def test_note_pressure_measurement(tmp_path, monkeypatch, extra_chars, note_lines, aggregate, fits):
     snap = scale.snapshot()
@@ -24,12 +24,14 @@ def test_note_pressure_measurement(tmp_path, monkeypatch, extra_chars, note_line
     assert result['ladder'].get('F8', 0) == note_lines, diagnostic
     assert bool(result['ladder'].get('F8a')) is aggregate, diagnostic
     assert result['ladder']['F7a'] == 1 and result['ladder']['F5a'] == 1
-    if note_lines:
-        assert result['ladder']['F7'] == 43, diagnostic  # uncovered rows retain their earlier, oldest-first pass
-        with monkeypatch.context() as earlier:
-            earlier.setattr(mf, 'LADDER', tuple(s for s in mf.LADDER if s not in mf.WINDOW_ONLY))
-            before = measure_core(scale.core(tmp_path, snap), scale.tools(), root=tmp_path, window=92000, reserve=10000)
+    assert result['ladder']['F7'] == {0: 18, 32000: 34, 48000: 42, 52000: 43, 53000: 43, 54000: 43}[extra_chars]
+    with monkeypatch.context() as earlier:
+        earlier.setattr(mf, 'LADDER', tuple(s for s in mf.LADDER if s not in ('F8', 'F8a')))
+        before = measure_core(scale.core(tmp_path, snap), scale.tools(), root=tmp_path, window=92000, reserve=10000)
+    if extra_chars:
         assert before['verdict'] == 'MinimumViewUnfit' and before['deficit_tokens'] > 0, before
+    else:
+        assert before['verdict'] == 'fits' and before['ladder']['F7'] > result['ladder']['F7']
     for key, size in scale.PROTECTED.items():
         label = {'system': 'SYSTEM', 'bible': 'BIBLE'}.get(key, key)
         assert next(row for row in result['blocks'] if row['block'] == label)['chars'] == size

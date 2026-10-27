@@ -882,13 +882,21 @@ class FloorLevel:
 
 
 FULL_VIEW = FloorLevel()
-_STORY_INTRO = ("Sealed pages and parts, and my accounts across rooms, oldest first; each is mine unless marked. "
+_STORY_INTRO = ("My accounts across rooms first, then sealed pages and parts, oldest first; each is mine unless marked. "
                 "Anything named here is one memory_read away by its id.")
 
 
 def _page_pointer(entry: Mapping[str, Any]) -> str:
     selection = f"; selection {entry['selection']}" if entry.get("selection") else ""
-    return f"- {entry['label']}; {entry['period']}; {entry['kind']} {entry['id']}; memory_read(node_id='{entry['id']}'){selection}"
+    return f"- {entry['label']}; {entry['period']}; {entry['kind']}; memory_read(node_id='{entry['id']}'){selection}"
+
+
+def _page_label(entry: Mapping[str, Any]) -> str:
+    """The page's first sentence, without a length cut or an invented summary, and its reader."""
+    sentence = re.split(r'(?<=[.!?。！？])\s+', entry['text'].strip(), maxsplit=1)[0]
+    attribution = (f" (draft by {entry.get('signer') or 'Light'}, not yet accepted)"
+                   if entry.get('status') == 'draft' else '')
+    return _page_pointer(entry) + attribution + "\n" + _indented(sentence)
 
 
 def _told_lines(account_id: str, told: List[Dict[str, Any]]) -> List[str]:
@@ -952,7 +960,7 @@ def _rows_line(room: Mapping[str, Any], items: List[Dict[str, Any]]) -> str:
 
 
 def _story_line(items: List[Dict[str, Any]]) -> str:
-    return (f"{len(items)} older pages, parts and accounts by address, {items[0]['period']} → {items[-1]['period']}; "
+    return (f"{len(items)} older pages and parts by address, {items[0]['period']} → {items[-1]['period']}; "
             "memory_read(story=true, start=0) lists every id and its exact reader.")
 
 
@@ -1049,8 +1057,8 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
     Every unfolded retold record is whole, then my pages, parts and selected accounts; a
     records an account tells retain their combined period and count with its composition reader. Its bytes depend only on the
     chronicle, the room labels, the helper route and ``level`` (the physical floor's; the
-    empty level renders the full view): F3 turns a room's retold records into one line, F5
-    my oldest pages, parts and accounts into address lines.
+    empty level renders the full view): F3 turns a room's retold records into one line;
+    F5l keeps first sentences, then F5 addresses the oldest pages and parts. Accounts stay whole.
     """
     spec = snapshot.spec
     if not spec.story:
@@ -1061,8 +1069,13 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
     gone = dict(level.addressed)
     told = [entry for entry in snapshot.story if entry.get("told_by")]
     pointers = [entry for entry in snapshot.story if entry.get("kind") == "legacy" and not entry.get("told_by")]
-    pages = [entry for entry in snapshot.story if entry.get("kind") != "legacy" and not entry.get("told_by")]
+    accounts = [entry for entry in snapshot.story if entry.get("kind") == "account" and not entry.get("told_by")]
+    pages = [entry for entry in snapshot.story if entry.get("kind") not in ("legacy", "account") and not entry.get("told_by")]
     lines = ["## My story", "", _STORY_INTRO]
+    if accounts:
+        lines += ["", "### My account across rooms"]
+        for entry in accounts:
+            lines += _page_lines(entry) + _told_lines(entry['id'], told)
     if pointers:
         taken = set(gone.get("F3", ()))
         lines += ["", "### Old memory retold by a helper before the update (not lived; exact sources readable by id)"]
@@ -1072,9 +1085,10 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
     # A selected form changes this entry alone, without regrouping unrelated entries or changing their headers.
     for entry in pages:
         if aggregate and entry is aggregate[0]:
-            lines += ['', '### My older pages, parts and accounts, by address', _story_line(aggregate)]
+            lines += ['', '### My older pages and parts, by address', _story_line(aggregate)]
         if not aggregate or entry['id'] not in shown:
-            lines += (["", _page_pointer(entry)] if entry["id"] in shown else _page_lines(entry))
+            lines += (["", _page_pointer(entry)] if entry["id"] in shown else
+                      ["", _page_label(entry)] if entry["id"] in gone.get('F5l', ()) else _page_lines(entry))
         told_lines = _told_lines(entry["id"], told)
         if aggregate and entry['id'] in shown and told_lines:
             lines += [f"Account {entry['id']}; memory_read(node_id='{entry['id']}')"]

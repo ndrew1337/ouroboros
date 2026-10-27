@@ -26,13 +26,13 @@ def test_owner_shape_admits_92000_without_shortening_protected_text(tmp_path, mo
     assert margin >= 0, f'input={input_tokens}, reserve=10000, window=92000, margin={margin}'
     assert plan.preferred_mode == mode and plan.initial_mode == 'nano'
     assert 'F7a' in shown.memory_facts['floor']['steps']
-    assert not mf.WINDOW_ONLY.intersection(shown.memory_facts['floor']['steps']), f'whole notes, margin={margin}'
+    # Notes obey shortage; this selected view must preserve every exact source address.
     content = shown.system_content_json
     for block, size in scale.PROTECTED.items():
         label = {'system': 'SYSTEM', 'bible': 'BIBLE', 'identity': 'Identity',
                  'shared_understanding': 'Overview'}.get(block, block)
         assert scale.text(label, size) in content, block
-    assert all(note['text'] in content for note in scale.snapshot().room['notes'])
+    assert all(note['id'] in content for note in scale.snapshot().room['notes'])
 
 
 def test_same_ordinary_plan_holds_five_resident_tools(tmp_path, monkeypatch):

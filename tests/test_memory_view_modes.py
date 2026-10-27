@@ -100,7 +100,7 @@ def test_smaller_route_addresses_memory_only_when_the_compact_request_exceeds_it
     snapshot = mv.snapshot_from_json(core.memory_view_json)
     whole_memory = mf.view_tokens(mv.render_story(snapshot)) + mf.view_tokens(mv.render_room(snapshot))
     assert whole_memory > floor["physical_allowance_tokens"]
-    assert narrow.initial_mode == "nano" and floor["steps"]["F5"] == 1
+    assert narrow.initial_mode == "nano" and floor["steps"]["F5l"] == 1
     reserve = cb.context_mode_limits(narrow.initial_mode, narrow.preferred_mode, narrow.output_reserve_tokens)[1]
     assert shown.calibrated_tokens + reserve <= narrow.window_tokens
     enlarged = _on_route(narrow, 1_000_000)
