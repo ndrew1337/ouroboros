@@ -106,6 +106,7 @@ class OpenAISession(JsonSession):
         self.tools = tuple(json.loads(selected.tools_json))
         self.active_response = ""
         self.truncations = {}
+        self.source_images, self.requested_deletions = {}, set()
         self.number = 0
         self.outstanding = {}
         self.tool_update = None
@@ -122,7 +123,8 @@ class OpenAISession(JsonSession):
         # The feature separately waits for playback ACKs and its caption writer.
         return self.ready and not (self.speech_active or self.input_transcripts or self.output_transcripts
             or self.active_response or self.response_requested or self.want_response or self.context_queue
-            or self.outstanding or self.tool_update is not None or self.waiting_tools or self.truncations)
+            or self.outstanding or self.tool_update is not None or self.waiting_tools or self.truncations
+            or self.requested_deletions)
 
     def final_captions(self):
         events = [LiveEvent("caption", {"speaker": "ouroboros", "item_id": item, "text": text,
@@ -213,24 +215,37 @@ class OpenAISession(JsonSession):
                 return
             while self.context_queue and not self.outstanding and self.tool_update is None:
                 command = self.context_queue.pop(0)
-                outgoing = [item for message in command.messages for item in items(message)]
+                outgoing = [(item, message.get("_call_frame_source", ""))
+                            for message in command.messages for item in items(message)]
                 if isinstance(command, ToolOutputs) and command.tools != self.tools:
                     self.tools = command.tools
                     self.tool_update = _tools(list(command.tools))
                     await self.write({"type": "session.update", "session": {"type": "realtime", "tools": self.tool_update}})
-                for item in outgoing:
-                    self.number += 1
-                    item = {**item, "id": f"host_item_{self.number}"}
-                    self.outstanding[item["id"]] = item
+                for item, source in outgoing:
                     if item["type"] == "function_call_output":
                         self.waiting_tools.discard(item["call_id"])
-                    await self.write({"type": "conversation.item.create", "item": item})
+                    await self.create_host_item(item, source=source)
                 self.want_response |= any(item["type"] != "function_call_output" or
-                    not isinstance(command, ToolOutputs) or item["call_id"] not in command.silent for item in outgoing)
+                    not isinstance(command, ToolOutputs) or item["call_id"] not in command.silent for item, _ in outgoing)
             if (self.want_response and not self.context_queue and not self.outstanding
                     and self.tool_update is None and not self.speech_active and not self.waiting_tools):
                 self.want_response, self.response_requested = False, True
                 await self.write({"type": "response.create"})
+
+    async def create_host_item(self, item, *, source=""):
+        # Caller holds context_lock. Only explicitly source-labelled host images
+        # replace one another; ordinary history and legacy Video commands stay intact.
+        image = any(part.get("type") == "input_image" for part in item.get("content", []))
+        previous = self.source_images.get(source) if source and image else None
+        if previous:
+            self.requested_deletions.add(previous)
+            await self.write({"type": "conversation.item.delete", "item_id": previous})
+        self.number += 1
+        item = {**item, "id": f"host_item_{self.number}"}
+        self.outstanding[item["id"]] = item
+        if source and image:
+            self.source_images[source] = item["id"]
+        await self.write({"type": "conversation.item.create", "item": item})
 
     def convert(self, event):
         kind, item = event.get("type", ""), event.get("item_id", "")
@@ -250,7 +265,10 @@ class OpenAISession(JsonSession):
             if sent and not item_matches(sent, actual):
                 raise RealtimeSetupError("item_mismatch", "OpenAI changed host context or tool output")
         if kind == "conversation.item.deleted":
-            raise RealtimeSetupError("provider_truncation", "OpenAI deleted conversation input")
+            if item not in self.requested_deletions:
+                raise RealtimeSetupError("provider_truncation", "OpenAI deleted conversation input")
+            self.requested_deletions.remove(item)
+            self.outstanding.pop(item, None)
         if kind == "conversation.item.truncated":
             if self.truncations.pop(item, None) != event.get("audio_end_ms"):
                 raise RealtimeSetupError("provider_truncation", "unrequested OpenAI truncation")
@@ -332,12 +350,10 @@ class OpenAISession(JsonSession):
             await self.write({"type": "input_audio_buffer.append", "audio": base64.b64encode(command.pcm).decode()})
         elif isinstance(command, Video):
             # Frames are observations. They do not trigger a response by themselves.
-            self.number += 1
-            item = {"id": f"host_item_{self.number}", "type": "message", "role": "user",
-                "content": [{"type": "input_image", "image_url": "data:" + command.mime + ";base64,"
-                            + base64.b64encode(command.data).decode()}]}
-            self.outstanding[item["id"]] = item
-            await self.write({"type": "conversation.item.create", "item": item})
+            async with self.context_lock:
+                await self.create_host_item({"type": "message", "role": "user",
+                    "content": [{"type": "input_image", "image_url": "data:" + command.mime + ";base64,"
+                                + base64.b64encode(command.data).decode()}]}, source=command.source)
         elif isinstance(command, Interrupt):
             if self.active_response and self.active_response not in self.cancelled:
                 self.cancelled.add(self.active_response)

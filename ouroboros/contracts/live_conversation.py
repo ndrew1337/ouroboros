@@ -119,6 +119,8 @@ class Audio:
 class Video:
     data: bytes
     mime: str
+    # A stable peer/source identity. Empty keeps the legacy unlabelled-frame path.
+    source: str = ""
 
 
 @dataclass(frozen=True)
@@ -246,10 +248,21 @@ class LiveHost(Protocol):
         """At a quiet boundary, apply the ordinary authored view; True requires a fresh prefix."""
 
     async def caption(self, speaker: str, text: str, item_id: str, *, heard: bool = False, played_ms: int = 0,
-                      interrupted: bool = False, completed: bool = False, replace: bool = False) -> None:
+                      interrupted: bool = False, completed: bool = False, replace: bool = False,
+                      speaker_label: str = "") -> None:
         """Write one final caption to history: owner words, a heard participant, or spoken output."""
         # replace revises the same item's text, retaining identity and playback/provenance;
         # unchanged replays do nothing. A replacement before the first write creates one row.
+
+    async def retain_frame(self, data: bytes, mime: str, *, source: str = "") -> str:
+        """Retain exact bytes in this task's artifacts; return the absolute reader path.
+
+        An older implementation may return empty to report that retention is unavailable.
+        """
+        return ""
+
+    def timing_event(self, event: str, *, at: float | None = None) -> None:
+        """Record a call timing boundary; older implementations may ignore it."""
 
     async def observe_context(self, row: dict) -> None:
         """Add a peer's observation to history as a labelled row, never as owner words."""

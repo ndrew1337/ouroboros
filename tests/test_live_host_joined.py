@@ -99,6 +99,7 @@ def test_feature_renewal_joins_cancelled_real_mailbox(monkeypatch, tmp_path):
             async def peers(self):
                 assert await asyncio.to_thread(entered.wait, 30)
                 self.renewing = True
+        host.state = {}
         call = LocalCall(host)
         before = set(asyncio.all_tasks())
         call.writer = asyncio.create_task(call.save_rows())

@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from ouroboros.contracts.live_conversation import LiveEvent, LiveOptions, Respond, ToolOutputs
+from ouroboros.contracts.live_conversation import ContextUpdate, LiveEvent, LiveOptions, Respond, ToolOutputs
 from ouroboros.contracts.realtime import RealtimeSetupError
 from ouroboros import call_protocol as cp
 from skills.live_conversation.driver import _Call
@@ -104,17 +104,16 @@ def test_tool_growth_refits_without_a_quiet_boundary_and_answers_from_fitted_his
                 assert not second.sent, 'the replacement must be ready before opening a response'
                 second.emit('ready', input_rate=24000, output_rate=24000)
                 second.emit('ready', input_rate=24000, output_rate=24000)
-                # Nothing was spoken in this call yet: even a silent batch (Grok recorded the languages as its
-                # first reply, 27.10) makes the replacement ask for the first words (R15 conditional). After
-                # speech a silent batch opens nothing: test_live_conversation_driver.py, renewal-due variant.
-                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
+                # Silence is finished, including before the first spoken words. A non-silent
+                # result offers one truthful continuation at the quiet boundary.
+                if not silent:
+                    await until(lambda: any(isinstance(x, ContextUpdate) for x in second.sent))
                 await asyncio.sleep(.04)
-                responses = [x for x in second.sent if isinstance(x, Respond)]
-                assert len(responses) == 1
+                responses = [x for x in second.sent if isinstance(x, ContextUpdate)]
+                assert len(responses) == int(not silent)
                 if responses:
-                    assert responses[0].fact.startswith('[Host fact; not owner words]')
-                    assert 'completed tool results' in responses[0].fact
-                    assert responses[0].fact != host.opening
+                    assert 'requested tool batch returned' in str(responses[0].messages)
+                    assert host.opening not in str(responses[0].messages)
                     second.emit('response_started', response_id='answer')
                     second.emit('response_done', response_id='answer', usage={}, raw_usage={}, status='completed', continues=False)
                     await until(lambda: any(row[:2] == ('done', 'answer') for row in host.usage))
@@ -232,7 +231,7 @@ def test_tool_refit_includes_queued_effects_before_fitting_the_replacement(overf
                 second = host.sessions[1]
                 second.emit('ready', input_rate=24000, output_rate=24000)
                 await until(lambda: bool(second.sent))
-                assert len(second.sent) == 1 and isinstance(second.sent[0], Respond)
+                assert len(second.sent) == 1 and isinstance(second.sent[0], ContextUpdate)
             else:
                 await until(lambda: len([x for x in first.sent if isinstance(x, ToolOutputs)]) == 2)
                 assert len(host.sessions) == 1
@@ -311,8 +310,8 @@ def test_an_engine_that_cannot_change_tools_live_takes_them_at_the_tool_boundary
                 assert not any(isinstance(x, ToolOutputs) for x in first.sent)
                 second = host.sessions[1]
                 second.emit('ready', input_rate=24000, output_rate=24000)
-                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
-                assert 'completed tool results' in next(x for x in second.sent if isinstance(x, Respond)).fact
+                await until(lambda: any(isinstance(x, ContextUpdate) for x in second.sent))
+                assert 'requested tool batch returned' in str(next(x for x in second.sent if isinstance(x, ContextUpdate)).messages)
             else:
                 assert len(host.sessions) == 1
                 assert next(x for x in first.sent if isinstance(x, ToolOutputs)).tools == tuple(host.schemas)

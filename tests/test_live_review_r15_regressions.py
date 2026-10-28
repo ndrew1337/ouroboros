@@ -1,4 +1,4 @@
-# Reviewer probes of R15 (rev-astra2), adopted verbatim as regression tests.
+# Reviewer probes of R15 (rev-astra2); silence and ready-boundary pins follow the 28.10 owner decision.
 """R15 reviewer probes. Real adapters, synthetic peers/data, no provider access."""
 import asyncio
 import base64
@@ -92,6 +92,7 @@ def test_peer_history_survives_reconnection(resume):
     host = Host()
     call = driver._Call(host)
     call.session = Session()
+    call.connected.set()  # this probe represents an already-ready physical connection
     call.request_renewal(resuming=resume)
     host.state['resume_handle'] = 'synthetic-resume'
     async def scenario():
@@ -128,7 +129,7 @@ def test_provider_close_words_survive_after_ready(host_world, providers, gemini,
     asyncio.run(host.session(consume, LiveOptions()))
 
 
-def test_silent_first_language_refit_still_requests_words_when_capacity_also_requires_refit():
+def test_silent_first_language_refit_preserves_silence_when_capacity_also_requires_refit():
     from skills.live_conversation.driver import _Call
     from ouroboros.contracts.live_conversation import ToolBatch
     from tests.test_live_conversation_driver import Host, Session
@@ -147,7 +148,7 @@ def test_silent_first_language_refit_still_requests_words_when_capacity_also_req
         try:
             await asyncio.wait_for(call.tool_queue.join(), 2)
             assert call.tool_refit.is_set()
-            assert call.answer_after_refit, 'The first silent language result must open speech on either refit path.'
+            assert not call.pending_offers, 'A completed silent result offers nothing on either refit path.'
         finally:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)

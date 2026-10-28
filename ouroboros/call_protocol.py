@@ -116,6 +116,7 @@ def decode_frame(data: bytes) -> AudioFrame | VideoFrame:
 #   {"type": "played", "item_id": str, "played_ms": int}     # playback acknowledgement
 #   {"type": "context", "text": str, "source": str}           # a peer-observed fact for the mind
 #   {"type": "participant", "label": str, "speaking": bool}   # who the platform says is speaking
+#   {"type": "share", "sharing": bool, "kind": "screen"|"camera"}  # first frame sent / capture stopped
 #   {"type": "bye", "reason": str}
 # Server -> peer:
 #   {"type": "state", "state": <CALL_STATES>, "reason": str, "engine": str,
@@ -126,7 +127,7 @@ def decode_frame(data: bytes) -> AudioFrame | VideoFrame:
 #   {"type": "turn", "turn": "awaiting"|"answering"|"idle"}  # where the turn is (CALL_TURNS)
 #   {"type": "caption", "speaker": "owner"|"ouroboros", "text": str, "final": bool, "item_id": str}
 #   {"type": "flush", "epoch": int}                           # stop playback of older epochs now
-PEER_MESSAGE_TYPES = ("hello", "mute", "played", "context", "participant", "bye")
+PEER_MESSAGE_TYPES = ("hello", "mute", "played", "context", "participant", "share", "bye")
 SERVER_MESSAGE_TYPES = ("state", "activity", "turn", "caption", "flush")
 MAX_CONTROL_BYTES = 16 * 1024
 

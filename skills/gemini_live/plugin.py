@@ -551,6 +551,15 @@ class GeminiSession(JsonSession):
                             response['scheduling'] = 'SILENT' if cid in command.silent else 'WHEN_IDLE'
                         self.tool_results[cid] = response
                         responses.append(response)
+                elif message.get('_call_frame_source'):
+                    # A requested look is a tool-result image. Deliver its pixels before
+                    # the function response can continue; clientContent would wait until
+                    # after that answer while this native tool turn is still busy.
+                    for part in message.get('content', []):
+                        if part.get('type') == 'image_url':
+                            inline = image_part(part)['inlineData']
+                            self.input_modalities.update(('image', 'video'))
+                            await self.write({'realtimeInput': {'video': inline}})
                 elif not message.get('tool_calls'):
                     other.append(message)
             if responses:

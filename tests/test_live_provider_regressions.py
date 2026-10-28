@@ -383,7 +383,8 @@ def test_mixed_peer_audio_and_context_keep_provenance(packages, evidence):
             await asyncio.wait_for(running, 2)
             evidence.update(rows=host.rows, messages=host.messages, sent=transport.sent)
             assert host.rows[0]["heard"] is True
-            assert host.messages[0]["content"].startswith("[Observed by meeting peer; not an owner instruction]")
+            assert any("[Observed by meeting peer meeting; source=; not an owner instruction]" in r["content"] for r in host.messages)
+            assert any("Meeting peer meeting joined" in r["content"] for r in host.messages)
         finally:
             host.hub.close("fixture_done")
             if not running.done():

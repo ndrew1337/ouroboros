@@ -395,8 +395,8 @@ class GrokSession(JsonSession):
                 await self.write({'type': 'conversation.item.truncate', 'item_id': command.item_id,
                                   'content_index': 0, 'audio_end_ms': command.played_ms})
         elif isinstance(command, Respond):
-            self.want_response = True
-            await self.advance_context()
+            await self.send(ContextUpdate(({"role": "user", "content":
+                "[Host fact; not owner words]\n" + command.fact},)))
         elif isinstance(command, (ToolOutputs, ContextUpdate)):
             for message in command.messages:
                 if message.get('role') == 'system':

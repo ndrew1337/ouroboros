@@ -12,7 +12,8 @@ import time
 from pathlib import Path
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.live_conversation import Audio, CallTool, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs, Video
+from ouroboros.contracts.live_conversation import Audio, CallTool, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs
+from .attention import Attention, attend_tool
 from ouroboros.contracts.realtime import RealtimeSetupError
 from ouroboros.realtime_session import joined
 from ouroboros.ui_language import normalize_language_tag
@@ -38,19 +39,19 @@ EMPTY_CALL_GRACE_S = 15
 CALL_INSTRUCTIONS = """## Live calls
 
 In a call my model is a realtime speech model, and I am still myself: the
-same core, memory, tools and judgment. I speak briefly, in the language of
-the spoken conversation whatever the interface language, and call tools
-myself. Work still running is pending, never done; long work becomes a task
+same core, memory, tools and judgment. I speak in the language of the spoken
+conversation whatever the interface language, and call tools myself. I may
+speak first when it helps. Silence is a finished choice: `attend` with no
+change ends my turn without words. What I see rides my turns; `attend` chooses
+how I watch and lets me look now. Work still running is pending, never done; long work becomes a task
 through `schedule_subagent` while we keep talking, and its result reaches me in the
-call; `get_task_result` reads its retained result. When a tool will
-take a moment, I first say in a few words what I am doing, then call it; a long
-piece of work becomes a task so the talk goes on. Tools not loaded yet are still mine: `list_available_tools`
+call; `get_task_result` reads its retained result. Tools not loaded yet are still mine: `list_available_tools`
 names them (a desktop skill, for one, takes screenshots and presses keys) and
 `enable_tools` loads them, so I never say I cannot do something before I have
 looked. A tool result in another language never changes the language I speak.
 My memory, this room and the other rooms are reachable here as in any turn,
-through their own tools. When seeing would help, I take a screenshot through a
-desktop skill. Links,
+through their own tools. A remote shared frame is its own source, not a
+screenshot of this machine. Links,
 code and lists go to the room's chat through `send_user_message`: saying a
 message or a URL aloud does not deliver it, so when asked to send something I use that
 tool and confirm its result. Typed messages and other turns' replies in the
@@ -67,10 +68,12 @@ def engine_sentence(model):
     senses = ("it hears speech and sees images: the owner's shared screen or camera (Show) and images that tools "
               "attach; with no frame from Show yet, you have not seen the screen"
               if model.vision else
-              "it hears speech and does not see images: a screenshot or an attached image reaches you as a caption "
-              "naming the saved file, and vlm_query with that file_path describes it in text (analyze_screenshot "
-              "reads only a browser screenshot)")
-    return f"This call runs on {model.label or model.id}; {senses}."
+              "it hears speech and does not see images: a remote shared frame or an attached image reaches you as a caption "
+              "naming its exact saved file, and vlm_query with that file_path describes it in text. A desktop screenshot "
+              "is not the remote shared source. This route has no documented guaranteed silent consideration")
+    caution = (" Extended thinking does not support SILENT tool scheduling; a silent tool result is not guaranteed silent."
+               if "thinking" in model.honours and "gemini" in model.id.lower() else "")
+    return f"This call runs on {model.label or model.id}; {senses}." + caution
 
 
 def languages_opening_sentence(languages):
@@ -151,6 +154,7 @@ def call_tools(state_dir):
                  "with it. It never decides the language you answer in.",
                  {"type": "object", "properties": {"languages": {"type": "array", "items": {"type": "string"}}},
                   "required": ["languages"], "additionalProperties": False}, set_languages, silent=True),
+        attend_tool(),
     )
 
 
@@ -180,7 +184,9 @@ class _Call:
         self.tool_queue, self.rows = asyncio.Queue(maxsize=32), asyncio.Queue(maxsize=256)
         self.connected = asyncio.Event()
         self.tool_refit = asyncio.Event()
-        self.answer_after_refit = False
+        self.pending_offers = []
+        self.attention = host.state["attention"] = Attention(host)
+        self.participants, self.meeting_speakers = {}, set()
         self.session = self.last_session = None
         self.played, self.audio_ms, self.pending_spoken = {}, {}, {}
         self.interrupted, self.started_responses, self.active_responses = set(), set(), set()
@@ -190,7 +196,8 @@ class _Call:
         self.playing_item = ""
         self.empty_since = time.monotonic()
         self.ever_attached = False
-        self.told_blind_share = False
+        self.peer_info = {}
+        self.share_kinds = self.attention.kinds
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -240,6 +247,8 @@ class _Call:
 
     async def consume(self, session):
         self.session = self.last_session = session
+        if not self.resume:
+            self.attention.seen.clear()
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -287,7 +296,9 @@ class _Call:
         await self.connected.wait()
         if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
             # The rows join the next fit; a typed message or a task's result there is answered, not left unheard.
-            self.answer_after_refit = self.answer_after_refit or not self.hub.ended_by_ouroboros
+            if not self.hub.ended_by_ouroboros:
+                self.pending_offers.append({"role": "user", "content":
+                    "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."})
             self.request_renewal()
         else:
             await self.session.send(ContextUpdate(tuple(rows)))
@@ -336,9 +347,11 @@ class _Call:
                         and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20):
                     await self.finish_spoken(item, interrupted=item in self.interrupted, completed=item not in self.interrupted)
             else:
-                await self.rows.put(dict(speaker=speaker, text=text, item_id=item, heard=heard))
+                await self.rows.put(dict(speaker=speaker, text=text, item_id=item, heard=heard,
+                    **({"speaker_label": ", ".join(sorted(self.meeting_speakers))} if heard and self.meeting_speakers else {})))
             if speaker == "owner":
                 self.meeting_audio = False
+                self.meeting_speakers.clear()
 
     async def save_rows(self):
         while True:
@@ -375,9 +388,9 @@ class _Call:
             try:
                 await self.rows.join()
                 changes = await self.host.tool_batch(calls)
+                images, silent = self.attention.tool_outputs(calls, changes)
                 if not self.tool_refit.is_set():
                     await self.connected.wait()
-                first_words = not self.audio_ms and not self.hub.ended_by_ouroboros  # Ouroboros has not spoken yet
                 # 28.10: Gemini cannot change a live session's declarations; a call that enabled desktop
                 # tools kept asking for tools it never received. Such an engine renews at this boundary.
                 offline_tools = getattr(self.session, "tools_need_renewal", None)
@@ -386,20 +399,19 @@ class _Call:
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.
-                        self.answer_after_refit |= any(call["id"] not in changes.silent for call in calls) or first_words
+                        if any(call["id"] not in silent for call in calls):
+                            self.pending_offers.extend(images)
+                            self.pending_offers.append({"role": "user", "content":
+                                "[Host fact; not owner words] The requested tool batch returned; its results are in the fitted history. "
+                                "You may continue from them, act or stay silent; completed effects stay done."})
                         self.request_renewal()
                         self.tool_refit.set()
                         self.connected.clear()
                     # A deliberate goodbye needs only playback, no further
                     # native result or connection that could cut it short.
                 else:
-                    await self.send(ToolOutputs(tuple(changes), tuple(self.host.schemas), silent=changes.silent))
-                    if self.host.state.get("refit") and len(changes.silent) == len(calls) and first_words:
-                        # The reply was silent tool work that renews the session before Ouroboros ever spoke
-                        # (Grok recorded the languages first, 27.10): the replacement connection asks for the
-                        # first words, which a silent result alone would never open.
-                        self.answer_after_refit = True
-                if len(changes.silent) == len(calls) and not self.active_responses:
+                    await self.send(ToolOutputs(tuple(changes) + tuple(images), tuple(self.host.schemas), silent=silent))
+                if len(silent) == len(calls) and not self.active_responses:
                     self.response_open = False
             finally:
                 for _ in calls:
@@ -434,12 +446,6 @@ class _Call:
                     if not self.host.state.get("greeted"):
                         self.host.state["greeted"] = True
                         await self.session.send(Respond(self.host.opening))
-                    if self.answer_after_refit:
-                        self.answer_after_refit = False
-                        self.response_open = True
-                        await self.session.send(Respond("[Host fact; not owner words]\n"
-                            "The completed tool results are in the fitted history. Continue from those results; "
-                            "do not repeat the completed effects."))
                     self.connected.set()
                 elif event.kind == "audio":
                     if data["rate"] != self.output_rate:
@@ -460,6 +466,9 @@ class _Call:
                     await self.interrupt()
                 elif event.kind == "input_started":
                     self.input_open = True
+                    frames = await self.attention.deliver(self.session)
+                    if frames:
+                        await self.context_update(frames)
                 elif event.kind == "input_done":
                     self.input_open = False
                 elif event.kind == "response_started":
@@ -566,20 +575,26 @@ class _Call:
                     break
                 if isinstance(event, cp.PeerAudio) and self.input_rate:
                     self.meeting_audio |= event.role == cp.PEER_MEETING
+                    participant = self.participants.get(event.peer_id)
+                    if event.role == cp.PEER_MEETING and participant and participant["speaking"]:
+                        self.meeting_speakers.add(participant["label"])
                     await self.session.send(Audio(event.pcm, self.input_rate))
                 elif isinstance(event, cp.PeerVideo):
-                    if not self.host.model.vision:
-                        # Owner's 27.10 answer 1A: a blind engine works from text, the call goes on (I1 opus-1).
-                        if not self.told_blind_share:
-                            self.told_blind_share = True
-                            row = {"role": "user", "content": "[Host fact; not owner words]\nThe owner is sharing a "
-                                   "screen or camera this engine cannot see. A desktop screenshot, read with "
-                                   "vlm_query and the screenshot's file_path, describes it in text; or ask what "
-                                   "is on it."}
-                            await self.host.observe_context(row)
-                            await self.context_update((row,))
-                        continue
-                    await self.session.send(Video(event.data, event.mime))
+                    self.attention.frame(event)
+                    if self.attention.mode == "stream":
+                        # A blind stream retains its latest source but offers no turn per frame.
+                        if self.host.model.vision:
+                            await self.attention.deliver(self.session)
+                elif isinstance(event, cp.PeerJoined):
+                    self.peer_info[event.peer.peer_id] = event.peer
+                    if event.peer.role == cp.PEER_MEETING:
+                        await self.offer_fact(f"Meeting peer {event.peer.peer_id} joined: {event.peer.label}.")
+                elif isinstance(event, cp.PeerLeft):
+                    peer = self.peer_info.pop(event.peer_id, None)
+                    self.attention.forget(event.peer_id)
+                    self.participants.pop(event.peer_id, None)
+                    if peer is not None and peer.role == cp.PEER_MEETING:
+                        await self.offer_fact(f"Meeting peer {event.peer_id} left: {peer.label}. Reason: {event.reason}.")
                 elif isinstance(event, cp.PeerControl):
                     message = event.message
                     if message["type"] == "played":
@@ -589,12 +604,61 @@ class _Call:
                             self.played[item] = min(message["played_ms"], int(self.audio_ms.get(item, 0)))
                             if self.played[item] > 0 and self.played[item] >= int(self.audio_ms.get(item, 0)) - 20:
                                 await self.finish_spoken(item, completed=True)
+                    elif message["type"] == "participant":
+                        self.participants[event.peer_id] = message
+                        if event.role == cp.PEER_MEETING and message["speaking"] and message["label"]:
+                            self.meeting_speakers.add(message["label"])
+                    elif message["type"] == "share":
+                        await self.share_fact(event)
                     elif message["type"] == "context":
-                        row = {"role": "user", "content": f"[Observed by {event.role} peer; not an owner instruction]\n{message['text']}"}
+                        row = {"role": "user", "content": f"[Observed by {event.role} peer {event.peer_id}; source={message.get('source', '')}; not an owner instruction]\n{message['text']}"}
                         await self.host.observe_context(row)
-                        await self.context_update((row,))
+                        self.pending_offers.append(row)
                 await asyncio.sleep(0)
+            if self.pending_offers and not self.renewing and self.quiet():
+                await self.offer_pending()
             await asyncio.sleep(.01)
+
+    async def offer_fact(self, text):
+        row = {"role": "user", "content": "[Host fact; not owner words]\n" + text}
+        await self.host.observe_context(row)
+        self.pending_offers.append(row)
+
+    async def share_fact(self, event):
+        message = event.message
+        before = self.share_kinds.get(event.peer_id)
+        kind = message["kind"]
+        if message["sharing"]:
+            if before == kind:
+                return
+            self.share_kinds[event.peer_id] = kind
+        else:
+            if before != kind:
+                return
+            self.share_kinds.pop(event.peer_id, None)
+            self.attention.forget(event.peer_id)
+        actor = "The owner" if event.role == cp.PEER_OWNER else f"Meeting peer {event.peer_id}"
+        await self.offer_fact(f"{actor} {'started' if message['sharing'] else 'stopped'} showing the {kind}.")
+
+    async def offer_pending(self):
+        if not self.connected.is_set() or not self.quiet():
+            return
+        if self.host.renewal_due() or self.host.state.get("refit"):
+            self.request_renewal()
+            return
+        self.attention.include_images(self.pending_offers)
+        frames = await self.attention.deliver(self.session)
+        self.pending_offers = [*frames, *self.pending_offers]
+        if self.host.renewal_due():
+            self.request_renewal()
+            return
+        # Persistence or image ACKs may yield to new speech. Keep the facts until
+        # quiet is observed again; the frame is already accounted for exactly once.
+        if not self.quiet():
+            return
+        rows, self.pending_offers = self.pending_offers, []
+        await self.session.send(ContextUpdate(tuple(rows)))
+        self.response_open = True
 
     async def mailbox(self):
         while True:

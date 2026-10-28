@@ -90,7 +90,7 @@ def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config
     for fields in ({'model':'invented'}, {'voice':'invented'}, {'provider':'missing:engine'}):
         status, data = request(api, {'enabled':True, 'provider':'fixture-engine:voice', **fields})
         assert status == 400 and data['error']
-    assert {tool.name for tool in api.feature['call_tools']} == {'end_call','set_call_languages'}
+    assert {tool.name for tool in api.feature['call_tools']} == {'end_call','set_call_languages','attend'}
     assert all(tool.silent for tool in api.feature['call_tools'])
     from ouroboros.extension_ui_validation import validate_settings_schema
     validate_settings_schema(api.sections[0][1]['schema'])

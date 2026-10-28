@@ -87,6 +87,8 @@ def test_language_tool_exchange_survives_two_connections(providers, recorded_exc
             await first.open()
             assert (await first.receive())[0].kind == "ready"
             await first.send(Respond("The call is open."))
+            while not wire.events.empty():
+                await first.receive()  # acknowledge the Grok offer fact before its response
             wire.put({"type": "response.created", "response": {"id": record["tool_event"]["response_id"]}})
             await first.receive()
             if engine == "grok":
@@ -106,7 +108,9 @@ def test_language_tool_exchange_survives_two_connections(providers, recorded_exc
             rows = history(record)
             await first.send(ToolOutputs((rows[-1],), (), silent=(call.data["call_id"],)))
             await drain(first, wire)
-            assert record["result_sent"] in wire.sent
+            output = next(e["item"] for e in wire.sent if e.get("item", {}).get("type") == "function_call_output")
+            assert {k:v for k,v in output.items() if k != "id"} == {
+                k:v for k,v in record["result_sent"]["item"].items() if k != "id"}
             assert not first.waiting_tools
             assert sum(e["type"] == "response.create" for e in wire.sent) == 1
         finally:
@@ -139,6 +143,7 @@ def test_language_tool_exchange_survives_two_connections(providers, recorded_exc
             assert not any(e["type"] == "response.create" for e in wire.sent)
             assert not renewed.waiting_tools
             await renewed.send(Respond("Continue from the completed tool result."))
+            await drain(renewed, wire)  # acknowledge the newly offered host fact
             wire.put({"type": "response.created", "response": {"id": "renewed-reply"}})
             assert (await renewed.receive())[0].kind == "response_started"
             wire.put({"type": "response.output_audio.delta", "response_id": "renewed-reply",

@@ -771,6 +771,18 @@ class ConversationHost:
             self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
             self._context_changed()
 
+    async def retain_frame(self, data, mime, *, source=""):
+        """Use the existing content-addressed task media store and its retention."""
+        from ouroboros.artifacts import store_chat_media_bytes
+        from ouroboros.call_protocol import MAX_VIDEO_FRAME_PAYLOAD, VIDEO_FORMATS
+        if mime not in VIDEO_FORMATS or not 0 < len(data) <= MAX_VIDEO_FRAME_PAYLOAD:
+            raise RealtimeSetupError("video_format", "invalid retained call frame")
+        saved = await joined(asyncio.to_thread(store_chat_media_bytes,
+                            self.ctx.drive_root, self.ctx.task_id, data, mime))
+        if not saved:
+            raise RealtimeSetupError("frame_retention", "call frame could not be retained")
+        return saved["path"]
+
     async def tool_batch(self, calls):
         """Serialize ordinary and feature tools; retain changes to existing rows too."""
         async with self._tools_lock:
@@ -853,7 +865,7 @@ class ConversationHost:
                     self.tool_jobs.discard(job)
 
     async def caption(self, speaker, text, item_id, *, heard=False, played_ms=0, interrupted=False, completed=False,
-                      replace=False):
+                      replace=False, speaker_label=""):
         """Final words only; meeting input is never minted as the owner's message."""
         key = (speaker, item_id)
         if not text:
@@ -878,7 +890,7 @@ class ConversationHost:
                     from ouroboros.presence_call import record_call_utterance
                     if not record_call_utterance(self.ctx.drive_root, self.task,
                             direction="out" if speaker == "ouroboros" else "in",
-                            text=text, speaker_label=self.turn.spec.label, utterance_id=item_id):
+                            text=text, speaker_label=speaker_label, utterance_id=item_id):
                         raise RealtimeSetupError("history_write", "Presence caption could not be retained")
                     event_id = self.task["metadata"]["presence"]["event"]["source_event_id"]
                     name = f"{event_id}:{'spoken' if speaker == 'ouroboros' else 'heard'}:{item_id}"

@@ -376,6 +376,12 @@ class LiveCallHub(cp.CallHub):
             kind = message.get("type")
             if kind not in cp.PEER_MESSAGE_TYPES or kind == "hello":
                 raise CallPeerError("invalid_call_control")
+            if kind == "share" and (type(message.get("sharing")) is not bool
+                    or message.get("kind") not in ("screen", "camera") or not peer.info.video):
+                raise CallPeerError("invalid_call_control")
+            if kind == "participant" and (not isinstance(message.get("label"), str)
+                    or type(message.get("speaking")) is not bool):
+                raise CallPeerError("invalid_call_control")
             if kind == "played" and not peer.info.speaker:
                 raise CallPeerError("audio_direction_forbidden")
             self._event(cp.PeerControl(peer_id, peer.info.role, dict(message)))

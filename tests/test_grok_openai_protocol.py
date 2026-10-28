@@ -118,9 +118,13 @@ def test_greeting_waits_for_setup_and_never_invents_owner_words(providers, engin
             assert not wire.sent
             await adapter.open()
             assert (await adapter.receive())[0].kind == "ready"
+            if engine == "grok":
+                assert wire.sent[-1]["item"]["content"][0]["text"].startswith("[Host fact; not owner words]")
+                await drain(adapter, wire)  # the fact's native ACK precedes response.create
             assert [e["type"] for e in wire.sent].count("response.create") == 1
             assert wire.sent[-1]["type"] == "response.create"
-            assert not any(e.get("item", {}).get("role") == "user" for e in wire.sent)
+            assert all(e["item"]["content"][0]["text"].startswith("[Host fact; not owner words]")
+                       for e in wire.sent if e.get("item", {}).get("role") == "user")
         finally:
             await adapter.close()
     asyncio.run(run())

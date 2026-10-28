@@ -191,20 +191,29 @@ def test_a_nonresumable_close_refuses_without_retry():
     asyncio.run(scenario())
 
 
-def test_a_blind_engines_shared_screen_keeps_the_call_and_tells_the_voice_once():
+def test_a_blind_engines_shared_screen_keeps_the_call_and_tells_the_voice_once(tmp_path):
     """A shared screen ended a blind engine's call (I1 opus-1); the owner's 27.10 answer is captions, so the call goes on."""
     async def scenario():
         host = Host()
         host.model = replace(host.model, vision=False)
+        async def retain(data, mime, *, source=""):
+            path = tmp_path / "frame.jpg"
+            path.write_bytes(data)
+            return str(path)
+        host.retain_frame = retain
         task, session = await started(host)
         try:
             session.emit('ready', input_rate=24000, output_rate=24000)
             for _ in range(3):
                 host.hub.events.append(cp.PeerVideo('peer', cp.PEER_OWNER, 'image/jpeg', b'fake-image'))
+            await until(lambda: not host.hub.events)
+            assert not host.context, "a frame cannot offer a turn"
+            session.emit("input_started")
             await until(lambda: host.context)
             await asyncio.sleep(.05)
             assert not task.done() and not any(isinstance(x, Video) for x in session.sent)
-            assert len(host.context) == 1 and 'cannot see' in host.context[0]['content']
+            assert len(host.context) == 1 and 'This engine is blind' in host.context[0]['content']
+            assert str(tmp_path / 'frame.jpg') in host.context[0]['content']
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
@@ -742,7 +751,7 @@ def test_context_additions_refit_before_delivery_when_the_window_is_full(source,
             await until(lambda: bool(host.context))
             await asyncio.sleep(.04)
             additions = [x for x in first.sent if isinstance(x, ContextUpdate)]
-            if crosses_window:
+            if crosses_window or source == 'peer':
                 assert additions == [], 'an over-window addition must be kept for the fresh fit'
             else:
                 assert additions == [ContextUpdate(tuple(host.context))]
@@ -755,8 +764,10 @@ def test_context_additions_refit_before_delivery_when_the_window_is_full(source,
                 # The addition joined the fresh fit; the replacement answers it, as a delivered update would be (I1 m2).
                 second = host.sessions[1]
                 second.emit('ready', input_rate=24000, output_rate=24000)
-                await until(lambda: any(isinstance(x, Respond) for x in second.sent))
-                assert 'completed tool results' in next(x for x in second.sent if isinstance(x, Respond)).fact
+                await until(lambda: any(isinstance(x, ContextUpdate) for x in second.sent))
+                content = str(next(x for x in second.sent if isinstance(x, ContextUpdate)).messages)
+                assert 'completed tool results' not in content
+                assert ('New room context' if source == 'mailbox' else 'Observed context') in content
             else:
                 await asyncio.sleep(.05)
                 assert len(host.sessions) == 1
@@ -979,14 +990,16 @@ def test_call_guidance_distinguishes_interrupting_an_answer_from_ending_the_call
         assert distinction in text, (source, distinction)
 
 
-def test_call_text_speaks_before_slow_tools_offers_sight_and_keeps_the_language_caveat():
+def test_call_text_allows_initiative_and_silence_and_keeps_the_language_caveat():
     from skills.live_conversation.driver import CALL_INSTRUCTIONS, languages_opening_sentence
 
     # The owner's 18.10 remarks: silence while a tool runs, and a voice unaware it could ask to see.
     text = " ".join(CALL_INSTRUCTIONS.split())  # the block is wrapped by hand
-    assert "first say in a few words what I am doing, then call it" in text
+    assert "first say in a few words what I am doing, then call it" not in text
+    assert "Silence is a finished choice" in text
+    assert "I may speak first when it helps" in text
     assert "tools never pause the talk" not in text  # OpenAI withholds a response while a tool runs (I1 astra F7)
-    assert "When seeing would help, I take a screenshot" in text  # Show lives in the vision engine's sentence
+    assert "`attend` chooses how I watch and lets me look now" in text
     # 27.10: the OpenAI voice told the owner three times it had no desktop tools before it ever looked.
     assert "so I never say I cannot do something before I have looked" in text
     assert "never changes the language I speak" in text
@@ -1018,9 +1031,8 @@ def test_repeated_drops_without_an_answer_end_the_call_instead_of_resuming_forev
     asyncio.run(scenario())
 
 
-def test_a_silent_language_refit_before_any_speech_asks_the_model_to_continue_after_the_reconnect(tmp_path):
-    """Grok's first answer on 27.10 recorded the call languages (a silent tool) and the renewal that followed
-    asked for nothing: the owner heard silence. The replacement connection now asks for the first words."""
+def test_a_silent_language_refit_before_any_speech_preserves_silence_after_the_reconnect(tmp_path):
+    """The owner now chooses silence as a finished response, including before any spoken words."""
     from ouroboros.contracts.live_conversation import ToolOutputs
     async def scenario():
         host = Host()
@@ -1039,8 +1051,8 @@ def test_a_silent_language_refit_before_any_speech_asks_the_model_to_continue_af
             await until(lambda: len(host.sessions) == 2)
             second = host.sessions[1]
             second.emit('ready', input_rate=24000, output_rate=24000)
-            await until(lambda: any(isinstance(x, Respond) for x in second.sent))
-            assert 'Continue from those results' in next(x for x in second.sent if isinstance(x, Respond)).fact
+            await asyncio.sleep(.04)
+            assert not second.sent, 'a silent result does not offer a new turn'
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
@@ -1085,7 +1097,7 @@ def test_a_blind_engine_is_told_so_in_its_instructions():
     # 28.10: analyze_screenshot reads only this task's browser screenshot; a desktop screenshot's file
     # is read with vlm_query, and the voice that followed the old wording got a refusal.
     assert 'vlm_query with that file_path describes it in text' in text
-    assert 'analyze_screenshot reads only a browser screenshot' in text
+    assert 'A desktop screenshot is not the remote shared source' in text
     seeing = session_options(Host()).instructions
     assert 'vlm_query' not in seeing.split('This call runs on', 1)[1].split('.', 1)[0]
 

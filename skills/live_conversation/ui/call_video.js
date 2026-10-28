@@ -1,5 +1,5 @@
 /** Browser camera and screen frames for a live call. Capture stays local until the owner
- * starts sharing; a small changed thumbnail and a slow keep-alive limit billed frames.
+ * starts sharing. One frame in flight, a physical cadence and exact-duplicate suppression.
  */
 import { encodeVideoFrame, MAX_VIDEO_FRAME_PAYLOAD } from './call_worklet.js';
 import { loadDevicePrefs, cameraConstraints } from './call_devices.js';
@@ -10,9 +10,6 @@ const FRAME_MS = 1000;
 // Audio keeps streaming beside a frame: a socket that never quite empties still lets the next frame go once
 // what remains of the previous one is at most this much (about 170 ms of 48 kHz speech; a transport bound).
 const QUEUED_AUDIO_SLACK_BYTES = 16 * 1024;
-const KEEPALIVE_MS = 15000;
-const SAMPLE_WIDTH = 16;
-const SAMPLE_HEIGHT = 9;
 
 export function visionAvailability(env = globalThis) {
     const media = env.navigator?.mediaDevices;
@@ -25,16 +22,6 @@ export function visionAvailability(env = globalThis) {
         camera: typeof media?.getUserMedia === 'function',
         reason: 'Screen sharing is unavailable in this browser. Open this room in a browser with screen capture.',
         cameraReason: 'Camera sharing is unavailable in this browser.' };
-}
-
-function changedEnough(previous, next) {
-    if (!previous) return true;
-    let difference = 0;
-    for (let i = 0; i < next.length; i += 4) {
-        difference += Math.abs(next[i] - previous[i]) + Math.abs(next[i + 1] - previous[i + 1])
-            + Math.abs(next[i + 2] - previous[i + 2]);
-    }
-    return difference / (next.length * 0.75) > 6;
 }
 
 function jpeg(canvas, quality) {
@@ -50,9 +37,10 @@ export class CallVision {
         this.token = 0;
         this.seq = 0;
         this.lastSentAt = 0;
-        this.sample = null;
+        this.lastBytes = null;
         this.busy = false;
         this.cameraId = '';
+        this.announced = '';
         this.pendingBytes = 0;  // the last frame's bytes still queued in the call socket (upper bound)
     }
 
@@ -127,8 +115,10 @@ export class CallVision {
         lease?.release('cancelled'); pending?.release?.('cancelled');
         if (this.video) { this.video.pause(); this.video.srcObject = null; this.video = null; }
         const changed = Boolean(this.kind || this.error);
+        if (this.announced) this.session.send({ type: 'share', sharing: false, kind: this.announced });
+        this.announced = '';
         this.kind = this.error = '';
-        this.sample = null;
+        this.lastBytes = null;
         // The last frame may still be queued in the call socket: its bytes stay counted until the socket drains
         // them (`pending` decays with bufferedAmount), or stopping a share would read as a stalled uplink (R15-2).
         if (changed && notify) this.notify();
@@ -146,12 +136,6 @@ export class CallVision {
         if (!width || !height) return;
         this.busy = true;
         try {
-            const sample = this.env.document.createElement('canvas');
-            sample.width = SAMPLE_WIDTH; sample.height = SAMPLE_HEIGHT;
-            const sampleContext = sample.getContext('2d', { willReadFrequently: true });
-            sampleContext.drawImage(this.video, 0, 0, SAMPLE_WIDTH, SAMPLE_HEIGHT);
-            const pixels = sampleContext.getImageData(0, 0, SAMPLE_WIDTH, SAMPLE_HEIGHT).data;
-            if (!changedEnough(this.sample, pixels) && Date.now() - this.lastSentAt < KEEPALIVE_MS) return;
             const maxSide = this.kind === 'screen' ? 1280 : 768;
             let blob = null;
             for (const side of [maxSide, Math.round(maxSide * 0.75), Math.round(maxSide * 0.5)]) {
@@ -170,10 +154,15 @@ export class CallVision {
             if (!blob?.size || blob.size > MAX_VIDEO_FRAME_PAYLOAD) throw new Error('JPEG frame unavailable');
             const data = new Uint8Array(await blob.arrayBuffer());
             if (token !== this.token || session.state !== 'live' || session.socket?.readyState !== 1) return;
+            if (this.lastBytes?.length === data.length && data.every((byte, i) => byte === this.lastBytes[i])) return;
             session.socket.send(encodeVideoFrame({ epoch: session.epoch, seq: this.seq++, mime: 'image/jpeg', data }));
             this.pendingBytes = data.byteLength;
             this.lastSentAt = Date.now();
-            this.sample = new Uint8ClampedArray(pixels);
+            this.lastBytes = data;
+            if (!this.announced) {
+                this.announced = this.kind;
+                session.send({ type: 'share', sharing: true, kind: this.kind });
+            }
         } catch {
             if (token !== this.token) return;
             this.stop(false);
