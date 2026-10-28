@@ -59,3 +59,63 @@ def test_failed_audio_write_defers_to_the_native_readers_resumption_outcome(gemi
             host.hub.ended_by_owner = True
             if not running.done(): await asyncio.wait_for(running, 2)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('resumable', [False, True])
+def test_failed_tool_result_write_defers_to_native_resumption(gemini, resumable):
+    """R19-2: a tool result that meets the closed socket first is delivered on the resumed connection."""
+    from tests.test_live_conversation_driver import Batch
+
+    async def scenario():
+        host = Host()
+        host.state['greeted'] = True
+        native, wire = make_session(gemini)
+        wires = [wire]
+        original_send, original_recv = wire.send, wire.recv
+        closed = ConnectionClosedError(Close(1012, 'synthetic restart'), Close(1012, 'synthetic restart'), True)
+        async def send(raw):
+            if 'toolResponse' in json.loads(raw):
+                wire.put(closed)
+                raise closed
+            await original_send(raw)
+        async def recv():
+            try: return await original_recv()
+            except ConnectionClosedError:
+                await asyncio.sleep(.03)  # the writer demonstrably fails first
+                raise
+        wire.send, wire.recv = send, recv
+        async def batch(calls):
+            return Batch([{'role': 'tool', 'tool_call_id': c['id'], 'content': 'Synthetic completed effect'} for c in calls])
+        host.tool_batch = batch
+        async def connection(consume, options):
+            if host.sessions:
+                current, replacement = make_session(gemini, options)
+                wires.append(replacement)
+            else:
+                current = native
+            host.sessions.append(current)
+            await current.open()
+            try: return await consume(current)
+            finally: await current.close()
+        host.session = connection
+        running = asyncio.create_task(run(host))
+        try:
+            await until(lambda: host.hub.states)
+            if resumable:
+                wire.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'synthetic-resume'}})
+                await until(lambda: host.state.get('resume_handle'))
+            wire.put({'toolCall': {'functionCalls': [{'id': 'c', 'name': 'read_file', 'args': {}}]}})
+            if resumable:
+                await until(lambda: len(wires) == 2 and any('toolResponse' in e for e in wires[1].sent) or running.done())
+                if running.done(): await running
+                assert host.sessions[1].options.resume_handle == 'synthetic-resume'
+                [delivered] = [e for e in wires[1].sent if 'toolResponse' in e]
+                assert [r['id'] for r in delivered['toolResponse']['functionResponses']] == ['c']
+            else:
+                with pytest.raises(RealtimeSetupError, match='provider_closed'):
+                    await asyncio.wait_for(running, 2)
+                assert len(host.sessions) == 1, 'missing authority still forbids resumption'
+        finally:
+            host.hub.ended_by_owner = True
+            if not running.done(): await asyncio.wait_for(running, 2)
+    asyncio.run(scenario())

@@ -28,13 +28,15 @@ class Page:
         self.queue = deque()
         self.epoch = self.seq = self.video_seq = 0
         self.queued = self.waited = self.since_report = 0
-        self.playing = False
+        self.playing = self.muted = False
         self.send({'type': 'hello', 'protocol': 1, 'role': 'owner', 'mic': True,
                    'speaker': True, 'video': True, 'rate': 48000, 'label': 'Owner'})
 
     async def accept(self): pass
 
     def send(self, value):
+        if isinstance(value, dict) and value.get('type') == 'mute':
+            self.muted = value['muted']
         self.incoming.put_nowait({'type': 'websocket.receive',
             **({'bytes': value} if isinstance(value, bytes) else {'text': json.dumps(value)})})
 
@@ -80,6 +82,11 @@ class Page:
         samples = len(frame.pcm) // 2
         self.queue.append([self.items[frame.stream], samples])
         self.queued += samples
+
+    def capturing(self):
+        """The page captures only in its current live state and while unmuted (call.js)."""
+        state = next((v['state'] for v in reversed(self.controls) if 'state' in v), '')
+        return state == 'live' and not self.muted
 
     def tick(self, *, capture=True):
         if capture:

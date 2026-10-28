@@ -288,3 +288,33 @@ def test_a_live_update_carries_no_host_delivery_marks(gemini):
         assert "_canonical" not in text and "_requested_look" not in text
         await session.close()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
+@pytest.mark.parametrize('new_caption_first', [False, True])
+def test_old_turn_complete_cannot_finish_a_new_active_owner_caption(gemini, model, new_caption_first):
+    """R19-1: while native VAD reports speech, an interrupted answer's completion leaves the words open."""
+    async def scenario():
+        session, wire = make_session(gemini, model=model)
+        try:
+            await session.open(); await session.receive()
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+            await receive(session, wire, {'serverContent': {'inputTranscription': {'text': 'First utterance.'}}})
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_END'}})
+            boundary = await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+            assert any(e.kind == 'caption' and e.data['final'] for e in boundary)
+            fragment = {'serverContent': {'inputTranscription': {'text': 'New unfinished words'}}}
+            if new_caption_first:
+                await receive(session, wire, fragment)
+            old = await receive(session, wire, {'serverContent': {'interrupted': True, 'turnComplete': True}})
+            assert not any(e.kind == 'input_done' for e in old), 'old answer ended the current owner input'
+            assert session.input_pending and not session.renewal_ready
+            if not new_caption_first:
+                await receive(session, wire, fragment)
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_END'}})
+            final = await receive(session, wire, {'serverContent': {'turnComplete': True}})
+            assert [e.data['text'] for e in final if e.kind == 'caption' and e.data['final']] == ['New unfinished words']
+            assert any(e.kind == 'input_done' for e in final) and session.renewal_ready
+        finally:
+            await session.close()
+    asyncio.run(scenario())

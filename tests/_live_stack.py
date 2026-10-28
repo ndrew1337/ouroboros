@@ -124,6 +124,7 @@ async def stack(state, monkeypatch, engine, *, thinking=False, languages=False):
         sha256=hashlib.sha256(raw.encode()).hexdigest())))
     monkeypatch.setenv('OUROBOROS_TRUST_NATIVE_SEEDED_SKILLS', 'true')
     run = Stack(state, engine)
+    run.provider.thinking = thinking
     feature = install(run.root)
     config = LiveConfig(enabled=True, provider=PROVIDERS[engine],
         model='gemini-3.8-live-extended-thinking' if thinking else '', search=False, interruptions=True,
@@ -169,7 +170,7 @@ async def stack(state, monkeypatch, engine, *, thinking=False, languages=False):
         gateway = asyncio.create_task(serve_peer(run.page, hub, role='owner', video=True))
         async def playback():
             while not hub.closed:
-                run.page.tick(capture=any(v.get('state') == 'live' for v in run.page.controls))
+                run.page.tick(capture=run.page.capturing())
                 await asyncio.sleep(.02)
         pump = asyncio.create_task(playback())
         run.running = asyncio.create_task(asyncio.to_thread(turn.run, state.ctx, messages, state.host.tools,
@@ -182,7 +183,9 @@ async def stack(state, monkeypatch, engine, *, thinking=False, languages=False):
         finally:
             run.page.end()
             try:
-                run.result = await asyncio.wait_for(asyncio.shield(run.running), 20)
+                # A hang detector, not a timing claim: teardown joins effects, the journal and
+                # settlement, which a loaded machine slows well past one scenario step.
+                run.result = await asyncio.wait_for(asyncio.shield(run.running), 120)
                 await asyncio.wait_for(gateway, 3)
             finally:
                 close_hub(turn.spec.call_id, 'test_cleanup')

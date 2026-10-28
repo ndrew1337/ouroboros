@@ -25,6 +25,9 @@ class NativeWire(VoiceWire):
         self.prompt = 2000
         self.audio_tokens = 100
         self.websocket = None
+        # Ordinary Gemini (recorded 28.10) sends no interactionStatus and no caption
+        # `finished`; extended thinking reports native IDLE. ProviderServer sets the route.
+        self.thinking = False
 
     def start_tool(self):
         pass  # The scenario scripts native VAD, not an in-memory driver event.
@@ -56,7 +59,8 @@ class NativeWire(VoiceWire):
 
     def complete(self, *, output=(), status='completed'):
         if self.engine == 'gemini':
-            self.put({'serverContent': {'turnComplete': True, 'interactionStatus': 'IDLE'}, 'usageMetadata': self.usage()})
+            self.put({'serverContent': {'turnComplete': True, **({'interactionStatus': 'IDLE'} if self.thinking else {})},
+                      'usageMetadata': self.usage()})
         else:
             self.put({'type': 'response.done', 'response': {'id': self.active, 'status': status,
                 'usage': self.usage(), 'output': list(output)}, 'usage': {'input_audio_duration': len(self.audio) / 48000}})
@@ -66,7 +70,10 @@ class NativeWire(VoiceWire):
         item = self.begin()
         self.spoken.append(text)
         if self.engine == 'gemini':
-            self.put(audio_content(text, finished=complete))
+            content = audio_content(text, finished=complete)
+            if not self.thinking:
+                del content['serverContent']['outputTranscription']['finished']
+            self.put(content)
         else:
             self.put({'type': 'response.output_audio.delta', 'response_id': self.active, 'item_id': item,
                       'delta': base64.b64encode(b'\x01\x00' * (480 if complete else 48000)).decode()})
@@ -100,7 +107,7 @@ class NativeWire(VoiceWire):
     def input_end(self, item, text):
         if self.engine == 'gemini':
             self.put({'voiceActivity': {'type': 'ACTIVITY_END'}})
-            self.put({'serverContent': {'inputTranscription': {'text': text, 'finished': True}}})
+            self.put({'serverContent': {'inputTranscription': {'text': text, **({'finished': True} if self.thinking else {})}}})
             self.answer()
         else:
             self.put({'type': 'input_audio_buffer.speech_stopped', 'item_id': item})
@@ -144,7 +151,7 @@ class NativeWire(VoiceWire):
                 await asyncio.sleep(.1)
             if all(r.get('scheduling') == 'SILENT' or (r['name'] == 'attend'
                    and 'frames' not in json.loads(r['response']['output'])) for r in rows):
-                self.put({'serverContent': {'turnComplete': True, 'interactionStatus': 'IDLE'}})
+                self.put({'serverContent': {'turnComplete': True, **({'interactionStatus': 'IDLE'} if self.thinking else {})}})
             else:
                 self.answer()
         elif event.get('clientContent', {}).get('turnComplete'):
@@ -158,11 +165,12 @@ class ProviderServer:
     def __init__(self, engine):
         self.engine, self.connections, self.script = engine, [], deque()
         self.errors = []
+        self.thinking = False
 
     async def accept(self, websocket):
         from websockets.exceptions import ConnectionClosed
         wire = NativeWire(self.engine, len(self.connections) + 1, self.script)
-        wire.websocket = websocket
+        wire.websocket, wire.thinking = websocket, self.thinking
         self.connections.append(wire)
         async def outbound():
             while True:

@@ -218,6 +218,9 @@ class GeminiSession(JsonSession):
         self.caption_offsets = set()
         self.response_complete = False
         self.input_pending = self.input_final = self.input_boundary = False
+        # Native VAD speech belongs to this connection (not resumed): a replacement that never
+        # heard ACTIVITY_START lets its completion settle carried words, so nothing waits forever.
+        self.vad_active = False
         self.output_pending = self.output_final = False
         self.output_caption = None
         self.usage = {}
@@ -381,10 +384,10 @@ class GeminiSession(JsonSession):
                 self.input_pending = False
             if not self.input_pending:
                 result.append(LiveEvent('input_started'))
-            self.input_pending = True
+            self.input_pending = self.vad_active = True
             self.input_final = self.input_boundary = False
         elif event.get('voiceActivity', {}).get('type') == 'ACTIVITY_END':
-            self.input_boundary = True
+            self.input_boundary, self.vad_active = True, False
         if 'usageMetadata' in event and not replayed_response:
             self.usage.update(event['usageMetadata'])
             prompt = event['usageMetadata'].get('promptTokenCount')
@@ -480,10 +483,12 @@ class GeminiSession(JsonSession):
                 if 'ouroboros' in self.text:
                     result.append(self.finish_text('ouroboros'))
                     self.output_pending = False
-            if 'owner' in self.text:
+            # While native VAD reports the owner speaking, a completion belongs to
+            # an earlier (interrupted) answer: it cannot close the words in progress.
+            if 'owner' in self.text and not self.vad_active:
                 result.append(self.finish_text('owner'))
                 self.input_final = True
-            self.input_boundary = True
+            self.input_boundary = not self.vad_active
             if self.input_final:
                 if self.input_pending:
                     result.append(LiveEvent('input_done'))
@@ -565,13 +570,12 @@ class GeminiSession(JsonSession):
             for message in command.messages:
                 if message.get('role') == 'tool':
                     cid = message['tool_call_id']
-                    name = self.calls.pop(cid, None)
+                    name = self.calls.get(cid)
                     if name:
                         response = {'id': cid, 'name': name, 'response': {'output': message['content']}}
                         # Extended thinking rejects scheduling (docs and 2026-10-18 probe).
                         if 'thinkingConfig' not in self.events[0]['setup']['generationConfig']:
                             response['scheduling'] = 'SILENT' if cid in command.silent else 'WHEN_IDLE'
-                        self.tool_results[cid] = response
                         responses.append(response)
                 elif message.get('_call_frame_source'):
                     # A requested look is a tool-result image. Deliver its pixels before
@@ -586,6 +590,11 @@ class GeminiSession(JsonSession):
                     other.append(message)
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
+                # Committed once written: a write that met a closed socket leaves the call
+                # owed, and the resumed connection delivers the same result (R19-2).
+                for response in responses:
+                    self.calls.pop(response['id'], None)
+                    self.tool_results[response['id']] = response
             if other:
                 await self.send(ContextUpdate(tuple(other)))
             tools = unique_tools(command.tools)

@@ -30,7 +30,7 @@ def test_every_protocol_peer_message_has_a_gateway_shape():
 def test_every_message_type_the_page_sends_is_a_protocol_peer_message():
     sent = set()
     for path in UI.glob("*.js"):
-        sent |= set(re.findall(r"send\(\{\s*type:\s*'([a-z_]+)'", path.read_text(encoding="utf-8")))
+        sent |= set(re.findall(r"send\((?:JSON\.stringify\()?\{\s*type:\s*'([a-z_]+)'", path.read_text(encoding="utf-8")))
     assert sent and sent <= set(cp.PEER_MESSAGE_TYPES), sorted(sent - set(cp.PEER_MESSAGE_TYPES))
 
 

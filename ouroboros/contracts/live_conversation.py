@@ -161,7 +161,9 @@ class LiveSession(Protocol):
     # field with no fresh maximum.
     output_bound_tokens: int | None
     # Native input, transcription and playback work has reached a boundary where a
-    # replacement session loses nothing.
+    # replacement session loses nothing. An optional `renewal_blockers` tuple of
+    # names says which native obligations hold it false; the call's end-of-call
+    # offer-wait fact reports them.
     renewal_ready: bool
 
     def final_captions(self) -> list[LiveEvent]: ...

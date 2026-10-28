@@ -204,6 +204,7 @@ class _Call:
         self.input_rate = self.output_rate = 0
         self.unproven_resumes = 0  # provider drops since the last completed answer
         self.offer_wait_event = None
+        self.session_ended = asyncio.Event()  # set when the current connection is gone
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -252,6 +253,7 @@ class _Call:
 
     async def consume(self, session):
         self.session = self.last_session = session
+        self.session_ended = asyncio.Event()
         if not self.resume:
             if self.host.model.vision:
                 self.attention.seen.clear()  # pixels are transport state; blind frame facts are already in the fit
@@ -299,14 +301,23 @@ class _Call:
                 child.cancel()
             await joined(asyncio.gather(*children, return_exceptions=True))
             self.session = None
+            self.session_ended.set()
             if not resumed:
                 await joined(self.finalize())
 
     async def send(self, command):
         # A tool may finish after the old socket closes or while setup is in
         # flight. Only the replacement's ready event releases its outputs.
-        await self.connected.wait()
-        await self.session.send(command)
+        while True:
+            await self.connected.wait()
+            session, ended = self.session, self.session_ended
+            try:
+                return await session.send(command)
+            except ConnectionClosed:
+                # The writer saw the closed socket before the native reader, which
+                # owns the outcome: a resume releases this output to the replacement,
+                # a typed close ends the call and cancels this wait. The effect ran once.
+                await ended.wait()
 
     def refit_offers(self):
         """A fresh fit already holds every canonical fact; keep transport-only rows and one pointer to the facts."""

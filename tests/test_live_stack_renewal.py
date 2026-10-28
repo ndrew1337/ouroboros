@@ -123,3 +123,52 @@ def test_nonresumable_provider_drop_is_typed_and_does_not_buy_a_hidden_retry(hos
         assert any('Synthetic greeting heard.' in str(r) for r in run.transcript())
         assert run.journal()
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('resumable', [False, True])
+@pytest.mark.parametrize('thinking', [False, True])
+def test_full_stack_loss_during_a_tool_result_respects_the_native_handle(host_world, monkeypatch, resumable, thinking):
+    """R19-2 through the real stack: the writer that meets the close first does not end a resumable call."""
+    from websockets.exceptions import ConnectionClosedError
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        async with stack(host_world, monkeypatch, 'gemini', thinking=thinking) as live:
+            native = live.call.session
+            send, recv = native.ws.send, native.ws.recv
+            if resumable:
+                live.wire.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'synthetic-tool-handle'}})
+                await live.wait(lambda: live.host.state.get('resume_handle') == 'synthetic-tool-handle')
+            async def close_before_result(raw):
+                if 'toolResponse' in json.loads(raw):
+                    closing = asyncio.run_coroutine_threadsafe(
+                        live.wire.websocket.close(code=1012, reason='synthetic service restart'), loop)
+                    await asyncio.wrap_future(closing)
+                await send(raw)
+            async def read_later(*args, **kwargs):
+                try:
+                    return await recv(*args, **kwargs)
+                except ConnectionClosedError:
+                    await asyncio.sleep(.1)
+                    raise
+            monkeypatch.setattr(native.ws, 'send', close_before_result)
+            monkeypatch.setattr(native.ws, 'recv', read_later)
+            original_receive = native.receive
+            async def delayed_close():
+                events = await original_receive()
+                if any(e.kind == 'closed' for e in events):
+                    await asyncio.sleep(.1)
+                return events
+            monkeypatch.setattr(native, 'receive', delayed_close)
+            live.wire.tool('inflight-result', 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
+            await live.wait(lambda: live.running.done() or (len(live.provider.connections) > 1
+                            and 'inflight-result' in live.provider.connections[1].outputs))
+            assert 'inflight-result' in live.host.executed, 'the completed effect is already durable'
+            if resumable:
+                assert len(live.provider.connections) == 2, (
+                    'tool send bypassed native resumption', live.running.result() if live.running.done() else None)
+            else:
+                assert live.running.done()
+                assert live.running.result()[1]['reason_code'] == 'provider_closed'
+                assert len(live.provider.connections) == 1
+    asyncio.run(scenario())
