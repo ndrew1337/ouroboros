@@ -216,3 +216,62 @@ def test_failed_reopen_keeps_state_for_another_attempt(gemini):
         finally:
             await resumed.close()
     asyncio.run(run())
+
+
+def _resumed_mid_speech(gemini, model):
+    """The first connection holds owner words mid-speech, then hands its state to a replacement (R20)."""
+    from websockets.exceptions import ConnectionClosedError
+    from websockets.frames import Close
+
+    async def build():
+        first, wire = make_session(gemini, model=model)
+        await first.open(); await first.receive()
+        await receive(first, wire, {'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'h'}})
+        await receive(first, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+        await receive(first, wire, {'serverContent': {'inputTranscription': {'text': 'Carried words'}}})
+        assert first.vad_active and 'owner' in first.text and first.input_pending
+        lost = await receive(first, wire, ConnectionClosedError(
+            Close(1012, 'synthetic restart'), Close(1012, 'synthetic restart'), True))
+        assert [e.data['resumable'] for e in lost if e.kind == 'closed'] == [True]
+        await first.close()
+        second, replacement = make_session(gemini, LiveOptions(resume_handle='h'), model=model)
+        await second.open(); await second.receive()
+        return second, replacement
+    return build
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
+def test_a_replacement_that_never_heard_the_vad_start_settles_carried_words(gemini, model):
+    """VAD speech is per connection: carried words never wait forever on a replacement that heard no speech."""
+    async def scenario():
+        second, wire = await _resumed_mid_speech(gemini, model)()
+        try:
+            assert second.text.get('owner') and second.vad_active is False
+            assert not second.renewal_ready and 'session.input_pending' in second.renewal_blockers
+            events = await receive(second, wire, {'serverContent': {'turnComplete': True}})
+            assert [e.data['text'] for e in events if e.kind == 'caption' and e.data['final']] == ['Carried words']
+            assert any(e.kind == 'input_done' for e in events) and second.renewal_ready
+        finally:
+            await second.close()
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
+def test_a_replacement_that_hears_the_speech_continues_the_same_utterance(gemini, model):
+    """When the ongoing utterance reaches the replacement, it stays one caption item with no second input start."""
+    async def scenario():
+        second, wire = await _resumed_mid_speech(gemini, model)()
+        try:
+            item = second.text['owner'][0]
+            started = await receive(second, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+            assert not any(e.kind == 'input_started' for e in started), 'input was already open'
+            assert not any(e.kind == 'caption' and e.data['final'] for e in started), 'carried words were not split'
+            await receive(second, wire, {'serverContent': {'inputTranscription': {'text': ' and the rest'}}})
+            assert second.text['owner'][0] == item
+            await receive(second, wire, {'voiceActivity': {'type': 'ACTIVITY_END'}})
+            events = await receive(second, wire, {'serverContent': {'turnComplete': True}})
+            assert [e.data['text'] for e in events if e.kind == 'caption' and e.data['final']] == ['Carried words and the rest']
+            assert second.renewal_ready
+        finally:
+            await second.close()
+    asyncio.run(scenario())

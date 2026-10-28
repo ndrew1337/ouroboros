@@ -172,3 +172,37 @@ def test_full_stack_loss_during_a_tool_result_respects_the_native_handle(host_wo
                 assert live.running.result()[1]['reason_code'] == 'provider_closed'
                 assert len(live.provider.connections) == 1
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('engine', ['openai', 'grok'])
+def test_openai_grok_tool_result_write_loss_still_ends_typed(host_world, monkeypatch, engine):
+    """The shared writer wait must not hang or untype a loss on an engine without resumption (R20)."""
+    from websockets.exceptions import ConnectionClosedError
+
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        async with stack(host_world, monkeypatch, engine) as live:
+            native = live.call.session
+            send, recv = native.ws.send, native.ws.recv
+            async def close_before_result(raw):
+                event = json.loads(raw)
+                if event.get('type') == 'conversation.item.create' and event['item'].get('type') == 'function_call_output':
+                    closing = asyncio.run_coroutine_threadsafe(
+                        live.wire.websocket.close(code=1012, reason='synthetic service restart'), loop)
+                    await asyncio.wrap_future(closing)
+                await send(raw)
+            async def read_later(*args, **kwargs):
+                try:
+                    return await recv(*args, **kwargs)
+                except ConnectionClosedError:
+                    await asyncio.sleep(.1)  # the writer demonstrably fails first
+                    raise
+            monkeypatch.setattr(native.ws, 'send', close_before_result)
+            monkeypatch.setattr(native.ws, 'recv', read_later)
+            live.wire.tool('inflight-result', 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
+            await live.wait(lambda: live.running.done(), timeout=60)
+            assert 'inflight-result' in live.host.executed, 'the completed effect is already durable'
+            assert live.running.result()[1]['reason_code'] == 'provider_closed'
+            assert live.running.result()[1]['execution_status'] == 'infra_failed'
+            assert len(live.provider.connections) == 1, 'no handle, no reconnection'
+    asyncio.run(scenario())
