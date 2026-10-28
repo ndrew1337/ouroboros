@@ -115,24 +115,18 @@ def test_browser_fields_cannot_mint_a_host_opening(monkeypatch, tmp_path, forged
     assert update["message"]["accepted_source_ref"]["client_message_id"] == frame["client_message_id"]
 
 
-@pytest.mark.parametrize("stored", [False, True])
-def test_memory_capture_keeps_call_open_provenance_and_exact_address(tmp_path, monkeypatch, stored):
+def test_memory_capture_keeps_call_open_provenance_and_exact_address(tmp_path):
     from ouroboros import chat_chain, memory_floor, memory_inventory, memory_view
     from tests import _memory_inventory_shared as shared
 
+    # host_fact joins the projected fields with the ingress that writes it, so no stored fact predates
+    # it; facts stored before a field joined keep their old form (memory_inventory._META_FIELDS).
     shared.world(tmp_path)
     text = "The owner has just opened this call and can hear you now."
     shared.append(tmp_path / 'logs/chat.jsonl',
         shared.msg('2026-10-27T00:00:00Z', text, client_message_id='marked',
                    host_fact={'kind': 'call_open'}, source='web'),
         shared.msg('2026-10-27T00:00:01Z', text, client_message_id='legacy', source='web'))
-    if stored:
-        # The previous version retained a projection without host_fact. A warm
-        # index must be invalidated too, not only rows appended after the update.
-        with monkeypatch.context() as old:
-            old.setattr(memory_inventory, '_META_FIELDS', tuple(
-                key for key in memory_inventory._META_FIELDS if key != 'host_fact'))
-            memory_inventory.fill_tail(tmp_path, lambda: False)
     task = {'id': 'next', 'chat_id': 1, '_is_direct_chat': True}
     snapshot = memory_view.capture_memory_view(tmp_path, task, memory_view.view_spec_for_task(task, tmp_path))
     lane1, lane2 = snapshot.room['lane1'], snapshot.room['lane2']

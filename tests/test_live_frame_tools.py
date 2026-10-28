@@ -41,7 +41,7 @@ def test_first_nano_manifest_includes_frame_and_feature_tools_and_prices_them(ho
         async def inspect(session):
             rows = json.loads(session.selected.messages_json)
             [notice] = [r['content'] for r in rows if r.get('_host_context_kind') == 'tool_manifest']
-            assert f'You have {len(names)} tools loaded:' in notice
+            assert f'Loaded now ({len(names)}):' in notice and 'Not loaded does not mean unavailable.' in notice
             assert all(name in notice for name in names)
             assert 'cover most tasks' not in notice and 'core tools' not in notice
             assert set(names) == {s['function']['name'] for s in json.loads(session.selected.tools_json)}
@@ -57,7 +57,7 @@ def test_first_nano_manifest_includes_frame_and_feature_tools_and_prices_them(ho
             [notice] = [r['content'] for r in rows if r.get('_host_context_kind') == 'tool_manifest']
             sent = json.loads(session.selected.tools_json)
             assert len(sent) == len(names) + 1
-            assert f'You have {len(sent)} tools loaded:' in notice and 'read_file' in notice
+            assert f'Loaded now ({len(sent)}):' in notice and 'read_file' in notice
         async def reopen():
             await host.session(enable, session_options(host))
             await host.session(reloaded, session_options(host))

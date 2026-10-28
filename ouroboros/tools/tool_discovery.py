@@ -334,9 +334,9 @@ def update_resident_notice(registry, resident, messages):
     names = [schema["function"]["name"] for schema in resident]
     remaining = {schema["function"]["name"] for schema in registry.schemas()} - set(names)
     notice = (bound_host_row("tool_manifest", "[SYSTEM NOTICE]\n"
-            f"You have {len(names)} tools loaded: {', '.join(names)}. "
-            f"There are {len(remaining)} additional tools available; "
-            "use `list_available_tools` to see them and `enable_tools` to load their schemas.") if remaining else None)
+            f"Loaded now ({len(names)}): {', '.join(names)}. {len(remaining)} more tools in the catalog are "
+            "equally mine and not loaded yet: `list_available_tools` names them, `enable_tools` loads them. "
+            "Not loaded does not mean unavailable.") if remaining else None)
     updated = []
     for row in messages:
         if row.get('_host_context_kind') == 'tool_manifest':

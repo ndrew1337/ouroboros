@@ -195,7 +195,6 @@ def _tail_source(root: Any, frontier: Mapping[str, Any]) -> Dict[str, Any]:
     from ouroboros.store import file_identity
 
     return {"store": list(file_identity(ds.path(root)) or ()), "frontier": int(frontier["pos"]),
-            "meta_fields": list(_META_FIELDS),  # old stored projections must not lose newly retained provenance
             "text_revision": int(ds.meta(root, "chat_text_revision") or 0)}
 
 

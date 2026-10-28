@@ -434,7 +434,11 @@ def estimate_context_prompt_tokens(
         if isinstance(value, dict):
             if any(custody_private_key(key) for key in value):
                 value = context_custody_proxy(value)
-            if str(value.get("type") or "") in {"image", "image_url"}:
+            # A realtime engine's own wire shapes are images too: OpenAI's ``input_image`` and Gemini's
+            # ``inlineData`` (28.10: four screenshots in a Gemini renewal counted as 309k tokens of base64).
+            media = value.get("inlineData")
+            if (str(value.get("type") or "") in {"image", "image_url", "input_image"}
+                    or (isinstance(media, dict) and str(media.get("mimeType") or "").startswith("image/"))):
                 return {
                     "type": str(value.get("type") or "image"),
                     "image_token_proxy": "#" * IMAGE_BLOCK_CHAR_EQUIVALENT,
