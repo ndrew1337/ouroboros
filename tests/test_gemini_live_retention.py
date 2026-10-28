@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from ouroboros.contracts.live_conversation import LiveOptions
 from ouroboros.contracts.realtime import USAGE_AXES
 from tests.test_gemini_live_boundaries import deny_network  # noqa: F401
@@ -185,3 +187,81 @@ def test_compression_explains_only_a_drop_after_the_trigger(gemini):
                 finally:
                     await session.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('resume', [False, True])
+def test_prompt_peak_survives_resumption_and_is_consumed_once(gemini, resume):
+    async def run():
+        session, wire = make_session(gemini)
+        await session.open()
+        await session.receive()
+        try:
+            await turn(session, wire, {**usage(3000), 'promptTokenCount': 80000})
+            await receive(session, wire, {**audio_content(),
+                'usageMetadata': {**usage(4500), 'promptTokenCount': 93000}})
+            if resume:
+                await receive(session, wire, {'sessionResumptionUpdate': {'newHandle': 'peak', 'resumable': True}})
+                session.resume_requested = True
+                await session.close()
+                session, wire = make_session(gemini, LiveOptions(resume_handle='peak'))
+                await session.open()
+                await session.receive()
+            events = await receive(session, wire, {'serverContent': {'turnComplete': True},
+                'usageMetadata': {**usage(500), 'promptTokenCount': 82000}})
+            assert not any(e.kind == 'renew' for e in events)
+            assert not gemini.HELD_AUDIO_SPANS
+            await turn(session, wire, {**usage(1200), 'promptTokenCount': 83000})
+            events = await turn(session, wire, {**usage(600), 'promptTokenCount': 81000})
+            assert next(e.data['reason'] for e in events if e.kind == 'renew') == 'audio_drop'
+            assert gemini.HELD_AUDIO_SPANS['gemini-3.8-live'] == 1200, 'old crossing cannot excuse this new drop'
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('old_span,new_span', [(300, 3000), (3000, 300)])
+def test_latest_unexplained_drop_replaces_previous_span(gemini, old_span, new_span):
+    gemini.HELD_AUDIO_SPANS['gemini-3.8-live'] = old_span
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            await turn(session, wire, {**usage(new_span), 'promptTokenCount': 80000})
+            await turn(session, wire, {**usage(new_span // 2), 'promptTokenCount': 79000})
+            assert gemini.HELD_AUDIO_SPANS['gemini-3.8-live'] == new_span, 'evidence replaces evidence in either direction'
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize('model', ['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
+def test_compression_trigger_seen_inside_turn_is_not_lost_at_settlement(gemini, model):
+    async def scenario():
+        session, wire = make_session(gemini, model=model)
+        try:
+            await session.open()
+            await session.receive()
+            await turn(session, wire, {**usage(3000, text=77000), 'promptTokenCount': 80000})
+            await receive(session, wire, audio_content())
+            # The native receive path accepts intermediate usage samples. The trigger
+            # was actually observed before the lower post-compression receipt.
+            await receive(session, wire, {**audio_content('Still speaking'),
+                'usageMetadata': {**usage(4500, text=88500), 'promptTokenCount': 93000}})
+            events = await receive(session, wire, {'serverContent': {'turnComplete': True},
+                'usageMetadata': {**usage(500, text=81500), 'promptTokenCount': 82000}})
+        finally:
+            await session.close()
+        fresh, fresh_wire = make_session(gemini, model=model)
+        try:
+            await fresh.open()
+            await fresh.receive()
+            later = await turn(fresh, fresh_wire, {**usage(1500, text=18500), 'promptTokenCount': 20000})
+            assert model not in gemini.HELD_AUDIO_SPANS, (
+                f'observed trigger was overwritten; learned false audio cap {gemini.HELD_AUDIO_SPANS}; '
+                f'next session renewal={[event.data for event in later if event.kind == "renew"]}')
+            assert not any(event.kind == 'renew' and event.data['reason'] == 'audio_drop' for event in events)
+            assert not any(event.kind == 'renew' for event in later)
+        finally:
+            await fresh.close()
+    asyncio.run(scenario())

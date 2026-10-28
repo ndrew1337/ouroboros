@@ -33,7 +33,7 @@ RESUMPTIONS = {}
 RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
                  'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
                  'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final', 'output_caption',
-                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'held_prompt', 'audio_growth', 'input_modalities')
+                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'prompt_peak', 'audio_growth', 'input_modalities')
 INPUT_MODALITIES = frozenset({'text', 'audio', 'image', 'video'})
 
 # Google's prebuilt voices with the one-word style its speech docs give each
@@ -228,7 +228,7 @@ class GeminiSession(JsonSession):
             self.input_modalities.add('image')
         self.renewal_announced = False
         self.held_audio = self.audio_growth = 0
-        self.held_prompt = None
+        self.prompt_peak = None
         self.interrupted = False
         self.turn_busy = False
         self.held_context = []
@@ -317,23 +317,27 @@ class GeminiSession(JsonSession):
 
     def retention_renewal(self, usage):
         """Learn only unexplained audio eviction; the host owns total-window growth."""
-        prompt = self.usage.get('promptTokenCount')
-        trigger = self.events[0]['setup']['contextWindowCompression']['triggerTokens']
-        compression_explains = self.held_prompt is not None and self.held_prompt >= trigger
-        self.held_prompt = prompt if type(prompt) is int and prompt >= 0 else None
         audio = usage.get('audio_input_tokens')
         if audio is None:
             return []
+        prompt = self.usage.get('promptTokenCount')
+        trigger = self.events[0]['setup']['contextWindowCompression']['triggerTokens']
+        peak = self.prompt_peak
+        compression_explains = peak is not None and peak >= trigger
+        # Consume the interval's witness. This receipt is the next interval's starting point;
+        # an older intermediate crossing cannot excuse another later below-trigger drop.
+        self.prompt_peak = prompt if type(prompt) is int and prompt >= 0 else None
         model = self.selected.model.removeprefix('models/')
         span = HELD_AUDIO_SPANS.get(model)
         dropped = self.held_audio > audio
         if dropped and compression_explains:
             self.observe('host', canonical_json({'type': 'call.provider_window', 'reason': 'compression_explains_drop',
-                'trigger_tokens': trigger, 'previous_audio_tokens': self.held_audio, 'audio_tokens': audio}))
+                'trigger_tokens': trigger, 'prompt_peak_tokens': peak,
+                'previous_audio_tokens': self.held_audio, 'audio_tokens': audio}))
             self.held_audio, self.audio_growth = audio, 0
             return []
         if dropped:
-            span = HELD_AUDIO_SPANS[model] = min(span, self.held_audio) if span is not None else self.held_audio
+            span = HELD_AUDIO_SPANS[model] = self.held_audio
         else:
             self.audio_growth = max(self.audio_growth, audio - self.held_audio)
         self.held_audio = audio
@@ -371,6 +375,9 @@ class GeminiSession(JsonSession):
             self.input_boundary = True
         if 'usageMetadata' in event and not replayed_response:
             self.usage.update(event['usageMetadata'])
+            prompt = event['usageMetadata'].get('promptTokenCount')
+            if type(prompt) is int and prompt >= 0:
+                self.prompt_peak = max(self.prompt_peak or 0, prompt)
         new_output = bool(content.get('modelTurn') or calls)
         if new_output or content.get('outputTranscription'):
             if not self.response or (new_output and self.response_complete):
