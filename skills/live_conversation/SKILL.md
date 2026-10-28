@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.12
+version: 0.1.13
 type: extension
 runtime: python3
 entry: plugin.py
@@ -44,3 +44,8 @@ Respond, and renews at a quiet boundary. Its call-local tools remember BCP-47
 recognition languages per owner/Presence binding and end after goodbye playback.
 The engine-neutral Live calls instructions belong to this feature and precede
 the owner's call instructions on every connection.
+
+Fresh renewals prepare the next fitted connection while this one keeps listening.
+At a quiet moment the call switches with new canonical facts intact and no second
+greeting. A transport loss without a native handle continues from a fresh fit;
+provider refusals still end typed, and repeated unanswered drops remain bounded.

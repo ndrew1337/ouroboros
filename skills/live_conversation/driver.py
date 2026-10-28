@@ -3,7 +3,7 @@
 Audio remains realtime speech-to-speech. Tools run on the ordinary serialized
 host lane beside media; their completion, provider close and row writes all join
 before this consumer returns. A provider-requested renewal asks the host to fit
-the whole transcript again; transport loss never silently starts a paid retry.
+the whole transcript again; transport loss continues through that same fitted history.
 """
 from __future__ import annotations
 
@@ -192,6 +192,7 @@ class _Call:
         self.played, self.audio_ms, self.pending_spoken = {}, {}, {}
         self.interrupted, self.started_responses, self.active_responses = set(), set(), set()
         self.receipts = {}
+        self.tool_responses = set()
         self.response_open = self.tools_running = self.input_open = False
         self.meeting_audio = False
         self.playing_item = ""
@@ -205,6 +206,7 @@ class _Call:
         self.unproven_resumes = 0  # provider drops since the last completed answer
         self.offer_wait_event = None
         self.session_ended = asyncio.Event()  # set when the current connection is gone
+        self.preparing = None
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -215,6 +217,7 @@ class _Call:
                 await task
         finally:
             self.consume_revisit()
+            await self.close_preparation()
             self.timing("offer_idle")  # teardown is no longer waiting for a turn
             # A resume never cancels tools. Actual call teardown owns and joins
             # them; the host also joins any already-dispatched side effects.
@@ -242,17 +245,39 @@ class _Call:
                 # The retired native tool obligation cannot hold this new
                 # interaction open. Unreceipted reservations remain host-owned.
                 self.active_responses.clear()
+                self.tool_responses.clear()
                 self.response_open = self.input_open = False
             if not handle:
                 self.host.state.pop("refit", None)
                 self.host.state.pop("resume_handle", None)
-            result = await self.host.session(self.consume, session_options(self.host, handle))
+            if handle:
+                await self.close_preparation()  # native resumption stays sequential
+            prepared, self.preparing = self.preparing, None
+            lease = None
+            if prepared is not None:
+                try:
+                    lease = await prepared
+                except Exception:
+                    pass  # one preparation attempt; retry through the ordinary sequential path
+            if lease is not None:
+                try:
+                    result = await lease.run(self.consume)
+                    if result or self.preparing is None or not self.preparation_ready():
+                        await lease.close()  # native resumption/sequential replacement drains the old socket first
+                except RealtimeSetupError as exc:
+                    await lease.close()
+                    if exc.code != 'prepared_stale':
+                        raise
+                    result = await self.host.session(self.consume, session_options(self.host, handle))
+            else:
+                result = await self.host.session(self.consume, session_options(self.host, handle))
             if result is None:
                 return
             handle = result
 
     async def consume(self, session):
         self.session = self.last_session = session
+        self.connection_resumed = self.resume
         self.session_ended = asyncio.Event()
         if not self.resume:
             if self.host.model.vision:
@@ -266,7 +291,7 @@ class _Call:
         peers = asyncio.create_task(self.peers())
         provider = asyncio.create_task(self.provider())
         children = [provider, peers, asyncio.create_task(self.mailbox())]
-        children.append(asyncio.create_task(self.tool_refit.wait()))
+        children.append(asyncio.create_task(self.refit_boundary()))
         try:
             done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
             for child in done:
@@ -277,7 +302,7 @@ class _Call:
                         raise
                     # A microphone/context write can see the closed socket first.
                     # The native reader still owns the receipts and resumption
-                    # authority. No failed write is replayed or paid retry invented.
+                    # authority. Only native resumption retransmits a completed output; a fresh fit already holds its canonical row.
                     await provider
                     if not self.provider_closed:
                         raise
@@ -308,9 +333,21 @@ class _Call:
     async def send(self, command):
         # A tool may finish after the old socket closes or while setup is in
         # flight. Only the replacement's ready event releases its outputs.
+        failed = False
         while True:
             await self.connected.wait()
             session, ended = self.session, self.session_ended
+            if failed and not self.connection_resumed and isinstance(command, (ToolOutputs, ContextUpdate)):
+                # These effects/mail were canonical before the failed write.
+                # The fresh fit already holds them; only their answer is owed.
+                ordinary = not isinstance(command, ToolOutputs) or any(
+                    row.get('tool_call_id') not in command.silent for row in command.messages if row.get('role') == 'tool')
+                self.response_open = False
+                if ordinary:
+                    self.pending_offers.append({'role': 'user', 'content':
+                        '[Host fact; not owner words] The new facts and completed work are in the fitted history. '
+                        'You may answer, act or stay silent.'})
+                return
             try:
                 return await session.send(command)
             except ConnectionClosed:
@@ -318,6 +355,7 @@ class _Call:
                 # owns the outcome: a resume releases this output to the replacement,
                 # a typed close ends the call and cancels this wait. The effect ran once.
                 await ended.wait()
+                failed = True
 
     def refit_offers(self):
         """A fresh fit already holds every canonical fact; keep transport-only rows and one pointer to the facts."""
@@ -345,7 +383,7 @@ class _Call:
                     "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."})
             self.request_renewal()
         else:
-            await self.session.send(ContextUpdate(tuple(rows)))
+            await self.send(ContextUpdate(tuple(rows)))
 
     def timing(self, phase):
         record = getattr(self.host, "timing_event", None)
@@ -360,9 +398,33 @@ class _Call:
         self.renewing = True
         if not resuming:
             self.host.state["refit"] = True
+            prepare = getattr(self.host, 'prepare_session', None)
+            if prepare is not None and self.preparing is None:
+                self.preparing = asyncio.create_task(prepare(session_options(self.host, '')))
         if within is not None:
             deadline = time.monotonic() + float(within)
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
+
+    def preparation_ready(self):
+        return self.preparing is None or self.preparing.done()
+
+    async def close_preparation(self):
+        task, self.preparing = self.preparing, None
+        if task is None:
+            return
+        if not task.done():
+            task.cancel()
+        result = await joined(asyncio.gather(task, return_exceptions=True))
+        if not isinstance(result[0], BaseException) and result[0] is not None:
+            await result[0].close()
+
+    async def refit_boundary(self):
+        await self.tool_refit.wait()
+        # The old native tool obligation is deliberately withheld: it cannot be
+        # the quiet predicate. Actual speech, playback and running effects still are.
+        while not (self.preparation_ready() and not self.input_open and not (self.active_responses - self.tool_responses)
+                   and not self.tools_running and self.tool_queue.empty() and not self.pending_spoken and not self.unheard()):
+            await asyncio.sleep(.01)
 
     def audio_duration(self, item):
         return int(self.audio_ms.get(item, 0))
@@ -475,7 +537,6 @@ class _Call:
                                 "You may continue from them, act or stay silent; completed effects stay done."})
                         self.request_renewal()
                         self.tool_refit.set()
-                        self.connected.clear()
                     # A deliberate goodbye needs only playback, no further
                     # native result or connection that could cut it short.
                 else:
@@ -506,7 +567,17 @@ class _Call:
     async def provider(self):
         while True:
             refusal = None
-            for event in await self.session.receive():
+            try:
+                events = await self.session.receive()
+            except (OSError, ConnectionClosed) as exc:
+                from ouroboros.realtime_session import transport_loss
+                if not transport_loss(exc):
+                    received = getattr(exc, 'rcvd', None)
+                    detail = f'{received.code} {received.reason}'.strip() if received else 'provider ended the live connection'
+                    raise RealtimeSetupError('provider_closed', detail) from exc
+                self.lost_connection(resuming=False)
+                return
+            for event in events:
                 data = event.data
                 if refusal is not None and not (event.kind == "response_done"
                         or (event.kind == "caption" and data.get("final"))):
@@ -567,7 +638,8 @@ class _Call:
                     self.hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
                     response = data["response_id"]
-                    self.unproven_resumes = 0
+                    if data['status'] == 'completed':
+                        self.unproven_resumes = 0
                     receipt = {key: data[key] for key in ("usage", "raw_usage", "status")}
                     if self.receipts.get(response) != receipt:
                         self.host.response_done(response, **receipt)
@@ -576,6 +648,7 @@ class _Call:
                     self.response_open = bool(self.active_responses) or bool(data.get("continues"))
                     self.hub.send_turn(cp.TURN_AWAITING if self.response_open or self.tools_running else cp.TURN_IDLE)
                 elif event.kind == "tool_call":
+                    self.tool_responses.update(self.active_responses)
                     await self.tool_queue.put({"id": data["call_id"], "type": "function", "function": {
                         "name": data["name"], "arguments": data["arguments"]}})
                 elif event.kind == "renew":
@@ -583,25 +656,29 @@ class _Call:
                 elif event.kind == "resumable":
                     self.host.state["resume_handle"] = data["handle"]
                 elif event.kind == "closed":
-                    if not data.get("resumable") or not self.host.state.get("resume_handle"):
+                    resuming = bool(data.get('resumable') and self.host.state.get('resume_handle'))
+                    if not resuming and not data.get('transport_loss'):
                         # The engine's own close words (code and sentence) are the owner's reason (R15-4).
                         raise RealtimeSetupError("provider_closed", data.get("detail") or "provider ended the live connection")
-                    self.unproven_resumes += 1
-                    if self.unproven_resumes > UNPROVEN_RESUMES:
-                        raise RealtimeSetupError("reconnect_failed",
-                                                 "the voice connection kept dropping before it answered again")
-                    self.provider_closed = True
-                    self.connected.clear()
-                    # The dead input transport cannot reach another VAD boundary.
-                    # Response, tool and playback obligations survive the resume.
-                    self.input_open = False
-                    if not self.renewing:
-                        self.timing("requested")
-                    self.renewing = self.resume = True
-                    self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
+                    self.lost_connection(resuming=resuming)
                     return
             if refusal is not None:
                 raise refusal
+
+    def lost_connection(self, *, resuming):
+        self.unproven_resumes += 1
+        if self.unproven_resumes > UNPROVEN_RESUMES:
+            raise RealtimeSetupError('reconnect_failed', 'the voice connection kept dropping before it answered again')
+        self.provider_closed = True
+        self.connected.clear()
+        self.input_open = False  # the dead transport cannot deliver another VAD boundary
+        if not self.renewing:
+            self.timing('requested')
+        self.renewing, self.resume = True, resuming
+        if not resuming:
+            self.active_responses.clear()
+            self.response_open = False
+        self.hub.send_state(cp.STATE_RECONNECTING, 'provider_renewal')
 
     async def peers(self):
         # The host's independent control watcher owns Stop/Panic/budget reads.
@@ -635,7 +712,7 @@ class _Call:
                 if self.host.renewal_due() or self.host.state.get("refit"):
                     self.request_renewal()
                 if self.renewing:
-                    if self.quiet():
+                    if self.quiet() and (self.resume or self.preparation_ready()):
                         self.timing("quiet")
                         if self.resume and not self.host.state.get("resume_handle"):
                             raise RealtimeSetupError("resume_unavailable", "provider has not supplied a resume handle")
@@ -753,8 +830,7 @@ class _Call:
 
     async def mailbox(self):
         while True:
-            if not self.renewing:
-                mail = await self.host.mailbox()
-                if mail:
-                    await self.context_update(mail)
+            mail = await self.host.mailbox()
+            if mail:
+                await self.context_update(mail)
             await asyncio.sleep(.25)

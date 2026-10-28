@@ -47,6 +47,22 @@ async def joined(awaitable):
 _HANDSHAKE_REFUSALS = {401: "authentication", 403: "authentication", 429: "rate_limit"}
 
 
+def transport_loss(error):
+    """Wire termination, not a provider refusal. RFC 6455 / IANA close codes.
+
+    No received close frame means the network/heartbeat failed. 1011 alone is
+    ambiguous (Google also uses it for depleted credit), so only its exact
+    neutral internal-error/expiry sentences qualify; never match keywords in
+    arbitrary provider text. Error events and failed responses stay typed.
+    """
+    received = getattr(error, "rcvd", None)
+    if received is None:
+        return True
+    return received.code in {1000, 1001, 1005, 1006, 1012, 1013, 1014} or (
+        received.code == 1011 and received.reason in {
+            "", "Internal error encountered.", "Internal error encountered", "Deadline expired"})
+
+
 class JsonSession:
     # Providers may hold native transcription/boundary work after generation
     # stops. The feature waits for that work before replacing a connection.

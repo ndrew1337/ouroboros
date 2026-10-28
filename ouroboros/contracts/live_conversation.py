@@ -141,6 +141,8 @@ class ToolOutputs:
 @dataclass(frozen=True)
 class ContextUpdate:
     messages: tuple[dict, ...]
+    # Catch-up history may be delivered without offering a new turn. Old callers still answer.
+    respond: bool = True
 
 
 @dataclass(frozen=True)
@@ -243,6 +245,16 @@ class LiveHost(Protocol):
 
     async def mailbox(self) -> list[dict]:
         """Rows that reached this room since the last read, already in history."""
+
+    async def prepare_session(self, options: LiveOptions) -> Any:
+        """Optionally open a silent fitted successor while this connection serves.
+
+        Return None for older hosts, or a lease with async run(consume)/close()
+        and caught_up=False until adoption delivers new canonical rows. run owns
+        adoption and releases the consumer result before retired close accounting;
+        the host joins that cleanup at call end. No media goes to it before run.
+        """
+        return None
 
     async def tool_batch(self, calls: Sequence[dict]) -> list[dict]:
         """Run ordinary and call tools on the serialized lane; return the history changes."""

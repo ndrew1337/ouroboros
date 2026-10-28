@@ -394,6 +394,10 @@ class ConversationHost:
         self.wire_path = task_artifact_dir_path(ctx.drive_root, ctx.task_id, create=True) / "conversation-wire.jsonl"
         self.wire = WireJournal(self.wire_path)
         self.connection_number = 0
+        self._connection_sequence = 0
+        self._connection_tasks = []
+        self._connection_view = None
+        self._prepared_successor = None
         self._tools_lock = asyncio.Lock()
         self._rows_lock = asyncio.Lock()
         self.incoming = self.event_queue = None
@@ -558,93 +562,30 @@ class ConversationHost:
         self.quote = warm_quote(engine=self.turn.route.accounting_provider, model=self.turn.model,
                                 drive_root=self.ctx.drive_root)
 
+    async def prepare_session(self, options: LiveOptions):
+        """Open a silent successor from a private ordinary fit; adoption stays explicit."""
+        from ouroboros.live_connections import PreparedConnection
+        lease = PreparedConnection(self, options, ahead=True)
+        try:
+            await asyncio.shield(lease.ready)
+            self._prepared_successor = lease
+            return lease
+        except BaseException:
+            await lease.close()
+            raise
+
     async def session(self, consume, options: LiveOptions):
-        """Refit and seal one physical connection; response starts own the money."""
-        from ouroboros.extension_registry_state import extension_work_scope
-        from ouroboros.loop_model_call import _presend_context_fit
-        from ouroboros.observability import persist_physical_candidate
-        from ouroboros.realtime_credentials import capture_session_credentials
-        from ouroboros.realtime_setup import session_candidate
-        from ouroboros.response_limits import positive_limit, resolve_response_limit
-        from ouroboros.usage_accounting import PhysicalAttemptPreconditionFailed
-
-        await self.check()
+        from ouroboros.live_connections import PreparedConnection
         self.hub.pause_input()
-        provider = loaded_provider(self.turn.provider)
-        if provider["extension_generation"] != self.turn._generation:
-            raise RealtimeSetupError("provider_changed", "selected loaded generation changed; start a new call")
-        route = dict(provider=self.turn.route.accounting_provider, model=self.turn.model,
-                     base_url=self.turn.route.endpoint)
-        limit = resolve_response_limit(self.ctx.drive_root, **route, allow_fetch=False)
-        bound = (positive_limit(limit.max_output_tokens) or None) if not limit.stale else None
-        options = replace(options, model_output_bound_tokens=bound)
-        work = _LoopWork()
-        work.task = asyncio.current_task()
-        credentials = capture_session_credentials(self.turn, provider)
-
-        async def prepare(*, rebound=False):
-            with credentials.activate():
-                session, request, evidence = session_candidate(
-                    self, provider["session"], options, observation_fp=credentials.scope)
-            self.timing_event("fit_done")
-            connection["context_ready_at"] = time.time()
-            self.timing.setdefault("context_ready_at", connection["context_ready_at"])
-            self._physical_context = request.physical_context
-            self._held_input = self._growth = 0
-            self._history_at_receipt = self._history_estimate()
-            self._meter_watermark = 0.0
-            receipt = await asyncio.to_thread(persist_physical_candidate, self.ctx.drive_root,
-                task_id=self.ctx.task_id, attempt_id=f"call-{self.turn.spec.call_id}-{self.connection_number}" + ("-rebound" if rebound else ""),
-                candidate=session.wire, candidate_facts=evidence)
-            self.observe("host", canonical_json({"type": "call.prepared", **evidence,
-                                                 "manifest_ref": receipt["manifest_ref"]}))
-            self._view_session_factory, self._view_session_options = provider['session'], options
-            self._prepared_view = evidence, receipt['manifest_ref']
-            return session, request
-
-        with extension_work_scope(provider, work):
-            async with self._tools_lock:
-                self.connection_number += 1
-                connection = {"number": self.connection_number}
-                self.timing["connections"].append(connection)
-                session, request = await prepare()
-            try:
-                with _presend_context_fit() as admit:
-                    if not admit(request):
-                        raise PhysicalAttemptPreconditionFailed("context_capacity")
-                    await self.check()
-                    latest = capture_session_credentials(self.turn, provider)
-                    if latest.scope != credentials.scope:
-                        # Controls/persistence can yield to a Settings edit. Refit
-                        # this account, then pin the same capture through open.
-                        await joined(session.close())
-                        credentials = latest
-                        async with self._tools_lock:
-                            session, request = await prepare(rebound=True)
-                        if not admit(request):
-                            raise PhysicalAttemptPreconditionFailed("context_capacity")
-                        await self.check()
-                    self._connection_quote = copy.deepcopy(self.quote)
-                    self._connection_accounting = True
-                    with credentials.activate():
-                        await session.open()
-                    from ouroboros.live_context_view import record_session_view
-                    record_session_view(self, *self._prepared_view)
-                    connection["open_at"] = time.time()
-                    self.timing.setdefault("session_open_at", connection["open_at"])
-                    return await consume(session)
-            finally:
-                try:
-                    await joined(session.close())
-                finally:
-                    # close() may synchronously publish its final usage sample,
-                    # even after cancellation or exhausted admission. Consume it
-                    # before ending this connection's accounting lifetime.
-                    self._connection_accounting = False
-                    self._connection_quote = None
-                    if self._caption_dirty:
-                        await joined(asyncio.to_thread(self.checkpoint, "ready"))
-                        self._caption_dirty = False
+        lease = PreparedConnection(self, options)
+        try:
+            result = await lease.run(consume)
+            if result or self._prepared_successor is None:
+                await joined(lease.task)
+            return result
+        except BaseException:
+            await lease.close()
+            raise
 
     def _response_args(self, response_id):
         return dict(engine=self.turn.route.accounting_provider, model=self.turn.model,
@@ -654,6 +595,9 @@ class ConversationHost:
                     physical_context=self._physical_context)
 
     def response_started(self, response_id):
+        from ouroboros.live_connections import connection_for
+        if (view := connection_for(self)) is not None:
+            return view.response_started(response_id)
         from ouroboros.live_usage import reserve_live_response, record_refused_live_response
         from ouroboros.usage_accounting import BudgetExceeded
         key = response_id
@@ -672,6 +616,15 @@ class ConversationHost:
             raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
 
     def response_done(self, response_id, *, usage, raw_usage, status):
+        from ouroboros.live_connections import connection_for, publish
+        if (view := connection_for(self)) is not None:
+            view.response_done(response_id, usage=usage, raw_usage=raw_usage, status=status)
+            if view is self._connection_view:
+                publish(self, view)
+            if self._caption_dirty:
+                self.checkpoint("ready")
+                self._caption_dirty = False
+            return
         from ouroboros.live_usage import settle_live_response, record_refused_live_response
         key = response_id
         counts = self._connection_growth(usage)
@@ -734,7 +687,8 @@ class ConversationHost:
 
     def _history_estimate(self):
         from ouroboros.context_fit import estimate_context_prompt_tokens
-        version = self._history_version
+        owner = getattr(self, "_connection_owner", self)
+        version = owner._history_version if self.messages is owner.messages else self._history_version
         if self._history_cached_version != version:
             extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
             self._history_tokens = estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
@@ -971,6 +925,12 @@ class ConversationHost:
         """End call-lifetime custody, after sessions and owned work have drained."""
         from ouroboros.live_usage import abandon_live_response
 
+        for task in self._connection_tasks:
+            if not task.done():
+                task.cancel()
+        pending_connections = [task for task in self._connection_tasks if not task.done()]
+        if pending_connections:
+            await joined(asyncio.gather(*pending_connections, return_exceptions=True))
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:

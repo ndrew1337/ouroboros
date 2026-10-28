@@ -290,7 +290,7 @@ class GrokSession(JsonSession):
                     await self.write({'type': 'session.update', 'session': self.session_update})
                 for message in command.messages:
                     if message.get('role') == 'system':
-                        self.want_response = True
+                        self.want_response |= not isinstance(command, ContextUpdate) or command.respond
                         continue
                     for item in item_rows(message):
                         self.number += 1
@@ -299,7 +299,7 @@ class GrokSession(JsonSession):
                         if item['type'] == 'function_call_output':
                             self.waiting_tools.discard(item['call_id'])
                         await self.write({'type': 'conversation.item.create', 'item': item})
-                        self.want_response |= (item['type'] != 'function_call_output' or
+                        self.want_response |= (not isinstance(command, ContextUpdate) or command.respond) and (item['type'] != 'function_call_output' or
                             not isinstance(command, ToolOutputs) or item['call_id'] not in command.silent)
             if (self.want_response and not self.context_queue and not self.outstanding
                     and self.session_update is None and not self.speech_active and not self.waiting_tools):

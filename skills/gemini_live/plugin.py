@@ -16,7 +16,7 @@ from websockets.exceptions import ConnectionClosed
 from ouroboros.contracts.live_conversation import Audio, ContextUpdate, Interrupt, LiveEvent, Respond, ToolOutputs, Video
 from ouroboros.contracts.realtime import (CatalogModel, CatalogVoice, ProviderCatalog, RealtimeRoute, RealtimeSetupError,
                                           RouteFacts, USAGE_AXES, canonical_json)
-from ouroboros.realtime_session import JsonSession
+from ouroboros.realtime_session import JsonSession, transport_loss
 
 ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent'
 ROUTE = RealtimeRoute('gemini_live', ENDPOINT, 'google::')
@@ -305,7 +305,8 @@ class GeminiSession(JsonSession):
         try:
             event = reading.result()
         except (OSError, ConnectionClosed) as exc:
-            self.resume_requested = bool(self.resume_handle)
+            lost = transport_loss(exc)
+            self.resume_requested = lost and bool(self.resume_handle)
             rcvd = getattr(exc, 'rcvd', None)  # Google's close code and sentence (billing, policy) for the owner
             detail = ' '.join(part for part in (str(rcvd.code) if rcvd else '', (rcvd.reason or '') if rcvd else '') if part)
             result = []
@@ -315,6 +316,7 @@ class GeminiSession(JsonSession):
                     'status': 'incomplete', 'continues': False}))
                 self.response_complete = True
             return [*result, LiveEvent('closed', {'reason': 'transport_lost', 'resumable': self.resume_requested,
+                                                  'transport_loss': lost,
                                                   **({'detail': detail} if detail else {})})]
         return await self.convert(event)
 
@@ -607,7 +609,8 @@ class GeminiSession(JsonSession):
             if self.turn_busy:
                 self.held_context.append(command)
             else:
-                self.turn_busy = True
+                respond = not isinstance(command, ContextUpdate) or command.respond
+                self.turn_busy = respond
                 images = []
                 if isinstance(command, Respond):
                     text = '[Host fact; not owner words]\n' + command.fact
@@ -632,7 +635,7 @@ class GeminiSession(JsonSession):
                     if images:
                         self.input_modalities.add('image')
                 await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{'text': text}, *images]}],
-                    'turnComplete': True}})
+                    'turnComplete': respond}})
         else:
             raise RealtimeSetupError('command', 'unsupported Gemini live command')
 

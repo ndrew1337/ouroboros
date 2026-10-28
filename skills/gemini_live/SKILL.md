@@ -1,7 +1,7 @@
 ---
 name: gemini_live
 description: Gemini native Live audio and image provider for Live Conversation.
-version: 0.1.8
+version: 0.1.9
 type: extension
 runtime: python3
 entry: plugin.py
@@ -25,7 +25,8 @@ window minus the working reserve is its target. The host also owns usage-driven
 total-window renewals; both use the same quiet boundary. Idle time alone does
 not renew. GoAway asks for server-side resumption.
 Session resumption is enabled; handle updates reach the feature, and transport
-loss is marked resumable only while a valid handle exists. A replacement using
+loss is marked resumable only while a valid handle exists; otherwise the shared
+feature can continue through a fresh fitted session. Provider refusals remain terminal. A replacement using
 that handle restores in-process caption, tool, held-context and usage state.
 Completed response ids, timestamped transcripts and function-call ids prevent
 identified replays from being counted twice; identical words without native

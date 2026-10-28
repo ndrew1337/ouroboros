@@ -18,17 +18,19 @@ def record_timing(host, event, *, at=None):
     if event == "requested":
         host._renewal_number = getattr(host, "_renewal_number", 0) + 1
         host._renewal_timing = {"renewal": host._renewal_number, "requested_at": stamp,
-            "quiet_at": None, "fit_done_at": None, "provider_ready_at": None, "first_audio_at": None}
+            "quiet_at": None, "fit_done_at": None, "provider_ready_at": None, "first_audio_at": None,
+            "prepared_ready_at": None, "switched_at": None}
         return
     if event == "closed" or current is None:
         return
     field = {"quiet": "quiet_at", "fit_done": "fit_done_at", "ready": "provider_ready_at",
-             "first_audio": "first_audio_at"}.get(event)
+             "prepared_ready": "prepared_ready_at", "switched": "switched_at", "first_audio": "first_audio_at"}.get(event)
     if field is None:
         return
     # A requested renewal may still hear the retiring connection before replacement fit/ready.
     if ((event == "ready" and current["fit_done_at"] is None)
-            or (event == "first_audio" and current["provider_ready_at"] is None)):
+            or (event == "first_audio" and (current["provider_ready_at"] is None
+                or current.get('prepared_ready_at') is not None and current.get('switched_at') is None))):
         return
     # An account rebind can fit twice before open: the last completed fit is the sent one.
     if current[field] is None or event == "fit_done":

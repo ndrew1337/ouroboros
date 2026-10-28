@@ -7,7 +7,6 @@ from websockets.exceptions import ConnectionClosedError
 from websockets.frames import Close
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.realtime import RealtimeSetupError
 from skills.live_conversation.driver import run
 from tests.test_gemini_live_boundaries import gemini as gemini, make_session
 from tests.test_live_conversation_driver import Host, until
@@ -52,9 +51,8 @@ def test_failed_audio_write_defers_to_the_native_readers_resumption_outcome(gemi
                 assert len(host.sessions) == 2
                 assert host.sessions[1].options.resume_handle == 'synthetic-resume'
             else:
-                with pytest.raises(RealtimeSetupError, match='provider_closed'):
-                    await asyncio.wait_for(running, 2)
-                assert len(host.sessions) == 1, 'missing authority still forbids resumption'
+                await until(lambda: len(host.sessions) == 2)
+                assert not host.sessions[1].options.resume_handle, 'no handle means a fresh fit, never native resumption'
         finally:
             host.hub.ended_by_owner = True
             if not running.done(): await asyncio.wait_for(running, 2)
@@ -112,9 +110,8 @@ def test_failed_tool_result_write_defers_to_native_resumption(gemini, resumable)
                 [delivered] = [e for e in wires[1].sent if 'toolResponse' in e]
                 assert [r['id'] for r in delivered['toolResponse']['functionResponses']] == ['c']
             else:
-                with pytest.raises(RealtimeSetupError, match='provider_closed'):
-                    await asyncio.wait_for(running, 2)
-                assert len(host.sessions) == 1, 'missing authority still forbids resumption'
+                await until(lambda: len(host.sessions) == 2)
+                assert not host.sessions[1].options.resume_handle, 'no handle means a fresh fit, never native resumption'
         finally:
             host.hub.ended_by_owner = True
             if not running.done(): await asyncio.wait_for(running, 2)

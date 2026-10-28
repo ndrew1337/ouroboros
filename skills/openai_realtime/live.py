@@ -227,7 +227,7 @@ class OpenAISession(JsonSession):
                     if item["type"] == "function_call_output":
                         self.waiting_tools.discard(item["call_id"])
                     await self.create_host_item(item, source=source)
-                self.want_response |= any(item["type"] != "function_call_output" or
+                self.want_response |= (not isinstance(command, ContextUpdate) or command.respond) and any(item["type"] != "function_call_output" or
                     not isinstance(command, ToolOutputs) or item["call_id"] not in command.silent for item, _ in outgoing)
             if (self.want_response and not self.context_queue and not self.outstanding
                     and self.tool_update is None and not self.speech_active and not self.waiting_tools):

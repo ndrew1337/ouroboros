@@ -53,7 +53,7 @@ def test_transport_loss_reports_resumability_and_keeps_unsettled_usage(gemini):
                     {"modality": "AUDIO", "tokenCount": 12}]}})
                 events = await receive(session, wire, ConnectionError("socket went away"))
                 assert next(e.data for e in events if e.kind == "closed") == {
-                    "reason": "transport_lost", "resumable": valid}
+                    "reason": "transport_lost", "resumable": valid, "transport_loss": True}
                 if valid:
                     assert not any(e.kind == "response_done" for e in events)  # One response spans the reconnect.
                     assert session.usage["responseTokensDetails"][0]["tokenCount"] == 12

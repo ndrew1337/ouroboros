@@ -100,6 +100,7 @@ def test_full_stack_gemini_retention_or_resume_preserves_conversation(host_world
                 await run.wait(lambda: len(run.provider.connections) > before)
                 await run.quiet()
                 assert run.wire.sent[0]['setup']['sessionResumption'] == {'handle': 'synthetic-resume-handle'}
+                assert not run.host.timing['connections'][-1]['prepared_ahead'], 'native resumption stays sequential'
                 assert len([text for wire in run.provider.connections for text in wire.spoken
                             if text == 'Synthetic greeting heard.']) == 1
             run.provider.script.append(('say', 'Synthetic continued conversation.'))
@@ -111,16 +112,23 @@ def test_full_stack_gemini_retention_or_resume_preserves_conversation(host_world
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('engine', ['openai', 'grok'])
-def test_nonresumable_provider_drop_is_typed_and_does_not_buy_a_hidden_retry(host_world, monkeypatch, engine):
+@pytest.mark.parametrize('engine', ['openai', 'grok', 'gemini'])
+def test_nonresumable_transport_drop_continues_from_fitted_history(host_world, monkeypatch, engine):
     async def scenario():
         async with stack(host_world, monkeypatch, engine) as run:
+            run.provider.script.append(('say', 'Answer before network loss.'))
+            await run.owner_says('Owner words before network loss.')
+            await run.quiet()
             await run.wire.websocket.close(code=1012, reason='synthetic service restart')
-            await asyncio.wait_for(asyncio.shield(run.running), 10)
-        assert run.result[1]['reason_code'] == 'provider_closed'
-        assert run.result[1]['execution_status'] == 'infra_failed'
-        assert len(run.provider.connections) == 1
-        assert any('Synthetic greeting heard.' in str(r) for r in run.transcript())
+            await run.wait(lambda: len(run.provider.connections) == 2 and run.host.connection_number == 2)
+            await run.quiet()
+            assert any('Owner words before network loss.' in str(v) for v in run.wire.sent)
+            run.provider.script.append(('say', 'Answer after network loss.'))
+            await run.owner_says('Owner words after network loss.')
+            await run.quiet()
+            assert sum(s == 'Synthetic greeting heard.' for w in run.provider.connections for s in w.spoken) == 1
+        assert run.result[1]['execution_status'] == 'ok', run.result
+        assert sum('Owner words before network loss.' in str(r) for r in run.transcript()) == 1
         assert run.journal()
     asyncio.run(scenario())
 
@@ -161,22 +169,23 @@ def test_full_stack_loss_during_a_tool_result_respects_the_native_handle(host_wo
                 return events
             monkeypatch.setattr(native, 'receive', delayed_close)
             live.wire.tool('inflight-result', 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
-            await live.wait(lambda: live.running.done() or (len(live.provider.connections) > 1
-                            and 'inflight-result' in live.provider.connections[1].outputs))
+            await live.wait(lambda: len(live.provider.connections) == 2 and live.host.connection_number == 2)
+            await live.quiet()
             assert 'inflight-result' in live.host.executed, 'the completed effect is already durable'
             if resumable:
                 assert len(live.provider.connections) == 2, (
                     'tool send bypassed native resumption', live.running.result() if live.running.done() else None)
+                assert 'inflight-result' in live.wire.outputs
             else:
-                assert live.running.done()
-                assert live.running.result()[1]['reason_code'] == 'provider_closed'
-                assert len(live.provider.connections) == 1
+                assert any('inflight-result' in str(v) for v in live.wire.sent), 'fresh fit carries the committed result'
+                assert not live.wire.outputs, 'a fresh session must not receive an orphan native tool result'
+            assert sum(c.get('call_id') == 'inflight-result' for c in live.host.trace['tool_calls']) == 1
     asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('engine', ['openai', 'grok'])
-def test_openai_grok_tool_result_write_loss_still_ends_typed(host_world, monkeypatch, engine):
-    """The shared writer wait must not hang or untype a loss on an engine without resumption (R20)."""
+def test_openai_grok_tool_result_write_loss_continues_without_repeating_effect(host_world, monkeypatch, engine):
+    """A committed result travels in the fresh fit when its native write loses the connection."""
     from websockets.exceptions import ConnectionClosedError
 
     async def scenario():
@@ -200,9 +209,66 @@ def test_openai_grok_tool_result_write_loss_still_ends_typed(host_world, monkeyp
             monkeypatch.setattr(native.ws, 'send', close_before_result)
             monkeypatch.setattr(native.ws, 'recv', read_later)
             live.wire.tool('inflight-result', 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
-            await live.wait(lambda: live.running.done(), timeout=60)
-            assert 'inflight-result' in live.host.executed, 'the completed effect is already durable'
-            assert live.running.result()[1]['reason_code'] == 'provider_closed'
-            assert live.running.result()[1]['execution_status'] == 'infra_failed'
-            assert len(live.provider.connections) == 1, 'no handle, no reconnection'
+            await live.wait(lambda: len(live.provider.connections) == 2 and live.host.connection_number == 2)
+            await live.quiet()
+            assert 'inflight-result' in live.host.executed
+            assert any('inflight-result' in str(v) for v in live.wire.sent)
+            items = [v['item'] for v in live.wire.sent if v.get('type') == 'conversation.item.create']
+            if engine == 'openai':
+                pair = [v['type'] for v in items if v.get('call_id') == 'inflight-result']
+                assert pair == ['function_call', 'function_call_output'], 'exactly one atomic fitted pair'
+            else:
+                assert not live.wire.outputs, 'Grok puts canonical history in its instructions'
+            assert sum(c.get('call_id') == 'inflight-result' for c in live.host.trace['tool_calls']) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('engine', ['openai', 'grok', 'gemini'])
+@pytest.mark.parametrize('failure', ['event', 'close'])
+def test_provider_refusal_stays_terminal_without_reconnection(host_world, monkeypatch, engine, failure):
+    async def scenario():
+        async with stack(host_world, monkeypatch, engine) as run:
+            if failure == 'event':
+                run.wire.put({'type': 'error', 'error': {'code': 'invalid_request', 'message': 'Synthetic refusal'}})
+            else:
+                await run.wire.websocket.close(code=1008, reason='Synthetic policy refusal')
+            await asyncio.wait_for(asyncio.shield(run.running), 15)
+        assert run.result[1]['reason_code'] == ('provider_error' if failure == 'event' else 'provider_closed')
+        assert len(run.provider.connections) == 1
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('engine', ['openai', 'grok', 'gemini'])
+def test_repeated_transport_losses_without_an_answer_reach_existing_bound(host_world, monkeypatch, engine):
+    async def scenario():
+        async with stack(host_world, monkeypatch, engine) as run:
+            for number in range(1, 5):
+                await run.wire.websocket.close(code=1012, reason='synthetic restart')
+                if number < 4:
+                    await run.wait(lambda: len(run.provider.connections) == number + 1 and run.host.connection_number == number + 1)
+                    await run.quiet()
+                else:
+                    await asyncio.wait_for(asyncio.shield(run.running), 15)
+        assert run.result[1]['reason_code'] == 'reconnect_failed'
+        assert len(run.provider.connections) == 4, 'the existing three unproven reconnects are the bound'
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('engine', ['openai', 'grok', 'gemini'])
+def test_transport_replacement_open_refusal_ends_with_its_typed_reason(host_world, monkeypatch, engine):
+    from tests._live_stack_wire import NativeWire
+    async def scenario():
+        send = NativeWire.send
+        async def refused(wire, raw):
+            if wire.number == 2:
+                wire.put({'type': 'error', 'error': {'code': 'invalid_request', 'message': 'Synthetic open refusal'}})
+                return
+            return await send(wire, raw)
+        monkeypatch.setattr(NativeWire, 'send', refused)
+        async with stack(host_world, monkeypatch, engine) as run:
+            await run.wire.websocket.close(code=1012, reason='synthetic restart')
+            await asyncio.wait_for(asyncio.shield(run.running), 15)
+        assert run.result[1]['reason_code'] == 'provider_error'
+        assert len(run.provider.connections) == 2
+        assert all(w.closed for w in run.provider.connections)
     asyncio.run(scenario())
