@@ -51,7 +51,10 @@ from scripts.post_merge_routing import (  # noqa: E402  -- stdlib only, as is th
 
 WORKFLOW_FILE = "post-merge.yml"
 LINT_ARGS = ("check", "--select", "F", "--output-format", "json", "--exit-zero")  # the release lint gate
-SIZE_MARK = "mark.size_ratchet"  # what a module of the size check carries
+# What a module of the size check declares: a decorated test, or a `pytestmark` carrying the marker.
+# A line that only mentions it (a fixture string, a comment) declares nothing. POSIX classes: git grep -E.
+SIZE_DECLARATIONS = (r"^[[:space:]]*@pytest\.mark\.size_ratchet([^[:alnum:]_]|$)",
+                     r"^[[:space:]]*pytestmark[[:space:]]*[:=].*pytest\.mark\.size_ratchet([^[:alnum:]_]|$)")
 MAX_PROBES = 16
 ZERO_SHA = "0" * 40
 # Retry, probe and re-check sessions keep the per-test bound of both selected passes
@@ -407,12 +410,14 @@ def lint_findings(cwd: Path | None = None, paths=()) -> dict[str, str] | None:
 
 
 def size_modules(root: Path) -> list[str]:
-    """The test modules of the size check in the checkout `root`: those that mark a test `size_ratchet`.
+    """The test modules of the size check in the checkout `root`: those that declare a `size_ratchet` test.
 
-    The same tests as the release's `pytest tests/ -m size_ratchet`, without collecting the suite.
+    The same tests as the release's `pytest tests/ -m size_ratchet`, without collecting the suite, and
+    no module that merely mentions the marker: its collection is no business of the size check.
     """
     try:
-        listed = _git("grep", "-l", "-F", SIZE_MARK, "--", "tests", cwd=Path(root))
+        listed = _git("grep", "-l", "-E", *(arg for pattern in SIZE_DECLARATIONS for arg in ("-e", pattern)),
+                      "--", "tests", cwd=Path(root))
     except (OSError, subprocess.SubprocessError):
         return []  # git grep exits 1 when nothing matches
     return sorted(path for path in listed.splitlines() if Path(path).name.startswith("test_") and path.endswith(".py"))
@@ -730,7 +735,8 @@ def render_summary(evidence: Path, merged=(), web: str = "", system: str = "linu
     selection = classification.get("selection") or {}
     lines.append(f"Selection: **{selection.get('tier')}**, {selection.get('file_count')} of "
                  f"{selection.get('available')} Python modules; Node lane: {selection.get('node')}."
-                 + (" A full escalation was deferred to the release matrix: this leg ran the contract floor."
+                 + (" A full escalation was deferred to the release matrix: this leg ran the contract floor and what the "
+                    "other changes select."
                     if selection.get("deferred_full") else ""))
     lines.append(_gates(classification, web))
     lines += [f"- **The check is incomplete:** {_cell(problem)}." for problem in problems]

@@ -276,6 +276,22 @@ def test_a_size_issue_closes_only_once_its_own_base_measures_green():
     assert _route(FakeGitHub(label=True, issues=issues), [], [])["closed"] == []  # nothing measured them
 
 
+@pytest.mark.parametrize("kind", ["pre-existing", "unattributed"])
+def test_an_issue_opened_before_the_legs_gains_the_base_of_a_size_id_added_to_it(kind):
+    """Such an issue has no `os` and no `base`; the size id joining it must still be measurable."""
+    old, base = "tests/t.py::test_old", "a" * 40
+    github = FakeGitHub(label=True, issues=[_issue(5, {"kind": kind, "ids": [old]})])
+    first = _route(github, [old, SIZED], [{"id": SIZED, "verdict": kind}], classification={"base": base, "size": {"base": base}})
+    assert first["updated"] == [5] and first["created"] == []
+    stored = github.issues[5]["body"]
+    assert routing.parse_machine_block(stored) == {"format": 1, "os": "linux", "kind": kind, "base": base, "ids": [SIZED, old]}
+    assert f"OURO_SIZE_RATCHET_BASE_REF={base} " in stored and "OURO_SIZE_RATCHET_BASE_REF=None" not in stored
+    asked = []
+    second = _route(github, [], [], recheck=lambda ids: dict.fromkeys(ids, "passed"),
+                    size_recheck=lambda measured, ids: asked.append(measured) or dict.fromkeys(ids, "passed"))
+    assert second["closed"] == [5] and asked == [base]  # fixed, measured against its base, closed
+
+
 def test_a_size_red_is_handed_over_with_the_base_it_was_measured_against():
     culprit, other = "c" * 40, "size tests/test_x.py::test_y"
     github = FakeGitHub(prs={culprit: [_pr(2067, culprit, login="author")]})

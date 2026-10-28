@@ -75,9 +75,11 @@ jobs:
         with:
           interpreter: ${{ matrix.interpreter }}
           install-project: 'false'
-      # A failure here is loud and leaves the tests running: they still check this system.
+      # A drifted runner image is loud here (an annotation on the run) but no verdict on the code: the
+      # update letter of every install reads this run's conclusion. The tests still check this system.
       - name: The stores run ${{ matrix.journal }} here
-        run: python -c "import pathlib, sys, tempfile; from ouroboros import store; probe = pathlib.Path(tempfile.mkdtemp()) / 'probe.sqlite'; probe.touch(); mode = store._journal_mode(probe, store.TIER_ENFORCED); print('stores run', mode); sys.exit(mode != sys.argv[1])" ${{ matrix.journal }}
+        continue-on-error: true
+        run: python -c "import pathlib, sys, tempfile; from ouroboros import store; probe = pathlib.Path(tempfile.mkdtemp()) / 'probe.sqlite'; probe.touch(); mode = store._journal_mode(probe, store.TIER_ENFORCED); print('stores run', mode); mode == sys.argv[1] or print(f'::error title=Post-merge journal mode::this leg runs the stores in {mode}, not {sys.argv[1]}, so it no longer checks what it claims'); sys.exit(mode != sys.argv[1])" ${{ matrix.journal }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         if: ${{ !cancelled() }}
         id: setup_node
@@ -118,7 +120,8 @@ jobs:
           BASE: ${{ steps.base.outputs.base }}
         run: python scripts/post_merge_check.py growth --evidence-dir "$RUNNER_TEMP/post-merge" --base "$BASE" --head "$GITHUB_SHA"
       # Red here is not the verdict: the retry below separates FAILED from FLAKY. One Windows runner
-      # cannot finish a full escalation (ci.yml runs it in eight shards): it runs the contract floor.
+      # cannot finish a full escalation (ci.yml runs it in eight shards): it runs the contract floor
+      # and what the changes that did not escalate select by themselves.
       - name: Run the affected tests (contract floor + affected modules and the complete Node lane)
         id: selected
         if: >-

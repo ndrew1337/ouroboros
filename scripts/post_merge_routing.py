@@ -295,7 +295,9 @@ def _upsert_issue(call, github, issues, block, pr, head, run_url, record) -> int
         return issue["number"]
     number, known = existing["number"], set(existing["block"]["ids"])
     if added := sorted(set(block["ids"]) - known):
-        merged = {**existing["block"], "ids": sorted(known | set(added))}
+        # What the issue recorded stays; a field its block predates (an issue opened before the
+        # legs has no `base`) comes from this run, or a size id added to it could never be measured.
+        merged = {**block, **existing["block"], "ids": sorted(known | set(added))}
         if call(f"update #{number}", github.patch, f"issues/{number}",
                 {"body": issue_body(merged, head=head, run_url=run_url, author=author)})[0]:
             existing["block"] = merged

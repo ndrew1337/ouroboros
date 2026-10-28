@@ -299,21 +299,31 @@ def _selected(args, evidence) -> int:
 def _defer_full(selection):
     """A full escalation this leg cannot finish (Windows runs full in eight landed shards).
 
-    The leg still runs the PR minimum, the contract floor and the Node lane, and says
-    what it left to the landed matrix.
+    The leg still runs the contract floor, the Node lane and what the changes that did not
+    escalate select by themselves (changed test modules, direct importers, widening), and
+    says what it left to the landed matrix.
     """
     import dataclasses
 
-    from ouroboros.test_selection import FLOOR_TESTS
+    from ouroboros.test_selection import FLOOR_TESTS, select_from_paths
 
+    escalating = ("verification apparatus changed", "body cutover/recovery changed")
     why = "; ".join(f"{path}: {reason}" for path, reason in selection.reasons
-                    if reason == "verification apparatus changed" or reason.startswith("author requested full"))
-    note = f"full scope deferred to the landed matrix; this leg runs the contract floor and the Node lane ({why})"
+                    if reason in escalating or reason.startswith("author requested full"))
+    rest = [path for path in selection.changed if (path, escalating[0]) not in selection.reasons
+            and (path, escalating[1]) not in selection.reasons]
+    try:
+        files = select_from_paths(REPO, rest, base=selection.base, extra_tests=selection.extra_tests,
+                                  test_reason=selection.test_reason).files if rest else ()
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:  # the floor still runs
+        files, why = (), f"{why}; the other changes could not be selected: {exc}"
+    note = (f"full scope deferred to the landed matrix; this leg runs the contract floor, the Node lane and "
+            f"{len(set(files) - set(FLOOR_TESTS))} module(s) the other changes select ({why})")
     print(f"=== {note}", flush=True)
     if destination := os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(destination, "a", encoding="utf-8") as stream:
             stream.write(f"**{note}**\n")
-    return dataclasses.replace(selection, tier="selected", files=tuple(sorted(FLOOR_TESTS)))
+    return dataclasses.replace(selection, tier="selected", files=tuple(sorted(set(FLOOR_TESTS) | set(files))))
 
 
 def main(argv: list[str] | None = None) -> int:

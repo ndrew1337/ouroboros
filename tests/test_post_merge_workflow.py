@@ -40,7 +40,11 @@ def test_a_linux_and_a_windows_leg_run_the_journal_modes_fresh_and_updated_insta
     assert JOB["name"] == "post-merge (${{ matrix.leg }})" and JOB["defaults"] == {"run": {"shell": "bash"}}
     journal = STEPS["The stores run ${{ matrix.journal }} here"]
     assert journal["run"].endswith("sys.exit(mode != sys.argv[1])\" ${{ matrix.journal }}")
-    # A wrong journal mode fails the leg loudly, yet the tests still run: nothing waits on that step.
+    # A drifted runner is an annotation, not the run's conclusion, which every install's update letter
+    # reads (ouroboros/update_qualification.py); a red test on either system still is that conclusion.
+    assert journal["continue-on-error"] is True and "print(f'::error title=Post-merge journal mode::" in journal["run"]
+    assert "continue-on-error" not in next(step for step in JOB["steps"] if step.get("name") == "Publish the result")
+    # The tests still run after a wrong journal mode: nothing waits on that step.
     order = [step.get("id") or step.get("name") for step in JOB["steps"]]
     later = JOB["steps"][order.index(journal["name"]) + 1:]
     assert all(step.get("if", "").startswith("${{ !cancelled()") for step in later), later

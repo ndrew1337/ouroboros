@@ -309,14 +309,20 @@ def test_the_size_check_is_the_release_lane_over_the_modules_that_mark_it(tmp_pa
     repo = tmp_path / "repo"
     (repo / "tests" / "nested").mkdir(parents=True)
     files = {"tests/test_sized.py": "@pytest.mark.size_ratchet\ndef test_a(): pass\n",
-             "tests/nested/test_deep.py": "pytestmark = [pytest.mark.size_ratchet]\n",
+             "tests/nested/test_deep.py": "pytestmark = [pytest.mark.serial, pytest.mark.size_ratchet]\n",
+             "tests/test_class.py": "class TestK:\n    pytestmark: list = [pytest.mark.size_ratchet]\n",
              "tests/test_plain.py": "def test_b(): pass  # the size_ratchet marker lane\n",
+             # Mentions, not declarations: a fixture string, a comment, a longer marker name.
+             "tests/test_fixture.py": 'SOURCE = "@pytest.mark.size_ratchet\\ndef test_x(): pass"\n'
+                                      "# @pytest.mark.size_ratchet goes on each size test\n"
+                                      "@pytest.mark.size_ratchet_extra\ndef test_y(): pass\n",
              "tests/helper.py": "@pytest.mark.size_ratchet\n"}  # not a test module
     for path, text in files.items():
         (repo / path).write_text(text, encoding="utf-8")
     _git(repo, "init", "-q")
     _git(repo, "add", "-A")
-    assert pmc.size_modules(repo) == ["tests/nested/test_deep.py", "tests/test_sized.py"]
+    assert pmc.size_modules(repo) == ["tests/nested/test_deep.py", "tests/test_class.py", "tests/test_sized.py"]
+    _git(repo, "rm", "-q", "--cached", "tests/test_class.py")
     seen = []
 
     def run(args, directory, *, cwd, env):
@@ -338,6 +344,8 @@ def test_the_release_size_modules_are_found_in_this_checkout():
     release = {"tests/test_reference_book_budgets.py", "tests/test_repo_health_smoke.py", "tests/test_smoke.py"}
     found = set(pmc.size_modules(REPO))
     assert release <= found and all(Path(path).name.startswith("test_") for path in found)
+    # This module writes the marker into its fixtures; it declares no size test of its own.
+    assert "tests/test_post_merge_check.py" not in found
 
 
 def test_a_size_check_that_skipped_or_did_not_finish_measured_nothing(tmp_path):
@@ -629,7 +637,8 @@ def test_each_leg_names_its_system_and_the_gates_it_ran(tmp_path, monkeypatch, c
     text, red = pmc.render_summary(tmp_path, system="windows")
     assert not red and text.startswith("## Post-merge check on Windows — GREEN")
     assert "Gates: none on this leg (ruff F and the size check run on the Linux leg)." in text
-    assert "A full escalation was deferred to the release matrix: this leg ran the contract floor." in text
+    assert ("A full escalation was deferred to the release matrix: this leg ran the contract floor and what the other "
+            "changes select.") in text
     assert pmc.render_summary(tmp_path / "nothing", system="windows")[0].startswith("## Post-merge check on Windows — RED")
     (tmp_path / "classification.json").write_text(json.dumps({
         "failed": [{"id": "tests/t.py::test_a", "why": "failed in call", "pass": "serial"}], "flaky": [], "problems": [],
