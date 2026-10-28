@@ -512,6 +512,35 @@ test('ending while permission or admission is pending cleans up late success and
     } finally { g.session.stop(); }
 });
 
+for (const outcome of ['success', 'refusal']) {
+    test(`an old microphone ${outcome} cannot close the next call`, async () => {
+        const f = fixture();
+        let resolveOld, rejectOld;
+        const open = f.env.navigator.mediaDevices.getUserMedia;
+        f.env.navigator.mediaDevices.getUserMedia = () => new Promise((resolve, reject) => {
+            resolveOld = resolve; rejectOld = reject;
+        });
+        const oldTracks = [{ stop() { this.stopped = true; } }];
+        try {
+            const old = f.session.start();
+            while (!rejectOld) await new Promise(resolve => setImmediate(resolve));
+            f.session.end();
+            f.env.navigator.mediaDevices.getUserMedia = open;
+            await f.session.start();
+            f.sockets[0].connect(); f.state({ state: 'live' });
+            if (outcome === 'refusal') rejectOld({ name: 'NotAllowedError' });
+            else resolveOld({ getTracks: () => oldTracks });
+            await old;
+            assert.equal(f.session.state, 'live');
+            assert.equal(f.session.code, '');
+            assert.equal(f.sockets[0].closed, undefined);
+            assert.equal(f.tracks[0].stopped, false);
+            assert.equal(f.requests.length, 1);
+            if (outcome === 'success') assert.equal(oldTracks[0].stopped, true);
+        } finally { f.session.stop(); }
+    });
+}
+
 test('gateway client uses the call contract and refuses cross-origin or arbitrary sockets', async () => {
     const old = globalThis.fetch;
     globalThis.fetch = async (url, init) => {

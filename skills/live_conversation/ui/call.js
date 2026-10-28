@@ -143,12 +143,12 @@ export class CallSession {
                 constraints: microphoneConstraints(prefs).audio });
             this.pendingLease = pending;
             const lease = await pending;
+            if (!current()) { if (!lease.code) lease.release('cancelled'); return; }
             if (lease.code) {
                 const code = leaseFailure(lease);
                 this.fail(code, code === 'microphone_in_use' ? { detail: String(lease.label || '') } : {});
                 return;
             }
-            if (!current()) { lease.release('cancelled'); return; }
             this.lease = lease;
             this.pendingLease = null;
             // The lease lets go first when its device is lost: that is the lost microphone, not the owner's End.
