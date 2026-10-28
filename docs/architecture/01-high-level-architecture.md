@@ -205,12 +205,12 @@ ouroboros/ — agent core and shared runtime (§6)
   ouroboros/gateway/safety_settings.py — owner Safety level, rules and checker endpoints
   consciousness.py, consciousness_wake.py — the background alarm admitting an ordinary Main turn through the supervisor tick; the wake input and `wake_task_metadata` envelope (§6 Background consciousness)
   consciousness_authority.py, consciousness_allowance.py — dispatch-bound autonomy ceilings and the rolling 24-hour allowance (§6 Background consciousness and Evolution)
-  chat_chain.py, chat_references.py, chronicle_store.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts and separate common-view selections, disposable index (§6)
+  chat_chain.py, chat_references.py, chronicle_store.py, chronicle_quotes.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts, separate common-view selections, disposable index (§6)
   mark_anchors.py — a mark tied to a tool (optional call text) or a path trails that call's result once per task (§6 Post-task work)
   chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
   consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
-  knowledge.py, memory_publication.py — linked-Markdown notes with shelf indexes and revision-checked writes, so concurrent cognition cannot silently overwrite a newer note; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
+  knowledge.py, memory_publication.py — linked-Markdown notes, shelf indexes and revision-checked writes; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
   task_tree_ledger.py — append-only `data/task_trees/<root>/blackboard.jsonl`: ephemeral swarm coordination (`tree_note`/`tree_read`), mirrored into the project journal at root completion
   projects_registry.py, project_admission.py — the owner Project registry (active|deleting|tombstoned) and strict admission claims (§6 Project registry and lease)
@@ -225,7 +225,7 @@ ouroboros/ — agent core and shared runtime (§6)
   client_surface.py — bounded client-surface normalizer; identity excludes viewport/narrow_layout (§4 WebSocket protocol)
   context_fit.py, context_budget.py — immutable Max/Low/Nano views, typed reclaim deficit, transcript cache seal, no routing/retry authority; budget vocabulary and typed reclaim SSOT, `estimate_message_chars` (§6 Context fitting)
   context_mode_compat.py — reads normalize, boot persists `OUROBOROS_CONTEXT_MODE`/`OUROBOROS_CONTEXT_MODE_AUTO_LOW` together (§7 Default settings)
-  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses (§6)
+  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses; memory_reader.py — extensions' `read_memory` (§6)
   memory_floor.py, memory_max.py — physical memory-view floor (overflow becomes address lines, people's words last); lost-Max episode (§6 Context fitting)
   capability_evidence.py, response_limits.py, density_probe.py — sourced capability, token-density and maximum-response evidence (`data/state/capability_evidence.json`; windows size sends and grant no review authority); the bounded cold-start review-density probe, re-exported by capability_evidence (§6 Prompt size, density and windows)
   context_layout.py — doc-layout SSOT; `book_navigation` in Low/Nano, full ARCHITECTURE in Max; reduction relocates, never silently truncates (§6 Context fitting)

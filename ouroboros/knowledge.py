@@ -318,19 +318,25 @@ def _navigation_row(address: KnowledgeAddress) -> dict[str, Any]:
 
 
 def inventory_knowledge(address: KnowledgeAddress, *, navigation: bool = False,
-                        known_note: KnowledgeNote | None = None) -> tuple[dict[str, Any], ...]:
+                        known_note: KnowledgeNote | None = None, after: str = "",
+                        limit: int | None = None) -> tuple[dict[str, Any], ...]:
     """Enumerate the current shelf without writes; navigation omits source proofs.
 
     A note already read by this operation can be reused. A note's navigation is
     reused only while its identity proves the bytes unchanged: external edits and
-    missing/failed index publications stay visible.
+    missing/failed index publications stay visible. ``after`` (a topic) and ``limit``
+    read one page in the order of the shelf-relative parts, the order the page cursor
+    is compared in on every platform (``WindowsPath`` would sort them case-folded):
+    only that page's notes are opened.
     """
     if not address.shelf.exists():
         return ()
-    rows, listed = [], set()
-    for path in sorted(address.shelf.rglob("*.md")):
-        if path == address.shelf / INDEX_FILE:
+    rows, listed, past = [], set(), tuple(f"{after}.md".split("/")) if after else ()
+    for path in sorted(address.shelf.rglob("*.md"), key=lambda found: found.relative_to(address.shelf).parts):
+        if path == address.shelf / INDEX_FILE or path.relative_to(address.shelf).parts <= past:
             continue
+        if limit is not None and len(rows) >= limit:
+            break
         topic = path.relative_to(address.shelf).as_posix()[:-3]
         try:
             item = replace(address, topic=sanitize_topic(topic))
@@ -344,9 +350,10 @@ def inventory_knowledge(address: KnowledgeAddress, *, navigation: bool = False,
         except (OSError, UnicodeDecodeError) as exc:
             rows.append({**item.as_dict(), "title": topic, "summary": "", "revision": None,
                          "read_error": type(exc).__name__})
-    if navigation:
-        for gone in [held for held in _NAVIGATION if held.shelf == address.shelf and held not in listed]:
-            del _NAVIGATION[gone]
+    if navigation and not after and limit is None:  # only a whole listing proves a note gone
+        # A snapshot: an extension's paged read may keep a row from another thread meanwhile.
+        for gone in [held for held in list(_NAVIGATION) if held.shelf == address.shelf and held not in listed]:
+            _NAVIGATION.pop(gone, None)
     return tuple(rows)
 
 
