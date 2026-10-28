@@ -60,14 +60,14 @@ def test_language_batch_reaches_gemini_before_fresh_refit(host_world, gemini, tm
         calls = [{"id": e.data["call_id"], "type": "function", "function": {
             "name": e.data["name"], "arguments": e.data["arguments"]}} for e in events if e.kind == "tool_call"]
         changes = await host.tool_batch(calls)
-        assert changes.silent == ("languages-1",)
+        assert changes.silent == ()  # recording languages leaves the turn open for the next words
         assert host.state["refit"] and host.state["languages"] == ("ru-RU", "en-US")
         await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent=changes.silent))
         responses = [event["toolResponse"]["functionResponses"] for event in wire.sent if "toolResponse" in event]
         assert len(responses) == 1
         assert responses[0][0]["name"] == "set_call_languages"
         assert "ru-RU, en-US" in responses[0][0]["response"]["output"]
-        assert responses[0][0].get("scheduling") == (None if extended else "SILENT")
+        assert responses[0][0].get("scheduling") == (None if extended else "WHEN_IDLE")
         assert not session.calls
         assert session.renewal_ready is idle_before_result
         if not idle_before_result:

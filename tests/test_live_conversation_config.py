@@ -91,7 +91,9 @@ def test_unknown_catalog_selections_are_refused_and_call_tools_registered(config
         status, data = request(api, {'enabled':True, 'provider':'fixture-engine:voice', **fields})
         assert status == 400 and data['error']
     assert {tool.name for tool in api.feature['call_tools']} == {'end_call','set_call_languages','attend'}
-    assert all(tool.silent for tool in api.feature['call_tools'])
+    # Hanging up and attending are silent; recording languages leaves the turn open for the next words.
+    assert {tool.name: tool.silent for tool in api.feature['call_tools']} == {
+        'end_call': True, 'set_call_languages': False, 'attend': True}
     from ouroboros.extension_ui_validation import validate_settings_schema
     validate_settings_schema(api.sections[0][1]['schema'])
 

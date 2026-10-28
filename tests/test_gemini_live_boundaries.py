@@ -240,3 +240,19 @@ def test_a_tool_change_is_named_as_needing_a_new_session(gemini):
     session, _wire = make_session(gemini, tools=(tool,))
     assert session.tools_need_renewal((tool,)) is False
     assert session.tools_need_renewal((tool, added)) is True
+
+
+def test_a_live_update_carries_no_host_delivery_marks(gemini):
+    """The call driver marks its own rows (canonical facts, a requested look); Gemini serializes a whole update as
+    text, so those marks reached the model as words until they were left out (28.10)."""
+    from ouroboros.contracts.live_conversation import ContextUpdate
+    async def scenario():
+        session, wire = make_session(gemini)
+        await session.open()
+        await session.send(ContextUpdate(({"role": "user", "content": "[Host fact; not owner words]\nThe owner started "
+                                           "showing the screen.", "_canonical": True, "_requested_look": True},)))
+        text = wire.sent[-1]["clientContent"]["turns"][0]["parts"][0]["text"]
+        assert "started showing the screen" in text and '"role":"user"' in text.replace(" ", "")
+        assert "_canonical" not in text and "_requested_look" not in text
+        await session.close()
+    asyncio.run(scenario())

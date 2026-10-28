@@ -585,7 +585,8 @@ class GeminiSession(JsonSession):
                     # inline image part, as at setup; JSON text would carry its base64 as words (I1-gemini F1).
                     records = []
                     for message in command.messages:
-                        record = dict(message)
+                        # Underscored keys are the host's own delivery marks, not conversation content.
+                        record = {key: value for key, value in message.items() if not str(key).startswith('_')}
                         if isinstance(record.get('content'), list):
                             shaped = []
                             for part in record['content']:

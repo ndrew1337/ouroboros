@@ -253,7 +253,7 @@ def test_language_tool_refits_at_next_boundary_and_later_calls_start_with_record
         host = Host()
         host.model = replace(host.model, honours=frozenset({'languages'}))
         tools = install_tools(host, tmp_path)
-        assert tools['set_call_languages'].silent
+        assert not tools['set_call_languages'].silent
         task, session = await started(host, state_dir=tmp_path)
         try:
             assert host.options[0].languages == ()
@@ -263,8 +263,11 @@ def test_language_tool_refits_at_next_boundary_and_later_calls_start_with_record
             session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
             outputs = next(x for x in session.sent if isinstance(x, ToolOutputs))
-            assert outputs.silent == ('lang',)
+            assert outputs.silent == ()
             assert 'expects ru-RU' in outputs.messages[0]['content']
+            # The result leaves the turn open: the engine answers it before the boundary that applies the languages.
+            session.emit('response_started', response_id='after-languages')
+            session.emit('response_done', response_id='after-languages', usage={}, raw_usage={}, status='completed')
             assert len(host.sessions) == 1
             session.renewal_ready = True
             await until(lambda: len(host.sessions) == 2)
@@ -767,7 +770,10 @@ def test_context_additions_refit_before_delivery_when_the_window_is_full(source,
                 await until(lambda: any(isinstance(x, ContextUpdate) for x in second.sent))
                 content = str(next(x for x in second.sent if isinstance(x, ContextUpdate)).messages)
                 assert 'completed tool results' not in content
-                assert ('New room context' if source == 'mailbox' else 'Observed context') in content
+                if source == 'mailbox':
+                    assert 'New room context' in content
+                else:  # the observed row is canonical and in the fresh fit: one pointer, not the row twice
+                    assert 'new facts are in the fitted history' in content and 'Observed context' not in content
             else:
                 await asyncio.sleep(.05)
                 assert len(host.sessions) == 1
@@ -1031,14 +1037,17 @@ def test_repeated_drops_without_an_answer_end_the_call_instead_of_resuming_forev
     asyncio.run(scenario())
 
 
-def test_a_silent_language_refit_before_any_speech_preserves_silence_after_the_reconnect(tmp_path):
-    """The owner now chooses silence as a finished response, including before any spoken words."""
+def test_recording_languages_before_any_speech_leaves_the_opening_turn_open(tmp_path):
+    """Grok's first answer on 27.10 recorded the call languages and nothing more: the language tool was silent, so its
+    result opened no answer and the owner heard silence. Recording languages is ordinary work now: its result leaves
+    the turn open for the first words, and the reconnect that applies the languages manufactures no words of its own
+    (silence is the mind's choice through attend)."""
     from ouroboros.contracts.live_conversation import ToolOutputs
     async def scenario():
         host = Host()
         host.model = replace(host.model, honours=frozenset({'languages'}))
         tools = install_tools(host, tmp_path)
-        assert tools['set_call_languages'].silent
+        assert not tools['set_call_languages'].silent
         task, session = await started(host, state_dir=tmp_path)
         try:
             session.emit('ready', input_rate=24000, output_rate=24000)
@@ -1047,6 +1056,11 @@ def test_a_silent_language_refit_before_any_speech_preserves_silence_after_the_r
             session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
             assert [x for x in session.sent if isinstance(x, Respond)] == [Respond(host.opening)]
+            assert next(x for x in session.sent if isinstance(x, ToolOutputs)).silent == ()  # the engine opens the next answer
+            session.emit('response_started', response_id='first-words')
+            session.emit('audio', item_id='greeting', rate=24000, pcm=b'\0' * 4800)
+            session.emit('response_done', response_id='first-words', usage={}, raw_usage={}, status='completed')
+            host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type': 'played', 'item_id': 'greeting', 'played_ms': 100}))
             session.renewal_ready = True
             await until(lambda: len(host.sessions) == 2)
             second = host.sessions[1]
@@ -1059,8 +1073,8 @@ def test_a_silent_language_refit_before_any_speech_preserves_silence_after_the_r
     asyncio.run(scenario())
 
 
-def test_a_silent_language_refit_after_ouroboros_spoke_asks_nothing_more(tmp_path):
-    from ouroboros.contracts.live_conversation import ToolOutputs
+def test_recording_languages_after_ouroboros_spoke_asks_nothing_more(tmp_path):
+    from ouroboros.contracts.live_conversation import ContextUpdate, ToolOutputs
     async def scenario():
         host = Host()
         host.model = replace(host.model, honours=frozenset({'languages'}))
@@ -1073,13 +1087,15 @@ def test_a_silent_language_refit_after_ouroboros_spoke_asks_nothing_more(tmp_pat
             session.emit('response_done', response_id='greeting', usage={}, raw_usage={}, status='completed', continues=True)
             session.emit('tool_call', call_id='lang', name='set_call_languages', arguments='{"languages":["ru-RU"]}')
             await until(lambda: any(isinstance(x, ToolOutputs) for x in session.sent))
+            session.emit('response_started', response_id='after-languages')  # the result's own answer
+            session.emit('response_done', response_id='after-languages', usage={}, raw_usage={}, status='completed')
             host.hub.events.append(cp.PeerControl('peer', cp.PEER_OWNER, {'type': 'played', 'item_id': 'greeting', 'played_ms': 100}))
             session.renewal_ready = True
             await until(lambda: len(host.sessions) == 2)
             second = host.sessions[1]
             second.emit('ready', input_rate=24000, output_rate=24000)
             await asyncio.sleep(.05)
-            assert not any(isinstance(x, Respond) for x in second.sent)
+            assert not any(isinstance(x, (Respond, ContextUpdate)) for x in second.sent)
         finally:
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)

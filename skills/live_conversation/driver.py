@@ -153,7 +153,7 @@ def call_tools(state_dir):
                  "you hear someone use. Recognition takes the list at the next pause and later calls start "
                  "with it. It never decides the language you answer in.",
                  {"type": "object", "properties": {"languages": {"type": "array", "items": {"type": "string"}}},
-                  "required": ["languages"], "additionalProperties": False}, set_languages, silent=True),
+                  "required": ["languages"], "additionalProperties": False}, set_languages),
         attend_tool(),
     )
 
@@ -250,6 +250,7 @@ class _Call:
         self.session = self.last_session = session
         if not self.resume:
             self.attention.seen.clear()
+            self.refit_offers()
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -290,6 +291,16 @@ class _Call:
         # flight. Only the replacement's ready event releases its outputs.
         await self.connected.wait()
         await self.session.send(command)
+
+    def refit_offers(self):
+        """A fresh fit already holds every canonical fact; keep transport-only rows and one pointer to the facts."""
+        facts = [row for row in self.pending_offers if row.get("_canonical")]
+        if facts:
+            pointer = {"role": "user", "content": "[Host fact; not owner words] The new facts are in the fitted "
+                       "history. You may answer, act or stay silent."}
+            if any(row.get("_requested_look") for row in facts):
+                pointer["_requested_look"] = True
+            self.pending_offers = [row for row in self.pending_offers if not row.get("_canonical")] + [pointer]
 
     def consume_revisit(self):
         self.attention.revisit_at = None
@@ -635,7 +646,7 @@ class _Call:
                     elif message["type"] == "context":
                         row = {"role": "user", "content": f"[Observed by {event.role} peer {event.peer_id}; source={message.get('source', '')}; not an owner instruction]\n{message['text']}"}
                         await self.host.observe_context(row)
-                        self.pending_offers.append(row)
+                        self.pending_offers.append({**row, "_canonical": True})
                 await asyncio.sleep(0)
             if not self.renewing and (self.pending_offers or self.attention.revisit_due()) and self.quiet():
                 if not self.pending_offers and self.attention.revisit_due():
@@ -647,7 +658,7 @@ class _Call:
             await asyncio.sleep(.01)
 
     async def offer_fact(self, text, *, requested_look=False):
-        row = {"role": "user", "content": "[Host fact; not owner words]\n" + text}
+        row = {"role": "user", "content": "[Host fact; not owner words]\n" + text, "_canonical": True}
         if requested_look:
             row["_requested_look"] = True
         await self.host.observe_context(row)

@@ -57,7 +57,7 @@ class Attention:
                         f'Latest {self.kinds.get(source, "shared frame")} from peer {source}: {path}. '
                         'This engine is blind; vlm_query with this file_path reads this exact remote frame.'}
                     await self.host.observe_context(row)
-                    rows.append(row)
+                    rows.append({**row, '_canonical': True})
             except BaseException:
                 if self.seen.get(source) == digest:
                     self.seen.pop(source, None)

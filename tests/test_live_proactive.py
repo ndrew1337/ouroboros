@@ -1,9 +1,16 @@
 """Discrete observations offer a turn; media and self output never choose attention."""
 import asyncio
+import base64
+import json
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
 
 from ouroboros import call_protocol as cp
-from ouroboros.contracts.live_conversation import ContextUpdate
-from tests.test_live_conversation_driver import Host, started, until
+from ouroboros.contracts.live_conversation import ContextUpdate, LiveHost, Video
+from skills.live_conversation.attention import Attention, attend_tool
+from tests.test_live_conversation_driver import Batch, Host, started, until
 
 
 def test_facts_are_canonical_at_once_but_offered_once_only_when_quiet():
@@ -34,17 +41,6 @@ def test_facts_are_canonical_at_once_but_offered_once_only_when_quiet():
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
 
-
-import base64
-import json
-from dataclasses import replace
-from pathlib import Path
-
-import pytest
-
-from ouroboros.contracts.live_conversation import LiveHost, Video
-from skills.live_conversation.attention import Attention, attend_tool
-from tests.test_live_conversation_driver import Batch
 
 
 @pytest.mark.parametrize('mode', ['turns', 'stream', 'asked'])
@@ -275,4 +271,42 @@ def test_quiet_native_state_does_not_offer_before_the_port_is_ready():
         call.connected.set()
         await call.offer_pending()
         assert len(call.session.sent) == 1 and not call.pending_offers
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('resume', [False, True])
+def test_a_fresh_fit_points_to_the_facts_it_holds_and_a_resume_sends_them(resume):
+    """A share fact queued while the owner spoke is canonical at once. A fresh fit already holds it, so the new
+    connection is offered one pointer to it, never the fact a second time; a resumed provider session never saw
+    it, so the fact itself goes."""
+    async def scenario():
+        host = Host()
+        host.state['greeted'] = True
+        task, first = await started(host)
+        try:
+            first.emit('ready', input_rate=24000, output_rate=24000)
+            first.emit('resumable', handle='handle')
+            first.emit('input_started')
+            await asyncio.sleep(.02)
+            host.hub.events.append(cp.PeerControl('owner', cp.PEER_OWNER, dict(type='share', sharing=True, kind='screen')))
+            await until(lambda: len(host.context) == 1)
+            first.emit('renew', within_s=2, reason='rotate', resume=resume)
+            first.emit('input_done')
+            await until(lambda: len(host.sessions) == 2)
+            assert not any(isinstance(c, ContextUpdate) for c in first.sent)
+            second = host.sessions[1]
+            second.emit('ready', input_rate=24000, output_rate=24000)
+            await until(lambda: any(isinstance(c, ContextUpdate) for c in second.sent))
+            await asyncio.sleep(.03)
+            updates = [c for c in second.sent if isinstance(c, ContextUpdate)]
+            assert len(updates) == 1
+            texts = [row['content'] for row in updates[0].messages]
+            if resume:
+                assert texts == [host.context[0]['content']]
+            else:
+                assert len(texts) == 1 and 'new facts are in the fitted history' in texts[0]
+                assert 'started showing the screen' not in texts[0]
+        finally:
+            host.hub.ended_by_owner = True
+            await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
