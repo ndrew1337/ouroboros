@@ -476,7 +476,8 @@ class ConversationHost:
             return rows_for_engine(rows, vision=self.model.vision)
 
     def observe(self, direction, raw):
-        self.wire.append({"connection": self.connection_number, "direction": direction, "raw": raw})
+        self.wire.append({"connection": self.connection_number, "direction": direction, "raw": raw,
+                          "at": round(time.time(), 3)})  # observation time, not capture or speech time
         if direction == "usage" and self._connection_accounting:
             from ouroboros.live_usage import observe_live_usage
             observe_live_usage(self, json.loads(raw))

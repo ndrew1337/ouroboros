@@ -1,7 +1,7 @@
 ---
 name: gemini_live
 description: Gemini native Live audio and image provider for Live Conversation.
-version: 0.1.7
+version: 0.1.8
 type: extension
 runtime: python3
 entry: plugin.py
@@ -16,12 +16,14 @@ Registers `gemini_live:gemini`. It reuses the preserved Gemini Live transport
 mechanisms: native audio, function responses, caption accumulation and explicit
 fresh-context renewal. The full ordinary selected history is an ordered role
 archive in Gemini's system layout; this is provider packaging, not a separate
-memory or summary. Held audio plus observed turn growth reaching the measured
-2,500-token span, an observed audio drop, or a tool-catalog change asks the host
-for a fresh refit after pending work finishes. Drops lower the process-local
-route span. The host also owns usage-driven total-window renewals; both use the
-same quiet boundary. Idle time alone does not renew. Automatic sliding-window
-compression is omitted. GoAway asks for server-side resumption.
+memory or summary. An unexplained drop in the speech Gemini retains (its usage
+shows earlier audio gone without a compression that explains it), or a
+tool-catalog change, asks the host for a fresh refit after pending work
+finishes. The latest unexplained drop is the learned span; there is no fixed
+span. Context-window compression is on: the catalog window triggers it and the
+window minus the working reserve is its target. The host also owns usage-driven
+total-window renewals; both use the same quiet boundary. Idle time alone does
+not renew. GoAway asks for server-side resumption.
 Session resumption is enabled; handle updates reach the feature, and transport
 loss is marked resumable only while a valid handle exists. A replacement using
 that handle restores in-process caption, tool, held-context and usage state.

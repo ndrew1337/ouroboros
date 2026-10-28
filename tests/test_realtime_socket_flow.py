@@ -171,7 +171,7 @@ def test_connector_preserves_headers_lifetime_limits_and_unbounded_messages(prov
         async with connected(provider, monkeypatch) as (session, transport):
             (uri, options), = calls
             assert uri.startswith('wss://')
-            assert options['open_timeout'] == 10 and options['close_timeout'] == 3
+            assert options['open_timeout'] == 30 and options['close_timeout'] == 3
             assert options['proxy'] is None  # legacy connections also went directly
             assert options['max_size'] is None
             assert options['ping_interval'] == options['ping_timeout'] == 20

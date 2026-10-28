@@ -31,6 +31,8 @@ def test_full_stack_greeting_owner_answer_and_retained_receipts(host_world, monk
             assert any(r.get('source') == 'live_transcription_usage' for r in usage), 'input ASR is separately accounted'
         journal = run.journal()
         assert {'send', 'receive', 'host', 'response'} <= {r['direction'] for r in journal}
+        times = [r['at'] for r in journal]
+        assert times and all(type(t) is float and t > 0 for t in times), 'each record says when it was observed'
         assert not run.provider.errors and not any(r.get('code', 1000) != 1000 for r in run.page.closed)
     asyncio.run(scenario())
 

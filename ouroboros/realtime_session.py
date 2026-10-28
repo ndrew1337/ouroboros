@@ -21,8 +21,10 @@ def connect_provider(uri, *, headers):
     """
     from websockets.asyncio.client import connect
 
+    # A dead-socket bound for the opening handshake, not a timing judgment: on 28.10 a loaded Mac
+    # needed more than 10 s and a call failed to start (owner 3A: wait up to 30 s).
     return connect(uri, additional_headers=headers, proxy=None,
-                   open_timeout=10, close_timeout=3, max_size=None,
+                   open_timeout=30, close_timeout=3, max_size=None,
                    ping_interval=20, ping_timeout=20)
 
 
