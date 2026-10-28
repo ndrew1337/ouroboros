@@ -379,8 +379,10 @@ def observe_live_usage(host, sample: Mapping) -> None:
     if "connected_seconds" in usage:
         host._settle_connection_sample(host._connection_growth(usage), raw)
     elif sample.get("component") == "input_transcription":
-        engine, model = host.turn.route.accounting_provider, sample["model"]
-        quote = get_catalog_quote(model, provider=engine, drive_root=host.ctx.drive_root, allow_live_fetch=False)
+        # The contract requires the component's model; without one the receipt still lands, priced unknown.
+        engine, model = host.turn.route.accounting_provider, str(sample.get("model") or "")
+        quote = model and get_catalog_quote(model, provider=engine, drive_root=host.ctx.drive_root,
+                                            allow_live_fetch=False) or None
         evidence = {"call_id": host.turn.spec.call_id, "connection_key": str(host.connection_number),
                     "rendered_mode": host.plan.initial_mode, "tariff_quote": quote,
                     **{key: sample.get(key) for key in ("item_id", "content_index", "event_id")}}

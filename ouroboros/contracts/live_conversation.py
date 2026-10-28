@@ -180,7 +180,10 @@ class LiveSession(Protocol):
 # final sample before returning, even after Stop or exhausted admission: settlement
 # records spent usage and admits nothing new. Response ids dedupe across the call,
 # including resumed connections; each connection starts its own time watermark.
-# billable_audio_seconds is evidence.
+# billable_audio_seconds is evidence. A separately billed component reports
+# {"component": "input_transcription", "model": <the model that produced it, required>,
+# "item_id", "content_index", "event_id", "usage", "raw_usage"} once per transcribed
+# item; the host prices it under that model, never the voice model's tariff.
 # A factory may take further keyword-only test hooks of its own.
 SessionFactory = Callable[..., LiveSession]
 

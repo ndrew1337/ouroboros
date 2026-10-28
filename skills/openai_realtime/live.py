@@ -116,6 +116,7 @@ class OpenAISession(JsonSession):
         self.cancel_now = ""  # an answer the server opened while the owner was speaking
         self.waiting_tools = set()
         self.input_transcripts, self.output_transcripts = set(), set()
+        self.item_responses = {}  # output item -> the response it belongs to
         self.transcribed = set()
         self.ready = False
 
@@ -300,12 +301,14 @@ class OpenAISession(JsonSession):
             self.want_response = True
         if kind == "response.output_audio.delta":
             self.output_transcripts.add(item)
-            if (event.get("response_id") or self.active_response) in self.cancelled:
+            self.item_responses[item] = event.get("response_id") or self.active_response
+            if self.item_responses[item] in self.cancelled:
                 return []
             return [LiveEvent("audio", {"item_id": item, "rate": 24000,
                 "pcm": base64.b64decode(event["delta"], validate=True)})]
         if kind == "response.output_audio_transcript.delta":
             self.output_transcripts.add(item)
+            self.item_responses[item] = event.get("response_id") or self.item_responses.get(item) or self.active_response
             self.text[item] = self.text.get(item, "") + event["delta"]
             return [LiveEvent("caption", {"speaker": "ouroboros", "item_id": item, "text": event["delta"], "final": False})]
         if kind in {"response.output_audio_transcript.done", "conversation.item.input_audio_transcription.completed"}:
@@ -331,6 +334,8 @@ class OpenAISession(JsonSession):
             text = event.get("transcript", self.text.pop(item, ""))
             self.text.pop(item, None)
             (self.output_transcripts if speaker == "ouroboros" else self.input_transcripts).discard(item)
+            if speaker == "ouroboros":
+                self.item_responses.pop(item, None)
             return [LiveEvent("caption", {"speaker": speaker, "item_id": item, "text": text, "final": True})]
         if kind == "conversation.item.input_audio_transcription.failed":
             self.input_transcripts.discard(item)
@@ -349,6 +354,11 @@ class OpenAISession(JsonSession):
                 status = "interrupted"
             if response.get("status") == "cancelled":
                 self.cancelled.add(rid)
+                # A cancelled answer's item may never get a final transcript. Its words stay
+                # in self.text for final_captions(); it no longer holds the connection busy.
+                for owned in [key for key, owner in self.item_responses.items() if owner == rid]:
+                    self.output_transcripts.discard(owned)
+                    del self.item_responses[owned]
             events = [LiveEvent("response_done", {"usage": _usage(response), "raw_usage": response.get("usage") or {},
                 "response_id": rid, "status": status, "continues": False})]
             # A failed response still reports usage before the host stops it.

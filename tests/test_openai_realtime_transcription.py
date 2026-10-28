@@ -109,3 +109,20 @@ def test_transcription_usage_reaches_shared_ledger_with_its_own_model(providers,
         assert len(ua.read_usage_records(host.ctx.drive_root)) == 2
         adapter.convert({**event, 'type': 'response.output_audio_transcript.done', 'item_id': 'spoken'})
         assert len(ua.read_usage_records(host.ctx.drive_root)) == 2, 'output captions have no separate ASR charge'
+
+
+def test_a_component_sample_without_its_model_still_lands_priced_unknown(host_world):
+    """R18 M2: the contract requires the model; a sample without one never ends the call."""
+    import json
+    from ouroboros import usage_accounting as ua
+
+    host = host_world.host
+    host._connection_accounting = True
+    host.connection_number = 1
+    with ua.usage_scope(ua.UsageScope(drive_root=host.ctx.drive_root, task_id=host.ctx.task_id,
+                                    root_task_id=host.ctx.task_id)):
+        host.observe('usage', json.dumps({'component': 'input_transcription', 'item_id': 'owner-1',
+                                          'usage': {'audio_input_tokens': 3}, 'raw_usage': {}}))
+        [row] = ua.read_usage_records(host.ctx.drive_root)
+    assert row['source'] == 'live_transcription_usage' and row['model'] == ''
+    assert row['cost_usd'] is None and row['cost_evidence']['unpriced'], 'unknown, never free'

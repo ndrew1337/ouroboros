@@ -432,3 +432,39 @@ def test_openai_images_remain_native_and_do_not_open_response(providers):
         finally:
             await adapter.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('engine', ['grok', 'openai'])
+def test_a_cancelled_answer_without_a_final_transcript_no_longer_holds_the_connection(providers, engine):
+    """R18 M1: a barged-in item the provider never finalizes kept renewal and every offer waiting."""
+    delta = 'response.audio.delta' if engine == 'grok' else 'response.output_audio.delta'
+    words = 'response.audio_transcript.delta' if engine == 'grok' else 'response.output_audio_transcript.delta'
+    done = 'response.audio_transcript.done' if engine == 'grok' else 'response.output_audio_transcript.done'
+
+    async def run():
+        adapter, _ = make(providers, engine)
+        try:
+            await adapter.open()
+            await adapter.receive()
+            adapter.convert({'type': 'response.created', 'response': {'id': 'answer'}})
+            adapter.convert({'type': delta, 'response_id': 'answer', 'item_id': 'spoken', 'delta': 'AAA='})
+            adapter.convert({'type': words, 'response_id': 'answer', 'item_id': 'spoken', 'delta': 'Half a sen'})
+            adapter.convert({'type': 'input_audio_buffer.speech_started', 'item_id': 'owner'})
+            adapter.convert({'type': 'input_audio_buffer.speech_stopped', 'item_id': 'owner'})
+            adapter.convert({'type': 'response.done', 'response': {'id': 'answer', 'status': 'cancelled'}})
+            adapter.convert({'type': 'conversation.item.input_audio_transcription.completed',
+                             'item_id': 'owner', 'transcript': 'Wait.', 'status': 'completed'})
+            # The control: a completed answer still waits for its own final transcript.
+            adapter.convert({'type': 'response.created', 'response': {'id': 'second'}})
+            adapter.convert({'type': delta, 'response_id': 'second', 'item_id': 'spoken-2', 'delta': 'AAA='})
+            adapter.convert({'type': 'response.done', 'response': {'id': 'second', 'status': 'completed'}})
+            assert adapter.output_transcripts == {'spoken-2'} and not adapter.renewal_ready
+            adapter.convert({'type': done, 'response_id': 'second', 'item_id': 'spoken-2', 'transcript': 'Yes?'})
+            assert adapter.renewal_ready, 'the cancelled item no longer holds the connection'
+            # Its unfinished words are kept: they close as an incomplete caption.
+            [caption] = adapter.final_captions()
+            assert (caption.data['item_id'], caption.data['text']) == ('spoken', 'Half a sen')
+            assert caption.data['final'] and caption.data['incomplete']
+        finally:
+            await adapter.close()
+    asyncio.run(run())

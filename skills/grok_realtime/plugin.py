@@ -164,6 +164,7 @@ class GrokSession(JsonSession):
         self.response_requested = self.want_response = self.speech_active = self.vad_response_pending = False
         self.waiting_tools = set()
         self.input_transcripts, self.output_transcripts = set(), set()
+        self.item_responses = {}  # output item -> the response it belongs to
         self.text = {}
         self.tool_calls = set()
         self.ready = False
@@ -354,9 +355,10 @@ class GrokSession(JsonSession):
             self.input_transcripts.discard(item)
         if kind in {'response.audio.delta', 'response.output_audio.delta'}:
             self.output_transcripts.add(item)
+            self.item_responses[item] = event.get('response_id') or self.active_response
             # A barge-in can cancel before the feature has seen any audio item.
             # Keep draining response.done usage, but never play that response.
-            if (event.get('response_id') or self.active_response) in self.cancelled:
+            if self.item_responses[item] in self.cancelled:
                 return []
             return [LiveEvent('audio', {'item_id': item, 'rate': 24000,
                                       'pcm': base64.b64decode(event['delta'], validate=True)})]
@@ -369,6 +371,10 @@ class GrokSession(JsonSession):
             final = (event.get('status') == 'completed' if owner else kind.endswith('.done'))
             transcripts = self.input_transcripts if owner else self.output_transcripts
             transcripts.discard(item) if final else transcripts.add(item)
+            if not owner and final:
+                self.item_responses.pop(item, None)
+            elif not owner:
+                self.item_responses[item] = event.get('response_id') or self.item_responses.get(item) or self.active_response
             speaker = 'owner' if owner else 'ouroboros'
             key = (speaker, item)
             text = event.get('transcript', self.text.get(key, '') + event.get('delta', ''))
@@ -387,7 +393,9 @@ class GrokSession(JsonSession):
             self.responses.add(rid)
             if self.active_response == rid:
                 self.active_response = ''
-            self.response_requested = self.vad_response_pending = False
+            # Only response.created consumes a VAD obligation: an old answer's late
+            # receipt must not release the owner's next, still unanswered turn.
+            self.response_requested = False
             outer, nested = event.get('usage') or {}, response.get('usage') or {}
             raw = {**outer, 'nested_usage': nested} if outer and nested and outer != nested else outer or nested
             inputs = {**(nested.get('input_token_details') or {}), **(outer.get('input_token_details') or {})}
@@ -403,6 +411,11 @@ class GrokSession(JsonSession):
                 status = 'interrupted'
             if response.get('status') == 'cancelled':
                 self.cancelled.add(rid)
+                # A cancelled answer's item may never get a final transcript. Its words stay
+                # in self.text for final_captions(); it no longer holds the connection busy.
+                for owned in [key for key, owner in self.item_responses.items() if owner == rid]:
+                    self.output_transcripts.discard(owned)
+                    del self.item_responses[owned]
             events = [LiveEvent('response_done', {'response_id': rid, 'usage': usage, 'raw_usage': raw,
                                                 'status': status, 'continues': False})]
             for call in response.get('output', []) if response.get('status') in {None, 'completed'} else ():

@@ -196,3 +196,53 @@ def test_grok_received_words_survive_finalization_in_durable_history(providers, 
             call.writer.cancel()
             await asyncio.gather(call.writer, return_exceptions=True)
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('old_receipt_late', [False, True])
+def test_an_old_cancelled_receipt_cannot_release_the_next_unanswered_vad_turn(providers, old_receipt_late):
+    """R18-1: only response.created consumes the VAD obligation, in either receipt order."""
+    from skills.live_conversation.driver import _Call
+    from tests.test_live_conversation_driver import Host, until
+
+    async def scenario():
+        native, wire = make(providers, 'grok')
+        host = Host()
+        host.state['greeted'] = True
+        call = _Call(host)
+        call.session = native
+        reader = None
+        try:
+            await native.open()
+            reader = asyncio.create_task(call.provider())
+            await until(call.connected.is_set)
+            assert call.quiet()
+            wire.put({'type': 'response.created', 'response': {'id': 'old'}})
+            wire.put({'type': 'response.audio.delta', 'response_id': 'old', 'item_id': 'old-words', 'delta': 'AAA='})
+            wire.put({'type': 'response.audio_transcript.done', 'response_id': 'old',
+                      'item_id': 'old-words', 'transcript': 'Previous answer.'})
+            wire.put({'type': 'input_audio_buffer.speech_started', 'item_id': 'new-question'})
+            await until(lambda: call.input_open and 'old-words' in call.interrupted and not native.truncations)
+            receipt = {'type': 'response.done', 'response': {'id': 'old', 'status': 'cancelled'}}
+            if not old_receipt_late:
+                wire.put(receipt)
+            wire.put({'type': 'input_audio_buffer.speech_stopped', 'item_id': 'new-question'})
+            wire.put({'type': 'conversation.item.input_audio_transcription.completed',
+                      'item_id': 'new-question', 'status': 'completed', 'transcript': 'New question?'})
+            await until(lambda: not call.input_open and not native.input_transcripts)
+            assert not call.quiet()
+            if old_receipt_late:
+                wire.put(receipt)
+                await until(lambda: any(row[:2] == ('done', 'old') for row in host.usage))
+            assert not call.quiet() and native.vad_response_pending, 'a renewal must still wait for the new answer'
+            wire.put({'type': 'response.created', 'response': {'id': 'new'}})
+            await until(lambda: ('start', 'new') in host.usage)
+            assert not call.quiet()
+            wire.put({'type': 'response.done', 'response': {'id': 'new', 'status': 'completed'}})
+            await until(lambda: any(row[:2] == ('done', 'new') for row in host.usage))
+            assert call.quiet(), 'a finished native turn can renew'
+        finally:
+            if reader is not None:
+                reader.cancel()
+                await asyncio.gather(reader, return_exceptions=True)
+            await native.close()
+    asyncio.run(scenario())
