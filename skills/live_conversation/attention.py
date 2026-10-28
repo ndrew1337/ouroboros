@@ -13,6 +13,7 @@ from ouroboros.tool_call_log import current_tool_call_id
 
 
 FRAME_UNAVAILABLE = 'The shared frame could not be saved; ask what is on the screen.'
+FRAME_NOT_SAVED = 'The shared frame could not be saved as a file.'
 
 
 class Attention:
@@ -38,14 +39,10 @@ class Attention:
         try:
             path = await retain(frame.data, frame.mime, source=frame.source) if retain else ''
         except (OSError, RealtimeSetupError) as exc:
-            if self.host.model.vision or isinstance(exc, RealtimeSetupError) and exc.code != 'frame_retention':
+            if isinstance(exc, RealtimeSetupError) and exc.code != 'frame_retention':
                 raise
             path = ''
-        if not path:
-            if not self.host.model.vision:
-                return ''
-            raise RealtimeSetupError('frame_retention', 'This host cannot retain the exact shared frame.')
-        return path
+        return path or ''  # a failed save is said in words on every route; a seeing route still gets its pixels
 
     async def deliver(self, session, *, requested=False):
         """An input/offer boundary, or stream delivery. No response is opened here."""
@@ -95,11 +92,12 @@ class Attention:
             for source, frame in tuple(self.frames.items()):
                 path = await self.retained(frame)
                 frames.append({'source': source, 'kind': self.kinds.get(source, ''),
-                               **({'file_path': path} if path else {'error': FRAME_UNAVAILABLE})})
+                               **({'file_path': path} if path else
+                                  {'error': FRAME_NOT_SAVED if self.host.model.vision else FRAME_UNAVAILABLE})})
                 digest = sha256(frame.data).hexdigest()
                 if self.host.model.vision and self.seen.get(source) != digest:
                     images.append({'role': 'user', '_call_frame_source': source, '_call_frame_digest': digest, 'content': [
-                        {'type': 'text', 'text': f'[attend result; peer {source}; exact frame: {path}]'},
+                        {'type': 'text', 'text': f'[attend result; peer {source}; exact frame: {path or "not saved"}]'},
                         {'type': 'image_url', 'image_url': {'url': 'data:' + frame.mime + ';base64,'
                             + base64.b64encode(frame.data).decode()}, '_source_path': path}]})
                     self.seen[source] = digest

@@ -150,17 +150,29 @@ def test_host_binds_the_actual_call_id_for_an_attend_look(host_world, tmp_path):
 
 def test_frame_retention_does_not_swallow_cancellation_or_seeing_route_failures():
     async def scenario():
-        for vision, failure in [(False, asyncio.CancelledError), (True, OSError)]:
+        for vision in (False, True):  # cancellation is never a failed save
             host = Host()
             host.model = replace(host.model, vision=vision)
-            async def retain(*_args, **_kwargs):
-                raise failure()
-            host.retain_frame = retain
+            async def cancelled(*_args, **_kwargs):
+                raise asyncio.CancelledError()
+            host.retain_frame = cancelled
             attention = Attention(host)
             attention.frame(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'exact'))
-            with pytest.raises(failure):
+            with pytest.raises(asyncio.CancelledError):
                 await attention.attend({'look': True})
             assert not attention.seen and not attention.looks
+        # R17 N2: a seeing route's failed save is said in words, not as an argument error, and the pixels still come.
+        host = Host()
+        host.model = replace(host.model, vision=True)
+        async def broken(*_args, **_kwargs):
+            raise OSError("disk full")
+        host.retain_frame = broken
+        attention = Attention(host)
+        attention.frame(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'exact'))
+        result = json.loads(await attention.attend({'look': True}))
+        assert result['frames'] == [{'source': 'source', 'kind': '', 'error': 'The shared frame could not be saved as a file.'}]
+        [images] = attention.looks.values()
+        assert images and 'not saved' in images[0]['content'][0]['text']
     asyncio.run(scenario())
 
 

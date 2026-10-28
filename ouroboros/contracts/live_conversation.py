@@ -191,7 +191,8 @@ class CallTool:
 
     The host runs it on the call's ordinary tool lane, records its call and result
     in history like any tool, and awaits ``handler(host, arguments)`` for the result
-    text. A silent tool's result opens no spoken answer.
+    text inside the call's invocation scope, so ``tool_call_log.current_tool_call_id()``
+    names the call. A silent tool's result opens no spoken answer.
     """
 
     name: str
