@@ -33,7 +33,6 @@ OpenRouter/Anthropic-compatible output budgets use `max_tokens`; direct OpenAI C
 | Scratchpad consolidation, Light memory drafts (`consolidator.LIGHT_ANSWER_CEILING_TOKENS`) | 16,384 |
 | Post-task evolution promotion decision (`post_task_evolution`) | 8,192 |
 | Skill publish PR body generation | 8,192 |
-| Update letter LIGHT one-shot (`update_letter.UPDATE_LETTER_MAX_TOKENS`) | 1,024 |
 | Project naming LIGHT one-shot (`project_naming.llm_project_name`) | 256 |
 | Provider Test (`llm_probe.PROVIDER_TEST_MAX_TOKENS`) | 16 |
 
@@ -92,7 +91,6 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MODEL_SLOT_MAX_WAIT_SEC | 180 | Concurrency-slot wait bound |
 | OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming operation ceiling |
 | OUROBOROS_PROJECT_NAMING_ASYNC_TIMEOUT_SEC | 8 | Inline naming bound when a card becomes a project (`gateway/projects.py`) |
-| OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC | 120 | Update-letter calendar ceiling over slot wait and every send (`update_letter.py`) |
 | OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC | 120 | One translation batch, slot wait and call together (`ui_translation.py`) |
 | OUROBOROS_UI_LANGUAGE | "" | Owner interface language (BCP-47 tag; `""` = not chosen); written only by `POST /api/ui/i18n/language` (`ENDPOINT_WRITTEN_SETTINGS`), read live (§3 Settings) |
 | OUROBOROS_FALLBACK_COOLDOWN_ENABLED | true | 429-aware per-process model cooldown |

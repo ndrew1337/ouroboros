@@ -128,7 +128,7 @@ from ouroboros.runtime_limits import (
     explicit_execution_timeout_sec, _CURRENT_TASK_CEILING,  # noqa: F401
     resolve_task_execution_timeout_sec as _resolve_task_execution_timeout_sec,
     get_task_idle_timeout_sec, get_vision_caption_timeout_sec,  # noqa: F401
-    get_update_letter_timeout_sec, get_ui_translation_timeout_sec, get_websearch_timeout_sec,  # noqa: F401
+    get_ui_translation_timeout_sec, get_websearch_timeout_sec,  # noqa: F401
 )
 from ouroboros.update_channels import UPDATE_SETTINGS_DEFAULTS, normalize_update_channel  # noqa: F401
 

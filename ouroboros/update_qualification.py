@@ -2,7 +2,8 @@
 
 The commit trailer is evidence, never approval. Author declarations remain labelled;
 missing executions stay unknown. Fetching checks consult GitHub, passive readers do not.
-No prose is classified: older commit bodies reach the letter's author unchanged.
+No prose is classified: older commit bodies reach the description's author unchanged, and
+a refreshed run never rewrites a description of the same range.
 """
 from __future__ import annotations
 
@@ -145,10 +146,10 @@ def range_qualification(material: dict, repo_url: str) -> dict:
 
 
 def refresh_qualification(authored: dict, repo_url: str, *, previous: dict | None = None) -> tuple[dict, bool]:
-    """Refresh facts without making an outage erase observations or buy prose.
+    """Refresh facts without making an outage erase observations; prose never follows them.
 
-    The boolean names new check evidence relative to the letter's authoring input.
-    Availability is shown separately, with the latest retained observations.
+    The boolean names new check evidence relative to ``authored``, the recorded facts being
+    refreshed. Availability is shown separately, with the latest retained observations.
     """
     if not previous or any(previous.get(k) != authored.get(k) for k in ("base_sha", "target_sha")):
         previous = authored

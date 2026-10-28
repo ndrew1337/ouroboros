@@ -482,9 +482,10 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     # writes a local task artifact; Observe does not grant general file writes
     "generate_evolution_stats",
     # the world beyond the repository: forms, skills, project notes, the owner's interface wording
+    # and the update description shown to the owner
     "browser_action", "submit_skill_to_hub", "toggle_skill", "skill_owner_action",
     "skill_install", "skill_update",
-    "journal_write", "workpad_write", "pin_ui_translation",
+    "journal_write", "workpad_write", "pin_ui_translation", "record_update_description",
     "github_write", "pr_merge",
 })
 

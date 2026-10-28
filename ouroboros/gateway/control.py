@@ -49,9 +49,9 @@ def _managed_update_payload(*, fetch: bool, include_tags: bool) -> dict[str, Any
     from supervisor.update_merge import active_update_tx
 
     status = compute_managed_update_status(fetch=fetch)
-    # The update letter rides the same payload: written only after a FETCHING
-    # check (never on the passive read), with the running source separate from
-    # the mutable checkout HEAD that binds apply/preflight.
+    # The update description rides the same payload: a FETCHING check records only
+    # facts (never prose, never on the passive read), with the running source separate
+    # from the mutable checkout HEAD that binds apply/preflight.
     letter = None
     try:
         from ouroboros import update_letter as _letter
@@ -449,6 +449,62 @@ async def _preflight_description(plan: dict) -> dict:
     except Exception:
         log.warning("update preflight: range description unavailable", exc_info=True)
         return {"letter": None, "qualification": None}
+
+
+async def api_update_description(request: Request) -> JSONResponse:
+    """The owner's Write/Rewrite: ONE ordinary Main task describes the named range.
+
+    The range must be the one the last check offered or the saved description's own; a
+    request whose task has not ended answers 409 with that task. The task is admitted with
+    its scheduled receipt like any host-started root, and runs on the ordinary Main route.
+    """
+    body = await request_json_or(request, {})
+    body = body if isinstance(body, dict) else {}
+    mode = str(body.get("mode") or "")
+    base_sha, target_sha = (str(body.get(name) or "").strip().lower() for name in ("base_sha", "target_sha"))
+    if mode not in ("write", "rewrite") or not base_sha or not target_sha:
+        return json_error("mode (write or rewrite), base_sha and target_sha are required.", 400)
+    try:
+        from ouroboros.update_letter import RecordBusy, request_description
+
+        try:
+            outcome = await asyncio.to_thread(request_description, mode, base_sha, target_sha,
+                                              admit=_admit_description_task)
+        except RecordBusy:
+            return json_error("The update description record is busy; nothing was requested.", 503)
+        if outcome["outcome"] == "in_flight":
+            return json_error("A description is already being written.", 409,
+                              task_id=outcome["task_id"], task_status=outcome["status"])
+        if outcome["outcome"] == "range_not_offered":
+            return json_error("This range is not the offered update or the saved description's range; "
+                              "check for updates first.", 409, legal_ranges=outcome["legal_ranges"])
+        if outcome["outcome"] == "refused":
+            return json_error(f"The writing task was not accepted ({outcome['reason']}).", 503,
+                              reason=outcome["reason"])
+        update_progress.notify_changed()
+        return JSONResponse({"status": "queued", "task_id": outcome["task_id"], "key": outcome["key"]})
+    except Exception as exc:
+        return json_exception(exc)
+
+
+def _admit_description_task(task_id: str, text: str, metadata: Dict[str, Any]) -> str:
+    """Admit the owner's description request as an ordinary root task in the owner chat;
+    returns ``""`` or the refusal reason. Nothing else is started or stopped. Typed as a root
+    like every host-started one, so a host retry stays this request's own attempt."""
+    from supervisor.queue import enqueue_with_admission_receipt, persist_queue_snapshot
+    from supervisor.state import load_state
+
+    admitted = enqueue_with_admission_receipt({
+        "id": task_id, "type": "task", "chat_id": int(load_state().get("owner_chat_id") or 0),
+        "root_task_id": task_id, "delegation_role": "root",
+        "text": text, "metadata": metadata, "_require_worker_pool": True, "_require_unique_task_id": True,
+    })
+    if not isinstance(admitted, dict):
+        return "refused"
+    if admitted.get("_admission_blocked"):
+        return str(admitted.get("_worker_pool_disabled_reason") or admitted["_admission_blocked"])
+    persist_queue_snapshot(reason="update_description_requested")
+    return ""
 
 
 _KNOWN_UPDATE_PLAN_KINDS = frozenset({"clean", "conflicting"})

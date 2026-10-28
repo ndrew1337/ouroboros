@@ -258,7 +258,7 @@ Rules:
   document in the reader (§5 "Document reading"). Nothing else changes
   size: controls, labels, cards and page chrome keep the four sizes, and so
   do the compact surfaces (a Skill Review report, a task timeline) and the
-  other rich-content cards (the question card, the update letter).
+  other rich-content cards (the question card, the update description).
 
 ## 2. Hierarchy rule
 
@@ -275,7 +275,7 @@ steps down. Concretely:
   browser default is a defect: it lands at bold 16px full white and ties with,
   or beats, the content it introduces.
 - A Markdown heading is a subsection heading too — a `--type-body` semibold
-  label in a Skill Review report, the question card and the update letter,
+  label in a Skill Review report, the question card and the update description,
   and its row's own size in a task timeline — except inside a full rich chat
   answer, which is reading text and follows the §1 ladder instead.
 
@@ -1138,7 +1138,7 @@ preference when it opens and on every reconnect; there is no file watcher.
   label, and in a task card's timeline a heading renders inline, without
   block margins, at its row's own size, with a copyable line break before
   the following paragraph. Other rich-content cards (the question card, the
-  update letter) keep `--type-body` semibold labels. Bold text in chat
+  update description) keep `--type-body` semibold labels. Bold text in chat
   Markdown and rich-content cards is semibold, so a bold lead sentence never
   outweighs a heading. The page-size `md-h1` belongs to non-chat surfaces
   only.
