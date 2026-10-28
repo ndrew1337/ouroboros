@@ -225,7 +225,12 @@ def test_snapshot_is_a_distinct_checked_database(ctx, tmp_path, monkeypatch):
 def test_current_store_hold_stays_within_half_the_writers_wait(ctx, tmp_path, monkeypatch):
     # Task writes wait store.STORE_WAIT_SEC on the lock a current-store read holds; a snapshot's own query holds nothing.
     from contextlib import contextmanager
+    from itertools import count
+    from types import SimpleNamespace
 
+    # A clock that ticks on every read, as a fine one does: a coarse one (Windows) may not tick between two reads.
+    clock = count(1000.0, 0.001)
+    monkeypatch.setattr(sql, "time", SimpleNamespace(monotonic=lambda: next(clock)))
     seen, real_source = [], sql._source
 
     @contextmanager
@@ -315,6 +320,24 @@ def test_request_larger_than_a_pipe_reaches_a_late_child_whole(ctx, monkeypatch)
     text = "я" * 12000  # 72 KB once JSON-escaped, yet within the tool's 16384-character query limit
     result = run(ctx, f"SELECT length(value) AS n, substr(value, -2) AS tail FROM (SELECT '{text}' AS value)", timeout_sec=5)
     assert result == {"status": "ok", "data": {"columns": ["n", "tail"], "rows": [[12000, "яя"]], "truncated": False}}
+
+
+def test_child_answer_is_utf8_whatever_its_stdout_code_page(tmp_path, monkeypatch):
+    """A Windows pipe hands the child cp1252 stdout: its answer is UTF-8 bytes there too, and the
+    parent's ``json.loads`` reads them back whole."""
+    import io
+    from ouroboros import process_custody
+
+    request = tmp_path / "request.json"
+    request.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["query_data_sql", "session", str(request)])
+    monkeypatch.setattr(process_custody, "adopt_session_id", lambda _session: None)
+    monkeypatch.setattr(process_custody, "start_parent_lifeline", lambda **_kwargs: None)
+    monkeypatch.setattr(sql, "_result", lambda _request: {"status": "ok", "data": {"rows": [["яё𐍈"]]}})
+    wire = io.BytesIO()
+    monkeypatch.setattr(sys, "stdout", io.TextIOWrapper(wire, encoding="cp1252"))
+    sql.main()
+    assert json.loads(wire.getvalue()) == {"status": "ok", "data": {"rows": [["яё𐍈"]]}}
 
 
 def test_sqlite_failure_owns_only_its_interrupt_and_an_expired_busy_wait(tmp_path):

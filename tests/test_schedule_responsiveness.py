@@ -358,7 +358,11 @@ def test_a_deferred_preparation_resolves_its_resource_again(q, tmp_path, monkeyp
     automatic_pass()
     assert not occurrences._DEFERRED
     if change == "folder_removed":
-        assert q.pending == [] and _rows(q)["s1"]["hold"]["reason"] == "workspace_unusable"
+        # Read again and now absent: the kept address starts with its availability fact (#1799),
+        # and the same address keeps the fork its first preparation made.
+        [task] = q.pending
+        assert task["workspace_root"] == str(first.resolve())
+        assert task["metadata"]["workspace_availability"]["state"] == "missing" and len(forks) == 1
         return
     [task] = q.pending
     assert task["workspace_root"] == str((moved if change == "room_moved" else first).resolve())
@@ -444,9 +448,11 @@ def test_the_offloop_duty_never_holds_the_tick_and_runs_single_flight(q, monkeyp
         assert release.wait(5)
 
     monkeypatch.setattr(queue_schedules, "check_scheduled_tasks", slow_pass)
-    # Other cadences are not due in this tick: only the schedule duty starts.
+    # Other cadences are not due in this tick: only the schedule duty starts. The maintenance child is owed on a
+    # process's first look, so without this its thread would outlive the test whenever this test runs first.
     monkeypatch.setattr(server_maintenance, "_LAST_CANCEL_INTENT_SWEEP", [time.time()])
     monkeypatch.setattr(server_maintenance, "_LAST_COLD_CUSTODY_SWEEP", [time.time()])
+    monkeypatch.setattr(server_maintenance, "_tick_maintenance_child", lambda: None)
     stop_event = threading.Event()
     stamps = [time.time(), time.time()]
     try:

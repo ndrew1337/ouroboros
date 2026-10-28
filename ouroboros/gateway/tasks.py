@@ -1018,16 +1018,21 @@ def _cascade_waits_only_on_runs(task_id: str) -> bool:
 
     Their cancel is in flight (an engine confirms a cancel asynchronously), refused (a containment fault,
     critical until a verified terminal) or not sent (the engine is unreachable: pending until it answers).
-    The Stop stays pending and the cancel-intent watchdog settles it once custody records them settled;
-    none of these is a cascade that cancelled nothing. An unreadable answer proves nothing, so the
-    incident stays.
+    A witnessed live inline Presence root waits the same way: its runner observes the open intent at its
+    next stop check and writes the terminal itself (#2012). The Stop stays pending and the cancel-intent
+    watchdog settles it once custody records them settled; none of these is a cascade that cancelled
+    nothing. An unreadable answer, an unreadable author census included, proves nothing, so the incident
+    stays; only a Presence root's own row reads that census.
     """
     try:
         from ouroboros.delegate_custody_reconcile import tree_open_runs
+        from ouroboros.presence_runner import presence_execution_witness
+        from supervisor.cancel_publication import live_presence_row
         from supervisor.queue import DRIVE_ROOT, task_subtree_is_live
 
-        return bool(tree_open_runs(DRIVE_ROOT, task_id)) and not task_subtree_is_live(
-            task_id, ignore_intents=True, count_runs=False)
+        waits = tree_open_runs(DRIVE_ROOT, task_id) or (live_presence_row(load_task_result(DRIVE_ROOT, task_id))
+                                                         and presence_execution_witness(task_id, drive_root=DRIVE_ROOT) is True)
+        return bool(waits) and not task_subtree_is_live(task_id, ignore_intents=True, count_runs=False)
     except Exception:
         log.debug("Cascade liveness read failed for %s", task_id, exc_info=True)
         return False
@@ -1090,8 +1095,9 @@ def _record_stop(task_id: str, *, cascade: bool, stop_action_id: str) -> Optiona
         from supervisor.cancel_publication import live_presence_row
 
         row = load_task_result(DRIVE_ROOT, task_id, strict=True)
-        # A live Presence turn is its runner's (as on the single Stop's miss lane).
-        if live_presence_row(row) or (not row and not still_owned()):
+        # A Presence row is its runner's: only a turn the shared owner still holds takes the Stop (#2012).
+        if (live_presence_row(row) and not task_has_live_ownership(task_id)
+                or not row and not still_owned()):
             return None
     source = "http_cascade" if cascade else "http_single"
     record = functools.partial(
