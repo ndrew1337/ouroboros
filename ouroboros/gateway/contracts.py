@@ -1495,12 +1495,8 @@ from ouroboros.gateway.client_contracts import FileBrowserListResponse, ServedUi
 WS_MESSAGE_TYPES: tuple[str, ...] = (
     "conversation_finished", "chat", "command",
     "panic_accepted",  # immediate acceptance only, not proof of process exit
-    "photo",
-    "video",
-    "document",
-    "links",
-    "quiz",
-    "quiz_state",
+    "photo", "video", "document", "links",
+    "quiz", "quiz_state",
     "card", "card_state",  # gateway/card_contracts.py frames
     "typing",
     "log",

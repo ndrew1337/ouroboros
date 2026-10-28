@@ -884,7 +884,8 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 425 -> 426: ``state/openrouter_models.json``, the OpenRouter catalogue every process adopts.
 # 426 -> 429 (live calls): live wire evidence, the extension import lock and the live tariff cache.
 # 429 -> 430: ``state/delegate_document_imports/*.lock``, one selected document's import decision.
-EXPECTED_SCAN_PATHS = 430
+# 430 -> 431: ``observability/calls/*/*``, the target's per-call evidence (408d9a84d), counted on merge.
+EXPECTED_SCAN_PATHS = 431
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts
