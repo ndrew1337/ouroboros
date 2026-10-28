@@ -57,12 +57,14 @@ test('memory disclosures keep the catalog window unit and measurement source', (
     assert.match(callSettingsHtml({provider:'missing',catalogs:[]}), /memory window for this selection is not known/);
 });
 
-test('thinking labels its lowest default honestly and keeps explicit levels and other defaults', () => {
+test('thinking labels its default level honestly and keeps explicit levels and other defaults', () => {
     const thinking = {...catalog.models[1], default:true, notes:[['thinking', 'Fixture thinking note.']]};
     const config = {provider:catalog.id, catalogs:[{...catalog,models:[thinking]}]};
-    assert.match(callSettingsHtml({...config, thinking:'obsolete'}), /value="small" selected/);
+    assert.match(callSettingsHtml({...config, thinking:'obsolete'}), /value="" selected>Default \(small\)<\/option>/);
+    const named = {provider:catalog.id, catalogs:[{...catalog,models:[{...thinking, thinking_default:'large'}]}]};
+    assert.match(callSettingsHtml({...named, thinking:''}), /value="" selected>Default \(large\)<\/option>/);
     const blank = callSettingsHtml({...config, thinking:''});
-    assert.match(blank, /value="" selected>Lowest \(default\)<\/option>/);
+    assert.match(blank, /value="" selected>Default \(small\)<\/option>/);
     assert.doesNotMatch(blank, />Engine’s default<\/option>/);
     assert.match(blank, /Engine’s default model/);
     assert.match(blank, /Engine’s default voice/);

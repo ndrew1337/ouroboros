@@ -151,6 +151,8 @@ class CatalogModel:
     silent_tool_results: bool = field(default=True, kw_only=True)
     voices: tuple[CatalogVoice, ...] = ()  # empty: the provider's own default voice only
     thinking_levels: tuple[str, ...] = ()  # empty: no thinking control
+    # The level a call uses when the owner chose none; empty means the model's lowest level. Keyword-only.
+    thinking_default: str = field(default="", kw_only=True)
     honours: frozenset[str] = frozenset()  # subset of CALL_KNOBS
     # One plain sentence per knob in CALL_KNOBS it does not honour, shown where the knob would be.
     notes: tuple[tuple[str, str], ...] = ()
@@ -164,6 +166,8 @@ class CatalogModel:
             raise RealtimeSetupError("catalog", f"unknown knob in honours: {sorted(set(self.honours) - CALL_KNOBS)}")
         if bool(self.thinking_levels) != ("thinking" in self.honours):
             raise RealtimeSetupError("catalog", "thinking levels and the thinking knob go together")
+        if self.thinking_default and self.thinking_default not in self.thinking_levels:
+            raise RealtimeSetupError("catalog", "the default thinking level must be one of the model's levels")
         if len({voice.id for voice in self.voices}) != len(self.voices):
             raise RealtimeSetupError("catalog", "voice ids must be unique")
         for knob, sentence in self.notes:

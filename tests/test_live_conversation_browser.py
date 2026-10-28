@@ -492,8 +492,9 @@ def test_catalog_settings_save_and_client_devices(subscription_ui, monkeypatch, 
     thinking = next(model for model in gemini['models'] if 'thinking' in model['honours'])
     form.locator('[name="model"]').select_option(thinking['id'])
     assert_catalog_model(gemini, thinking)
-    expect(form.locator('[name="thinking"]')).to_have_value(thinking['thinking_levels'][0])
-    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text('Lowest (default)')
+    expect(form.locator('[name="thinking"]')).to_have_value('')  # a newly chosen model starts at its own default
+    expect(form.locator('[name="thinking"] option[value=""]')).to_have_text(
+        f"Default ({thinking['thinking_default'] or thinking['thinking_levels'][0]})")
     form.locator('[name="thinking"]').select_option(thinking['thinking_levels'][-1])
     grok = by_id['grok_realtime:grok']
     form.locator('[name="provider"]').select_option(grok['id'])

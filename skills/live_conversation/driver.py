@@ -163,7 +163,7 @@ def session_options(host, resume_handle=""):
     languages = tuple(host.state.get("languages", ()))
     knobs = {key: getattr(config, key) for key in ("pause", "interruptions", "thinking", "search") if key in honours}
     if "thinking" in knobs and knobs["thinking"] not in host.model.thinking_levels:
-        knobs["thinking"] = host.model.thinking_levels[0]
+        knobs["thinking"] = host.model.thinking_default or host.model.thinking_levels[0]
     return LiveOptions(voice=config.voice, resume_handle=resume_handle,
         languages=languages if "languages" in honours else (),
         instructions="\n\n".join(filter(None, (CALL_INSTRUCTIONS, engine_sentence(host.model),

@@ -150,7 +150,7 @@ def test_call_setup_copy_describes_default_on_skills_and_the_owner_flow(config_a
 
 @pytest.mark.parametrize('engine', ['openai', 'gemini_extended'])
 @pytest.mark.parametrize('saved', [None, '', 'low', 'high'])
-def test_unset_thinking_uses_the_selected_catalog_lowest_level_without_changing_saved_choices(engine, saved):
+def test_unset_thinking_uses_the_routes_default_level_without_changing_saved_choices(engine, saved):
     from skills.live_conversation.driver import session_options
     from skills.openai_realtime.plugin import CATALOG as OPENAI
     from skills.gemini_live.plugin import CATALOG as GEMINI
@@ -159,7 +159,9 @@ def test_unset_thinking_uses_the_selected_catalog_lowest_level_without_changing_
     config = plugin.validate(raw)
     host = SimpleNamespace(config=config, model=model, state={})
     assert config.thinking == ('' if saved is None else saved)
-    assert session_options(host).thinking == (saved or ('minimal' if engine == 'openai' else 'low'))
+    # OpenAI defaults to low (owner 28.10, OpenAI's voice-agent guidance); a model without a named default to its lowest.
+    assert session_options(host).thinking == (saved or 'low')
+    assert model.thinking_default == ('low' if engine == 'openai' else '')
 
 
 def test_the_untouched_beta_switch_is_never_written_so_a_later_default_reaches_this_install(config_api, tmp_path):

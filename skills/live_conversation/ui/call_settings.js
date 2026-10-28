@@ -18,7 +18,7 @@ export function callSettingsHtml(config) {
     const catalog = catalogs.find(row => row.id === config.provider);
     const model = catalog?.models.find(row => config.model ? row.id === config.model : row.default);
     if (config.thinking && model?.thinking_levels?.length && !model.thinking_levels.includes(config.thinking)) {
-        config = {...config, thinking:model.thinking_levels[0]};
+        config = {...config, thinking:''};  // a level this model lacks falls back to the model's own default
     }
     const fields = [field('enabled', 'Calls (beta)', 'checkbox'),
         select('provider', 'Engine', catalogs, config.provider),
@@ -30,7 +30,7 @@ export function callSettingsHtml(config) {
     const knobs = {
         pause: field('pause', 'Pause before answering', 'select', ['short','normal','long']),
         interruptions: field('interruptions', 'Speaking interrupts Ouroboros', 'checkbox'),
-        thinking: field('thinking', 'Thinking', 'select', [{value:'',label:'Lowest (default)'}, ...(model?.thinking_levels || [])]),
+        thinking: field('thinking', 'Thinking', 'select', [{value:'',label:`Default (${model?.thinking_default || model?.thinking_levels?.[0] || 'lowest'})`}, ...(model?.thinking_levels || [])]),
         search: field('search', 'Built-in search', 'checkbox'),
     };
     const notes = [];
@@ -88,7 +88,7 @@ export function mountCallSettings(form, { skill, env = globalThis, read = () => 
             draft.voice = '';
             const catalog = draft.catalogs?.find(row => row.id === draft.provider);
             const model = catalog?.models.find(row => draft.model ? row.id === draft.model : row.default);
-            draft.thinking = model?.thinking_levels?.[0] || '';
+            draft.thinking = '';  // a new engine or model starts at its own default level
             paint();
         }
         autosave.change();

@@ -183,6 +183,15 @@ def test_legacy_catalog_constructor_and_silence_are_independent_of_vendor_and_vi
     assert 'not guaranteed silent' not in engine_sentence(old)
     renamed = replace(old, id='vendor-free', vision=True, silent_tool_results=False)
     assert 'not guaranteed silent' in engine_sentence(renamed)
+    assert old.thinking_default == ''  # owner 28.10: a named default is optional and keyword-only
+
+
+def test_a_default_thinking_level_must_be_one_of_the_models_levels():
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    named = CatalogModel('m', 'M', thinking_levels=('minimal', 'low'), honours=frozenset({'thinking'}), thinking_default='low')
+    assert named.thinking_default == 'low'
+    with pytest.raises(RealtimeSetupError, match='default thinking level'):
+        CatalogModel('m', 'M', thinking_levels=('minimal', 'low'), honours=frozenset({'thinking'}), thinking_default='high')
 
 
 @pytest.mark.parametrize('duration,played,heard', [(None, 0, False), (None, 1, True), (1000, 979, False), (1000, 980, True)])

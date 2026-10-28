@@ -29,6 +29,8 @@ CATALOG = ProviderCatalog(
         voices=tuple(CatalogVoice(name, name.capitalize()) for name in (
             "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse")),
         thinking_levels=("minimal", "low", "medium", "high", "xhigh"),
+        # OpenAI's voice-agent guidance sets low rather than its own default (owner 28.10: low, not minimal).
+        thinking_default="low",
         honours=frozenset({"pause", "interruptions", "languages", "thinking"}),
         notes=(("search", "OpenAI Realtime has no built-in search here."),)),))
 
