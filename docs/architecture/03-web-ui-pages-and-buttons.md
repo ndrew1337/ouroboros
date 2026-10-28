@@ -49,7 +49,7 @@ Iframes inherit no host tokens or choice; `render.appearance` declares their pol
 
 #### Timeline ownership and ordering
 
-`chat.js` owns timeline, runtime/budget controls, routing, task/child cards, subscriptions, threads/order/unread/reconnect. `chat_media.js` owns delivery (living cards: `chat_cards.js`)/paste/drop, `chat_attachments.js` staged files/owner attachments, `chat_input_sizing.js` field height. Messages have one durable row; Project rows/bindings duplicate no messages/unread/cost on conversion. Routing ACKs update the owner's `client_message_id` sidecar, never an assistant bubble.
+`chat.js` owns timeline, runtime/budget controls, routing, task/child cards, subscriptions, threads/order/unread/reconnect, focus corners. `chat_media.js` owns delivery (living cards: `chat_cards.js`)/paste/drop, `chat_attachments.js` staged files/owner attachments, `chat_input_sizing.js` field height. Messages have one durable row; Project rows/bindings duplicate no messages/unread/cost on conversion. Routing ACKs update the owner's `client_message_id` sidecar, never an assistant bubble.
 
 Rows order by time then arrival (DESIGN). Keyed replay keeps nodes, disclosure, focus, selection and child lifecycle; current results outrank history. `LIVE_CARD_CAP` bounds live cards, `chat_history.js` bounds pages; `historyCoverage` proves bytes, not EOF/IDs/time. `chat_reading_position.js` owns anchors; `showLatest({arrive})` and `project_read_state.js` land on newest arrival. `createHistoryControls` keeps read gaps at the feed edge; `toast.js` announces once per document in an exposed room. Floating headers reserve measured height; sidebar selection is instant. Origins adopt by `project_dialogue.project_origin_identity`.
 
@@ -141,7 +141,7 @@ Cancel appears only on unfinished root cards (moved works' portals too) whose ho
 
 One click and `move_to_project` share one placement operation per task id. Its durable binding wins; a name requested for an already-bound task renames that room. Only this work moves. `project_started`, `project_handoff` and `/api/state.task_bindings` carry the task/project identity and name for the existing Main card. Origin siblings are independent. RUNNING resources stay unchanged until leased readmission (§6 Project placement).
 
-The Main-root `project_reference.js` opens/focuses the panel, never closes it; naming stays server-owned (DESIGN "References and actions"). Project-scoped is not project-bound: a headless/CLI `project_id` grants lease/memory scope without durable binding, routes to that thread at admission (§5), and creates neither Main card nor conversion button.
+Main-root `project_reference.js` opens, never closes, the panel; names stay server-owned (DESIGN "References and actions"). Project-scoped is not project-bound: a headless/CLI `project_id` grants lease/memory scope without durable binding, routes to that thread at admission (§5), and creates neither Main card nor conversion button.
 
 #### Project rooms
 

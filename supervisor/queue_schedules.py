@@ -368,6 +368,26 @@ def _schedule_projection_row(raw: Dict[str, Any]) -> Dict[str, Any]:
     return row
 
 
+def presence_promise(binding: Any, row: Any) -> bool:
+    """Whether ``row`` is a follow-up the exact nonempty Presence ``binding`` scheduled (#1589).
+
+    The one ownership predicate behind a Presence caller's schedule reads, its context
+    listing and its withdrawal: the binding carrier ``tools/followup.py`` copies by value
+    onto the row's task template. An owner or skill row, a note, another binding and an
+    empty or malformed carrier never match; objective text, room or writer kind decide nothing.
+    """
+    wanted = str(binding or "").strip()
+    template = row.get("task") if isinstance(row, dict) else None
+    return bool(wanted and isinstance(template, dict) and row.get("source") == "task_followup"
+                and row.get("kind") not in {"notify", "note"}
+                and presence_metadata_binding(template.get("metadata")) == wanted)
+
+
+def presence_promise_store(data: Dict[str, Any], binding: Any) -> Dict[str, Any]:
+    """The store narrowed to ``binding``'s own follow-ups, filtered BEFORE any page is cut."""
+    return {**data, "tasks": [row for row in data.get("tasks") or [] if presence_promise(binding, row)]}
+
+
 def schedule_tool_projection(
     data: Dict[str, Any], *, offset: int = 0, limit: int = _SCHEDULE_PAGE_DEFAULT,
     result_limit: int = 15_000,

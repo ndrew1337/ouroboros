@@ -1272,6 +1272,12 @@ def _no_tool_final_answer(
             )
             _loop()._merge_finalization_trace(llm_trace, forced_trace)
             return text, usage, llm_trace
+        from supervisor.owner_stop import presence_stop_now
+        if presence_stop_now(tools._ctx):  # Stop now met this Presence answer: kept on the row, never sent
+            from ouroboros.loop_round_limits import _handle_direct_turn_hard_stop
+            text, usage, forced_trace = _handle_direct_turn_hard_stop(limit_ctx)
+            _loop()._merge_finalization_trace(llm_trace, forced_trace)
+            return text, usage, llm_trace
         from ouroboros.place_intake import reopen_for_place_mail
         if not stopping and reopen_for_place_mail(tools._ctx, post_controls):
             return held()  # keep the answer; the accepted place context gets a model round
@@ -1340,8 +1346,10 @@ def finish_completed_stop(tools: ToolRegistry, ctx: Any, emit_progress: Any,
         return None
     reason = str(controls.get("finalize_now") or "").splitlines()
     cause = reason[0].strip() if reason else ""
-    from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN
-    if cause == REASON_OWNER_STOPPED_DIRECT_TURN:
+    from supervisor.owner_stop import REASON_OWNER_STOPPED_DIRECT_TURN, presence_stop_now
+    # Stop now (a direct turn's control, a Presence turn's open intent) keeps this stop, unsent, before
+    # a hard rail below could publish it without the ordinary admission's read.
+    if cause == REASON_OWNER_STOPPED_DIRECT_TURN or presence_stop_now(tools._ctx):
         from ouroboros.loop_round_limits import _handle_direct_turn_hard_stop
         return _handle_direct_turn_hard_stop(ctx)
     waiter = getattr(tools._ctx, "model_wait_context", None)

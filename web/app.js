@@ -374,16 +374,15 @@ function syncNavigationState() {
     if (leftNow.length) Promise.all([settled, exit]).then(() => leftNow.forEach(([pid, inst, at]) => rooms.settle(pid, inst, true, at)));
     // One commit for both layers (layers.js), after the panel's unhide so focus can go into it: the drawer, and the
     // Project panel's layer, modal only where it covers the room; on a phone only the covered room's inert (the whole
-    // room restyles) waits for the card's motion.
+    // room restyles) waits for the card's motion. Another Project is a new layer: its room takes the focus.
     layers.batch(() => {
         if (drawerOpen) {
             layers.push({ id: 'drawer', el: primarySidebar, modal: true, live: [navDrawerBackdrop].filter(Boolean),
                 onClose: () => setMobileDrawerOpen(false) });
         } else layers.remove('drawer');
-        if (activeProjectId) {
-            layers.push({ id: 'project', el: projectPanel, modal: isStackLayout(), live: [projectPanelBackdrop].filter(Boolean),
-                onClose: () => closeProjectPanel(), focus: focusProjectRoom });
-        } else layers.remove('project');
+        if (activeProjectId !== shownProjectId) layers.remove('project');
+        if (activeProjectId) layers.push({ id: 'project', el: projectPanel, modal: isStackLayout(),
+            live: [projectPanelBackdrop].filter(Boolean), onClose: () => closeProjectPanel(), focus: focusProjectRoom });
     }, { inertAfter: isStackLayout() ? settled : null });
     // The layer's inert release is registered first. A delayed read behind the drawer keeps its notice pending.
     Promise.all([settled, exit]).then(() => {
@@ -416,9 +415,9 @@ function arrivePanel(pid, since) {
     });
 }
 
-// Keys scroll what is being read: an opened Project gives the focus to its room's feed (focusable, out of the tab
-// order), so End, PageDown and the arrows move the messages, and a press on their text keeps the focus there. With
-// the panel itself focused they moved nothing (#1998). The panel takes it only before its room has mounted.
+// Keys scroll what is being read: an opened Project focuses its room's feed (out of the tab order; the panel only until
+// the room mounts), so End, PageDown and the arrows move the messages (#1998). Whether that focus shows is set by the
+// opening (openProjectPanel's `pointer`) and then by the room itself (chat.js, its focus corners).
 function focusProjectRoom() {
     const feed = projectInstances.get(navState.activeProjectId)?.page?.querySelector('.chat-messages') || projectPanel;
     if (!feed.hasAttribute('tabindex')) feed.tabIndex = -1;
@@ -628,7 +627,7 @@ function closeProjectPanel({ sync = true, reveal = false } = {}) {
     if (activeId && state.activePage === 'chat' && !reveal) void mainChat?.showLatest?.();
 }
 
-async function openProjectPanel(project, { closeDrawer = true, openOnly = false, taskId = '', quizId = '', sourceReveal = null } = {}) {
+async function openProjectPanel(project, { closeDrawer = true, openOnly = false, taskId = '', quizId = '', sourceReveal = null, pointer = false } = {}) {
     if (sourceReveal && !sourceReveal.current()) return null;
     if (!project?.id || String(project.lifecycle || 'active') !== 'active') return;
     const navigation = ++projectNavigationGeneration;
@@ -684,6 +683,7 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
             }
         }
         if (closeDrawer) navState.mobileDrawerOpen = false;
+        inst.quietFocus?.(pointer);  // pressed open by a pointer: the room's focus corners wait for a key
         syncNavigationState();
         if (sourceReveal) {
             const reveal = {};
@@ -1087,7 +1087,7 @@ function paintProjectsNav() {
                 item.appendChild(status);
             } else {
                 // Pressing a row opens its Project; pressing the open one again keeps it open (like every reference).
-                btn.addEventListener('click', () => openProjectPanel(item.project, { openOnly: true }));
+                btn.addEventListener('click', (event) => openProjectPanel(item.project, { openOnly: true, pointer: event.detail > 0 }));
                 // The action control is a sibling button, never nested interactive UI.
                 const kebab = document.createElement('button');
                 kebab.type = 'button';
@@ -1245,8 +1245,8 @@ window.addEventListener('ouro:project-created', async (event) => {
 window.addEventListener('ouro:open-project', (event) => {
     const project = event?.detail?.project;
     if (!project?.id) return;
-    const resolved = lastProjectRows.find((item) => item.id === project.id) || project;
-    openProjectPanel(resolved, { openOnly: true, taskId: event.detail.task_id || '', quizId: event.detail.quiz_id || '' });
+    openProjectPanel(freshProjectRow(project), { openOnly: true, taskId: event.detail.task_id || '',
+        quizId: event.detail.quiz_id || '', pointer: event.detail.pointer === true });
 });
 
 // A contribution's `open.tab` (contributions.js): the Widgets page, at that skill's first card once it is drawn.

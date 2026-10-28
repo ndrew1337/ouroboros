@@ -427,7 +427,7 @@ def _compact_annotations_locked(drive_root: Any, path: pathlib.Path) -> None:
     rows.sort(key=lambda row: str(row.get("ts") or ""))
     tmp = path.with_name(f".{path.name}.tmp.{uuid.uuid4().hex}")
     data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
     try:
         view = memoryview(data)
         while view:
@@ -533,7 +533,7 @@ def append_chat_annotation(
                 if require_latest_token is not None and latest_token not in set(require_latest_token):
                     return False  # a NEWER routing attempt owns the card now
         data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
         try:
             view = memoryview(data)
             while view:

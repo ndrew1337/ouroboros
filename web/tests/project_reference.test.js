@@ -72,10 +72,12 @@ test('one intent, one control: both forms are the same node with the same name a
             assert.equal(node.attributes['aria-label'], 'Open project OpenClaw 2.0 <b>x</b>');
             assert.equal(node.title, node.attributes['aria-label']);
         }
-        for (const node of [inline, footer]) node.listeners.get('click')();
-        assert.deepEqual(sent, Array(2).fill({
-            type: 'ouro:open-project', detail: { project, task_id: '', quiz_id: '' },
-        }));
+        // A key's click has no detail; a pointer's counts its press, and the room it opens stays quiet.
+        inline.listeners.get('click')({ detail: 0 });
+        footer.listeners.get('click')({ detail: 1 });
+        assert.deepEqual(sent, [false, true].map((pointer) => ({
+            type: 'ouro:open-project', detail: { project, task_id: '', quiz_id: '', pointer },
+        })));
     });
 });
 
@@ -83,8 +85,9 @@ test('a question reference opens that exact question; any other layout or a stat
     withDom((sent) => {
         const node = projectReference({ id: 'launch', name: 'Launch', chat_id: 7 }, { taskId: 't1', quizId: 'q1' });
         assert.equal(node.attributes['aria-label'], 'Open this question in Launch');
-        node.listeners.get('click')();
-        assert.deepEqual(sent[0].detail, { project: { id: 'launch', name: 'Launch', chat_id: 7 }, task_id: 't1', quiz_id: 'q1' });
+        node.listeners.get('click')({ detail: 1 });
+        assert.deepEqual(sent[0].detail, { project: { id: 'launch', name: 'Launch', chat_id: 7 }, task_id: 't1', quiz_id: 'q1',
+            pointer: true });
         // Two forms only: the retired `bar` layout and `background` words, or any other, read as the inline capsule.
         for (const [layout, state] of [['bar', 'background'], ['sidebar', 'paused']]) {
             const odd = projectReference({ id: 'launch', name: 'Launch' }, { layout, state });
@@ -121,7 +124,7 @@ test('a Project that was never named reads Project, and a name that arrives late
         assert.equal(late.children[1].textContent, 'Launch');
         assert.equal(late.title, 'Open this question in Launch');
         assert.equal(late.attributes['aria-label'], 'Open this question in Launch');
-        late.listeners.get('click')();
+        late.listeners.get('click')({ detail: 0 });
         assert.deepEqual(sent[0].detail.project, { id: 'launch', chat_id: 3, name: 'Launch' });
     });
 });

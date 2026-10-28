@@ -2889,6 +2889,9 @@ export function createChatInstance({
             return changed;
         };
         const changed = preserveStickiness ? withStableViewport(mutate) : mutate();
+        // The scrollbar this feed draws (none where scrollbars overlay the page): a Project's focus corners keep off it.
+        const lane = `${messagesDiv.offsetWidth - messagesDiv.clientWidth}px`;
+        if (asPanel && page.style.getPropertyValue('--chat-feed-lane') !== lane) page.style.setProperty('--chat-feed-lane', lane);
         updateScrollButton();
         return changed;
     }
@@ -2918,6 +2921,18 @@ export function createChatInstance({
     }
 
     installChatResizeObservers();
+
+    // A Project room's feed holds the keys while it is open (app.js focusProjectRoom) and shows that focus as two
+    // corners (style.css). A pointer in the panel quiets them; a key anywhere in the room restores the cue, including
+    // Back to reading from the composer. Lone modifiers and non-scrolling shortcuts (Cmd+C, Cmd+Shift+4) stay quiet.
+    const focusPanel = asPanel ? container.closest?.('.project-panel') : null;
+    const quietFocus = () => messagesDiv.classList.add('is-quiet-focus');
+    const showFocus = ({ key, metaKey, ctrlKey, altKey }) => {
+        if (metaKey || ctrlKey || altKey ? /^(Arrow|Page|Home$|End$| $)/.test(key)
+            : !/^(Shift|CapsLock|Fn)$/.test(key)) messagesDiv.classList.remove('is-quiet-focus');
+    };
+    focusPanel?.addEventListener('pointerdown', quietFocus);
+    focusPanel?.addEventListener('keydown', showFocus);
 
     let headerControlInterval = null;
     if (asPanel) {
@@ -3585,6 +3600,8 @@ export function createChatInstance({
         // reading and its transients stop at once, it is neither shown nor read; `stay` is a reopen meanwhile.
         leave: () => { leaving = true; readReceipt.cancel(); reading.cancel(); roomWork?.leave(); chatMedia.closeTransient(); },
         stay: () => { leaving = false; },
+        // How the room was opened (app.js): pressed open by a pointer, its focus corners wait for a key.
+        quietFocus: (quiet) => messagesDiv.classList.toggle('is-quiet-focus', Boolean(quiet)),
         // Full teardown (P3): release every resource this instance acquired —
         // ws subscriptions, window/document listeners, the ResizeObserver, all
         // timers — then drop the buffered collections and remove the DOM last.
@@ -3618,6 +3635,8 @@ export function createChatInstance({
             window.removeEventListener('ouro:page-shown', handlePageShown);
             document.removeEventListener('visibilitychange', handlePageShown);
             header?.destroy();
+            focusPanel?.removeEventListener('pointerdown', quietFocus);
+            focusPanel?.removeEventListener('keydown', showFocus);
             chatResizeObserver?.disconnect();
             chatResizeObserver = null;
             historyResyncScheduler.cancel();

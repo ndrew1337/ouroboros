@@ -350,12 +350,11 @@ outline: 2px solid var(--focus-accent-border);
 outline-offset: 2px;
 ```
 
-`outline-offset: -2px` is the only sanctioned variant, for a control that sits
-flush inside a strip that clips an outer ring (sidebar rows, header buttons).
-Nothing else: not a blue ring, not a green one, not a `box-shadow` standing in
-for an outline, and not a colour picked to match the control it is on. A focus
-ring is the reader's cursor; if it changes colour per surface, it stops
-reading as one thing.
+`outline-offset: -2px` serves a control in a strip clipping an outer ring.
+A Project transcript uses two gutter corners (owner 28.10), quiet after a
+pointer until a key; forced colours use an inset system-colour ring. No blue
+or green ring in ordinary themes, no `box-shadow` outline or colour matched
+to the control: a focus ring is the reader's cursor, consistent across surfaces.
 
 **Hover paint is not a focus ring.** A rule written as
 `.x:hover, .x:focus-visible { background: … }` gives a keyboard user exactly
@@ -363,7 +362,7 @@ what a mouse user gets by accident and nothing that says "you are here". Where
 a control wants both, the shared paint stays in the hybrid rule and the ring
 goes in a `:focus-visible`-only rule of its own.
 
-Text fields are the exception, and they keep their own established idiom:
+Text fields keep their own idiom:
 `border-color: var(--focus-accent-border)` plus
 `box-shadow: 0 0 0 3px var(--focus-accent-ring)`. A field already has a border
 to recolour, so an outline outside it would be a second frame.
@@ -863,7 +862,7 @@ status sentence's or a composer chip's dot is its tone, §4).
   Settings and onboarding notes, warnings inside task timelines, reviews and Logs
   events, account quota; (3) the System voice (a pale tint in the light theme, its name
   in the dark one), a voice, not a status; (4) a few data categories that are not statuses (Logs and Storage
-  categories). What goes on by itself or what someone chose — queued, waiting,
+  categories, the fourth default chart series). What goes on by itself or what someone chose — queued, waiting,
   paused, pausing, stopped, unconfirmed, work in flight, a mode, a level, a setting
   value — is never amber.
 
@@ -2814,8 +2813,8 @@ what is on top: a dialog over a layer first, then the layer. While a layer is
 open the page holds exactly one same-address history entry, so Back closes it
 instead of leaving the app; navigation itself is still never written into the
 address. A modal layer makes the rest of the shell inert (never what opens over
-it) and returns focus to its opener on close. The shell draws one close glyph and
-one More glyph (`web/modules/page_icons.js`).
+it); closing refocuses the opener unless focus moved somewhere live. The shell
+draws one close glyph and one More glyph (`web/modules/page_icons.js`).
 
 **Page header.** One component (`web/modules/page_header.js`) draws every page's
 header and the Project panel's, as one row except the narrow toolbar below. No decorative icon.

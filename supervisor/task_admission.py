@@ -632,7 +632,7 @@ def revalidate_project_holds() -> None:
         ProjectAdmissionError, _strict_admission_snapshot, host_unscoped,
         project_admission_guard, task_project_membership, validate_project_admission,
     )
-    from supervisor import queue
+    from supervisor import queue, workers
     from supervisor.queue_snapshot import _descends_from, _interrupted_ancestors, _fence_snapshot_running_rows, _exact_pause_row
     from supervisor.schedule_occurrence import first_dispatch_unsent, restore_allowed
     from supervisor.update_merge import assisted_resume_authorizes
@@ -640,6 +640,7 @@ def revalidate_project_holds() -> None:
     from ouroboros.project_placement import pending_placement, refresh_pending_placement
     from ouroboros.owner_wait import restore_owner_wait_allowed
     from ouroboros.delegate_recovery import planned_handoff_resume_allowed
+    from ouroboros.workspace_admission import admitted_absent_workspace
     from supervisor.events_budget import BUDGET_HOLD_KEY, native_continuation_repair
 
     from supervisor.budget_resume import revalidate_consumed_resume_holds
@@ -794,7 +795,9 @@ def revalidate_project_holds() -> None:
                 guard = project_admission_guard(queue.DRIVE_ROOT, basis, snapshot=snapshot)
             with guard:
                 workspace = str(task.get("workspace_root") or "")
-                if workspace:
+                # A folder admitted as merely absent (#1799) keeps that admission while its address stays absent.
+                if workspace and not admitted_absent_workspace(task, system_repo_dir=workers.REPO_DIR,
+                                                               drive_root=queue.DRIVE_ROOT):
                     path = pathlib.Path(workspace)
                     if not path.is_dir() or os.path.normcase(str(path.resolve(strict=True))) != os.path.normcase(workspace):
                         raise ValueError("The original prepared folder is unavailable or resolves elsewhere.")
