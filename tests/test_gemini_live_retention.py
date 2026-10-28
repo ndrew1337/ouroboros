@@ -57,7 +57,8 @@ def test_modality_axes_status_and_missing_values(gemini):
     asyncio.run(run())
 
 
-def test_retention_uses_audio_growth_not_an_idle_clock(gemini):
+def test_retention_uses_learned_audio_growth_not_an_idle_clock(gemini):
+    gemini.HELD_AUDIO_SPANS["gemini-3.8-live"] = 2500
     async def run():
         session, wire = make_session(gemini)
         try:
@@ -142,4 +143,45 @@ def test_thinking_idle_without_more_output_closes_the_existing_receipt(gemini):
                 {"serverContent": {"turnComplete": True, "interactionStatus": "IDLE"}}))
         finally:
             await session.close()
+    asyncio.run(run())
+
+
+def test_first_process_session_has_no_assumed_audio_limit(gemini):
+    async def run():
+        session, wire = make_session(gemini)
+        try:
+            await session.open()
+            await session.receive()
+            for count in (600, 1900, 2500, 10000):
+                assert not any(e.kind == "renew" for e in await turn(session, wire, usage(count)))
+            assert not gemini.HELD_AUDIO_SPANS
+        finally:
+            await session.close()
+    asyncio.run(run())
+
+
+def test_compression_explains_only_a_drop_after_the_trigger(gemini):
+    async def run():
+        for model in ("gemini-3.8-live", "gemini-3.8-live-extended-thinking"):
+            for previous_prompt, explained in ((92000, True), (91999, False)):
+                gemini.HELD_AUDIO_SPANS.clear()
+                session, wire = make_session(gemini, model=model)
+                observed = []
+                session.observe = lambda direction, raw: observed.append((direction, raw))
+                try:
+                    await session.open()
+                    await session.receive()
+                    config = wire.sent[0]["setup"]["contextWindowCompression"]
+                    assert config == {"triggerTokens": 92000, "slidingWindow": {"targetTokens": 82000}}
+                    await turn(session, wire, {**usage(3000), "promptTokenCount": previous_prompt})
+                    events = await turn(session, wire, {**usage(500), "promptTokenCount": 81000})
+                    assert any(e.kind == "renew" for e in events) is not explained
+                    assert (model in gemini.HELD_AUDIO_SPANS) is not explained
+                    if explained:
+                        assert any('compression_explains_drop' in raw for _, raw in observed)
+                        assert session.audio_growth == 0
+                    else:
+                        assert gemini.HELD_AUDIO_SPANS[model] == 3000
+                finally:
+                    await session.close()
     asyncio.run(run())

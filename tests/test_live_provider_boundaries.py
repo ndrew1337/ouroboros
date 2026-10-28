@@ -78,7 +78,9 @@ def test_gemini_idle_connection_does_not_rebill_same_input(packages):
             assert not receiving.done()  # No clock-only renewal, even with a live socket read.
             events = await session.convert({"serverContent": {"turnComplete": True},
                 "usageMetadata": {"promptTokensDetails": [{"modality": "AUDIO", "tokenCount": 1300}]}})
-            assert [e.kind for e in events] == ["response_started", "response_done", "renew"]
+            # A first receipt is not evidence of an audio-retention limit. It
+            # settles once without inheriting the old 2,500-token hypothesis.
+            assert [e.kind for e in events] == ["response_started", "response_done"]
             assert not any(e.kind == "renew" for e in await session.convert(
                 {"serverContent": {"turnComplete": True}}))
         finally:

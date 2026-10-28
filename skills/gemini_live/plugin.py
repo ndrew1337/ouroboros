@@ -22,9 +22,8 @@ ENDPOINT = 'wss://generativelanguage.googleapis.com/ws/google.ai.generativelangu
 ROUTE = RealtimeRoute('gemini_live', ENDPOINT, 'google::')
 # Measured 2026-10-18 in #1964: four ordinary-model sessions at ~92k
 # instruction tokens dropped spoken history at 2.5–2.9k held AUDIO tokens.
-# Extended thinking uses the family hypothesis until separately measured.
-HELD_AUDIO_TOKENS = 2_500
-# Process-local route evidence; observed drops can only lower the initial span.
+# That probe did not separate an audio cap from the almost-full total window.
+# Start with the catalog window; only this process's observed drops teach a span.
 # No call text, keys or context selection lives in this map.
 HELD_AUDIO_SPANS = {}
 # Only reconnecting sessions leave a capsule, consumed by the next connection.
@@ -34,7 +33,7 @@ RESUMPTIONS = {}
 RESUME_FIELDS = ('response', 'item', 'response_complete', 'native_response', 'completed_responses', 'last_done',
                  'text', 'calls', 'seen_calls', 'tool_results', 'caption_offsets',
                  'input_pending', 'input_final', 'input_boundary', 'output_pending', 'output_final', 'output_caption',
-                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'audio_growth', 'input_modalities')
+                 'turn_busy', 'held_context', 'usage', 'interrupted', 'held_audio', 'held_prompt', 'audio_growth', 'input_modalities')
 INPUT_MODALITIES = frozenset({'text', 'audio', 'image', 'video'})
 
 # Google's prebuilt voices with the one-word style its speech docs give each
@@ -193,7 +192,10 @@ def layout(selected, options):
         turn_taking['activityHandling'] = 'NO_INTERRUPTION'
     if turn_taking:
         setup['realtimeInputConfig'] = turn_taking
-    # No sliding-window compression: the host refits on renewal instead.
+    # Provider safety net; the host still re-tells canonical history on renewal.
+    facts = THINKING_FACTS if 'thinkingConfig' in generation else FACTS
+    setup['contextWindowCompression'] = {'triggerTokens': facts.conversation_window_tokens,
+        'slidingWindow': {'targetTokens': facts.conversation_window_tokens - facts.working_reserve_tokens}}
     events = [{'setup': setup}]
     if images and not options.resume_handle:
         events.append({'clientContent': {'turns': [{'role': 'user', 'parts': images}], 'turnComplete': False}})
@@ -226,6 +228,7 @@ class GeminiSession(JsonSession):
             self.input_modalities.add('image')
         self.renewal_announced = False
         self.held_audio = self.audio_growth = 0
+        self.held_prompt = None
         self.interrupted = False
         self.turn_busy = False
         self.held_context = []
@@ -313,19 +316,28 @@ class GeminiSession(JsonSession):
         return usage
 
     def retention_renewal(self, usage):
-        """Port #1964's held-audio/drop rule; the host owns total-window growth."""
+        """Learn only unexplained audio eviction; the host owns total-window growth."""
+        prompt = self.usage.get('promptTokenCount')
+        trigger = self.events[0]['setup']['contextWindowCompression']['triggerTokens']
+        compression_explains = self.held_prompt is not None and self.held_prompt >= trigger
+        self.held_prompt = prompt if type(prompt) is int and prompt >= 0 else None
         audio = usage.get('audio_input_tokens')
         if audio is None:
             return []
         model = self.selected.model.removeprefix('models/')
-        span = HELD_AUDIO_SPANS.get(model, HELD_AUDIO_TOKENS)
+        span = HELD_AUDIO_SPANS.get(model)
         dropped = self.held_audio > audio
+        if dropped and compression_explains:
+            self.observe('host', canonical_json({'type': 'call.provider_window', 'reason': 'compression_explains_drop',
+                'trigger_tokens': trigger, 'previous_audio_tokens': self.held_audio, 'audio_tokens': audio}))
+            self.held_audio, self.audio_growth = audio, 0
+            return []
         if dropped:
-            span = HELD_AUDIO_SPANS[model] = min(span, self.held_audio)
+            span = HELD_AUDIO_SPANS[model] = min(span, self.held_audio) if span is not None else self.held_audio
         else:
             self.audio_growth = max(self.audio_growth, audio - self.held_audio)
         self.held_audio = audio
-        if not self.renewal_announced and (dropped or audio and audio + self.audio_growth >= span):
+        if not self.renewal_announced and (dropped or span is not None and audio and audio + self.audio_growth >= span):
             self.renewal_announced = True
             return [LiveEvent('renew', {'within_s': 30, 'reason': 'audio_drop' if dropped else 'audio_span',
                                         'resume': False})]
