@@ -350,6 +350,7 @@ class ConversationHost:
         from ouroboros.artifacts import task_artifact_dir_path
         from ouroboros.loop import _reset_turn_state, _setup_dynamic_tools, StatefulToolExecutor
         from ouroboros.tool_policy import initial_tool_schemas
+        from ouroboros.tools.tool_discovery import update_resident_notice
 
         self.turn, self.ctx, self.messages, self.tools = turn, ctx, messages, tools
         self.task, self.effort, self.hub = task, effort, hub
@@ -375,6 +376,9 @@ class ConversationHost:
         self.schemas.extend({"type": "function", "function": {"name": tool.name, "description": tool.description,
             "parameters": dict(tool.parameters)}} for tool in self.call_tools.values())
         self.schemas, _ = _setup_dynamic_tools(tools, self.schemas, messages, context_mode=self.plan.initial_mode)
+        # A call starts with its frame's tools, so it names the rest in its own manifest row;
+        # a text turn reads them in the connections map.
+        update_resident_notice(tools, self.schemas, messages)
         if turn.spec.presence_binding_id:
             from ouroboros.context import build_user_content
             from ouroboros.context_budget import bound_host_row
@@ -419,6 +423,7 @@ class ConversationHost:
         """Follow a lower fitted mode, retaining tools explicitly loaded this call."""
         from ouroboros.loop import _setup_dynamic_tools
         from ouroboros.tool_policy import initial_tool_schemas
+        from ouroboros.tools.tool_discovery import update_resident_notice
 
         enabled = set(self.ctx._actor_loaded_tool_names)
         selected = initial_tool_schemas(self.tools, context_mode=mode,
@@ -428,6 +433,7 @@ class ConversationHost:
                         if schema["function"]["name"] in (enabled | self.call_tools.keys()) - names)
         self.schemas[:] = selected
         _, rebound = _setup_dynamic_tools(self.tools, self.schemas, self.messages, context_mode=mode)
+        update_resident_notice(self.tools, self.schemas, self.messages)
         rebound.update(enabled)
         self._schemas_mode = mode
         self._context_changed()

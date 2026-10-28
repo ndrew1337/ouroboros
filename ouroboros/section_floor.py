@@ -79,6 +79,13 @@ def render_sections(sections: Iterable[HostSection], fallback: str, addressed: M
     return "\n\n".join(addressed.get(part.section_id, part.full_text) for part in parts) if parts else fallback
 
 
+def rendered_texts(core: Any, addressed: Mapping[str, str]) -> Any:
+    """The core with its captured texts as sent under ``addressed``: a measure of parts reads what the request carries."""
+    return replace(core, semi_stable_text=render_sections(core.semi_stable_sections, core.semi_stable_text, addressed),
+                   dynamic_head_text=render_sections(core.dynamic_head_sections, core.dynamic_head_text, addressed),
+                   dynamic_text=render_sections(core.dynamic_sections, core.dynamic_text, addressed))
+
+
 def section_inventory(plan, mode, facts):
     """The captured host forms and their resident prices, for the ordinary view inventory.
 
@@ -125,16 +132,23 @@ def _governance_blocks(env: Any, core: Any, *, mode: str, reference_docs: Callab
     return (capture_sections(static_parts, prefix="governance"), development)
 
 
+def render_governance(governance: Tuple[Any, ...], addressed: Optional[Mapping[str, str]] = None) -> Tuple[str, ...]:
+    """The governance blocks as sent: captured sections in their selected views, plain parts whole."""
+    return tuple(render_sections(part, "", addressed or {}) if not isinstance(part, str) else part
+                 for part in governance)
+
+
 def _system_blocks(core: Any, governance: Tuple[Any, ...], story: str = "", room: str = "",
                    mode: str = "", addressed: Optional[Mapping[str, str]] = None) -> List[Dict[str, Any]]:
-    # All stable items precede C, including D only when the captured core calls
-    # for the full handbook. Never create an empty cache boundary.
+    # All stable items precede C; D is its own block only for the full handbook: Max without it carries the
+    # handbook's chapter map at the head of B, spending no breakpoint. The mode picks the connections map's
+    # form in B. Never create an empty cache boundary.
     addressed = addressed or {}
-    rendered_governance = tuple(render_sections(part, "", addressed) if not isinstance(part, str) else part
-                                for part in governance)
+    common, *handbook = render_governance(governance, addressed)
     semi = render_sections(core.semi_stable_sections, core.semi_stable_text, addressed)
     dynamic = render_sections(core.dynamic_sections, core.dynamic_text, addressed)
-    stable = (*rendered_governance, "\n\n".join(part for part in (semi, story) if part))
+    stable = (common, *(handbook if core.docs_need_development else ()), "\n\n".join(part for part in (
+        *(() if core.docs_need_development else handbook), semi, core.connections[mode == "nano"], story) if part))
     head = render_sections(core.dynamic_head_sections, core.dynamic_head_text, addressed)
     return [{"type": "text", "text": text, "cache_control": {"type": "ephemeral"}}
             for text in stable if text.strip()] + [

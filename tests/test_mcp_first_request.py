@@ -105,7 +105,7 @@ def test_tools_listed_in_the_background_reach_the_next_read_and_enable_tools(col
     _join_listings()
 
     assert listing.finished == ["svc"] and on_caller == [False]
-    assert "registered late" in enable_tools(registry, registry._ctx, "mcp_svc__ping", resident)
+    assert "Call schemas loaded" in enable_tools(registry, registry._ctx, "mcp_svc__ping", resident)
     assert _mcp_names(resident) == ["mcp_svc__ping"]
     assert _mcp_names(registry.schemas()) == ["mcp_svc__ping"]
     assert not any(item.get("reason") == "server_no_tools" for item in registry.capability_omissions())

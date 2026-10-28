@@ -26,7 +26,8 @@ if TYPE_CHECKING:
     from ouroboros.physical_attempt_context import PhysicalAttemptContext
 
 from ouroboros.context_layout import reference_doc_sections
-from ouroboros.section_floor import HostSection, section_views, _governance_blocks as _section_governance, _system_blocks
+from ouroboros.section_floor import (HostSection, render_governance, rendered_texts, section_views,
+                                     _governance_blocks as _section_governance, _system_blocks)
 from ouroboros.reference_books import ReferenceBook
 from ouroboros import context_budget
 from ouroboros.context_window import WindowRecord, resolve_window, route_observation_scope
@@ -253,15 +254,8 @@ class ContextFitPlan:
                 (projection.estimated_tokens + tool_schema_tokens(tools))
                 * projection.calibration_ratio
             )
-        return int(
-            estimate_context_prompt_tokens(
-                self.messages_for(mode),
-                tools,
-                provider=provider,
-                reasoning_effort=reasoning_effort,
-            )
-            * projection.calibration_ratio
-        )
+        return int(estimate_context_prompt_tokens(self.messages_for(mode), tools, provider=provider,
+                                                  reasoning_effort=reasoning_effort) * projection.calibration_ratio)
 
 @dataclass(frozen=True)
 class ContextCore:
@@ -290,6 +284,8 @@ class ContextCore:
     dynamic_sections: Tuple[HostSection, ...] = ()
     section_root: str = ""
     section_task_id: str = ""
+    # The connections map (``tool_connections.connection_views``): the Low/Max text, then the Nano text.
+    connections: Tuple[str, str] = ("", "")
 
 
 def _governance_blocks(env: Any, core: ContextCore, *, mode: str) -> Tuple[Any, ...]:
@@ -309,7 +305,7 @@ def _render_context_system_content(
     ``story`` and ``room`` are the memory view rendered for this projection's mode and
     selected forms; empty without a view.
     """
-    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode)
+    return _system_blocks(core, _governance_blocks(env, core, mode=mode), story, room, mode=mode)
 
 
 def seal_task_transcript(messages: List[Dict[str, Any]], min_prefix_tokens: int = 2048) -> None:
@@ -702,10 +698,13 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
 
     # Max names whole books. Story is the last rung: change books before taking its pages.
     whole_story = render_story(snapshot) if snapshot else ""
-    if (kept is None or start_work) and mode == "max" and allowances["margin"] is not None:
-        if floor.view_tokens(whole_story) > allowances["margin"] or math.ceil(fixed * ratio) + reserve + work() > window:
-            mode = "low"
-            sent, fixed, reserve, window, boundary, allowances = frame(mode)
+    room_fact = floor.max_room_fact(snapshot, rendered_texts(core, section_views(sections[mode], receipts)),
+        render_governance(governance[form[mode]], section_views(sections[mode], receipts)), story=whole_story,
+        fixed=fixed, ratio=ratio, schemas=tool_schema_tokens(list(sent.schemas)), window=window, reserve=reserve,
+        work=work(), allowance=allowances["margin"]) if (kept is None or start_work) and mode == "max" else None
+    if room_fact and floor.max_room_lost(room_fact):
+        mode = "low"
+        sent, fixed, reserve, window, boundary, allowances = frame(mode)
     # The same ordinary Nano is the last physical rescue for every Main route.
     if (kept is None and known_window and mode == "low"
             and math.ceil((fixed + (floor.minimal_view_tokens(snapshot, window_tokens=window) if snapshot else 0)) * ratio) + reserve > window):
@@ -725,7 +724,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
         return floor.render_view_for_mode(snapshot, mode=mode, owner_mode=preferred,
             window_tokens=window, known_window=known_window, output_reserve=output_reserve, ratio=ratio,
             non_memory_tokens=fixed, lowered_from=preferred if mode != preferred else None,
-            tool_names=None if tool_schemas is None else sent.chosen,
+            tool_names=None if tool_schemas is None else sent.chosen, max_room=room_fact,
             kept=None if kept is None else kept.get(start or preferred), saving=saved, boundary_tokens=boundary,
             start_work=start_work,
             working_reserve_tokens=working_reserve_tokens,
@@ -745,7 +744,7 @@ def _view_projections(core: ContextCore, governance: Mapping[str, Tuple[Any, ...
             raise MinimumViewUnfit("Protected owner words and the minimum view cannot fit the usable input",
                                    fixed_tokens=fixed, memory_tokens=floor.view_tokens(story) + floor.view_tokens(room),
                                    reserve_tokens=reserve, window_tokens=window, ratio=ratio)
-        receipt = floor.view_receipt(snapshot, story, room, facts)
+        receipt = floor.view_receipt(snapshot, story, room, floor.with_max_room(facts, room_fact, mode))
     else:
         story, room, receipt = "", "", {}
     if receipts:
@@ -867,6 +866,7 @@ def build_context_fit_plan(
             "dynamic_head_text": core.dynamic_head_text,
             "dynamic_text": core.dynamic_text,
             "memory_view_json": core.memory_view_json,
+            **({"connections": list(core.connections)} if any(core.connections) else {}),
             **({"supplementary_messages": json.loads(core.supplementary_messages_json)}
                if json.loads(core.supplementary_messages_json) else {}),
             "user_content": user_content,

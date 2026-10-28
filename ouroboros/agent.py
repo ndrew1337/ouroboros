@@ -863,7 +863,7 @@ class OuroborosAgent:
             task=task,
             review_context_builder=lambda: build_review_context(review_env),
             ctx=ctx,
-            tool_schemas=initial_tool_schemas(self.tools, context_mode=get_context_mode()),
+            tool_schemas=initial_tool_schemas(self.tools, context_mode=get_context_mode()), tool_registry=self.tools,
             **({"route_resolver": self._realtime_turn.resolve_route} if getattr(self, "_realtime_turn", None) is not None else {}),
         )
         # The second of the three places a reduction must reach (the durable record

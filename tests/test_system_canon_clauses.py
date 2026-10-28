@@ -23,7 +23,7 @@ def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
     "(the restart path checks it out when my working branch fails to import)",
     "Their exact composition and room detail remain readable",
     "not by merely reselecting the old one",
-    "MCP tools appear as `mcp_<server>__<tool>`",
+    "MCP tools are named `mcp_<server>__<tool>`",
     "diagrams and plots",
     "not by this read reach",
     "generic offers that add nothing",

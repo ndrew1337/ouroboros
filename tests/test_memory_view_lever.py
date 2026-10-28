@@ -19,7 +19,8 @@ def plan():
     core = ContextCore("Core", "BIBLE", "", "", "Identity", "Facts", '"Assignment"', False,
                        memory_view_json=mv.snapshot_json(snap))
     facts = floor.view_facts(snap, mv.FULL_VIEW, window_tokens=200000, mode="max", allowances={})
-    content = _system_blocks(core, _governance_blocks(None, core, mode="max"), mv.render_story(snap), mv.render_room(snap))
+    content = _system_blocks(core, _governance_blocks(None, core, mode="max"), mv.render_story(snap), mv.render_room(snap),
+                             mode="max")
     projection = ContextFitProjection("max", json.dumps(content), 10000, 10000, 1.0, memory_facts=facts)
     return ContextFitPlan("capture", "max", "max", "test", "test", "route", "confirmed", False, 200000,
                           65536, '"Assignment"', projection, replace(projection, mode="low"), core=core), snap
@@ -114,6 +115,15 @@ def test_compact_range_form_keeps_an_authored_capsule_for_uncovered_owner_words(
     assert dict(floor.kept_level(snap, ctx.context_fit_plan.max_projection.memory_facts).addressed)['F7a'] == ('1',)
     sources = list(tmp_path.rglob('*.json'))
     assert any(snap.room['lane1'][0]['line'] in path.read_text() for path in sources)
+
+
+def test_a_view_selection_keeps_its_mode_s_connections_form():
+    p, _snap = plan()
+    p = replace(p, core=replace(p.core, connections=("FULL MAP", "NAMES MAP")),
+                nano_projection=replace(p.max_projection, mode="nano"))
+    for mode, form, other in (("nano", "NAMES MAP", "FULL MAP"), ("max", "FULL MAP", "NAMES MAP")):
+        text = floor.select_view(p, mode, ["F5:page-000"]).projection(mode).system_content_json
+        assert form in text and other not in text, mode
 
 
 def test_addresses_refuse_core_and_governing_words_and_keep_prior_choices():
