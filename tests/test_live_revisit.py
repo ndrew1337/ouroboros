@@ -73,6 +73,8 @@ def test_due_revisit_waits_for_quiet_and_call_end_cancels_it(monkeypatch):
             attention = host.state['attention']
             await attention.attend({'revisit_after_s':3})
             session.emit('response_started', response_id='still-speaking')
+            # Advance the clock only once the driver holds that response open (a loaded machine raced this, 28.10).
+            await until(lambda: ('start', 'still-speaking') in host.usage)
             now[0] = 10
             await asyncio.sleep(.04)
             assert not session.sent and not host.context
