@@ -68,6 +68,7 @@ def test_rejected_input_and_pending_close_have_distinct_drop_causes():
     hub.next_event(0)
     assert hub.receive_audio('owner', audio(hub, 1))
     hub.flush()
+    hub.flush()  # two generations back is genuinely stale input
     assert not hub.receive_audio('owner', audio(hub, 2, epoch=0))
     assert hub.receive_audio('owner', audio(hub, 3))
     assert not hub.receive_audio('owner', audio(hub, 3))
@@ -81,6 +82,34 @@ def test_rejected_input_and_pending_close_have_distinct_drop_causes():
         'stale_epoch': 137, 'sequence': 137, 'muted': 411, 'call_closed': 137}
     assert evidence['dropped_samples'] == 822
     assert evidence['dropped_ms'] == pytest.approx(822 * 1000 / 24000)
+
+
+@pytest.mark.parametrize('frames', [1, 10, 30])
+@pytest.mark.parametrize('epoch', [0, 65535])
+def test_barge_in_keeps_inflight_microphone_frames_and_retires_old_output(frames, epoch):
+    """Audit epoch-repro: 20–600 ms in flight belongs to the new owner turn."""
+    hub = LiveCallHub(cp.CallSpec('barge-in', 1, 'fixture', 'voice'))
+    hub._epoch = epoch
+    hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), 24000)
+    hub.set_engine_rates(24000, 24000)
+    hub.next_event(0)
+    hub.play(b'\x02\x00' * 480, 'old-answer')
+    hub.flush()
+    for seq in range(frames):
+        assert hub.receive_audio('owner', audio(hub, seq, samples=480, epoch=epoch))
+    assert hub.receive_audio('owner', audio(hub, frames, samples=480))
+    received = [hub.next_event(.1).pcm for _ in range(frames + 1)]
+    assert received == [b'\x01\x00' * 480] * (frames + 1)
+    while (outgoing := hub.next_outgoing('owner')) is not None:
+        assert isinstance(outgoing, str), 'flush must still retire queued output audio'
+    assert hub.input_audio_evidence()['dropped_samples'] == 0
+    assert not hub.receive_audio('owner', audio(hub, frames, epoch=epoch))  # duplicate
+    assert not hub.receive_audio('owner', audio(hub, frames - 1, epoch=epoch))  # reordered
+    assert not hub.receive_audio('owner', audio(hub, frames + 1, epoch=(hub.epoch + 1) & 0xFFFF))
+    hub.flush()
+    assert not hub.receive_audio('owner', audio(hub, frames + 1, epoch=epoch))
+    assert hub.receive_audio('owner', audio(hub, frames + 1))
+    hub.close('test_finished')
 
 
 @pytest.mark.parametrize('leave', [False, True])

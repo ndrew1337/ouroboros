@@ -319,7 +319,10 @@ class LiveCallHub(cp.CallHub):
                 self._drop_input("invalid_pcm", len(frame.pcm) // 2, peer.rate)
                 raise CallPeerError("invalid_pcm")
             delta = (frame.seq - peer.input_seq) & 0xFFFFFFFF if peer.input_seq is not None else 1
-            if frame.epoch != self._epoch:
+            # Flush retires output, not the owner's speech already in flight.
+            # Allow the preceding output epoch until the browser sees the flush;
+            # input sequence still rejects replay/reordering across that boundary.
+            if frame.epoch not in {self._epoch, (self._epoch - 1) & 0xFFFF}:
                 self._drop_input("stale_epoch", len(frame.pcm) // 2, peer.rate)
                 return False
             if not 0 < delta < 0x80000000:

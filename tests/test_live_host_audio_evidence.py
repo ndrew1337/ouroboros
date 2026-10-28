@@ -18,9 +18,9 @@ def drop_evidence(samples, rate):
 def fill_input(hub, rate, excess):
     hub.join(cp.PeerInfo('owner', cp.PEER_OWNER, True, True), rate)
     if excess:
-        # Overflow now waits instead of losing input. A real stale epoch remains
-        # a counted discard, including a partial 20 ms frame.
-        frame = cp.AudioFrame(cp.FRAME_AUDIO_IN, (hub.epoch - 1) & 0xffff, 0, rate, 0, b'\x01\x00' * excess)
+        # Overflow waits; the preceding output epoch is current in-flight speech.
+        # Two generations back is still a counted discard, including a partial frame.
+        frame = cp.AudioFrame(cp.FRAME_AUDIO_IN, (hub.epoch - 2) & 0xffff, 0, rate, 0, b'\x01\x00' * excess)
         assert not hub.receive_audio('owner', frame)
 
 
