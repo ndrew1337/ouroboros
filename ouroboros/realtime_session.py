@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import string
 
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 
@@ -59,8 +60,9 @@ def transport_loss(error):
     if received is None:
         return True
     return received.code in {1000, 1001, 1005, 1006, 1012, 1013, 1014} or (
-        received.code == 1011 and received.reason in {
-            "", "Internal error encountered.", "Internal error encountered", "Deadline expired"})
+        received.code == 1011 and (not received.reason.strip()
+            or received.reason.strip().rstrip(string.punctuation).casefold() in {
+                "internal error encountered", "deadline expired", "deadline expired before operation could complete"}))
 
 
 class JsonSession:
