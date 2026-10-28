@@ -163,10 +163,26 @@ class GrokSession(JsonSession):
         self.context_lock = asyncio.Lock()
         self.response_requested = self.want_response = self.speech_active = self.vad_response_pending = False
         self.waiting_tools = set()
+        self.input_transcripts, self.output_transcripts = set(), set()
+        self.text = {}
         self.tool_calls = set()
         self.ready = False
         self.opened_at = None
         self.connected_seconds = 0.0
+
+    @property
+    def renewal_ready(self):
+        return self.ready and not (self.speech_active or self.vad_response_pending
+            or self.active_response or self.response_requested or self.want_response or self.context_queue
+            or self.outstanding or self.session_update is not None or self.waiting_tools or self.truncations
+            or self.input_transcripts or self.output_transcripts)
+
+    def final_captions(self):
+        events = [LiveEvent('caption', {'speaker': speaker, 'item_id': item, 'text': text,
+                  'final': True, 'replace': True, 'incomplete': True})
+                  for (speaker, item), text in self.text.items() if text]
+        self.text.clear()
+        return events
 
     def connection_usage(self):
         if self.opened_at is not None:
@@ -322,6 +338,8 @@ class GrokSession(JsonSession):
             return [LiveEvent('response_started', {'response_id': self.active_response})]
         if kind == 'input_audio_buffer.speech_started':
             self.speech_active = True
+            if item:
+                self.input_transcripts.add(item)
             if self.active_response:
                 # xAI's server VAD always interrupts. Drain usage before clearing
                 # active_response, but do not cancel it again from host Interrupt.
@@ -330,7 +348,12 @@ class GrokSession(JsonSession):
         if kind == 'input_audio_buffer.speech_stopped':
             self.speech_active, self.vad_response_pending = False, True
             return [LiveEvent('input_done')]
+        if kind == 'input_audio_buffer.committed' and item:
+            self.input_transcripts.add(item)
+        if kind == 'conversation.item.input_audio_transcription.failed':
+            self.input_transcripts.discard(item)
         if kind in {'response.audio.delta', 'response.output_audio.delta'}:
+            self.output_transcripts.add(item)
             # A barge-in can cancel before the feature has seen any audio item.
             # Keep draining response.done usage, but never play that response.
             if (event.get('response_id') or self.active_response) in self.cancelled:
@@ -344,8 +367,18 @@ class GrokSession(JsonSession):
             # R6: owner "completed" events can still have in_progress status.
             # Deltas append; only a full transcript replaces the earlier words.
             final = (event.get('status') == 'completed' if owner else kind.endswith('.done'))
-            return [LiveEvent('caption', {'speaker': 'owner' if owner else 'ouroboros', 'item_id': item,
-                'text': event.get('transcript', event.get('delta', '')), 'final': final, 'replace': 'transcript' in event})]
+            transcripts = self.input_transcripts if owner else self.output_transcripts
+            transcripts.discard(item) if final else transcripts.add(item)
+            speaker = 'owner' if owner else 'ouroboros'
+            key = (speaker, item)
+            text = event.get('transcript', self.text.get(key, '') + event.get('delta', ''))
+            if final:
+                self.text.pop(key, None)
+            else:
+                self.text[key] = text
+            return [LiveEvent('caption', {'speaker': speaker, 'item_id': item,
+                'text': text if final else event.get('transcript', event.get('delta', '')),
+                'final': final, 'replace': final or 'transcript' in event})]
         if kind == 'response.done':
             response = event.get('response', {})
             rid = response.get('id')
