@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.13
+version: 0.1.14
 type: extension
 runtime: python3
 entry: plugin.py
@@ -45,7 +45,15 @@ recognition languages per owner/Presence binding and end after goodbye playback.
 The engine-neutral Live calls instructions belong to this feature and precede
 the owner's call instructions on every connection.
 
-Fresh renewals prepare the next fitted connection while this one keeps listening.
+With providers declaring silent context updates, fresh renewals prepare the next
+fitted connection while this one keeps listening; older providers renew sequentially.
 At a quiet moment the call switches with new canonical facts intact and no second
 greeting. A transport loss without a native handle continues from a fresh fit;
 provider refusals still end typed, and repeated unanswered drops remain bounded.
+
+The waiting successor keeps reading and metering into the shared limit; its events
+wait for adoption. Overlap has no separate time bound and adds connected seconds
+at the captured route tariff. Current options and account scope are checked at
+the switch. Only transport failure or a stale fit falls back; typed refusals end
+without another attempt. Committed room mail keeps its answer opportunity across
+a handoff, and an interrupted answer proves the connection just as a completed one does.

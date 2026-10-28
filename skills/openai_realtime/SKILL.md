@@ -1,7 +1,7 @@
 ---
 name: openai_realtime
 description: OpenAI native Realtime audio, images and tools over the host's ordinary selected context.
-version: 0.1.5
+version: 0.1.6
 type: extension
 runtime: python3
 entry: plugin.py
@@ -43,3 +43,6 @@ an admitted connection. Granting a key does not enable Calls (beta).
 
 Catalog checked 2026-10-21: thinking follows `reasoning.effort` (minimal through
 xhigh); the ten built-in voices remain available.
+
+This provider declares silent context updates: fitted catch-up history with
+`respond=False` does not open an answer, allowing the host to prepare a successor.

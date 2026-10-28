@@ -1559,7 +1559,7 @@ this way, so its first named action needs no schema-enablement reconnect.
 loaded provider and its credential grants. Beta defaults off. No connection duration
 or per-call dollar limit exists; responses share the ordinary spending limit.
 
-`handler(host)` receives the `LiveHost` protocol in `contracts/live_conversation.py`. Its additive `prepare_session(options)` defaults to None for older hosts; a supporting host returns a silent successor lease with async `run(consume)`/`close()` and `caught_up` indicating canonical arrivals delivered on adoption. The additive `ContextUpdate.respond` defaults to true; false delivers catch-up history without asking for another answer.
+`handler(host)` receives the `LiveHost` protocol in `contracts/live_conversation.py`. Its additive `prepare_session(options)` defaults to None for older hosts; a supporting host returns a silent successor lease with async `run(consume)`/`close()` and `caught_up` indicating canonical arrivals delivered on adoption. The additive `ContextUpdate.respond` defaults to true; false delivers catch-up history without asking for another answer. Providers opt in with `LiveSession.silent_context_updates=True`; its absent/false default preserves sequential renewal for older implementations. The additive host operation `take_mail_answer()` claims an unanswered durable mailbox delivery after cancellation; its old-host default is false, and returned mailbox rows still request an answer.
 The host owns admission, current canonical history, ordinary context fitting, tools,
 mailbox, accounting and Stop. The feature owns call state, media, captions, language
 choices and session renewal. It calls `session(consume, LiveOptions(...))`; every reopen

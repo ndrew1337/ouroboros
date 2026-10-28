@@ -54,7 +54,9 @@ class Stack:
         self.mail, self.events = queue.Queue(), queue.Queue()
         self.running = None
 
-    async def wait(self, predicate, timeout=15):
+    async def wait(self, predicate, timeout=120):
+        # A hang detector, not a scenario latency assertion. Fitting, SQLite
+        # and the provider loop share two workers on the loaded sprint host.
         async def pending():
             while not predicate():
                 if self.running and self.running.done():

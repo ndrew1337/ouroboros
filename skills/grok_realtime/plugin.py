@@ -111,6 +111,7 @@ def item_ack(event):
 
 
 class GrokSession(JsonSession):
+    silent_context_updates = True
     def __init__(self, selected, options, *, connect, observe):
         super().__init__(selected, options, connect=connect, observe=observe)
         messages = json.loads(selected.messages_json)

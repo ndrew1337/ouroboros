@@ -148,6 +148,7 @@ class VoiceWire:
 
 
 class FakeSession:
+    silent_context_updates = True
     output_bound_tokens = 100
     renewal_ready = True
 
@@ -159,6 +160,9 @@ class FakeSession:
 
     async def open(self):
         self.opened = True
+
+    async def receive(self):
+        return await asyncio.Future()
 
     async def close(self):
         self.closed = True

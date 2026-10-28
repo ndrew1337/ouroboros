@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import time
+from collections import deque
 from contextlib import ExitStack
 from contextvars import ContextVar
 from dataclasses import replace
@@ -43,6 +44,49 @@ def publish(host, view):
             setattr(host, name, getattr(view, name))
     host.ctx.context_fit_plan = view.plan
     host.ctx.active_context_mode = view.plan.initial_mode
+
+
+class WaitingReader:
+    """Keep the native reader/meter alive until adoption, without dispatching events.
+
+    Adoption takes the buffered batches and the one in-flight read before
+    returning to direct reads. Cancelling a waiter never abandons that read.
+    """
+
+    def __init__(self, lease):
+        self.lease = lease
+        self.batches = deque()
+        self.native_receive = lease.session.receive
+        lease.session.receive = self.receive
+        self.task = asyncio.create_task(self._read())
+
+    async def _read(self):
+        from ouroboros.realtime_session import transport_loss
+        while not self.lease.activate.done():
+            try:
+                events = await self.native_receive()
+            except (OSError, ConnectionClosed) as exc:
+                if transport_loss(exc):
+                    raise RealtimeSetupError('prepared_stale', 'prepared transport closed while waiting') from exc
+                raise RealtimeSetupError('provider_closed', 'provider refused the prepared connection') from exc
+            for event in events:
+                if event.kind == 'closed':
+                    code = 'prepared_stale' if event.data.get('transport_loss') else 'provider_closed'
+                    raise RealtimeSetupError(code, event.data.get('detail') or 'prepared connection closed')
+            if events:
+                self.batches.append(events)
+            await self.lease.host.check()  # the same ledger/limit, including this connection's meter
+
+    async def receive(self):
+        if not self.batches:
+            await asyncio.shield(self.task)
+        if self.batches:
+            return self.batches.popleft()
+        return await self.native_receive()
+
+    async def stop(self):
+        self.task.cancel()
+        await joined(asyncio.gather(self.task, return_exceptions=True))
 
 
 class PreparedConnection:
@@ -116,6 +160,10 @@ class PreparedConnection:
         from ouroboros.llm_attempt import main_context_fit_refusal
         host, view = self.host, self.view
         async with host._tools_lock:
+            if self.ahead:
+                from ouroboros.realtime_credentials import capture_session_credentials
+                if capture_session_credentials(host.turn, self.provider).scope != self.credentials.scope:
+                    raise RealtimeSetupError('prepared_stale', 'account changed while preparing')
             # An authored edit/revision to the fitted prefix needs a fresh fit;
             # append-only arrivals use the ordinary ordered context update lane.
             if host.messages[:len(self.source)] != self.source or host.schemas != self.source_schemas:
@@ -172,7 +220,7 @@ class PreparedConnection:
         from ouroboros.response_limits import positive_limit, resolve_response_limit
         from ouroboros.usage_accounting import PhysicalAttemptPreconditionFailed
         host = self.host
-        self.session = None
+        self.session = self.reader = None
         try:
             await host.check()
             self.provider = loaded_provider(host.turn.provider)
@@ -203,6 +251,10 @@ class PreparedConnection:
             self.options = replace(self.options, model_output_bound_tokens=bound)
             credentials = capture_session_credentials(host.turn, self.provider)
             await self._fit(credentials)
+            if self.ahead and not getattr(self.session, 'silent_context_updates', False):
+                self.ready.set_result(None)
+                self.result.set_result(None)
+                return
             with _presend_context_fit() as admit:
                 if not admit(self.request):
                     raise PhysicalAttemptPreconditionFailed('context_capacity')
@@ -217,13 +269,19 @@ class PreparedConnection:
                     await host.check()
                 view._connection_quote = copy.deepcopy(host.quote)
                 view._connection_accounting = True
+                self.credentials = credentials
                 with credentials.activate():
                     await self.session.open()
                 self.connection['open_at'] = time.time()
                 host.timing.setdefault('session_open_at', self.connection['open_at'])
                 if self.ahead:
                     host.timing_event('prepared_ready')
+                    self.reader = WaitingReader(self)
                 self.ready.set_result(self)
+                if self.reader is not None:
+                    await asyncio.wait([self.activate, self.reader.task], return_when=asyncio.FIRST_COMPLETED)
+                    if self.reader.task.done():
+                        await self.reader.task  # failure closes and settles immediately, even while waiting for quiet
                 consume = await self.activate
                 await host.check()
                 try:
@@ -245,8 +303,12 @@ class PreparedConnection:
                     future.set_exception(exc)
         finally:
             try:
-                if self.session is not None:
-                    await joined(self.session.close())
+                try:
+                    if self.reader is not None:
+                        await self.reader.stop()
+                finally:
+                    if self.session is not None:
+                        await joined(self.session.close())
             finally:
                 if hasattr(self, 'connection'):
                     self.connection['closed_at'] = time.time()

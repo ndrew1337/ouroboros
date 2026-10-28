@@ -469,6 +469,9 @@ class ConversationHost:
                     defer_content_ack=True)
                 self.messages.extend(rows)
                 if rows:
+                    # Call-owned before the cancellable connection worker gets
+                    # the drain's return value. Canonical words still owe an offer.
+                    self._pending_mail_answer = True
                     self._context_changed()
                     self.checkpoint("ready")
                 return controls
@@ -478,6 +481,11 @@ class ConversationHost:
             # A live delta reaches the engine as it can take it: an image attached in the room is a caption for a
             # blind engine (R15-1); the canonical rows above keep the image.
             return rows_for_engine(rows, vision=self.model.vision)
+
+    def take_mail_answer(self):
+        pending = getattr(self, '_pending_mail_answer', False)
+        self._pending_mail_answer = False
+        return pending
 
     def observe(self, direction, raw):
         self.wire.append({"connection": self.connection_number, "direction": direction, "raw": raw,
@@ -567,7 +575,8 @@ class ConversationHost:
         from ouroboros.live_connections import PreparedConnection
         lease = PreparedConnection(self, options, ahead=True)
         try:
-            await asyncio.shield(lease.ready)
+            if await asyncio.shield(lease.ready) is None:
+                return None  # an older provider cannot silently catch up history
             self._prepared_successor = lease
             return lease
         except BaseException:

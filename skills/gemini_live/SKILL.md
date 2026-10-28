@@ -1,7 +1,7 @@
 ---
 name: gemini_live
 description: Gemini native Live audio and image provider for Live Conversation.
-version: 0.1.9
+version: 0.1.10
 type: extension
 runtime: python3
 entry: plugin.py
@@ -66,3 +66,6 @@ Installing or granting it does not enable the Live Conversation beta.
 Wire reference: https://ai.google.dev/api/live (updated 2026-10-09 UTC), model
 pages and capabilities guide (read 2026-10-21). Live-provider probes remain
 necessary to verify the deployed dialect and the labelled retention hypotheses.
+
+This provider declares silent context updates: fitted catch-up history with
+`respond=False` does not open an answer, allowing the host to prepare a successor.

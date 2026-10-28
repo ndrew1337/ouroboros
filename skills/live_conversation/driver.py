@@ -21,7 +21,7 @@ from ouroboros.ui_language import normalize_language_tag
 from ouroboros.utils import read_json_dict, update_json_locked, utc_now_iso
 
 
-# A transport bound, not a judgment: a session that keeps dropping before any answer completes is
+# A transport bound, not a judgment: a session that keeps dropping before an answer completes or is interrupted is
 # resumed this many times, then the call ends with a typed reason instead of reconnecting forever.
 UNPROVEN_RESUMES = 3
 
@@ -203,10 +203,11 @@ class _Call:
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
-        self.unproven_resumes = 0  # provider drops since the last completed answer
+        self.unproven_resumes = 0  # provider drops since the last completed/interrupted answer
         self.offer_wait_event = None
         self.session_ended = asyncio.Event()  # set when the current connection is gone
         self.preparing = None
+        self.preparing_options = None
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -257,8 +258,16 @@ class _Call:
             if prepared is not None:
                 try:
                     lease = await prepared
-                except Exception:
-                    pass  # one preparation attempt; retry through the ordinary sequential path
+                except RealtimeSetupError as exc:
+                    if exc.code != 'prepared_stale':
+                        raise
+                except (OSError, ConnectionClosed) as exc:
+                    from ouroboros.realtime_session import transport_loss
+                    if not transport_loss(exc):
+                        raise RealtimeSetupError('provider_closed', 'provider refused the prepared connection') from exc
+            if lease is not None and self.preparing_options != session_options(self.host, handle):
+                await lease.close()
+                lease = None  # promised options changed: one sequential fit with current values
             if lease is not None:
                 try:
                     result = await lease.run(self.consume)
@@ -283,6 +292,8 @@ class _Call:
             if self.host.model.vision:
                 self.attention.seen.clear()  # pixels are transport state; blind frame facts are already in the fit
             self.refit_offers()
+        if getattr(self.host, 'take_mail_answer', lambda: False)():
+            self.pending_offers.append(self.room_answer_pointer())
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
@@ -291,22 +302,39 @@ class _Call:
         peers = asyncio.create_task(self.peers())
         provider = asyncio.create_task(self.provider())
         children = [provider, peers, asyncio.create_task(self.mailbox())]
-        children.append(asyncio.create_task(self.refit_boundary()))
+        boundary = asyncio.create_task(self.refit_boundary())
+        children.append(boundary)
         try:
-            done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
-            for child in done:
-                try:
-                    await child
-                except ConnectionClosed:
-                    if child is provider:
-                        raise
-                    # A microphone/context write can see the closed socket first.
-                    # The native reader still owns the receipts and resumption
-                    # authority. Only native resumption retransmits a completed output; a fresh fit already holds its canonical row.
-                    await provider
-                    if not self.provider_closed:
-                        raise
-            await self.rows.join()
+            while True:
+                done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
+                for child in done:
+                    try:
+                        await child
+                    except ConnectionClosed:
+                        if child is provider:
+                            raise
+                        # The native reader owns the receipts and resumption authority
+                        # when a microphone/context write sees the closed socket first.
+                        await provider
+                        if not self.provider_closed:
+                            raise
+                await self.rows.join()
+                # Joining canonical rows yields. Native input or an answer may
+                # have started since the boundary worker observed quiet; retain
+                # its reader and receipt instead of cancelling a newly busy turn.
+                quiet = self.refit_ready() if self.tool_refit.is_set() else self.quiet()
+                if (self.renewing and not self.provider_closed and not quiet
+                        and not (self.hub.closed or self.hub.ended_by_owner or self.hub.ended_by_ouroboros)):
+                    if peers in done:
+                        children.remove(peers)
+                        peers = asyncio.create_task(self.peers())
+                        children.append(peers)
+                    if boundary in done:
+                        children.remove(boundary)
+                        boundary = asyncio.create_task(self.refit_boundary())
+                        children.append(boundary)
+                    continue
+                break
             if self.tool_refit.is_set():
                 # Finish already-requested effects before fitting their rows.
                 # The withheld native result never participates in this wait.
@@ -371,19 +399,31 @@ class _Call:
         self.attention.revisit_at = None
         self.pending_offers[:] = [row for row in self.pending_offers if not row.get("_requested_look")]
 
+    @staticmethod
+    def room_answer_pointer():
+        return {"role": "user", "content":
+            "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."}
+
     async def context_update(self, rows):
         # Mailbox and peer rows are already canonical on the host. Check the
         # resulting fit before adding them to this connection; a refit includes
         # them in its selected input instead.
-        await self.connected.wait()
+        pointer = self.room_answer_pointer()
+        self.pending_offers.append(pointer)  # owns the answer before a write can yield or be cancelled
+        if not self.connected.is_set():
+            return
         if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
-            # The rows join the next fit; a typed message or a task's result there is answered, not left unheard.
-            if not self.hub.ended_by_ouroboros:
-                self.pending_offers.append({"role": "user", "content":
-                    "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."})
             self.request_renewal()
         else:
-            await self.send(ContextUpdate(tuple(rows)))
+            # A failed/cancelled write leaves the pointer call-owned. The native
+            # reader classifies a closed socket before consume retires this worker.
+            self.response_open = True
+            try:
+                await self.session.send(ContextUpdate(tuple(rows)))
+            except BaseException:
+                self.response_open = bool(self.active_responses)
+                raise
+            self.pending_offers[:] = [row for row in self.pending_offers if row is not pointer]
 
     def timing(self, phase):
         record = getattr(self.host, "timing_event", None)
@@ -399,8 +439,10 @@ class _Call:
         if not resuming:
             self.host.state["refit"] = True
             prepare = getattr(self.host, 'prepare_session', None)
-            if prepare is not None and self.preparing is None:
-                self.preparing = asyncio.create_task(prepare(session_options(self.host, '')))
+            if (prepare is not None and self.preparing is None
+                    and getattr(self.session, 'silent_context_updates', False)):
+                self.preparing_options = session_options(self.host, '')
+                self.preparing = asyncio.create_task(prepare(self.preparing_options))
         if within is not None:
             deadline = time.monotonic() + float(within)
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
@@ -422,9 +464,12 @@ class _Call:
         await self.tool_refit.wait()
         # The old native tool obligation is deliberately withheld: it cannot be
         # the quiet predicate. Actual speech, playback and running effects still are.
-        while not (self.preparation_ready() and not self.input_open and not (self.active_responses - self.tool_responses)
-                   and not self.tools_running and self.tool_queue.empty() and not self.pending_spoken and not self.unheard()):
+        while not self.refit_ready():
             await asyncio.sleep(.01)
+
+    def refit_ready(self):
+        return (self.preparation_ready() and not self.input_open and not (self.active_responses - self.tool_responses)
+                and not self.tools_running and self.tool_queue.empty() and not self.pending_spoken and not self.unheard())
 
     def audio_duration(self, item):
         return int(self.audio_ms.get(item, 0))
@@ -638,7 +683,7 @@ class _Call:
                     self.hub.send_turn(cp.TURN_ANSWERING)
                 elif event.kind == "response_done":
                     response = data["response_id"]
-                    if data['status'] == 'completed':
+                    if data['status'] in {'completed', 'interrupted'}:
                         self.unproven_resumes = 0
                     receipt = {key: data[key] for key in ("usage", "raw_usage", "status")}
                     if self.receipts.get(response) != receipt:
@@ -832,5 +877,6 @@ class _Call:
         while True:
             mail = await self.host.mailbox()
             if mail:
+                getattr(self.host, 'take_mail_answer', lambda: False)()
                 await self.context_update(mail)
             await asyncio.sleep(.25)

@@ -1,7 +1,7 @@
 ---
 name: grok_realtime
 description: xAI Grok Voice provider for Live Conversation.
-version: 0.1.5
+version: 0.1.6
 type: extension
 runtime: python3
 entry: plugin.py
@@ -35,3 +35,6 @@ connection. Installing or granting this provider does not enable Calls (beta).
 Catalog checked 2026-10-21: thinking follows `reasoning.effort` (`none`/`high`);
 `eve` is documented and `xai_ara` was observed as the server default on 2026-10-20.
 The empty voice choice leaves the provider default in effect.
+
+This provider declares silent context updates: fitted catch-up history with
+`respond=False` does not open an answer, allowing the host to prepare a successor.

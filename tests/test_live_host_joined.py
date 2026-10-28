@@ -81,6 +81,7 @@ def test_real_mailbox_joins_drain_retains_rows_and_propagates_cancel(monkeypatch
             else:
                 assert await task == [row]
             assert host.messages == [row] and checkpoints == ['ready']
+            assert host._pending_mail_answer, 'a committed drain owns its answer even when its waiter was cancelled'
         finally:
             release.set()
             await asyncio.gather(task, return_exceptions=True)
@@ -103,7 +104,7 @@ def test_feature_renewal_joins_cancelled_real_mailbox(monkeypatch, tmp_path):
         call = LocalCall(host)
         before = set(asyncio.all_tasks())
         call.writer = asyncio.create_task(call.save_rows())
-        consume = asyncio.create_task(call.consume(SimpleNamespace(final_captions=lambda: [])))
+        consume = asyncio.create_task(call.consume(SimpleNamespace(final_captions=lambda: [], renewal_ready=True)))
         try:
             await asyncio.wait_for(transition.wait(), 30)
             await asyncio.sleep(0)  # let the first cancellation reach joined()

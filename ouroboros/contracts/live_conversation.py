@@ -157,6 +157,9 @@ class Respond:
 
 
 class LiveSession(Protocol):
+    # Opt in only when ContextUpdate(respond=False) never opens an answer.
+    # Absent/False preserves sequential renewal for older provider implementations.
+    silent_context_updates: bool = False
     selected: RealtimeInput
     wire: dict  # the physical setup before opening; the host seals it as evidence
     # Effective native output bound. None means unknown, including an unbounded
@@ -245,6 +248,13 @@ class LiveHost(Protocol):
 
     async def mailbox(self) -> list[dict]:
         """Rows that reached this room since the last read, already in history."""
+
+    def take_mail_answer(self) -> bool:
+        """Claim an unanswered canonical mailbox delivery, even if its waiter was cancelled.
+
+        Older hosts return False; their returned mailbox rows still request an answer.
+        """
+        return False
 
     async def prepare_session(self, options: LiveOptions) -> Any:
         """Optionally open a silent fitted successor while this connection serves.

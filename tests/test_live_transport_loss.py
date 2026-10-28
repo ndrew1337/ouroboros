@@ -34,3 +34,8 @@ def test_network_loss_without_a_close_frame_is_transport():
 def test_context_update_addition_preserves_old_callers():
     assert ContextUpdate(({'role': 'user', 'content': 'Old caller'},)).respond is True
     assert ContextUpdate((), respond=False).respond is False
+
+
+def test_silent_catchup_capability_is_absent_by_default_for_old_providers():
+    from ouroboros.contracts.live_conversation import LiveSession
+    assert LiveSession.silent_context_updates is False
