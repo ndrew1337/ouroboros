@@ -23,13 +23,14 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 from ouroboros.contracts.plugin_api import (
     ExecutionMode,
     ExtensionRegistrationError,
     FORBIDDEN_SKILL_SETTINGS,
     LEGACY_PLUGIN_API_GENERATION,
+    MemoryReadError,
     RuntimeInfo,
     VALID_EXTENSION_PERMISSIONS,
     available_capabilities,
@@ -987,6 +988,16 @@ class PluginAPIImpl:
 
     def get_skill_token(self) -> SkillToken:
         return SkillToken(mint_skill_token(self._state_dir, self._skill, self._skill_dir))
+
+    def read_memory(self, operation: str, parameters: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """``memory_reader.read_memory`` over this host's data root (``drive_root``), never a payload-named path;
+        refused once unload began, like every runtime read here."""
+        with _lock:
+            if self._runtime_closing or self._runtime_closed or self._skill in _unloading:
+                raise MemoryReadError("unavailable", f"skill {self._skill!r} is unloading")
+        from ouroboros.memory_reader import read_memory  # the memory owners load only when a skill reads
+
+        return read_memory(self._drive_root, operation, parameters)
 
     def get_runtime_info(self) -> RuntimeInfo:
         """Return the PluginAPI runtime-info snapshot without manifest I/O."""
