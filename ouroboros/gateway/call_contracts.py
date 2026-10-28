@@ -104,6 +104,13 @@ class CallParticipant(TypedDict):
     speaking: bool
 
 
+class CallShare(TypedDict):
+    """A peer's Show started (after its first frame) or stopped."""
+    type: Literal["share"]
+    sharing: bool
+    kind: Literal["screen", "camera"]
+
+
 class CallBye(TypedDict):
     type: Literal["bye"]
     reason: NotRequired[str]
@@ -172,7 +179,7 @@ class CallSocketContract(TypedDict):
 
 
 PEER_CONTROLS = {"hello": CallHello, "mute": CallMute, "played": CallPlayed,
-                 "context": CallContext, "participant": CallParticipant, "bye": CallBye}
+                 "context": CallContext, "participant": CallParticipant, "share": CallShare, "bye": CallBye}
 SERVER_CONTROLS = {"state": CallState, "activity": CallActivity, "turn": CallTurn, "caption": CallCaption,
                    "flush": CallFlush}
 

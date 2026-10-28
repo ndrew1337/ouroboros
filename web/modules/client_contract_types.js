@@ -1083,6 +1083,12 @@
  * @property {boolean} speaking
  */
 /**
+ * @typedef {Object} CallShare
+ * @property {'share'} type
+ * @property {boolean} sharing
+ * @property {'screen'|'camera'} kind
+ */
+/**
  * @typedef {Object} CallBye
  * @property {'bye'} type
  * @property {string=} reason
