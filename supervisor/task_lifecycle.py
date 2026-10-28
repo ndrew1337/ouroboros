@@ -14,7 +14,6 @@ import pathlib
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
-from ouroboros.post_task_checkpoint import post_task_synthesis_in_flight
 from ouroboros.review_owner_custody import reconcile_confirmed_dead_review_owner as _reconcile_dead_review_owner
 from ouroboros.utils import utc_now_iso
 
@@ -700,10 +699,10 @@ def cancel_task_custody(
         # ownership wins over the settled fast path; the stored terminal
         # stays the answer either way.
         turn = workers.direct_chat_turn(task_id)
-        if turn is not None or post_task_synthesis_in_flight(q.DRIVE_ROOT, task_id):
-            from supervisor.cancel_publication import _finish_captured_chat_turn
-
-            return _finish_captured_chat_turn(q, task_id, turn, intent=intent, deliver=deliver)
+        from supervisor.cancel_publication import finish_in_process_turn  # a live inline Presence turn too
+        in_process = finish_in_process_turn(q, task_id, turn, prepared, intent=intent, deliver=deliver)
+        if in_process is not None:
+            return in_process
     if settled and captured_worker is None and not captured_was_reaping:
         # A slot stranded at ``reaping`` by a custody attempt that crashed is
         # recovered HERE too: the task settled on its own afterwards, so nothing

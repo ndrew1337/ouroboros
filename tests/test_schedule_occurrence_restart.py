@@ -199,6 +199,7 @@ if stage == "claim":
                  "task": {"type": "task", "text": "continue", "project_id": "proj", "chat_id": 42}})
     if crash_point == "prepare_hold":
         folder.rmdir()
+        folder.write_text("a file where the folder was")  # a missing folder starts as its address (#1799)
         queue.check_scheduled_tasks()
         assert next(iter(_rows(q).values()))["hold"]["reason"] == "workspace_unusable"
     else:
@@ -217,6 +218,8 @@ if stage == "claim":
     row = next(iter(_rows(q).values()))
     print(json.dumps({"pid": __import__("os").getpid(), "occurrence": row["occurrence"]}))
 else:
+    if folder.is_file():
+        folder.unlink()
     folder.mkdir(exist_ok=True)
     queue.check_scheduled_tasks()
     queue.check_scheduled_tasks()

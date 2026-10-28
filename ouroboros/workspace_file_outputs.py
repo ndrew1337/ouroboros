@@ -278,15 +278,19 @@ def _directory_direct_artifacts(
     root: Path, artifact_dir: Path, task: dict, existing: dict,
 ) -> tuple[list[dict], dict] | None:
     """Record direct folder effects without inventing a before-image or scanning the tree."""
-    from ouroboros.headless_status import ARTIFACT_STATUS_READY
+    from ouroboros.headless_status import ARTIFACT_STATUS_MISSING, ARTIFACT_STATUS_READY
     from ouroboros.workspace_patch_capture import _acting_constraint_from_task, _preflight_head_from_task
     from ouroboros.utils import atomic_write_json, utc_now_iso
     from ouroboros.workspace_admission import has_git_metadata
 
     root = root.resolve(strict=False)
+    meta = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
+    # Admitted while missing (#1799) and still absent: no tree to diff, and nothing remains there.
+    absent = (not root.exists() and not root.is_symlink()
+              and (meta.get("workspace_availability") or {}).get("state") == "missing")
     constraint = _acting_constraint_from_task(task)
     surface = str((task.get("task_constraint") or {}).get("surface") or "")
-    if (not root.is_dir() or surface in {"self_worktree", "genesis"}
+    if (not (root.is_dir() or absent) or surface in {"self_worktree", "genesis"}
             or (constraint and constraint.base_sha) or _preflight_head_from_task(task)
             or has_git_metadata(root)):
         return None
@@ -313,6 +317,11 @@ def _directory_direct_artifacts(
                 "bytes; other shell, GUI or external effects and the full changed-file set are unknown. "
                 "No full rollback is available.",
     }
+    if absent:
+        manifest.update(status=ARTIFACT_STATUS_READY if outputs else ARTIFACT_STATUS_MISSING, before="absent",
+                        note="The selected folder was missing when this work was admitted and is still absent, "
+                             "so nothing remains there to capture. Registered outputs retain their captured "
+                             "bytes; other shell, GUI or external effects are unknown.")
     path = artifact_dir / "workspace_patch.json"
     atomic_write_json(path, manifest, trailing_newline=True)
     return [*outputs, artifact_record(path, kind="workspace_patch_manifest")], manifest

@@ -1192,7 +1192,12 @@ For promised work without a new event, `start_task` and
 `schedule_followup(notify=false, relation=...)` retain the existing Presence
 carrier and ordinary resource/control semantics. A scheduled root explicitly
 uses connector tools to deliver later; it is not discovered by polling the old
-event. `notify=true` and the owner-wide schedule table are separate capabilities.
+event, its finish reaches no one by itself, and it reads the conversation's
+current previous turn rather than the copy taken when it was scheduled. Any turn
+of the place lists, reads and withdraws the follow-ups that place scheduled
+(`manage_schedules` `list`/`get`/`delete`); withdrawal stops future runs only, and
+`cancel_task` stops work one already started. `notify=true` and the owner-wide
+schedule table remain separate capabilities.
 
 A turn's source identity uses its first legacy binding id (otherwise its place id), source event ID, provider/account,
 conversation/thread, actor ID and text. Keep those facts stable on retry;
