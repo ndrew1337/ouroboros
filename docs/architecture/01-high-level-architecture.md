@@ -103,7 +103,7 @@ ouroboros/ — agent core and shared runtime (§6)
   packaged_cli.py, packaged_cli_install.py — packaged desktop CLI bridge and its command-shim installer
   agent.py — task orchestrator; a loop crash is projected from captured evidence or an explicit `loop_evidence_unavailable`, never invented counters (§6 Task lifecycle)
   startup_historical_audit.py — explicit seal-audit child in its own process group (`python -m ouroboros.startup_historical_audit`; §2; docs/MODEL_SEND_OBSERVABILITY.md)
-  maintenance.py, maintenance_jobs.py, maintenance_retirement.py, plan_collection_job.py, temp_sweep.py — the maintenance child's history-sized jobs, their durable `job:<name>` facts and the stale atomic-temp sweep (§5)
+  maintenance.py, maintenance_jobs.py, maintenance_retirement.py, plan_collection_job.py, record_compression.py, temp_sweep.py — the maintenance child's history-sized jobs and durable `job:<name>` facts (§5)
   focus.py — authored focus with typed source ref; no dialogue or path escapes
   agent_startup_checks.py — agent-boot verification (warning-only health) and native-host adoption for self-restart (§2)
   agent_task_pipeline.py — task execution pipeline: result, artifacts, frozen cost snapshot, the review lens, root-only post-task work (§6 Task lifecycle)
@@ -162,7 +162,7 @@ ouroboros/ — agent core and shared runtime (§6)
   working_checkpoint.py — one rolling working state per attempt, delayed content ACK, frozen recovery (§6 Saved working state)
   local_custody_repair.py — an addressed action retires a positively ended local owner's claim; passive reads write nothing (§6 Owner Continue)
   owner_continue.py, schedule_continuation.py — Continue eligibility and sources (§6)
-  routing_wait.py — receipt waits and the one act projection that the picker, routing tools and observer share
+  routing_wait.py — receipt waits and the one act projection the picker, routing tools and observer share
   outcomes.py — typed task-outcome and objective authority with separate lifecycle, execution, objective, review, artifact and verification axes (§6 Task lifecycle; §10.1)
   outcome_receipt_store.py — verification-receipt append/read authority; a zero-run receipt writes `incomplete`/`unknown` only: a zero-run "complete" is unverifiable self-report
   depth_evidence.py — pure `requested_depth`/permitted/attempted/achieved projection from admitted facts
@@ -177,7 +177,7 @@ ouroboros/ — agent core and shared runtime (§6)
   usage_store.py, usage_journal.py, openrouter_cost.py — `state/usage.sqlite`, its journal import and explicit OpenRouter price receipts (docs/USAGE_STORE.md)
   store.py, store_empty.py, store_journal.py, store_task_cards.py, store_timing.py, store_import.py, store_switch.py, install_identity.py, dialogue_store.py, dialogue_retry.py, dialogue_import.py, dialogue_positions.py — shared SQLite core (USAGE_STORE.md): `state/current.sqlite` (atomic `meta.commit_seq`; boot import/reconcile §2, export before storeless switches §9) and `state/dialog.sqlite` (chat/progress rows by chain coordinate, ordinals, import intervals; one `append` seam; cutover, archive import, rollback export; PERSISTENCE.md)
   cost_projection.py — the one task-cost projection for every producer: `accounted_upper_bound_usd`, null as None and never $0.00 (§6 Budget tracking)
-  storage.py, storage_free.py — Dashboard counts and temporary-space actions (§3)
+  storage.py, storage_free.py, storage_removers.py — Dashboard counts and temporary-space actions (§3)
   delegate_custody.py, delegate_custody_reconcile.py, delegate_collection.py, delegate_state_sweep.py, delegate_custody_usage.py, delegate_capture_attempt.py, delegate_capture_job.py, delegate_named_evidence.py — run custody, observation, collection, child capture and usage; OWNED/FOREIGN/UNKNOWN (§6 Nanny, transport and custody)
   delegate_hold.py — unknown-provider nanny hold (§6 Context fitting)
   delegate_source_coverage.py — oversized work-order source custody; incomplete source cannot authorize a passing terminal verdict or an apply
@@ -218,7 +218,7 @@ ouroboros/ — agent core and shared runtime (§6)
   task_tree_ledger.py — append-only `data/task_trees/<root>/blackboard.jsonl`: ephemeral swarm coordination (`tree_note`/`tree_read`), mirrored into the project journal at root completion
   projects_registry.py, project_admission.py — the owner Project registry (active|deleting|tombstoned) and strict admission claims (§6 Project registry and lease)
   project_handoff.py — the Main transfer receipt owed through the terminal outbox after a durable bind (§3 Project handoff receipts)
-  project_dialogue.py — read-only chat lens and append-only `logs/chat_annotations.jsonl`; routes nothing but the `needs_manual_target` decision card; `routing_refusal_cause` (§3 Chat and Projects)
+  project_dialogue.py — read-only chat lens; append-only `logs/chat_annotations.jsonl` (`ROUTING_RECEIPT_FIELDS`) routes only `needs_manual_target` cards; `routing_refusal_cause` (§3 Chat and Projects)
   room_membership.py — canonical stored-row membership for history and inventory; a place row belongs only to its place room (§3 Chat and Projects)
   owner_words.py — the owner's words that caused a work tree, rendered verbatim for children, sessions and reviewers
   project_lease.py — one-writer-per-project lease in `assign_tasks`; same-project swarms exempt (§6 Project registry and lease)
@@ -263,7 +263,7 @@ ouroboros/ — agent core and shared runtime (§6)
   subagent_worktrees.py, worktree_removal.py — private-copy primitive, `state/private_copies/` records, `refs/ouroboros/delegated*/` pins, custody GC, removal retries (§6 Delegated subagents)
   force_remove.py, unindexed.py — shared permission-granting `force_rmtree`; `.noindex` copy names
   body_candidate.py, body_adoption.py, body_switch.py — Own-body worktree authoring and restart-bound adoption of an exact reviewed commit before body imports (§6 Own-body candidates; §2)
-  artifacts.py, artifact_storage.py, artifact_directories.py — artifact_store/attachments/, records/clones, patch compression, ZIPs, .scratch_manifest.json hashes, output audit, tool-evidence slices (§6)
+  artifacts.py, artifact_storage.py, artifact_directories.py — artifact_store/attachments/, records/clones, compression, ZIPs, .scratch_manifest.json hashes, output audit, tool-evidence slices (§6)
   chat_uploads.py, confined_files.py — the owner-attachment store (`data/uploads`) with byte-proven media kind; held-directory walks and regular-file opens (POSIX dirfd, Windows NT handles) for attachments, task files and sources (DESIGN "Chat attachments")
   retention.py, workspace_preflight.py — GC clamp, cutoff and exact task-drive retention date; workspace facts and delegated scratch/cache preparation/retirement (§6)
   project_sources.py — folder attach validation (realpath, not the home root, no repo/data overlap); opt-in `init_git`; a server-side clone never prompts (typed `auth_required`); attaching is the trust grant (`trusted_at`)
@@ -465,7 +465,7 @@ ouroboros/ — agent core and shared runtime (§6)
     claudexor_quota.py — Owned-daemon refresh/reset/receipt proxies; catalog negotiation, exact key/body and typed errors, no start/retry/browser token (§3 Agent accounts; §4)
     harness_maintenance.py — Owner maintenance HTTP over shared service (§6; routes: §4)
     host_service.py, host_notify.py — Loopback-only Host Service API; POST /notify beside it: a granted skill's sentence becomes one signed `skill_notice` System row in the owner's chat (§12)
-    history.py, history_deliveries.py — Shared Chat room/quiz/media/review/terminal projection and cost-breakdown factories; delivery rows' `msg_type`
+    history.py, history_deliveries.py — Shared Chat room/quiz/media/review/terminal/receipt projection, cost-breakdown factories; delivery rows' `msg_type`
     history_paging.py, history_chronology.py — a room's own pages over the dialogue store, frozen room-bound cursors, gaps, the import frontier, a Project's `latest_arrival`; no stored history copy (§3 History reads)
     cost_breakdown.py — Ledger-derived dashboard buckets and root-task detail over the same physical-attempt authority
     projects.py — GET/POST /api/projects, /from-task, /update, /delete
@@ -725,7 +725,7 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   ├── logs/
 │   │   ├── chat.jsonl             ← frozen at the cutover
 │   │   ├── progress.jsonl         ← frozen at the cutover
-│   │   ├── chat_annotations.jsonl ← routing status by client_message_id
+│   │   ├── chat_annotations.jsonl ← receipts by client_message_id
 │   │   ├── events.jsonl           ← lifecycle, llm_round/llm_usage, errors
 │   │   ├── tools.jsonl            ← tool calls
 │   │   ├── supervisor.jsonl       ← workers/supervisor, cancel trail
