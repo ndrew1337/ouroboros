@@ -2982,12 +2982,13 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 .review-facts-list {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    /* A label takes at most 40% and wraps: a long one (`Review panel <record id>`) never squeezes the values. */
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
     gap: var(--space-1) var(--space-4);
     margin: 0;
 }
 
-.review-facts-list dt { color: var(--text-secondary); }
+.review-facts-list dt { min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .review-facts-list dd {
     min-width: 0;
@@ -6168,6 +6169,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     overflow-y: auto;
     overscroll-behavior: contain;
 }
+/* Cut (toast.js names it a region), the column takes the pointer itself, as any scrolling box does: a wheel or a finger
+   anywhere over it scrolls it in every engine (Linux WebKit finds a scroller only where it takes pointer events).
+   Uncut, its empty box lets the page through. */
+#toast-stack[tabindex] { pointer-events: auto; }
 /* A notice taller than the column shows keeps its close button on screen, at the nearer edge. */
 #toast-stack .toast-dismiss { position: sticky; top: 0; bottom: 0; }
 /* The focused scroll region uses the same ring as other keyboard controls. */
@@ -8118,6 +8123,33 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
 }
 .project-panel .chat-instance-panel .chat-messages {
     padding-top: var(--chat-feed-reserve, var(--chat-header-reserve, 56px));
+    /* Reserve the real scrollbar lane from the first layout: WebKit's auto-overflow transition can leave rows
+       wider than the content box until a resize, covering the focus corners. Overlay scrollbars take no space. */
+    overflow-y: scroll;
+}
+/* The open room's feed holds the keys (app.js focusProjectRoom). Its keyboard focus is two corners of the focus ring,
+   never a frame round the room: each 11px outside the rows' edge, in the feed's own gutter, 4px above the first row
+   and opening toward it; rows scroll under them, and a pointer quiets them until the next key (chat.js; DESIGN §3
+   Focus). Both engines place a background over the scrollbar's lane, so the right pair moves in by the lane the feed
+   actually draws (--chat-feed-lane, measured with the room's other reserves; none where scrollbars overlay). */
+.project-panel .chat-messages:focus { outline: none; }
+.project-panel .chat-messages:focus-visible:not(.is-quiet-focus) {
+    background-image: linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border));
+    background-origin: content-box;
+    background-repeat: no-repeat;
+    background-size: 8px 2px, 2px 12px, 8px 2px, 2px 12px;
+    background-position: left -11px top -4px, left -11px top -4px,
+        right calc(var(--chat-feed-lane, 0px) - 11px) top -4px, right calc(var(--chat-feed-lane, 0px) - 11px) top -4px;
+}
+/* Forced colours drop gradients, the corners with them: there the keys get the system's ring, inset. */
+@media (forced-colors: active) {
+    .project-panel .chat-messages:focus-visible:not(.is-quiet-focus) {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
 }
 /* The note already reserves the floating bar. With a keyboard both are in flow. The room asks and its feed inherits
    the answer: :has() stays in its subject compound (DEVELOPMENT "Design System"). */

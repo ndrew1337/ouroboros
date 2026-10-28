@@ -200,5 +200,13 @@ def test_speaker_can_schedule_no_event_followup_with_host_carrier_and_related_bu
     assert not future.get("project_id")
     assert "FOLLOWUP_NOTIFY_REFUSED" in _handle_schedule_followup(ctx, objective="A private note", notify=True,
                                                                  run_at="2030-01-01T00:00:00Z", relation="related")
-    assert "RESOURCE_CONSTRAINT_BLOCKED" in _manage_schedules(ctx, "list")
-    assert len(queue.list_scheduled_tasks(root)["tasks"]) == 1
+    # The speaker sees only its own promise (#1589); the owner's schedule in the same table stays out of
+    # reach, and changing a promise in place stays refused (withdraw it and schedule anew instead).
+    from supervisor.schedule_lifecycle import upsert_scheduled_task
+
+    upsert_scheduled_task({"id": "owner-digest", "name": "Owner digest", "trigger": {"type": "once", "run_at": "2030-01-01T00:00:00Z"},
+                           "task": {"type": "task", "text": "Send the digest"}}, drive_root=root)
+    assert [row["id"] for row in json.loads(_manage_schedules(ctx, "list"))["tasks"]] == [schedule["id"]]
+    assert json.loads(_manage_schedules(ctx, "get", schedule_id="owner-digest"))["status"] == "not_found"
+    assert "RESOURCE_CONSTRAINT_BLOCKED" in _manage_schedules(ctx, "update", schedule_id=schedule["id"], objective="Later")
+    assert sorted(row["id"] for row in queue.list_scheduled_tasks(root)["tasks"]) == sorted([schedule["id"], "owner-digest"])

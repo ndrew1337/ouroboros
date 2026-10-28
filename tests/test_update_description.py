@@ -329,12 +329,10 @@ def test_a_failed_request_keeps_the_saved_text_and_nothing_repeats(door, tmp_pat
     assert len(door.pending) == 1
 
 
-def test_a_host_retry_is_the_request_s_own_work_and_its_end_ends_the_request(door, tmp_path):
-    """The reaper's own retry publication gives the request a new physical task. The request reads
-    that attempt's effective status (no maintenance sweep runs here), the retry's save is the owner's
-    request, and Main's later rewrite neither claims the request nor makes it read unsaved."""
+def test_a_stored_host_retry_is_the_request_s_own_work_and_its_end_ends_the_request(door, tmp_path):
+    """Read the reciprocal rows older reapers published, without recreating their retired admission.
+    The retry's save belongs to the request; later initiative leaves that fact intact."""
     from ouroboros.task_results import load_task_result, write_task_result
-    from supervisor import queue, task_reaper
 
     _offer(door.root)
     handle = _request(door).json()["task_id"]
@@ -342,9 +340,13 @@ def test_a_host_retry_is_the_request_s_own_work_and_its_end_ends_the_request(doo
     write_task_result(door.root, handle, "running")
     retry_id = f"{handle}-retry"
     retried = {**task, "id": retry_id, "original_task_id": handle, "timeout_retry_from": handle, "_attempt": 2}
-    assert task_reaper._run_retry_admission_transaction(
-        queue, task, retried, task_id=handle, retry_task_id=retry_id, terminal_reason="idle_timeout",
-        recon_fields={}, runtime_sec=300, unreconciled_runs=None, salvage_note="") == ({}, "")
+    write_task_result(door.root, retry_id, "scheduled", supersedes_task_id=handle,
+                      original_task_id=handle, root_task_id=task.get("root_task_id") or handle,
+                      parent_task_id=task.get("parent_task_id"), delegation_role=task.get("delegation_role"),
+                      timeout_retry_from=handle, metadata=task.get("metadata", {}))
+    write_task_result(door.root, handle, "interrupted", reason_code="idle_timeout_retry",
+                      superseded_by=retry_id, retry_task_id=retry_id)
+    door.pending.append(retried)
     status = {"running_sha": BASE, "checked_target_sha": TARGET}
     assert ul.project_letter_for_panel(status, drive_root=door.root)["request"]["status"] == "scheduled"
     assert _request(door, mode="rewrite").status_code == 409 and [t["id"] for t in door.pending] == [retry_id]

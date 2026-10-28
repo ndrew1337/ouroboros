@@ -168,10 +168,19 @@ def test_a_presence_childs_promote_and_follow_up_stay_its_bindings_work_under_th
     assert followup["metadata"]["presence_binding_authority"] == authority and "presence" not in followup["metadata"]
     assert followup["task_contract"]["capability_ceiling"] == ceiling
     assert not followup.get("project_id") and presence_related_work(BINDING, followup)
-    # Work acting for a binding reads no owner schedule table, exactly as its speaker cannot.
-    assert "RESOURCE_CONSTRAINT_BLOCKED" in _manage_schedules(root_ctx, "list")
-    child_tools = types.SimpleNamespace(task_metadata=_worker_metadata(child), task_contract=child["task_contract"])
-    assert "RESOURCE_CONSTRAINT_BLOCKED" in _manage_schedules(child_tools, "list")
+    # Work acting for a binding reads that binding's own follow-ups and never the owner's table,
+    # exactly as its speaker (#1589); changing an owner row stays refused before any read.
+    from supervisor.schedule_lifecycle import upsert_scheduled_task
+    upsert_scheduled_task({"id": "owner-row", "name": "Owner's own", "timezone": "UTC",
+                           "trigger": {"type": "cron", "expr": "0 * * * *"},
+                           "task": {"type": "task", "text": "Owner work"}}, drive_root=tmp_path)
+    listed = json.loads(_manage_schedules(root_ctx, "list"))
+    assert [row["id"] for row in listed["tasks"]] == [record["id"]] and listed["total"] == 1
+    child_tools = types.SimpleNamespace(task_metadata=_worker_metadata(child), task_contract=child["task_contract"],
+                                        drive_root=tmp_path)
+    assert [row["id"] for row in json.loads(_manage_schedules(child_tools, "list"))["tasks"]] == [record["id"]]
+    assert "RESOURCE_CONSTRAINT_BLOCKED" in _manage_schedules(root_ctx, "disable", schedule_id="owner-row",
+                                                              reason="not mine")
 
     # An ordinary child's promote is unchanged: no carrier, and its project request stands.
     _plain_evt, plain = _admitted_child(tmp_path, monkeypatch, _parent(tmp_path, {}, task_id="owner-root", ceiling=False))

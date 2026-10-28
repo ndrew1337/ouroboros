@@ -62,12 +62,12 @@ Enforcement: `tests/test_acceptance_claims_wiring.py`, `tests/test_protected_art
 
 - A place is the owner's: a connector declares `provides: place` and per-tool `effect`/`target` in its manifest; the owner's choices live in the host place record (`places.py`), never in the payload, and a connector update never overwrites them. Wake matching reads typed provider facts, never message text.
 - A focus has consciousness authority (autonomy level, allowance, Safety at the consciousness level), not a per-place ceiling: Silent/Paused and Advises are refusals at the one dispatch guard from declared tool effects (`place_guard.py`), and the automatic reply passes the `place_reply` check. Old ceilings stay decodable only for retained work.
-- `state/presence_bindings.json` is host-owned authority: a transport token resolves only bindings naming that exact transport skill, and provider/account/conversation/thread must match the binding origin; identities are never recovered from message text (turn flow: ARCHITECTURE §12).
+- Admission is host-owned: a transport token reaches only places of its exact connector, whose provider/account/conversation/thread must match; identities are never recovered from message text (turn flow: ARCHITECTURE §12).
 - Each admitted event runs a fresh agent under a deterministic binding-plus-source-event task id, a cross-process state-root-wide turn cap and per-conversation serialization; the transport's durable custody owns arrival FIFO. Add no transport-specific scheduler, memory silo, core outbox or resident cross-room agent.
-- Every descendant producer (promotion, `schedule_followup`) copies the Presence carrier, admitted workspace and capability ceiling by value or refuses the transition. A Presence caller reads, steers and cancels only roots of its own binding.
-- Knowledge-topic and scratchpad mutation each serialize on one stable lock, so concurrent owner and Presence turns cannot overwrite a newer projection with an older render.
+- Every descendant producer (promotion, `schedule_followup`) copies the Presence carrier, admitted workspace and capability ceiling by value or refuses. A Presence caller reads, steers and cancels only roots of its own binding and reads or withdraws only its follow-ups (`queue_schedules.presence_promise`).
+- Knowledge-topic and scratchpad mutation each serialize on one stable lock: concurrent owner and Presence turns never overwrite a newer projection with an older render.
 
-Enforcement: `tests/test_presence_admission.py` (parsing, admission, schema and execution filtering, binding/token/origin checks, idempotency and ordering, inheritance); provider-adapter E2E is separate evidence.
+Enforcement: `tests/test_presence_admission.py` (parsing, admission, schema and execution filtering, binding/token/origin checks, idempotency, ordering, inheritance), `tests/test_presence_promises.py`; provider-adapter E2E is separate evidence.
 
 ### Devtools isolation
 
@@ -154,7 +154,7 @@ Enforcement: `tests/test_acting_subagents.py` (profiles and creation), `tests/te
 
 ### Cancellation and effective status
 
-Mechanism: ARCHITECTURE §5 "Supervisor Loop" (`supervisor/queue_transitions.py`, `supervisor/cancel_publication.py`, `supervisor/owner_stop.py`); invariants: ARCHITECTURE §10 "Key Invariants" 14 and 15. The imperatives:
+Mechanism: ARCHITECTURE §5 (`supervisor/queue_transitions.py`, `supervisor/cancel_publication.py`, `supervisor/owner_stop.py`); ARCHITECTURE §10 invariants 14-15. The imperatives:
 
 - Effective task status belongs in `ouroboros/task_status.py`; never duplicate child-drive merge or terminality logic in gateways or tools. Waits use `SETTLED_STATUSES` and structured facts plus queue-heartbeat freshness, never keyword matching.
 - `wait_task`, `wait_tasks` and `await_messages` peek the waiting actor's own mailbox via the transport-wait reader: early return for pending mail is disclosed without ACK or stopping children; the round-top drain delivers and ACKs. Only a proved-empty mailbox is retained; a read failure or torn data is neither proof nor cached.

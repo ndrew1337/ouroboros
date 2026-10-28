@@ -767,6 +767,34 @@ def _finish_captured_chat_turn(
     return CANCEL_ALREADY_SETTLED if outcome == DIRECT_TURN_STOP_GONE else CANCEL_CANCELLED
 
 
+def finish_in_process_turn(q: Any, task_id: str, turn: Optional[Dict[str, Any]], row: Dict[str, Any], *,
+                           intent: Optional[Dict[str, Any]] = None, deliver: bool = True) -> Optional[str]:
+    """Custody of a task no queue map holds but this process runs, else ``None``: a direct chat turn or its
+    billing synthesis takes ``_finish_captured_chat_turn``. An inline Presence turn the census witnesses or
+    cannot rule out (``presence_execution_witness``) reads this open intent and its runner writes the terminal
+    (#2012); custody never writes that row: it releases the claim (an unreadable census recorded as unknown)
+    and settles the intent once the row settles (``cancelled`` only for this request); an absent turn: None."""
+    from ouroboros.post_task_checkpoint import post_task_synthesis_in_flight
+    from ouroboros.presence_runner import presence_execution_witness
+    from supervisor.queue_transitions import settled_status_of
+    from supervisor.task_lifecycle import SETTLED_ALREADY, _release_intent_claim, _settle_intent
+    if turn is not None or post_task_synthesis_in_flight(q.DRIVE_ROOT, task_id):
+        return _finish_captured_chat_turn(q, task_id, turn, intent=intent, deliver=deliver)
+    if not (isinstance(owner := (row or {}).get("execution_owner"), dict) and owner.get("kind") == "presence"):
+        return None
+    live = presence_execution_witness(task_id, drive_root=pathlib.Path(q.DRIVE_ROOT))
+    current = _load_result_row(q, task_id) or row  # read after the witness: an end in between is settled
+    if not (settled := settled_status_of(current)):
+        if live is not False:  # witnessed or unknown: the Stop stays pending, recorded as what it is
+            _release_intent_claim(q, task_id, intent=intent, error="Presence turn has not reached its next stop check"
+                                  if live else "Presence liveness unknown: its author census is unreadable")
+        return None if live is False else CANCEL_FAILED
+    stopped = (settled == "cancelled" and bool(intent) and isinstance(origin := current.get("cancel_origin"), dict)
+               and origin.get("request_id") == intent.get("request_id"))
+    _settle_intent(q, task_id, outcome="cancelled" if stopped else SETTLED_ALREADY, detail=settled, intent=intent)
+    return CANCEL_CANCELLED if stopped else CANCEL_ALREADY_SETTLED
+
+
 def live_presence_row(row: Any) -> bool:
     """An unsettled row a live Presence turn owns: its runner settles it, not cancel custody."""
     from supervisor.queue_transitions import settled_status_of

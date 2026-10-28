@@ -372,6 +372,55 @@ test('a layer that replaces another in one commit returns focus where the replac
     w.layers.destroy();
 });
 
+test('a drawer and its replaced room hand focus back through both retired openers', () => {
+    const w = world();
+    const mainMenu = w.node('button', w.content);
+    mainMenu.focus();
+    w.layers.push({ id: 'drawer', el: w.sidebar, onClose() {} });
+    const row = w.node('button', w.sidebar);
+    row.focus();
+    w.layers.batch(() => {
+        w.layers.remove('drawer');
+        w.layers.push({ id: 'project', el: w.panel, onClose() {} });
+    });
+    const roomMenu = w.node('button', w.panel);
+    roomMenu.focus();
+    w.layers.push({ id: 'drawer', el: w.sidebar, onClose() {} });
+    row.focus();
+    w.layers.batch(() => {
+        w.layers.remove('drawer');
+        w.layers.remove('project');
+        w.layers.push({ id: 'project', el: w.panel, onClose() {} });
+    });
+    assert.equal(w.doc.activeElement, w.panel, 'the replacement room receives the keys');
+    roomMenu.isConnected = false;  // the replaced chat instance is destroyed
+    w.layers.pop('escape');
+    assert.equal(w.doc.activeElement, mainMenu, 'the surviving opener receives them on close');
+    w.layers.destroy();
+});
+
+test('a replacement keeps a focus held outside what it retired, and an opener its owner names', () => {
+    const w = world();
+    const row = w.node('button', w.sidebar);
+    row.focus();
+    w.layers.push({ id: 'project', el: w.panel, modal: false, onClose() {} });
+    const field = w.node('textarea', w.content);  // Main's composer beside the docked Project
+    field.focus();
+    const replace = (facts = {}) => w.layers.batch(() => {
+        w.layers.remove('project');
+        w.layers.push({ id: 'project', el: w.panel, modal: false, onClose() {}, ...facts });
+    });
+    replace();
+    w.layers.pop('escape');
+    assert.equal(w.doc.activeElement, field, 'the live focus it was given, not the retired room\'s row');
+    w.layers.push({ id: 'project', el: w.panel, modal: false, onClose() {} });
+    const named = w.node('button', w.content);
+    replace({ opener: named });
+    w.layers.pop('escape');
+    assert.equal(w.doc.activeElement, named, 'an opener the owner names wins over the chain');
+    w.layers.destroy();
+});
+
 test('a later commit supersedes a pending inert difference; one without inertAfter applies now; destroy drops it', async () => {
     const w = world();
     let first;
@@ -464,6 +513,23 @@ test('focus goes into the layer on open and back to the opener on close', () => 
     w.content.inert = true;
     w.layers.remove('project');
     assert.equal(w.doc.activeElement, field, 'no focus into an inert opener');
+    w.layers.destroy();
+});
+
+test('closing a layer leaves a focus the person moved beside it, and places a lost one', () => {
+    const w = world();
+    const row = w.node('button', w.sidebar);
+    row.focus();
+    w.layers.push({ id: 'project', el: w.panel, modal: false, onClose() {} });
+    assert.equal(w.doc.activeElement, w.panel);
+    const field = w.node('textarea', w.content);  // Main's composer beside the docked Project
+    field.focus();
+    w.layers.pop('escape');
+    assert.equal(w.doc.activeElement, field, 'the Project closed; the field keeps the focus it was given');
+    w.layers.push({ id: 'project', el: w.panel, modal: false, onClose() {} });
+    w.doc.activeElement = w.doc.body;  // its room was put away under the focus
+    w.layers.remove('project');
+    assert.equal(w.doc.activeElement, field, 'a lost focus goes back to the opener');
     w.layers.destroy();
 });
 
