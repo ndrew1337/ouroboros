@@ -4,18 +4,28 @@
 
 Paths: `OUROBOROS_REPO_DIR` (checkout), `OUROBOROS_DATA_DIR` (memory/state/settings/logs),
 `OUROBOROS_SETTINGS_PATH`, `OUROBOROS_PID_FILE` (launcher lock),
-`OUROBOROS_PORT_FILE`; `OUROBOROS_APP_ROOT` defaults to `~/Ouroboros`. Work roots
-(`OUROBOROS_SUBAGENT_PROJECTS_ROOT`, `OUROBOROS_SUBAGENT_WORKTREE_ROOT`,
-`OUROBOROS_DELIVERABLES_ROOT`) prefer saved settings, then environment, then
-defaults. Compose/systemd/shell may load an env file; Ouroboros does not.
-A direct server defaults to its checkout and `~/Ouroboros/data` even with APP_ROOT:
-specify DATA_DIR (ARCHITECTURE §7).
+`OUROBOROS_PORT_FILE`; each defaults beneath `OUROBOROS_APP_ROOT` (`~/Ouroboros`), and
+an explicit value never moves another. Work roots (`OUROBOROS_SUBAGENT_PROJECTS_ROOT`,
+`OUROBOROS_SUBAGENT_WORKTREE_ROOT`, `OUROBOROS_DELIVERABLES_ROOT`) prefer saved settings,
+then environment, then the data root's basis (`state/state.initialized.json`):
+`<APP_ROOT>/<folder>` for data first initialized by this release or later,
+`~/Ouroboros/<folder>` for older data. An unreadable basis makes a default work root
+refuse until its key is set; nothing is moved, copied or deleted. Compose/systemd/shell
+may load an env file; Ouroboros does not. A direct server uses its checkout and
+`<APP_ROOT>/data`; while DATA_DIR is unset and `~/Ouroboros/data` holds memory (or cannot
+be examined), it exits 2 naming both choices: that data with the old
+`<APP_ROOT>/data/settings.json`, or `<APP_ROOT>/data` (ARCHITECTURE §7).
 
 `OUROBOROS_SERVER_PORT` defaults to 8765; fallback skips Host Service/local-model
-ports. Source CLI, Settings, extensions and launcher use the published port.
-Desktop CLI scrubs path overrides and uses `~/Ouroboros/data`; relocated servers
-need `--url` or `OUROBOROS_URL`.
-Keep containers' published port free.
+ports. Source CLI, desktop CLI, Settings, extensions and launcher use the published
+port of the roots they resolve. Desktop `run --start` accepts a running server only when
+that data root's service binding names it (`--url` names one outright); otherwise it opens
+the app, on macOS through `open -n --env` with its resolved paths, including defaults. Keep containers'
+published port free.
+
+An older release ignores the basis: it creates new work roots under `~/Ouroboros`, and
+its direct server given only APP_ROOT keeps memory in `~/Ouroboros/data`. Set DATA_DIR
+and the three work-root keys explicitly before running one on such data.
 
 One server holds `<data>/state/server.lock` until exit, regardless of repository,
 PID file or port. A second waits briefly for Restart, then exits 2;

@@ -22,11 +22,11 @@ from typing import Callable
 
 import uvicorn
 
+from ouroboros.launch_roots import data_dir as _configured_data_dir
 from ouroboros.utils import read_json_dict, update_json_locked
 
 
-DATA_DIR = pathlib.Path(os.environ.get("OUROBOROS_DATA_DIR",
-    pathlib.Path.home() / "Ouroboros" / "data"))
+DATA_DIR = _configured_data_dir()  # config's root; a direct entry has already settled and exported it (launch_roots)
 
 
 log = logging.getLogger("server")

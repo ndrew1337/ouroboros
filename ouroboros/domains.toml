@@ -173,6 +173,7 @@ D20 = "Presence"
 "ouroboros/colab_bootstrap.py" = "D12"
 "ouroboros/commit_admission.py" = "D06"
 "ouroboros/config.py" = "D12"
+"ouroboros/launch_roots.py" = "D12"  # the stdlib launch tuple and work-root basis config derives from
 "ouroboros/composer_cognition.py" = "D12"
 "ouroboros/confined_files.py" = "D18"
 "ouroboros/model_slots.py" = "D12"
@@ -1132,6 +1133,7 @@ allowed = [
   "D12->D02",
   "D12->D03",
   "D12->D07",
+  "D12->D08",
   "D12->D11",
   "D12->D13",
   "D12->D18",

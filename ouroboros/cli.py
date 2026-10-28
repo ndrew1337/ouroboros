@@ -814,6 +814,12 @@ def _default_base_url() -> str:
 def _start_local_server(base_url: str) -> subprocess.Popen:
     if os.environ.get("OUROBOROS_PACKAGED_CLI") == "1":
         raise CLIError("packaged CLI must launch the desktop app for --start, not source server.py")
+    from ouroboros.launch_roots import AmbiguousDataRoot, direct_data_dir
+
+    try:  # the server's own refusal would be lost with its discarded output
+        direct_data_dir()
+    except AmbiguousDataRoot as exc:
+        raise CLIError(f"server not started: {exc}") from None
     parsed = urllib.parse.urlparse(base_url)
     host = parsed.hostname or DEFAULT_HOST
     port = int(parsed.port or DEFAULT_PORT)

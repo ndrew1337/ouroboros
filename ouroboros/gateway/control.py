@@ -148,6 +148,10 @@ async def api_reset(request: Request) -> JSONResponse:
         bridge = try_get_bridge()
         if bridge is not None:
             bridge.panic.invalidate_owner()
+        from ouroboros.launch_roots import durable_basis
+        from supervisor.state_initialization import mark_pending, supervisor_evidence
+
+        basis, _why = durable_basis(data_dir, evidence=supervisor_evidence)  # read before state/ goes: Reset keeps it
         deleted = []
         # Keep synchronization files until restart. Removing the directory that
         # contains the held managed-update lock would let a second updater enter.
@@ -161,10 +165,9 @@ async def api_reset(request: Request) -> JSONResponse:
             settings_file.unlink()
             deleted.append("settings.json")
         # The owner's explicit fresh start (#1307): boot initializes a new state from
-        # this pending witness instead of reading the wiped root as a lost one.
-        from supervisor.state_initialization import mark_pending
-
-        mark_pending(data_dir, origin="owner_reset")
+        # this pending witness instead of reading the wiped root as a lost one; the work
+        # folders it never deletes keep their basis (#1239).
+        mark_pending(data_dir, origin="owner_reset", work_root_basis=basis)
         _request_restart(request)
         return JSONResponse({"status": "ok", "deleted": deleted, "restarting": True})
     except Exception as exc:
