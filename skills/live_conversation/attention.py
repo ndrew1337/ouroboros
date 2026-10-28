@@ -1,6 +1,7 @@
 """The mind chooses when live sources are delivered; a frame never offers a turn."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import math
@@ -34,6 +35,10 @@ class Attention:
         self.kinds.pop(peer, None)
         self.seen.pop(peer, None)
 
+    def delivered(self, source, digest):
+        if source in self.frames:
+            self.seen[source] = digest
+
     async def retained(self, frame):
         retain = getattr(self.host, 'retain_frame', None)
         try:
@@ -44,12 +49,14 @@ class Attention:
             path = ''
         return path or ''  # a failed save is said in words on every route; a seeing route still gets its pixels
 
-    async def deliver(self, session, *, requested=False):
+    async def deliver(self, session, *, requested=False, held_sources=()):
         """An input/offer boundary, or stream delivery. No response is opened here."""
         if self.mode == 'asked' and not requested:
             return []
         rows = []
         for source, frame in tuple(self.frames.items()):
+            if source in held_sources:
+                continue  # this exact offer carries pixels; custody is marked only after its write
             digest = sha256(frame.data).hexdigest()
             if self.seen.get(source) == digest:
                 continue
@@ -58,7 +65,18 @@ class Attention:
             self.seen[source] = digest
             try:
                 if self.host.model.vision:
-                    await session.send(frame)
+                    offer = getattr(session, 'offer_video', None)
+                    if offer is None:
+                        await session.send(frame)
+                    else:
+                        # Queue custody is not delivery. Only a completed provider
+                        # write marks these exact source bytes as seen.
+                        self.seen.pop(source, None)
+                        accepted = offer(frame, lambda source=source, digest=digest: self.delivered(source, digest),
+                                         lambda source=source, frame=frame: self.frames.get(source) is frame)
+                        if accepted is False:
+                            await session.send(frame)
+                            self.delivered(source, digest)
                 else:
                     path = await self.retained(frame)
                     detail = (f'{path}. This engine is blind; vlm_query with this file_path reads this exact remote frame.'
@@ -102,15 +120,63 @@ class Attention:
                         {'type': 'text', 'text': f'[attend result; peer {source}; exact frame: {path or "not saved"}]'},
                         {'type': 'image_url', 'image_url': {'url': 'data:' + frame.mime + ';base64,'
                             + base64.b64encode(frame.data).decode()}, '_source_path': path}]})
-                    self.seen[source] = digest
                 elif self.host.model.vision:
                     frames[-1]['already_visible'] = True
             result['frames'] = frames
-            result['reader'] = 'vlm_query(file_path=...)' if not self.host.model.vision else 'images follow; unchanged frames are already visible'
+            result['reader'] = 'vlm_query(file_path=...)' if not self.host.model.vision else 'image delivery gives the microphone priority; exact files stay readable; unchanged delivered frames are already visible'
             # Tool text keeps exact source paths in canonical history. The ordinary
             # ToolOutputs image lane carries their pixels, without changing CallTool's str result.
             self.looks[current_tool_call_id()] = images
         return json.dumps(result, ensure_ascii=False)
+
+    async def delivery_images(self, session, rows):
+        """Requested looks use the same transport cap; exact files remain readers.
+
+        A constrained look must not smuggle an original-sized JPEG into ToolOutputs.
+        Its result says whether pixels arrived or are waiting, without claiming sight.
+        """
+        upload = getattr(session, 'upload', None)
+        if upload is None or not callable(getattr(session, 'video_payload', None)):
+            return rows
+        from ouroboros.live_upload import smaller_frame
+        from ouroboros.realtime_session import joined
+        output = []
+        for row in rows:
+            if not row.get('_call_frame_source'):
+                output.append(row)
+                continue
+            parts = []
+            deferred = False
+            for part in row.get('content', []):
+                if part.get('type') != 'image_url':
+                    parts.append(part)
+                    continue
+                url = part['image_url']['url']
+                prefix, encoded = url.split(',', 1)
+                frame = Video(base64.b64decode(encoded), prefix[5:].split(';')[0], row['_call_frame_source'])
+                limit = session.frame_byte_limit(frame, int(upload.capacity()))
+                copy = await joined(asyncio.to_thread(smaller_frame, frame, limit))
+                if (copy is not None and upload.backlog() == 0 and not upload.audio_waiters
+                        and len(copy.data) <= session.frame_byte_limit(copy, upload.budget())):
+                    parts.append({**part, 'image_url': {'url': 'data:' + copy.mime + ';base64,'
+                        + base64.b64encode(copy.data).decode()}})
+                    from ouroboros.contracts.realtime import canonical_json
+                    upload.credit = max(0, upload.credit - session.wire_bytes(canonical_json(session.video_payload(copy))))
+                    if copy is not frame:
+                        upload.notice(True)
+                else:
+                    deferred = True
+                    self.seen.pop(frame.source, None)
+                    latest = self.frames.get(frame.source)
+                    if latest is not None:
+                        session.offer_video(latest, lambda source=latest.source, digest=sha256(latest.data).hexdigest():
+                                            self.delivered(source, digest),
+                            lambda latest=latest: self.frames.get(latest.source) is latest)
+                    parts.append({'type': 'text', 'text': 'These pixels have not been delivered. Live frames wait for '
+                                  'upload room, with newer frames replacing older ones. This exact file remains '
+                                  'available to the image reader.'})
+            output.append({**row, 'content': parts, **({'_deferred_frame': True} if deferred else {})})
+        return output
 
     def revisit_due(self):
         return self.revisit_at is not None and monotonic() >= self.revisit_at
@@ -118,7 +184,7 @@ class Attention:
     def include_images(self, rows):
         """A refitted look already brings its exact pixels with the pending offer."""
         for row in rows:
-            if row.get("_call_frame_source") and row.get("_call_frame_digest"):
+            if row.get("_call_frame_source") and row.get("_call_frame_digest") and not row.get('_deferred_frame'):
                 self.seen[row["_call_frame_source"]] = row["_call_frame_digest"]
 
     def tool_outputs(self, calls, changes):

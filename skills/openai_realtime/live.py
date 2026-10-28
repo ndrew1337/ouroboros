@@ -248,7 +248,7 @@ class OpenAISession(JsonSession):
         self.outstanding[item["id"]] = item
         if source and image:
             self.source_images[source] = item["id"]
-        await self.write({"type": "conversation.item.create", "item": item})
+        await self.write({"type": "conversation.item.create", "item": item}, image=image)
 
     def convert(self, event):
         kind, item = event.get("type", ""), event.get("item_id", "")
@@ -373,11 +373,16 @@ class OpenAISession(JsonSession):
             return events
         return []
 
+    def video_payload(self, command):
+        return {"type": "conversation.item.create", "item": {"type": "message", "role": "user",
+            "id": f"host_item_{self.number + 1}", "content": [{"type": "input_image",
+            "image_url": "data:" + command.mime + ";base64," + base64.b64encode(command.data).decode()}]}}
+
     async def send(self, command):
         if isinstance(command, Audio):
             if command.rate != 24000 or len(command.pcm) % 2:
                 raise RealtimeSetupError("audio_format", "OpenAI expects PCM16 mono at 24000 Hz")
-            await self.write({"type": "input_audio_buffer.append", "audio": base64.b64encode(command.pcm).decode()})
+            await self.write_audio({"type": "input_audio_buffer.append", "audio": base64.b64encode(command.pcm).decode()}, command)
         elif isinstance(command, Video):
             # Frames are observations. They do not trigger a response by themselves.
             async with self.context_lock:

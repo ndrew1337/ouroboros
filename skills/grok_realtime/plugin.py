@@ -431,7 +431,7 @@ class GrokSession(JsonSession):
         if isinstance(command, Audio):
             if command.rate != 24000 or len(command.pcm) % 2:
                 raise RealtimeSetupError('audio_format', 'Grok expects PCM16 mono at 24000 Hz')
-            await self.write({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(command.pcm).decode()})
+            await self.write_audio({'type': 'input_audio_buffer.append', 'audio': base64.b64encode(command.pcm).decode()}, command)
         elif isinstance(command, Interrupt):
             if self.active_response and self.active_response not in self.cancelled:
                 self.cancelled.add(self.active_response)

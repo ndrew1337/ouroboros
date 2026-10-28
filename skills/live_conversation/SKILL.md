@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.14
+version: 0.1.15
 type: extension
 runtime: python3
 entry: plugin.py
@@ -57,3 +57,5 @@ at the captured route tariff. Current options and account scope are checked at
 the switch. Only transport failure or a stale fit falls back; typed refusals end
 without another attempt. Committed room mail keeps its answer opportunity across
 a handoff, and an interrupted answer proves the connection just as a completed one does.
+
+On a weak upload the microphone goes first. Provider frames wait for an empty socket; newer frames replace waiting ones per source. The shared transport measures drainage, sizes only delivery copies to its physical audio-buffer bound, and paces them with spare microphone capacity. Exact original files remain readers. The mind gets one slow-upload fact and one recovery fact; a queued frame is not sight. Requested looks obey the same limit.

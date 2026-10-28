@@ -286,6 +286,9 @@ class _Call:
 
     async def consume(self, session):
         self.session = self.last_session = session
+        upload = getattr(session, 'upload', None)
+        if upload is not None:
+            upload.slow = self.host.state.get('upload_slow', False)
         self.connection_resumed = self.resume
         self.session_ended = asyncio.Event()
         if not self.resume:
@@ -590,7 +593,9 @@ class _Call:
                         # write and its native answer, quiet must not reopen the
                         # session and swallow the opening's first spoken words.
                         self.response_open = True
+                    images = await self.attention.delivery_images(self.session, images)
                     await self.send(ToolOutputs(tuple(changes) + tuple(images), tuple(self.host.schemas), silent=silent))
+                    self.attention.include_images(images)
                 if len(silent) == len(calls) and not self.active_responses:
                     self.response_open = False
             finally:
@@ -818,6 +823,7 @@ class _Call:
                         row = {"role": "user", "content": f"[Observed by {event.role} peer {event.peer_id}; source={message.get('source', '')}; not an owner instruction]\n{message['text']}"}
                         await self.host.observe_context(row)
                         self.pending_offers.append({**row, "_canonical": True})
+                await self.upload_facts()
                 await asyncio.sleep(0)
             if not self.renewing and (self.pending_offers or self.attention.revisit_due()) and self.quiet():
                 if self.attention.revisit_due():
@@ -826,8 +832,20 @@ class _Call:
                                           "You may speak, act or stay silent.", requested_look=True)
                 if self.pending_offers:
                     await self.offer_pending()
+            await self.upload_facts()
             self.track_offer_wait()
             await asyncio.sleep(.01)
+
+    async def upload_facts(self):
+        upload = getattr(self.session, 'upload', None)
+        if upload is not None:
+            if upload.error is not None:
+                raise upload.error
+            while upload.notices:
+                from ouroboros.live_upload import SLOW
+                notice = upload.notices.pop(0)
+                self.host.state['upload_slow'] = notice == SLOW
+                await self.offer_fact(notice)
 
     async def offer_fact(self, text, *, requested_look=False):
         row = {"role": "user", "content": "[Host fact; not owner words]\n" + text, "_canonical": True}
@@ -858,9 +876,11 @@ class _Call:
         if self.host.renewal_due() or self.host.state.get("refit"):
             self.request_renewal()
             return
-        self.attention.include_images(self.pending_offers)
+        self.pending_offers = await self.attention.delivery_images(self.session, self.pending_offers)
         requested = any(row.get("_requested_look") for row in self.pending_offers)
-        frames = await self.attention.deliver(self.session, requested=requested)
+        held_sources = {row['_call_frame_source'] for row in self.pending_offers
+                        if row.get('_call_frame_source') and not row.get('_deferred_frame')}
+        frames = await self.attention.deliver(self.session, requested=requested, held_sources=held_sources)
         self.pending_offers = [*frames, *self.pending_offers]
         if self.host.renewal_due():
             self.request_renewal()
@@ -871,6 +891,7 @@ class _Call:
             return
         rows, self.pending_offers = self.pending_offers, []
         await self.session.send(ContextUpdate(tuple(rows)))
+        self.attention.include_images(rows)
         self.response_open = True
 
     async def mailbox(self):

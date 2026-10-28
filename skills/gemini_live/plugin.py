@@ -553,6 +553,10 @@ class GeminiSession(JsonSession):
             result.append(LiveEvent('caption', {**event.data, 'incomplete': True}))
         return result
 
+    def video_payload(self, command):
+        return {'realtimeInput': {'video': {'mimeType': command.mime,
+            'data': base64.b64encode(command.data).decode()}}}
+
     async def send(self, command):
         if isinstance(command, Audio):
             if command.rate != 16000 or len(command.pcm) % 2:
@@ -560,12 +564,11 @@ class GeminiSession(JsonSession):
             # Continuous PCM includes silence. Only native VAD/transcription
             # can open an input boundary; sending a frame says nothing about it.
             self.input_modalities.add('audio')
-            await self.write({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
-                'data': base64.b64encode(command.pcm).decode()}}})
+            await self.write_audio({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
+                'data': base64.b64encode(command.pcm).decode()}}}, command)
         elif isinstance(command, Video):
             self.input_modalities.update(('image', 'video'))
-            await self.write({'realtimeInput': {'video': {'mimeType': command.mime,
-                'data': base64.b64encode(command.data).decode()}}})
+            await self.write(self.video_payload(command), image=True)
         elif isinstance(command, Interrupt):
             pass  # Gemini's VAD owns interruption.
         elif isinstance(command, ToolOutputs):
@@ -588,7 +591,7 @@ class GeminiSession(JsonSession):
                         if part.get('type') == 'image_url':
                             inline = image_part(part)['inlineData']
                             self.input_modalities.update(('image', 'video'))
-                            await self.write({'realtimeInput': {'video': inline}})
+                            await self.write({'realtimeInput': {'video': inline}}, image=True)
                 elif not message.get('tool_calls'):
                     other.append(message)
             if responses:

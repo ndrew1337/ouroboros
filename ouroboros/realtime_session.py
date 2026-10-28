@@ -75,11 +75,14 @@ class JsonSession:
         self.connect, self.observe = connect, observe
         self.ws = self.connection = None
         self._send_lock = asyncio.Lock()
+        from ouroboros.live_upload import Upload
+        self.upload = Upload(self)
 
     async def connect_wire(self):
         self.connection = self.connect(self.selected.model)
         try:
             self.ws = await self.connection.__aenter__()
+            self.upload.bind()
         except Exception as exc:  # noqa: BLE001 - only the handshake status is read; anything else keeps its type
             status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
             code = _HANDSHAKE_REFUSALS.get(status) or ("engine_unavailable" if type(status) is int and status >= 500 else None)
@@ -87,13 +90,68 @@ class JsonSession:
                 raise
             raise RealtimeSetupError(code, f"the voice service answered the connection with HTTP {status}") from exc
 
-    async def write(self, payload):
+    async def write(self, payload, *, image=False, audio=False):
         raw = canonical_json(payload)
-        async with self._send_lock:
+        if self.upload.error is not None:
+            raise self.upload.error
+        async def send():
+            if image:
+                from ouroboros.live_upload import socket_backlog
+                while socket_backlog(self.ws) or self.upload.audio_waiters:
+                    await self.upload.wait_room()
             self.observe("send", raw)
+            # Setup establishes the line; images refresh that observation. Small
+            # control/PCM messages are application-limited, not bandwidth probes.
+            self.upload.note(self.wire_bytes(raw), calibrate=not audio and (image or self.upload.rate is None))
             await self.ws.send(raw)
+        if image or asyncio.current_task() is self.upload.frame_task:
+            # Native asyncio websockets supports concurrent unfragmented sends.
+            # A bounded image must never own the microphone's application lock.
+            await send()
+        else:
+            async with self._send_lock:
+                await send()
+
+    def wire_bytes(self, raw):
+        # Conservative pre-encoding envelope price; negotiated compression can
+        # save bytes. The socket meter observes actual transport bytes separately.
+        transport = getattr(self.ws, 'transport', None)
+        tls = transport and transport.get_extra_info('ssl_object')
+        size = len(raw.encode('utf-8'))
+        size += 6 if size < 126 else 8 if size < 65536 else 14
+        return size + (((size + 16383) // 16384) * (22 if tls.version() == 'TLSv1.3' else 37) if tls else 0)
+
+    async def write_audio(self, payload, command):
+        seconds = len(command.pcm) / (command.rate * 2)
+        if seconds:
+            self.upload.audio_packet_s = seconds
+            self.upload.audio_rate = self.wire_bytes(canonical_json(payload)) / seconds
+        from ouroboros.live_upload import AUDIO_WRITE
+        token = AUDIO_WRITE.set({'upload': self.upload, 'seconds': seconds, 'bytes': 0} if seconds else None)
+        self.upload.audio_waiters += 1
+        try:
+            await self.write(payload, audio=True)
+        finally:
+            AUDIO_WRITE.reset(token)
+            self.upload.audio_waiters -= 1
+            self.upload.ready.set()
+        await asyncio.sleep(0)  # let a ready, bounded image use the just-drained slot
+
+    def frame_byte_limit(self, frame, budget):
+        from dataclasses import replace
+        empty = replace(frame, data=b'')
+        overhead = self.wire_bytes(canonical_json(self.video_payload(empty)))
+        return max(0, (budget - overhead) // 4 * 3)
+
+    def offer_video(self, frame, done, valid=lambda: True):
+        if not callable(getattr(self, 'video_payload', None)):
+            return False  # an owner-edited older adapter keeps its original send contract
+        self.upload.offer(frame, done, valid)
+        return True
 
     async def read(self):
+        if self.upload.error is not None:
+            raise self.upload.error
         raw = await self.ws.recv()
         if isinstance(raw, bytes):
             raw = raw.decode("utf-8")
@@ -118,6 +176,7 @@ class JsonSession:
     async def close(self):
         connection, self.connection = self.connection, None
         try:
+            await self.upload.close()
             if connection is not None:
                 await joined(connection.__aexit__(None, None, None))
         finally:

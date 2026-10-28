@@ -1,7 +1,7 @@
 ---
 name: openai_realtime
 description: OpenAI native Realtime audio, images and tools over the host's ordinary selected context.
-version: 0.1.6
+version: 0.1.7
 type: extension
 runtime: python3
 entry: plugin.py
@@ -46,3 +46,5 @@ xhigh); the ten built-in voices remain available.
 
 This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
+
+Microphone JSON contributes its actual encoded rate to the shared provider-upload budget. Frames, on seeing routes, use measured spare upload capacity; no adapter chooses what an image means.

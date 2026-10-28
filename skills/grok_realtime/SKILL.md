@@ -1,7 +1,7 @@
 ---
 name: grok_realtime
 description: xAI Grok Voice provider for Live Conversation.
-version: 0.1.6
+version: 0.1.7
 type: extension
 runtime: python3
 entry: plugin.py
@@ -38,3 +38,5 @@ The empty voice choice leaves the provider default in effect.
 
 This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
+
+Microphone JSON contributes its actual encoded rate to the shared provider-upload budget. Frames, on seeing routes, use measured spare upload capacity; no adapter chooses what an image means.

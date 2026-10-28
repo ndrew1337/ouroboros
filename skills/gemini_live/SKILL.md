@@ -1,7 +1,7 @@
 ---
 name: gemini_live
 description: Gemini native Live audio and image provider for Live Conversation.
-version: 0.1.10
+version: 0.1.11
 type: extension
 runtime: python3
 entry: plugin.py
@@ -69,3 +69,5 @@ necessary to verify the deployed dialect and the labelled retention hypotheses.
 
 This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
+
+Microphone JSON contributes its actual encoded rate to the shared provider-upload budget. Frames, on seeing routes, use measured spare upload capacity; no adapter chooses what an image means.
