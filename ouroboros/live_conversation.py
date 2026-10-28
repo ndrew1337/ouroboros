@@ -587,6 +587,7 @@ class ConversationHost:
             with credentials.activate():
                 session, request, evidence = session_candidate(
                     self, provider["session"], options, observation_fp=credentials.scope)
+            self.timing_event("fit_done")
             connection["context_ready_at"] = time.time()
             self.timing.setdefault("context_ready_at", connection["context_ready_at"])
             self._physical_context = request.physical_context
@@ -770,6 +771,10 @@ class ConversationHost:
         async with self._tools_lock:
             self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
             self._context_changed()
+
+    def timing_event(self, event, *, at=None):
+        from ouroboros.live_timing import record_timing
+        record_timing(self, event, at=at)
 
     async def retain_frame(self, data, mime, *, source=""):
         """Use the existing content-addressed task media store and its retention."""
@@ -988,6 +993,7 @@ class ConversationHost:
             # awaits included): a failed wire-log write never skips custody and never replaces the
             # reason this call ended.
             try:
+                self.timing_event("closed")
                 self.observe("host", canonical_json({"type": "call.timing", **self.timing}))
             except OSError:
                 log.warning("call %s: timing evidence not written", self.turn.spec.call_id, exc_info=True)

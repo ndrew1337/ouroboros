@@ -252,6 +252,7 @@ class _Call:
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
+        self.timed_audio = False
         resumed = replacing = False
         peers = asyncio.create_task(self.peers())
         children = [asyncio.create_task(self.provider()), peers, asyncio.create_task(self.mailbox())]
@@ -303,7 +304,14 @@ class _Call:
         else:
             await self.session.send(ContextUpdate(tuple(rows)))
 
+    def timing(self, phase):
+        record = getattr(self.host, "timing_event", None)
+        if record is not None:
+            record(phase)
+
     def request_renewal(self, *, resuming=False, within=None):
+        if not self.renewing:
+            self.timing("requested")
         # A fresh fit wins over a requested resume while the transport is live.
         self.resume = resuming if not self.renewing else self.resume and resuming
         self.renewing = True
@@ -440,6 +448,7 @@ class _Call:
                 if event.kind == "ready":
                     if self.tool_refit.is_set():
                         continue  # a late ready cannot release work to the retiring connection
+                    self.timing("ready")
                     self.input_rate, self.output_rate = data["input_rate"], data["output_rate"]
                     self.hub.set_engine_rates(self.input_rate, self.output_rate)
                     self.hub.send_state(cp.STATE_LIVE)
@@ -460,6 +469,9 @@ class _Call:
                         self.playing_item = item
                     self.audio_ms[item] = self.audio_ms.get(item, 0) + len(data["pcm"]) * 500 / self.output_rate
                     self.hub.play(data["pcm"], item)
+                    if not getattr(self, "timed_audio", False):
+                        self.timed_audio = True
+                        self.timing("first_audio")
                 elif event.kind == "caption":
                     await self.caption(data)
                 elif event.kind == "speech_started":
@@ -517,6 +529,8 @@ class _Call:
                     # The dead input transport cannot reach another VAD boundary.
                     # Response, tool and playback obligations survive the resume.
                     self.input_open = False
+                    if not self.renewing:
+                        self.timing("requested")
                     self.renewing = self.resume = True
                     self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
                     return
@@ -555,6 +569,7 @@ class _Call:
                     self.request_renewal()
                 if self.renewing:
                     if self.quiet():
+                        self.timing("quiet")
                         if self.resume and not self.host.state.get("resume_handle"):
                             raise RealtimeSetupError("resume_unavailable", "provider has not supplied a resume handle")
                         self.hub.send_state(cp.STATE_RECONNECTING, "provider_renewal")
