@@ -2982,12 +2982,13 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 .review-facts-list {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    /* A label takes at most 40% and wraps: a long one (`Review panel <record id>`) never squeezes the values. */
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
     gap: var(--space-1) var(--space-4);
     margin: 0;
 }
 
-.review-facts-list dt { color: var(--text-secondary); }
+.review-facts-list dt { min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .review-facts-list dd {
     min-width: 0;
@@ -6168,6 +6169,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     overflow-y: auto;
     overscroll-behavior: contain;
 }
+/* Cut (toast.js names it a region), the column takes the pointer itself, as any scrolling box does: a wheel or a finger
+   anywhere over it scrolls it in every engine (Linux WebKit finds a scroller only where it takes pointer events).
+   Uncut, its empty box lets the page through. */
+#toast-stack[tabindex] { pointer-events: auto; }
 /* A notice taller than the column shows keeps its close button on screen, at the nearer edge. */
 #toast-stack .toast-dismiss { position: sticky; top: 0; bottom: 0; }
 /* The focused scroll region uses the same ring as other keyboard controls. */
