@@ -770,6 +770,64 @@ def test_start_reaches_only_the_selected_data_roots_own_server(layout, monkeypat
             server.server_close()
 
 
+def test_source_start_uses_only_its_data_roots_own_server(layout, monkeypatch, tmp_path, capsys):
+    """Negative control on the staged tree (review R3): with a new APP_ROOT (no port file yet) and another
+    installation ready on the default port, source `run --start` attached to it before any root check."""
+    import argparse
+
+    from ouroboros import cli, server_process
+
+    servers = [http.server.ThreadingHTTPServer(("127.0.0.1", 0), _ReadySupervisor) for _ in range(2)]
+    for server in servers:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    other, own = (f"http://127.0.0.1:{server.server_port}" for server in servers)
+    data, real_start = layout.app / "data", cli._start_local_server
+    started: list = []
+
+    class Spawned:  # the server `--start` spawned: the default port is busy, so it takes a fallback later
+        returncode, polls = None, 0
+
+        def poll(self):
+            self.polls += 1
+            if self.polls == 3:
+                (data / "state").mkdir(parents=True, exist_ok=True)
+                (data / "state" / "server_port").write_text(str(servers[1].server_port), encoding="utf-8")
+                server_process.record_service_binding(data, "main", "127.0.0.1", servers[1].server_port,
+                                                      pid=os.getpid())
+            return None
+
+    def client(url="", *, start=True):
+        return cli._client(argparse.Namespace(url=url), start=start).base_url
+
+    try:
+        monkeypatch.setattr(cli, "DEFAULT_PORT", servers[0].server_port)  # held by the other installation
+        server_process.record_service_binding(tmp_path / "other" / "data", "main", "127.0.0.1",
+                                              servers[0].server_port, pid=os.getpid())
+        monkeypatch.delenv("OUROBOROS_URL", raising=False)
+        monkeypatch.setenv("OUROBOROS_APP_ROOT", str(layout.app))
+        monkeypatch.setattr(cli, "_start_local_server", lambda url: started.append(url) or Spawned())
+        monkeypatch.setattr(cli.time, "sleep", lambda _s: None)
+        assert client() == own and started == [other], "its own server, on the port that server took"
+        assert "is not the one for" in capsys.readouterr().err
+        assert client() == own and len(started) == 1, "its running server: no second start"
+        assert client(other) == other and len(started) == 1, "a named URL is the caller's choice"
+        monkeypatch.setenv("OUROBOROS_URL", other)
+        assert client() == other and len(started) == 1, "so is OUROBOROS_URL"
+        monkeypatch.delenv("OUROBOROS_URL")
+        (data / "state" / "server_port").unlink()
+        assert client(start=False) == other, "without --start a command attaches to what answers, as before"
+        _write_witness(layout.historical / "data")  # an ambiguous APP_ROOT: the root check comes first
+        monkeypatch.setattr(cli, "_start_local_server", real_start)
+        monkeypatch.setattr(cli.subprocess, "Popen", lambda *a, **k: pytest.fail("an ambiguous start spawned"))
+        with pytest.raises(cli.CLIError, match="OUROBOROS_DATA_DIR="):
+            client()
+        assert len(started) == 1
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
+
+
 def test_colab_keeps_git_checkouts_local_while_a_new_installs_projects_follow_drive(layout, monkeypatch, tmp_path):
     from ouroboros import colab_bootstrap
 

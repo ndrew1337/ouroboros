@@ -168,4 +168,33 @@ def test_storage_dashboard_real_server_consumer(direct_server_with_data, request
         overflow = body.evaluate("node => node.scrollWidth - node.clientWidth")
         assert overflow <= 2, f"storage dashboard overflows the narrow viewport by {overflow}px"
         _assert_bar_fills_its_card(page)
+
+        # The narrowest phone with working copies whose default folder could not be chosen: the server's
+        # reason names unbroken absolute paths. Negative control on the staged CSS (review R3): at 360 px
+        # the line overflowed its row and widened the Storage panel in both engines.
+        lab = "/Users/ouroboros_owner/Library/Application_Support/Ouroboros_lab_installation_2026"
+        reason = ("the default subagent_worktrees folder is undecided: this data root's work-root basis is unknown "
+                  "(state/state.initialized.json is unreadable) and the candidates differ: "
+                  "/Users/ouroboros_owner/Ouroboros/subagent_worktrees (earlier releases) and "
+                  f"{lab}/subagent_worktrees (OUROBOROS_APP_ROOT). Set OUROBOROS_SUBAGENT_WORKTREE_ROOT to the "
+                  "folder to use; nothing was created or moved.")
+        copies = places["working_copies"]
+        undecided = {**report, "count": {
+            **count, "bytes": count["bytes"] - (copies["bytes"] or 0), "unreadable": count["unreadable"] + 1,
+            "places": [{**row, "present": True, "bytes": None, "unreadable": row["unreadable"] + 1, "undecided": reason}
+                       if row["id"] == "working_copies" else row for row in count["places"]]}}
+        page.route("**/api/storage*", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=json.dumps(undecided))
+            if route.request.method == "GET" else route.continue_())
+        page.set_viewport_size({"width": 360, "height": 780})
+        page.locator('[data-dashboard-tab="logs"]').click()
+        page.locator('[data-dashboard-tab="storage"]').click()
+        why = page.locator('[data-storage-place="working_copies"] .storage-place-why')
+        expect(why).to_contain_text(f"Not counted: {reason[:40]}", timeout=10_000)
+        why.scroll_into_view_if_needed()
+        page.screenshot(path=str(evidence / "storage-undecided-360.png"))
+        widths = why.evaluate("node => [node.scrollWidth, node.clientWidth]")
+        assert widths[0] <= widths[1] + 1, f"the undecided reason overflows its row: {widths}"
+        overflow = body.evaluate("node => node.scrollWidth - node.clientWidth")
+        assert overflow <= 2, f"the undecided reason widens the storage dashboard by {overflow}px"
         assert not errors, errors

@@ -5733,6 +5733,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .storage-place-why,
 .storage-place-split,
 .storage-place-remover { grid-column: 2 / -1; }
+.storage-place-why { overflow-wrap: anywhere; }  /* the server's reason can name an unbroken absolute path */
 .storage-group-body { display: grid; row-gap: 2px; margin: 2px 0 0 calc(8px + var(--space-2)); }
 .storage-group-places { display: grid; margin: var(--space-2) 0 0 calc(8px + var(--space-2)); padding: 0; list-style: none; }
 .storage-place.is-member { grid-template-columns: minmax(0, 1fr) auto minmax(56px, auto); padding-block: var(--space-2); border-top: 1px solid var(--surface-border-soft); }

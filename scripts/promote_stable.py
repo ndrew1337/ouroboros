@@ -25,6 +25,15 @@ draft, prerelease or unproven release, a release older than the newest one on
 one atomic push without force: if either branch moved meanwhile, both stay as
 they were and a rerun plans again. Repeating a finished promotion changes nothing.
 
+Rollout: a promoted ``main`` runs the release's own mirror refresh
+(``.github/workflows/sync-legacy-mirrors.yml`` and ``scripts/sync_legacy_mirrors.py``).
+A release tagged before that script could read a promotion commit through to its tag
+(v7.8.0 included) takes it for an untagged commit and skips the refresh, automatic or
+dispatched. The first promotion, of v7.8.0, loses nothing: the mirrors were already at
+7.8.0 when this step was added. Promoting another such release needs one manual run of
+the repaired script with ``--source-ref vX.Y.Z`` (and ``MIRROR_TOKEN``) until a later
+Stable release carries it; this step itself never writes a mirror.
+
 Usage: ``python3 scripts/promote_stable.py promote vX.Y.Z [--remote origin]
 [--verify-download] [--push]`` from any checkout with push access; without
 ``--push`` it prints the plan. ``render`` prints a cask. Standard library only.
@@ -92,7 +101,20 @@ cask "ouroboros" do
   # zap: launchctl also runs on upgrade and would drop the sign-in registration,
   # and ~/Ouroboros holds the owner's repository, memory and projects.
   uninstall quit: "{bundle_id}"
+{caveat}
 end
+"""
+
+_SETUP_780_CAVEAT = """\
+  caveats do
+    <<~EOS
+      In 7.8.0, finish Setup before the first Quit (including a Homebrew upgrade).
+      Quitting earlier can make a new data folder refuse initialization (#2412).
+      If affected, back up the data folder and diagnose it before changing anything.
+      Use Reset runtime data only for a confirmed empty new installation.
+      Guidance: https://github.com/razzant/ouroboros/blob/ouroboros/README.md#homebrew-on-macos
+    EOS
+  end
 """
 
 
@@ -102,8 +124,11 @@ def render_cask(version: str, sha256: str) -> str:
         raise ValueError(f"a cask needs a plain X.Y.Z version and a sha256, not {version!r} / {sha256!r}")
     # The URL owner with Ruby's own interpolation as the version: one naming source.
     url = _SYNC["release_asset_download_url"](PROOF_ID, "#{version}", repository=REPOSITORY)
+    # main retains the release's README. Put this measured old-release warning at the
+    # install surface too, without changing the release tag or guessing other releases.
     return _TEMPLATE.format(version=version, sha256=sha256, url=url, macos=MACOS_MINIMUM[1],
-                            app=APP_BUNDLE, bundle_id=BUNDLE_ID)
+                            app=APP_BUNDLE, bundle_id=BUNDLE_ID,
+                            caveat=_SETUP_780_CAVEAT if version == "7.8.0" else "")
 
 
 def _version_key(tag: str) -> tuple[int, ...]:

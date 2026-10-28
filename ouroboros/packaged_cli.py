@@ -7,7 +7,6 @@ then delegates to the normal gateway-backed ``ouroboros.cli`` entrypoint.
 
 from __future__ import annotations
 
-import ipaddress
 import json
 import os
 import pathlib
@@ -410,28 +409,9 @@ def _gateway_supervisor_ready(base_url: str) -> bool:
 def _selected_ready(url: str, runtime: PackagedRuntime, *, explicit: bool) -> bool:
     """A ready supervisor at URL that is this CLI's: one the caller named, or the main server of the
     data root it resolved, never another installation's on a shared or fallback port."""
-    return (explicit or _serves_data_root(url, runtime.data_dir)) and _gateway_supervisor_ready(url)
+    from ouroboros.server_process import serves_data_root
 
-
-def _serves_data_root(url: str, data_dir: pathlib.Path) -> bool:
-    """Whether DATA_DIR's own main server holds URL's port: its live service binding, or the
-    launcher's server record, proves it (``server_process.runtime_service_identity``)."""
-    from ouroboros.server_process import runtime_service_identity
-
-    def reaches(bind_host: str) -> bool:
-        try:
-            address = ipaddress.ip_address(bind_host)
-            target = ipaddress.ip_address(urllib.parse.urlparse(url).hostname or DEFAULT_HOST)
-        except ValueError:
-            return False
-        # A different loopback address can host a different installation on the same port.
-        # Wildcard includes the legacy any-local-interface sentinel of runtime_service_identity.
-        return address == target or (address.is_unspecified and target.is_loopback)
-
-    try:
-        return runtime_service_identity(data_dir, urllib.parse.urlparse(url).port or DEFAULT_PORT, reaches) == "main"
-    except (OSError, ValueError):
-        return False
+    return (explicit or serves_data_root(url, runtime.data_dir)) and _gateway_supervisor_ready(url)
 
 
 def _wait_for_ready(base_url: str, runtime: PackagedRuntime, *, explicit_url: bool) -> str:

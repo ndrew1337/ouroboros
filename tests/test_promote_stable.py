@@ -56,9 +56,17 @@ def test_the_cask_declares_a_self_updating_app_and_never_touches_owner_data():
     # launchctl (it also runs on upgrade and deletes ~/Library/LaunchAgents/com.ouroboros.agent.plist).
     stanzas = re.findall(r"^  ([a-z0-9_]+)\b", cask, re.MULTILINE)
     assert stanzas == ["version", "sha256", "url", "name", "desc", "homepage",
-                       "auto_updates", "depends_on", "depends_on", "app", "uninstall"]
+                       "auto_updates", "depends_on", "depends_on", "app", "uninstall", "caveats", "end"]
     assert "  auto_updates true\n" in cask
     assert re.findall(r"^  uninstall .*$", cask, re.MULTILINE) == ['  uninstall quit: "com.ouroboros.agent"']
+
+
+def test_first_cask_exposes_the_known_setup_limitation_without_rewriting_the_release():
+    cask = promotion.render_cask("7.8.0", DMG_SHA)
+    assert "finish Setup before the first Quit" in cask
+    assert "confirmed empty new installation" in cask
+    assert "blob/ouroboros/README.md#homebrew-on-macos" in cask
+    assert '#2412' not in promotion.render_cask("7.9.0", DMG_SHA)
 
 
 @pytest.mark.parametrize("version,sha256", [("7.9.0-rc.1", DMG_SHA), ("7.9", DMG_SHA), ("7.8.0", "ABC")])

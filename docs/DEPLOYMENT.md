@@ -3,10 +3,12 @@
 ## Roots, Ports and One Server per Data Directory
 
 Paths: `OUROBOROS_REPO_DIR` (checkout), `OUROBOROS_DATA_DIR` (memory/state/settings/logs),
-`OUROBOROS_SETTINGS_PATH`, `OUROBOROS_PID_FILE` (launcher lock),
-`OUROBOROS_PORT_FILE`; each defaults beneath `OUROBOROS_APP_ROOT` (`~/Ouroboros`), and
-an explicit value never moves another. Work roots (`OUROBOROS_SUBAGENT_PROJECTS_ROOT`,
-`OUROBOROS_SUBAGENT_WORKTREE_ROOT`, `OUROBOROS_DELIVERABLES_ROOT`) prefer saved settings,
+`OUROBOROS_SETTINGS_PATH`, `OUROBOROS_PID_FILE` (launcher lock), `OUROBOROS_PORT_FILE`.
+Checkout, data root and PID file default beneath `OUROBOROS_APP_ROOT` (`~/Ouroboros`);
+the settings and port files default beneath the data root, so an explicit DATA_DIR
+supplies their defaults too. No root is inferred from another's parent. Work roots
+(`OUROBOROS_SUBAGENT_PROJECTS_ROOT`, `OUROBOROS_SUBAGENT_WORKTREE_ROOT`,
+`OUROBOROS_DELIVERABLES_ROOT`) prefer saved settings,
 then environment, then the data root's basis (`state/state.initialized.json`):
 `<APP_ROOT>/<folder>` for data first initialized by this release or later,
 `~/Ouroboros/<folder>` for older data. An unreadable basis makes a default work root

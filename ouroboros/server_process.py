@@ -10,6 +10,7 @@ them without importing ``server`` back.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import pathlib
@@ -17,6 +18,7 @@ import re
 import sys
 import threading
 import time
+import urllib.parse
 from contextlib import nullcontext
 from typing import Callable
 
@@ -350,6 +352,28 @@ def runtime_service_identity(drive_root: pathlib.Path, port: int,
     if snapshot_live("local_model"):
         return ""  # a verified manager owns another endpoint; its custody row is the same process
     return _custodied_local_model(drive_root, port, host_matches)
+
+
+def serves_data_root(url: str, data_dir: pathlib.Path) -> bool:
+    """Whether DATA_DIR's own main server holds URL's port: its live service binding, or the
+    launcher's server record, proves it. A CLI asks this before it uses an endpoint nobody named,
+    since a shared or fallback port can belong to another installation."""
+    parsed = urllib.parse.urlparse(url)
+
+    def reaches(bind_host: str) -> bool:
+        try:
+            address = ipaddress.ip_address(bind_host)
+            target = ipaddress.ip_address(parsed.hostname or "127.0.0.1")
+        except ValueError:
+            return False
+        # A different loopback address can host a different installation on the same port.
+        # Wildcard includes the legacy any-local-interface sentinel of runtime_service_identity.
+        return address == target or (address.is_unspecified and target.is_loopback)
+
+    try:  # a URL without a port names the main server's default, 8765
+        return runtime_service_identity(data_dir, parsed.port or 8765, reaches) == "main"
+    except (OSError, ValueError):
+        return False
 
 
 def server_stop_source() -> str:

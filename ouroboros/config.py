@@ -157,7 +157,7 @@ resolve_app_root, resolve_data_dir = _launch_roots.app_root, _launch_roots.data_
 
 
 def resolve_repo_dir() -> pathlib.Path:
-    return pathlib.Path(os.environ.get("OUROBOROS_REPO_DIR", resolve_app_root() / "repo"))
+    return _launch_roots.configured_roots().repo_dir
 
 
 def resolve_port_file(data_dir=None, *, hosting_data_dir=None) -> pathlib.Path:

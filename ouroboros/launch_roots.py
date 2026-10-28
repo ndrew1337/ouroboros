@@ -36,7 +36,7 @@ import pathlib
 import sys
 from typing import Any, Callable, Dict, NamedTuple, Optional, Tuple
 
-from ouroboros.installation_stop import confirm_absent
+from ouroboros.installation_stop import confirm_absent  # stays there: that reader runs alone (-I -S)
 
 Path = pathlib.Path
 
