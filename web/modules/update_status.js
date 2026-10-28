@@ -56,44 +56,65 @@ export function verifiedUpdatePlan(preflight) {
     return { plan, strategy };
 }
 
+// The plan pins the prose: only a description of exactly its range is shown. The owner's request is
+// not prose: it stays the live status's own, so a task that saves or ends meanwhile is still followed.
 export function bindPreflightDescription(status, preflight) {
     const plan = preflight?.merge_plan || {};
     const letter = preflight?.letter;
     const matches = letter?.key?.base_sha === plan.base_sha && letter?.key?.target_sha === plan.target_sha;
+    const request = status?.letter?.request || null;
     return { ...status, preflight_range: plan, checked_target_sha: plan.target_sha,
-        latest_sha: plan.target_sha, letter: matches ? letter : null };
+        latest_sha: plan.target_sha, letter: matches ? { ...letter, request } : (request && { request }) };
 }
 
-export function preflightEvidenceText(preflight) {
-    const plan = preflight?.merge_plan || {};
+/** The saved description of exactly these preflight pins, as Markdown to render; '' when there is none. */
+export function preflightDescription(preflight) {
     const letter = bindPreflightDescription({}, preflight).letter;
+    return letter?.description_current && letter.text ? String(letter.text) : '';
+}
+
+/**
+ * The exact range's evidence as the confirmation's detail rows: every first-parent commit's receipt
+ * (declarations stay labelled as such), the post-merge read and each observed run. Missing, unread and
+ * non-green stay distinct; nothing here becomes a verdict.
+ * @returns {Array<{label: string, value: string}>}
+ */
+export function preflightEvidenceRows(preflight) {
+    const plan = preflight?.merge_plan || {};
     const facts = preflight?.qualification;
-    const lines = [letter?.description_current && letter.text
-        ? letter.text : 'No description is available for this exact preflight range.'];
     if (!facts || facts.base_sha !== plan.base_sha || facts.target_sha !== plan.target_sha) {
-        lines.push('Qualification for this range is unknown.');
-        return lines.join('\n');
+        return [{ label: 'Checks', value: 'Qualification for this range is unknown.' }];
     }
+    const rows = [];
     for (const commit of facts.commits || []) {
-        const name = `${String(commit.sha).slice(0, 8)} ${commit.subject || ''}`;
+        // The short SHA names the row; the subject leads its value, where a long one has room.
+        const label = String(commit.sha).slice(0, 8);
+        const lines = commit.subject ? [String(commit.subject)] : [];
         if (!commit.receipt) {
-            lines.push(`${name}: ${commit.body_read === false ? 'commit body not read; qualification unknown' : 'no qualification receipt'}.`);
+            lines.push(commit.body_read === false ? 'Commit body not read; qualification unknown.' : 'No qualification receipt.');
+            rows.push({ label, value: lines.join('\n') });
             continue;
         }
         for (const check of commit.receipt.checks || []) {
-            lines.push(`${name}: ${check.name} ${check.status} (${check.source || 'unknown source'})${check.detail ? `; ${check.detail}` : ''}.`);
+            const line = `${check.name} ${check.status} (${check.source || 'unknown source'})${check.detail ? `; ${check.detail}` : ''}`;
+            lines.push(/[.!?]$/.test(line) ? line : `${line}.`);
         }
         const review = commit.receipt.review || {};
-        lines.push(`${name}: review observed ${review.observed || 'unknown'}, author declared ${review.declared || 'unknown'}.`);
+        lines.push(`Review observed ${review.observed || 'unknown'}, author declared ${review.declared || 'unknown'}.`);
+        rows.push({ label, value: lines.join('\n') });
     }
     const github = facts.github || {};
-    lines.push(`GitHub checks: ${github.status || 'unknown'}${github.reason ? `; ${github.reason}` : ''}.`);
+    rows.push({ label: 'GitHub checks', value: `${github.status || 'unknown'}${github.reason ? `; ${github.reason}` : ''}.` });
     for (const run of github.runs || []) {
-        lines.push(`${String(run.sha).slice(0, 8)} post-merge: ${run.conclusion || run.status || 'unknown'} ${run.url || ''}`);
-        if (run.covered_shas?.length) lines.push(`This run also covers: ${run.covered_shas.map((sha) => sha.slice(0, 8)).join(', ')}.`);
+        const covers = run.covered_shas?.length
+            ? `\nThis run also covers: ${run.covered_shas.map((sha) => sha.slice(0, 8)).join(', ')}.` : '';
+        rows.push({ label: `${String(run.sha).slice(0, 8)} post-merge`,
+            value: `${run.conclusion || run.status || 'unknown'}${run.url ? ` ${run.url}` : ''}${covers}` });
     }
-    if (github.missing_shas?.length) lines.push(`No matching run observed: ${github.missing_shas.map((sha) => sha.slice(0, 8)).join(', ')}.`);
-    return lines.join('\n');
+    if (github.missing_shas?.length) {
+        rows.push({ label: 'No matching run observed', value: github.missing_shas.map((sha) => sha.slice(0, 8)).join(', ') });
+    }
+    return rows;
 }
 
 // The retained attempt's before/after samples as labelled rows of its Last attempt (owner 25.10: A). Only a number

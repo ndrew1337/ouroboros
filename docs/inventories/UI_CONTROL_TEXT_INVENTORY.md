@@ -5,7 +5,7 @@ it: `docs/DESIGN.md` "References and actions". Rows are sorted by text so that t
 the same thing sit together: when your diff adds a row, read its neighbours.
 
 260 controls with fixed text in 241 rows, 176 distinct texts;
-139 more controls build their text at run time and are not listed.
+140 more controls build their text at run time and are not listed.
 
 ## Fixed control text
 
@@ -56,6 +56,7 @@ the same thing sit together: when your diff adds a row, read its neighbours.
 | Change in Models | `consciousness-inline-link ui-hit-area` | modules/settings_safety.js | 1 |
 | Change model or account | `btn btn-default` | modules/model_wait.js | 1 |
 | Check | `btn btn-primary` | modules/skill_dialogs.js | 1 |
+| ↻ Check | `btn btn-ghost btn-sm updates-letter-refresh` | modules/updates.js | 1 |
 | Check again | `btn btn-primary` | modules/harness_login_cards.js | 1 |
 | Check and publish | `btn btn-primary` | modules/skill_dialogs.js | 1 |
 | Check consciousness fully | `consciousness-inline-link ui-hit-area` | modules/settings_safety.js | 1 |
@@ -163,7 +164,6 @@ the same thing sit together: when your diff adds a row, read its neighbours.
 | Refresh | `btn btn-default btn-sm` | modules/skills.js | 1 |
 | Refresh | `btn btn-default btn-sm costs-budget-refresh` | modules/costs.js | 1 |
 | Refresh | `skills-menu-item` | modules/skill_sources_view.js | 1 |
-| ↻ Refresh | `btn btn-ghost btn-sm updates-letter-refresh` | modules/updates.js | 1 |
 | Refresh all | `btn btn-default btn-sm` | modules/settings_ui.js | 1 |
 | Refresh history | `btn btn-default btn-sm` | modules/place_history.js | 1 |
 | Refresh Model Catalog | `btn btn-default` | modules/settings_ui.js | 1 |

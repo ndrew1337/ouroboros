@@ -93,7 +93,7 @@ ouroboros/ — agent core and shared runtime (§6)
   secret_masking.py, settings_integrity.py, route_choice.py — Settings/MCP wire placeholders and secret repair before env overlay/persistence; task-local/skill settings views, snapshot pin (`OUROBOROS_SETTINGS_SHA256`), projection echo/digests (`OUROBOROS_PROJECTED_*`); live route keys, a turn's route choice (§6, §7)
   credential_shapes.py — credential leaf names and physical locations (§6 Credential mutation and diagnostic redaction)
   update_channels.py — Stable/QA/Development channel mapping (§8)
-  update_letter.py — the update letter: `base..target` commit material from one accounted light-slot call (§7; §3 Updates)
+  update_letter.py — update description: check facts, owner request, the writer (§3 Updates)
   update_qualification.py, update_generation_facts.py, update_impact.py, engine_pin_policy.py — range-bound merge/check evidence, before/after update facts, Apply effects and the pin rule restart shares (§3)
   evolution_history.py — Evolution's version history (§3)
   colab_bootstrap.py — Google Colab source-mode bootstrap (official source, Drive-backed data, no-UI server)
@@ -477,7 +477,7 @@ ouroboros/ — agent core and shared runtime (§6)
     compact_context.py — LLM-requested tool-history compaction trigger, applied on the next round
     control.py — control tools: restart, timeout settings, scheduling, review, chat history and model switching; the `schedule_subagent` contract and compact `wait_task` projections (§6 Delegated subagents)
     control_delegation.py — Delegation-budget affordances and `move_to_project` (§6 Project placement)
-    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, control_ui_translation.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources, owner wording pins (§3)
+    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, control_ui_translation.py, control_update_description.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources, owner wording pins (§3)
     tool_discovery.py — List/enable owner: callable catalog by namespace in every mode; grants nothing
     tool_result.py, tool_catalog.py, tool_resolution.py — the typed internal tool result and its text adapter, intrinsic tool descriptors, argument normalization with physical target binding
     arg_feedback.py — What a tool says about an argument it did not obey: the one-line ignored disclosure and the typed refusal naming field, value and repair (DEVELOPMENT "LLM-first affordances")
@@ -675,7 +675,8 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   │   ├── claudexor_rotation_provisioning.json ← last rotation receipt
 │   │   ├── claudexor_route_health.json ← the engine's newest per-route failure shares, replaced on change
 │   │   ├── subagent_last_delegation.json ← dated helper observations, not dispatch authority
-│   │   ├── update_letter.json     ← update letter with `last_good`
+│   │   ├── update_letter.json     ← description, its range, check facts
+│   │   ├── update_material.json   ← checked range for its author
 │   │   ├── projects.json          ← Project registry; tombstones are durable
 │   │   ├── projects.json.committed ← commit witness: with it a missing registry is unavailable, not empty
 │   │   ├── project_task_bindings.json ← root↔Project bindings with typed origin
