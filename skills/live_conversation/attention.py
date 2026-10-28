@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import base64
 import json
+import math
+from time import monotonic
 from hashlib import sha256
 
 from ouroboros.contracts.live_conversation import CallTool, Video
@@ -17,6 +19,7 @@ class Attention:
         self.kinds = {}
         self.seen = {}
         self.looks = []
+        self.revisit_at = None
 
     def frame(self, event):
         self.frames[event.peer_id] = Video(event.data, event.mime, event.peer_id)
@@ -33,9 +36,9 @@ class Attention:
             raise RealtimeSetupError('frame_retention', 'This host cannot retain the exact shared frame.')
         return path
 
-    async def deliver(self, session):
+    async def deliver(self, session, *, requested=False):
         """An input/offer boundary, or stream delivery. No response is opened here."""
-        if self.mode == 'asked':
+        if self.mode == 'asked' and not requested:
             return []
         rows = []
         for source, frame in tuple(self.frames.items()):
@@ -62,13 +65,19 @@ class Attention:
         return rows
 
     async def attend(self, arguments):
-        if (not isinstance(arguments, dict) or set(arguments) - {'see', 'look'}
+        if (not isinstance(arguments, dict) or set(arguments) - {'see', 'look', 'revisit_after_s'}
                 or arguments.get('see') not in (None, 'turns', 'stream', 'asked')
                 or arguments.get('look') is not None and type(arguments['look']) is not bool):
             raise ValueError('attend takes see (turns, stream, asked or null) and look (boolean or null)')
+        revisit = arguments.get("revisit_after_s")
+        if revisit is not None and (type(revisit) not in (int, float) or not math.isfinite(revisit) or revisit < 0):
+            raise ValueError("revisit_after_s must be finite nonnegative seconds or null")
         before = self.mode
         self.mode = arguments.get('see') or self.mode
         result = {'mode': self.mode, 'changed': self.mode != before}
+        if revisit is not None:
+            self.revisit_at = monotonic() + revisit
+            result['revisit_after_s'] = revisit
         if arguments.get('look'):
             frames, images = [], []
             for source, frame in tuple(self.frames.items()):
@@ -89,6 +98,9 @@ class Attention:
             # ToolOutputs image lane carries their pixels, without changing CallTool's str result.
             self.looks.append(images)
         return json.dumps(result, ensure_ascii=False)
+
+    def revisit_due(self):
+        return self.revisit_at is not None and monotonic() >= self.revisit_at
 
     def include_images(self, rows):
         """A refitted look already brings its exact pixels with the pending offer."""
@@ -121,8 +133,10 @@ def attend_tool():
     return CallTool('attend', 'Choose how I watch: turns (latest unseen frame with each turn), stream '
         '(every new frame), asked (only when I look). look=true returns the latest live sources and continues '
         'this turn; unchanged images are already visible. With no change, finish this turn without words. '
-        'Null means no change; false does not ask to look.',
+        'Null means no change; false does not ask to look. revisit_after_s names seconds until one offer with the current view, '
+        'at the next quiet moment. There is no default or repeat; another offer or owner turn consumes it.',
         {'type': 'object', 'properties': {
             'see': {'type': ['string', 'null'], 'enum': ['turns', 'stream', 'asked', None]},
-            'look': {'type': ['boolean', 'null']}},
-         'required': ['see', 'look'], 'additionalProperties': False}, attend, silent=True)
+            'look': {'type': ['boolean', 'null']},
+            'revisit_after_s': {'type': ['number', 'null'], 'minimum': 0}},
+         'required': ['see', 'look', 'revisit_after_s'], 'additionalProperties': False}, attend, silent=True)

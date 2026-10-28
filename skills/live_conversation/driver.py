@@ -211,6 +211,7 @@ class _Call:
             for task in done:
                 await task
         finally:
+            self.consume_revisit()
             # A resume never cancels tools. Actual call teardown owns and joins
             # them; the host also joins any already-dispatched side effects.
             for task in workers:
@@ -290,6 +291,10 @@ class _Call:
         await self.connected.wait()
         await self.session.send(command)
 
+    def consume_revisit(self):
+        self.attention.revisit_at = None
+        self.pending_offers[:] = [row for row in self.pending_offers if not row.get("_requested_look")]
+
     async def context_update(self, rows):
         # Mailbox and peer rows are already canonical on the host. Check the
         # resulting fit before adding them to this connection; a refit includes
@@ -302,6 +307,7 @@ class _Call:
                     "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."})
             self.request_renewal()
         else:
+            self.consume_revisit()
             await self.session.send(ContextUpdate(tuple(rows)))
 
     def timing(self, phase):
@@ -477,6 +483,7 @@ class _Call:
                 elif event.kind == "speech_started":
                     await self.interrupt()
                 elif event.kind == "input_started":
+                    self.consume_revisit()
                     self.input_open = True
                     frames = await self.attention.deliver(self.session)
                     if frames:
@@ -630,12 +637,19 @@ class _Call:
                         await self.host.observe_context(row)
                         self.pending_offers.append(row)
                 await asyncio.sleep(0)
-            if self.pending_offers and not self.renewing and self.quiet():
-                await self.offer_pending()
+            if not self.renewing and (self.pending_offers or self.attention.revisit_due()) and self.quiet():
+                if not self.pending_offers and self.attention.revisit_due():
+                    self.attention.revisit_at = None  # one shot, even if the offer must await a refit
+                    await self.offer_fact("This is the look you asked to be offered after the time you named. "
+                                          "You may speak, act or stay silent.", requested_look=True)
+                if self.pending_offers:
+                    await self.offer_pending()
             await asyncio.sleep(.01)
 
-    async def offer_fact(self, text):
+    async def offer_fact(self, text, *, requested_look=False):
         row = {"role": "user", "content": "[Host fact; not owner words]\n" + text}
+        if requested_look:
+            row["_requested_look"] = True
         await self.host.observe_context(row)
         self.pending_offers.append(row)
 
@@ -662,7 +676,10 @@ class _Call:
             self.request_renewal()
             return
         self.attention.include_images(self.pending_offers)
-        frames = await self.attention.deliver(self.session)
+        requested = any(row.get("_requested_look") for row in self.pending_offers)
+        frames = await self.attention.deliver(self.session, requested=requested)
+        if requested and not any(row.get("_requested_look") for row in self.pending_offers):
+            return  # an input/offer consumed the revisit while its frame was being retained
         self.pending_offers = [*frames, *self.pending_offers]
         if self.host.renewal_due():
             self.request_renewal()
@@ -672,6 +689,7 @@ class _Call:
         if not self.quiet():
             return
         rows, self.pending_offers = self.pending_offers, []
+        self.consume_revisit()
         await self.session.send(ContextUpdate(tuple(rows)))
         self.response_open = True
 
