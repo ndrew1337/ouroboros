@@ -49,3 +49,16 @@ test('cadence and one frame in flight remain physical bounds; an unsent share is
     const unsent = fixture(); unsent.vision.stop();
     assert.equal(unsent.controls.length, 0);
 });
+
+test('an identical JPEG is retried in a new epoch, then suppressed in that epoch', async () => {
+    const f = fixture();
+    await f.vision.tick();
+    f.session.epoch += 1; // the first send raced a flush and may have been rejected
+    f.vision.lastSentAt = 0;
+    await f.vision.tick();
+    assert.equal(f.frames.length, 2, 'a rejected epoch is not a delivered duplicate');
+    f.vision.lastSentAt = 0;
+    await f.vision.tick();
+    assert.equal(f.frames.length, 2, 'same-epoch exact duplicates stay suppressed');
+    assert.equal(f.controls.length, 1, 'a retry is not a new share');
+});

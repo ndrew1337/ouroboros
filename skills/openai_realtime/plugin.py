@@ -25,7 +25,7 @@ CATALOG = ProviderCatalog(
                    basis="provider", source="accepted and answered at 133,554 input tokens (text probe 20.10.2026; "
                    "documented context 128,000); spoken retention not yet measured",
                    observed="2026-10-20"),
-        default=True, vision=True,
+        default=True, vision=True, silent_tool_results=True,
         voices=tuple(CatalogVoice(name, name.capitalize()) for name in (
             "alloy", "ash", "ballad", "cedar", "coral", "echo", "marin", "sage", "shimmer", "verse")),
         thinking_levels=("minimal", "low", "medium", "high", "xhigh"),

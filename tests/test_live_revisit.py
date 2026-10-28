@@ -97,7 +97,10 @@ def test_owner_turn_during_saved_look_consumes_the_pending_offer(tmp_path):
         call.attention.frame(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'exact'))
         await call.offer_fact('This is the look you asked for.', requested_look=True)
         await call.offer_pending()
-        assert not call.pending_offers and not call.session.sent
+        assert not call.pending_offers and not call.response_open
+        assert len(call.session.sent) == 1 and isinstance(call.session.sent[0], ContextUpdate)
+        assert 'frame.jpg' in str(call.session.sent[0].messages)
+        assert 'look you asked' not in str(call.session.sent[0].messages)
         call.input_open = False
         assert call.attention.revisit_at is None
     asyncio.run(scenario())

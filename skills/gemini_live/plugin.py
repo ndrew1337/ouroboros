@@ -64,10 +64,10 @@ CATALOG = ProviderCatalog(
     privacy='Call audio and the frames you show go to Google.',
     models=(
         CatalogModel('gemini-3.8-live', 'gemini-3.8-live \u2014 Google\u2019s live voice model', FACTS, default=True,
-                     vision=True, voices=VOICES, honours=frozenset({'pause', 'interruptions', 'search', 'languages'}),
+                     vision=True, silent_tool_results=True, voices=VOICES, honours=frozenset({'pause', 'interruptions', 'search', 'languages'}),
                      notes=(('thinking', 'This model uses interleaved reasoning without a configurable thinking level.'),)),
         CatalogModel('gemini-3.8-live-extended-thinking', 'gemini-3.8-live-extended-thinking \u2014 thinks before it answers',
-                     THINKING_FACTS, vision=True, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
+                     THINKING_FACTS, vision=True, silent_tool_results=False, voices=VOICES, thinking_levels=('low', 'medium', 'high'),
                      honours=frozenset({'pause', 'interruptions', 'thinking', 'search', 'languages'})),
     ))
 

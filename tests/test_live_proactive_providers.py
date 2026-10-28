@@ -57,7 +57,9 @@ def test_attend_silent_or_look_continues_through_driver_and_native_session(packa
         async def batch(calls):
             rows = []
             for call in calls:
-                text = await tool.handler(host, json.loads(call['function']['arguments']))
+                from ouroboros.tool_call_log import invocation_scope
+                with invocation_scope({'tool_call_id': call['id']}):
+                    text = await tool.handler(host, json.loads(call['function']['arguments']))
                 rows.append({'role':'tool', 'tool_call_id':call['id'], 'content':text})
             return Batch(rows, silent=[c['id'] for c in calls])
         host.session, host.tool_batch = connection, batch

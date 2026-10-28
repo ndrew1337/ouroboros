@@ -814,6 +814,7 @@ class ConversationHost:
 
             async def run():
                 from ouroboros.loop import handle_tool_calls, _measure_tool_result_batch, _resolve_loop_max_rounds
+                from ouroboros.tool_call_log import invocation_scope
                 self.rounds += 1
                 maximum = _resolve_loop_max_rounds(self.ctx)
                 if maximum is not None and self.rounds > maximum:
@@ -840,12 +841,11 @@ class ConversationHost:
                         continue
                     try:
                         args = json.loads(call["function"]["arguments"])
-                        if not isinstance(args, dict):
-                            raise ValueError("arguments must be an object")
+                        if not isinstance(args, dict): raise ValueError("arguments must be an object")
+                        with invocation_scope({"tool_call_id": call["id"]}):
+                            result = await tool.handler(self, args)
                     except (ValueError, TypeError) as exc:
                         result = f"Call tool argument error: {exc}"
-                    else:
-                        result = await tool.handler(self, args)
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
                     self._context_changed()
                     self.trace["tool_calls"].append({"name": tool.name, "call_id": call["id"], "result": str(result)})

@@ -70,9 +70,9 @@ def engine_sentence(model):
               if model.vision else
               "it hears speech and does not see images: a remote shared frame or an attached image reaches you as a caption "
               "naming its exact saved file, and vlm_query with that file_path describes it in text. A desktop screenshot "
-              "is not the remote shared source. This route has no documented guaranteed silent consideration")
-    caution = (" Extended thinking does not support SILENT tool scheduling; a silent tool result is not guaranteed silent."
-               if "thinking" in model.honours and "gemini" in model.id.lower() else "")
+              "is not the remote shared source")
+    caution = (" A silent tool result is not guaranteed silent on this route."
+               if not model.silent_tool_results else "")
     return f"This call runs on {model.label or model.id}; {senses}." + caution
 
 
@@ -249,7 +249,8 @@ class _Call:
     async def consume(self, session):
         self.session = self.last_session = session
         if not self.resume:
-            self.attention.seen.clear()
+            if self.host.model.vision:
+                self.attention.seen.clear()  # pixels are transport state; blind frame facts are already in the fit
             self.refit_offers()
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
@@ -338,10 +339,13 @@ class _Call:
             deadline = time.monotonic() + float(within)
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
 
+    def audio_duration(self, item):
+        return int(self.audio_ms.get(item, 0))
+
     def heard(self, item):
         # Playback reports floor at the device rate: a fully played 9,800 ms item reads 9,799 after the
         # 24 -> 48 kHz resample (27.10), so the caption rule's 20 ms tolerance decides here as well.
-        return self.played.get(item, 0) > 0 and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20
+        return self.played.get(item, 0) > 0 and self.played[item] >= self.audio_duration(item) - 20
 
     def unheard(self):
         return any(item not in self.interrupted and not self.heard(item) for item in self.audio_ms)
@@ -368,8 +372,7 @@ class _Call:
                 peer.role == cp.PEER_MEETING and peer.mic for peer in self.hub.peers()))
             if speaker == "ouroboros":
                 self.pending_spoken[item] = dict(text=text, **({"replace": True} if data.get("replace") else {}))
-                if item in self.interrupted or (self.played.get(item, 0) > 0
-                        and self.played[item] >= int(self.audio_ms.get(item, 1)) - 20):
+                if item in self.interrupted or self.heard(item):
                     await self.finish_spoken(item, interrupted=item in self.interrupted, completed=item not in self.interrupted)
             else:
                 await self.rows.put(dict(speaker=speaker, text=text, item_id=item, heard=heard,
@@ -634,8 +637,8 @@ class _Call:
                         item = message["item_id"]
                         if (event.role == cp.PEER_OWNER or
                                 (self.hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
-                            self.played[item] = min(message["played_ms"], int(self.audio_ms.get(item, 0)))
-                            if self.played[item] > 0 and self.played[item] >= int(self.audio_ms.get(item, 0)) - 20:
+                            self.played[item] = min(message["played_ms"], self.audio_duration(item))
+                            if self.heard(item):
                                 await self.finish_spoken(item, completed=True)
                     elif message["type"] == "participant":
                         self.participants[event.peer_id] = message
@@ -681,7 +684,7 @@ class _Call:
         await self.offer_fact(f"{actor} {'started' if message['sharing'] else 'stopped'} showing the {kind}.")
 
     async def offer_pending(self):
-        if not self.connected.is_set() or not self.quiet():
+        if not self.pending_offers or not self.connected.is_set() or not self.quiet():
             return
         if self.host.renewal_due() or self.host.state.get("refit"):
             self.request_renewal()
@@ -690,7 +693,9 @@ class _Call:
         requested = any(row.get("_requested_look") for row in self.pending_offers)
         frames = await self.attention.deliver(self.session, requested=requested)
         if requested and not any(row.get("_requested_look") for row in self.pending_offers):
-            return  # an input/offer consumed the revisit while its frame was being retained
+            if frames:
+                await self.context_update(frames)  # the owner's turn inherits the retained frame, without a revisit offer
+            return
         self.pending_offers = [*frames, *self.pending_offers]
         if self.host.renewal_due():
             self.request_renewal()

@@ -147,6 +147,8 @@ class CatalogModel:
     facts: RouteFacts = field(default_factory=RouteFacts)
     default: bool = False
     vision: bool = False  # accepts images and video frames
+    # A silent tool result opens no answer. Keyword-only preserves legacy positional constructors.
+    silent_tool_results: bool = field(default=True, kw_only=True)
     voices: tuple[CatalogVoice, ...] = ()  # empty: the provider's own default voice only
     thinking_levels: tuple[str, ...] = ()  # empty: no thinking control
     honours: frozenset[str] = frozenset()  # subset of CALL_KNOBS

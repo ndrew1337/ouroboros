@@ -9,6 +9,7 @@ import pytest
 
 from ouroboros import call_protocol as cp
 from ouroboros.contracts.live_conversation import ContextUpdate, LiveHost, Video
+from ouroboros.tool_call_log import invocation_scope
 from skills.live_conversation.attention import Attention, attend_tool
 from tests.test_live_conversation_driver import Batch, Host, started, until
 
@@ -86,7 +87,8 @@ def test_look_has_exact_image_or_reader_and_continues_only_when_asked(tmp_path, 
         tool = attend_tool()
         unchanged = json.loads(await tool.handler(host, {'see': None, 'look': None}))
         assert unchanged == {'mode': 'turns', 'changed': False} and not attention.looks
-        result = await tool.handler(host, {'see': 'asked', 'look': True})
+        with invocation_scope({'tool_call_id': 'look'}):
+            result = await tool.handler(host, {'see': 'asked', 'look': True})
         record = json.loads(result)
         assert record['mode'] == 'asked' and record['changed']
         assert Path(record['frames'][0]['file_path']).read_bytes() == b'exact-jpeg'
@@ -175,8 +177,9 @@ def test_refitted_look_does_not_send_its_pixels_twice(tmp_path):
         call.session = Session()
         call.connected.set()
         call.attention.frame(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'exact'))
-        await call.attention.attend({'look':True})
-        call.pending_offers.extend(call.attention.looks.pop())
+        with invocation_scope({'tool_call_id': 'look'}):
+            await call.attention.attend({'look':True})
+        call.pending_offers.extend(call.attention.looks.pop('look'))
         call.attention.seen.clear()  # fresh connection has not seen these images
         await call.offer_pending()
         assert not any(isinstance(command, Video) for command in call.session.sent)
@@ -191,7 +194,8 @@ def test_route_lines_disclose_actual_silence_support():
     from skills.grok_realtime.plugin import CATALOG as grok
     assert 'not guaranteed silent' not in engine_sentence(gemini.models[0])
     assert 'not guaranteed silent' in engine_sentence(gemini.models[1])
-    assert 'no documented guaranteed silent consideration' in engine_sentence(grok.models[0])
+    assert grok.models[0].silent_tool_results
+    assert 'not guaranteed silent' not in engine_sentence(grok.models[0])
 
 
 def test_speech_during_frame_retention_defers_offer_without_losing_the_fact(tmp_path):

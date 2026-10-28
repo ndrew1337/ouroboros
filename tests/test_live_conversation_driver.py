@@ -687,8 +687,14 @@ def test_a_renewal_waits_for_quiet_past_its_deadline_unless_nothing_can_resume(t
                 assert len(host.sessions) == 1
             else:
                 assert not task.done() and len(host.sessions) == 1
+                first.emit('input_started')
+                await asyncio.sleep(.03)
                 first.renewal_ready = True
+                await asyncio.sleep(.03)
+                assert not task.done() and len(host.sessions) == 1, 'expired deadline cannot cut owner speech'
+                first.emit('input_done')
                 await until(lambda: len(host.sessions) == 2)
+                assert host.options[1].resume_handle == ('kept' if trigger == 'provider_resume_with_handle' else '')
             if trigger == 'provider_resume_with_handle':
                 assert host.options[1].resume_handle == 'kept'  # the engine's own session goes on
             else:

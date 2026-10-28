@@ -38,6 +38,7 @@ export class CallVision {
         this.seq = 0;
         this.lastSentAt = 0;
         this.lastBytes = null;
+        this.lastEpoch = null;
         this.busy = false;
         this.cameraId = '';
         this.announced = '';
@@ -119,6 +120,7 @@ export class CallVision {
         this.announced = '';
         this.kind = this.error = '';
         this.lastBytes = null;
+        this.lastEpoch = null;
         // The last frame may still be queued in the call socket: its bytes stay counted until the socket drains
         // them (`pending` decays with bufferedAmount), or stopping a share would read as a stalled uplink (R15-2).
         if (changed && notify) this.notify();
@@ -154,11 +156,14 @@ export class CallVision {
             if (!blob?.size || blob.size > MAX_VIDEO_FRAME_PAYLOAD) throw new Error('JPEG frame unavailable');
             const data = new Uint8Array(await blob.arrayBuffer());
             if (token !== this.token || session.state !== 'live' || session.socket?.readyState !== 1) return;
-            if (this.lastBytes?.length === data.length && data.every((byte, i) => byte === this.lastBytes[i])) return;
-            session.socket.send(encodeVideoFrame({ epoch: session.epoch, seq: this.seq++, mime: 'image/jpeg', data }));
+            const epoch = session.epoch;
+            if (this.lastEpoch === epoch && this.lastBytes?.length === data.length
+                && data.every((byte, i) => byte === this.lastBytes[i])) return;
+            session.socket.send(encodeVideoFrame({ epoch, seq: this.seq++, mime: 'image/jpeg', data }));
             this.pendingBytes = data.byteLength;
             this.lastSentAt = Date.now();
             this.lastBytes = data;
+            this.lastEpoch = epoch;
             if (!this.announced) {
                 this.announced = this.kind;
                 session.send({ type: 'share', sharing: true, kind: this.kind });

@@ -9,6 +9,10 @@ from hashlib import sha256
 
 from ouroboros.contracts.live_conversation import CallTool, Video
 from ouroboros.contracts.realtime import RealtimeSetupError
+from ouroboros.tool_call_log import current_tool_call_id
+
+
+FRAME_UNAVAILABLE = 'The shared frame could not be saved; ask what is on the screen.'
 
 
 class Attention:
@@ -18,7 +22,7 @@ class Attention:
         self.frames = {}
         self.kinds = {}
         self.seen = {}
-        self.looks = []
+        self.looks = {}
         self.revisit_at = None
 
     def frame(self, event):
@@ -31,8 +35,15 @@ class Attention:
 
     async def retained(self, frame):
         retain = getattr(self.host, 'retain_frame', None)
-        path = await retain(frame.data, frame.mime, source=frame.source) if retain else ''
+        try:
+            path = await retain(frame.data, frame.mime, source=frame.source) if retain else ''
+        except (OSError, RealtimeSetupError) as exc:
+            if self.host.model.vision or isinstance(exc, RealtimeSetupError) and exc.code != 'frame_retention':
+                raise
+            path = ''
         if not path:
+            if not self.host.model.vision:
+                return ''
             raise RealtimeSetupError('frame_retention', 'This host cannot retain the exact shared frame.')
         return path
 
@@ -53,9 +64,10 @@ class Attention:
                     await session.send(frame)
                 else:
                     path = await self.retained(frame)
+                    detail = (f'{path}. This engine is blind; vlm_query with this file_path reads this exact remote frame.'
+                              if path else FRAME_UNAVAILABLE)
                     row = {'role': 'user', 'content': '[Host fact; not owner words]\n'
-                        f'Latest {self.kinds.get(source, "shared frame")} from peer {source}: {path}. '
-                        'This engine is blind; vlm_query with this file_path reads this exact remote frame.'}
+                        f'Latest {self.kinds.get(source, "shared frame")} from peer {source}: {detail}'}
                     await self.host.observe_context(row)
                     rows.append({**row, '_canonical': True})
             except BaseException:
@@ -82,7 +94,8 @@ class Attention:
             frames, images = [], []
             for source, frame in tuple(self.frames.items()):
                 path = await self.retained(frame)
-                frames.append({'source': source, 'kind': self.kinds.get(source, ''), 'file_path': path})
+                frames.append({'source': source, 'kind': self.kinds.get(source, ''),
+                               **({'file_path': path} if path else {'error': FRAME_UNAVAILABLE})})
                 digest = sha256(frame.data).hexdigest()
                 if self.host.model.vision and self.seen.get(source) != digest:
                     images.append({'role': 'user', '_call_frame_source': source, '_call_frame_digest': digest, 'content': [
@@ -96,7 +109,7 @@ class Attention:
             result['reader'] = 'vlm_query(file_path=...)' if not self.host.model.vision else 'images follow; unchanged frames are already visible'
             # Tool text keeps exact source paths in canonical history. The ordinary
             # ToolOutputs image lane carries their pixels, without changing CallTool's str result.
-            self.looks.append(images)
+            self.looks[current_tool_call_id()] = images
         return json.dumps(result, ensure_ascii=False)
 
     def revisit_due(self):
@@ -121,8 +134,7 @@ class Attention:
                 looked = False
             if looked:
                 continue_ids.add(call['id'])
-                if self.looks:
-                    images.extend(self.looks.pop(0))
+                images.extend(self.looks.pop(call['id'], []))
         return images, tuple(cid for cid in changes.silent if cid not in continue_ids)
 
 

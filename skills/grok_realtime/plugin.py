@@ -32,7 +32,7 @@ CATALOG = ProviderCatalog(
         RouteFacts(conversation_window_tokens=80_000, working_reserve_tokens=10_000, basis='estimator',
                    source='measured spoken-retention bound of session.instructions (operator probes 21.10)',
                    observed='2026-10-21'),
-        default=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
+        default=True, silent_tool_results=True, voices=(CatalogVoice('eve', 'Eve'), CatalogVoice('xai_ara', 'Ara')),
         thinking_levels=('none', 'high'), honours=frozenset({'languages', 'thinking'}),
         notes=(('pause', 'Grok Voice decides itself when your turn has ended.'),
                ('interruptions', 'Grok Voice always lets you speak over it.'),

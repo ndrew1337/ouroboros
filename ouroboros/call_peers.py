@@ -499,7 +499,6 @@ class LiveCallHub(cp.CallHub):
                 peer.converter = LinearResampler(self._output_rate, peer.rate)
                 peer.outgoing.appendleft(cp.encode_control({"type": "flush", "epoch": self._epoch}))
                 peer.queued_audio, peer.queued_controls = 0, len(peer.outgoing)
-            self._video_pending.clear()
             return self._epoch
 
     def _broadcast(self, message: dict) -> None:
