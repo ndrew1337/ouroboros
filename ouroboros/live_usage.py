@@ -365,3 +365,27 @@ def settle_connection_usage(*, engine: str, model: str, call_id: str, connection
 
 def abandon_live_response(attempt: LiveAttempt, *, reason: str) -> None:
     accounting.mark_unresolved(attempt._reservation, reason)
+
+
+def observe_live_usage(host, sample: Mapping) -> None:
+    """Settle non-response receipts on the call's existing physical-attempt ledger.
+
+    Input transcription is separately billed under its configured ASR model, never the voice
+    model's tariff. The call's warm_quote already fetched the catalog off-loop; an absent/stale
+    ASR quote or incomplete receipt stays unknown. These are incurred charges, so admission
+    cannot discard them even when a prior receipt exhausted the shared limit.
+    """
+    usage, raw = sample.get("usage", {}), sample.get("raw_usage", {})
+    if "connected_seconds" in usage:
+        host._settle_connection_sample(host._connection_growth(usage), raw)
+    elif sample.get("component") == "input_transcription":
+        engine, model = host.turn.route.accounting_provider, sample["model"]
+        quote = get_catalog_quote(model, provider=engine, drive_root=host.ctx.drive_root, allow_live_fetch=False)
+        evidence = {"call_id": host.turn.spec.call_id, "connection_key": str(host.connection_number),
+                    "rendered_mode": host.plan.initial_mode, "tariff_quote": quote,
+                    **{key: sample.get(key) for key in ("item_id", "content_index", "event_id")}}
+        normalized, cost = _settlement(quote, evidence, usage, raw, "completed")
+        accounting.record_received_attempt(accounting.AttemptRequest(
+            model=model, provider=engine, task_id=host.ctx.task_id, drive_root=host.ctx.drive_root,
+            source="live_transcription_usage", physical_context=host._physical_context,
+            cost_evidence=evidence), normalized, cost_usd=cost)

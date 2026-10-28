@@ -478,10 +478,8 @@ class ConversationHost:
     def observe(self, direction, raw):
         self.wire.append({"connection": self.connection_number, "direction": direction, "raw": raw})
         if direction == "usage" and self._connection_accounting:
-            sample = json.loads(raw)
-            usage = sample.get("usage", {})
-            if "connected_seconds" in usage:
-                self._settle_connection_sample(self._connection_growth(usage), sample.get("raw_usage", {}))
+            from ouroboros.live_usage import observe_live_usage
+            observe_live_usage(self, json.loads(raw))
 
     def _connection_growth(self, usage):
         counts = dict(usage)

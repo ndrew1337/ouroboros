@@ -116,6 +116,7 @@ class OpenAISession(JsonSession):
         self.cancel_now = ""  # an answer the server opened while the owner was speaking
         self.waiting_tools = set()
         self.input_transcripts, self.output_transcripts = set(), set()
+        self.transcribed = set()
         self.ready = False
 
     @property
@@ -309,6 +310,24 @@ class OpenAISession(JsonSession):
             return [LiveEvent("caption", {"speaker": "ouroboros", "item_id": item, "text": event["delta"], "final": False})]
         if kind in {"response.output_audio_transcript.done", "conversation.item.input_audio_transcription.completed"}:
             speaker = "ouroboros" if kind.startswith("response.") else "owner"
+            if speaker == "owner":
+                key = (item, event.get("content_index", 0))
+                if key not in self.transcribed:
+                    raw = event.get("usage") or {}
+                    details = raw.get("input_token_details") or {}
+                    usage = {"image_input_tokens": 0, "video_input_tokens": 0, "audio_output_tokens": 0,
+                             "cached_input_tokens": 0, "thinking_tokens": 0}
+                    if raw.get("type") == "tokens":
+                        usage.update({axis: value for axis, value in {
+                            "text_input_tokens": details.get("text_tokens"),
+                            "audio_input_tokens": details.get("audio_tokens"),
+                            "text_output_tokens": raw.get("output_tokens"),
+                        }.items() if type(value) is int and value >= 0})
+                    self.observe("usage", canonical_json({"component": "input_transcription",
+                        "model": self.events[0]["session"]["audio"]["input"]["transcription"]["model"],
+                        "item_id": item, "content_index": key[1], "event_id": event.get("event_id"),
+                        "usage": usage, "raw_usage": raw}))
+                    self.transcribed.add(key)
             text = event.get("transcript", self.text.pop(item, ""))
             self.text.pop(item, None)
             (self.output_transcripts if speaker == "ouroboros" else self.input_transcripts).discard(item)
