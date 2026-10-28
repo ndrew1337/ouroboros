@@ -12,7 +12,7 @@ from tests.test_live_conversation_driver import Host, Session, started, until
 
 
 @pytest.mark.parametrize('consume', ['fire', 'owner', 'offer', 'renew'])
-def test_named_revisit_is_once_consumed_or_survives_renewal(monkeypatch, consume):
+def test_named_revisit_survives_speech_offers_and_renewal_then_fires_once(monkeypatch, consume):
     now = [100.0]
     monkeypatch.setattr(module, 'monotonic', lambda: now[0])
     async def scenario():
@@ -31,11 +31,13 @@ def test_named_revisit_is_once_consumed_or_survives_renewal(monkeypatch, consume
             await until(lambda: not host.hub.events)
             if consume == 'owner':
                 session.emit('input_started'); session.emit('input_done')
-                await until(lambda: attention.revisit_at is None)
+                await asyncio.sleep(.03)
+                assert attention.revisit_at is not None
             elif consume == 'offer':
                 host.hub.events.append(cp.PeerControl('owner', cp.PEER_OWNER, {'type':'share','sharing':True,'kind':'screen'}))
                 await until(lambda: any(isinstance(c, ContextUpdate) for c in session.sent))
-                assert attention.revisit_at is None
+                assert attention.revisit_at is not None
+                session.emit('response_done', response_id='share', usage={}, raw_usage={}, status='completed')
             elif consume == 'renew':
                 deadline = attention.revisit_at
                 host.due = True
@@ -45,9 +47,9 @@ def test_named_revisit_is_once_consumed_or_survives_renewal(monkeypatch, consume
                 await asyncio.sleep(.02)
                 assert host.state['attention'] is attention and attention.revisit_at == deadline
             now[0] += 8
-            if consume in {'fire','renew'}:
-                await until(lambda: any(isinstance(c, ContextUpdate) for c in session.sent))
-                update = next(c for c in session.sent if isinstance(c, ContextUpdate))
+            if consume in {'fire', 'renew', 'owner', 'offer'}:
+                await until(lambda: any(isinstance(c, ContextUpdate) and 'look you asked' in str(c.messages) for c in session.sent))
+                update = next(c for c in session.sent if isinstance(c, ContextUpdate) and 'look you asked' in str(c.messages))
                 assert 'look you asked' in str(update.messages)
                 assert any(isinstance(c, Video) for c in session.sent), 'a named look gets the current view even in asked mode'
             before = len(session.sent)
@@ -88,21 +90,25 @@ def test_due_revisit_waits_for_quiet_and_call_end_cancels_it(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_owner_turn_during_saved_look_consumes_the_pending_offer(tmp_path):
+def test_owner_turn_during_saved_look_defers_the_pending_offer_without_losing_its_frame(tmp_path):
     async def scenario():
         host = Host(); host.model = replace(host.model, vision=False)
         call = _Call(host); call.session = Session(); call.connected.set()
         async def retain(data, mime, *, source=''):
-            call.consume_revisit(); call.input_open = True
+            call.input_open = True
             path = tmp_path / 'frame.jpg'; path.write_bytes(data); return str(path)
         host.retain_frame = retain
         call.attention.frame(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'exact'))
         await call.offer_fact('This is the look you asked for.', requested_look=True)
         await call.offer_pending()
-        assert not call.pending_offers and not call.response_open
+        assert call.pending_offers and not call.response_open
+        assert not call.session.sent
+        call.input_open = False
+        await call.offer_pending()
+        assert not call.pending_offers
         assert len(call.session.sent) == 1 and isinstance(call.session.sent[0], ContextUpdate)
         assert 'frame.jpg' in str(call.session.sent[0].messages)
-        assert 'look you asked' not in str(call.session.sent[0].messages)
+        assert 'look you asked' in str(call.session.sent[0].messages)
         call.input_open = False
         assert call.attention.revisit_at is None
     asyncio.run(scenario())

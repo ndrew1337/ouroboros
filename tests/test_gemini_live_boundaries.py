@@ -150,6 +150,32 @@ def test_partial_input_is_pending_without_vad_and_finishes_at_turn(gemini):
     asyncio.run(run())
 
 
+def test_an_old_utterances_tail_cannot_close_new_barge_in_input(gemini):
+    async def scenario():
+        session, wire = make_session(gemini)
+        try:
+            await session.open(); await session.receive()
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+            first = await receive(session, wire, {'serverContent': {'inputTranscription': {'text': 'First owner words.'}}})
+            first_id = next(e.data['item_id'] for e in first if e.kind == 'caption')
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_END'}})
+            boundary = await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_START'}})
+            assert [e.kind for e in boundary] == ['caption', 'input_done', 'input_started']
+            assert boundary[0].data == dict(speaker='owner', text='First owner words.', item_id=first_id, final=True)
+            events = await receive(session, wire, {'serverContent': {'interrupted': True, 'turnComplete': True}})
+            assert not any(e.kind == 'input_done' for e in events)
+            assert session.input_pending and not session.renewal_ready
+            await receive(session, wire, {'serverContent': {'inputTranscription': {'text': 'New owner words.'}}})
+            await receive(session, wire, {'voiceActivity': {'type': 'ACTIVITY_END'}})
+            last = await receive(session, wire, {'serverContent': {'turnComplete': True}})
+            caption = next(e.data for e in last if e.kind == 'caption' and e.data['final'])
+            assert caption['text'] == 'New owner words.' and caption['item_id'] != first_id
+            assert session.renewal_ready
+        finally:
+            await session.close()
+    asyncio.run(scenario())
+
+
 def test_late_output_and_outstanding_tool_keep_their_boundaries(gemini):
     async def run():
         session, wire = make_session(gemini)
@@ -175,18 +201,24 @@ def test_late_output_and_outstanding_tool_keep_their_boundaries(gemini):
     asyncio.run(run())
 
 
-def test_caption_without_audio_remains_pending_until_finished(gemini):
+@pytest.mark.parametrize('model', ['gemini-3.8-live', 'gemini-3.8-live-extended-thinking'])
+def test_completed_caption_without_finished_releases_quiet_and_late_tail_revises(gemini, model):
     async def run():
-        session, wire = make_session(gemini)
+        session, wire = make_session(gemini, model=model)
         try:
             await session.open()
             await session.receive()
             await receive(session, wire, {"serverContent": {"outputTranscription": {"text": "First "}}})
-            await receive(session, wire, {"serverContent": {"turnComplete": True}})
             assert not session.renewal_ready
+            await receive(session, wire, {"serverContent": {"turnComplete": True}})
+            if 'thinking' in model:
+                assert not session.renewal_ready, 'thinking still needs its native IDLE'
+                await receive(session, wire, {"serverContent": {"turnComplete": True, "interactionStatus": "IDLE"}})
+            assert session.renewal_ready
             events = await receive(session, wire, {"serverContent": {
                 "outputTranscription": {"text": "last.", "finished": True}}})
             assert next(e.data["text"] for e in events if e.kind == "caption" and e.data["final"]) == "First last."
+            assert next(e.data['replace'] for e in events if e.kind == 'caption' and e.data['final'])
             assert session.renewal_ready
         finally:
             await session.close()

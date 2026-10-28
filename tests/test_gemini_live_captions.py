@@ -68,7 +68,7 @@ async def replay_greeting(session, wire):
 
 
 @pytest.mark.parametrize("model", [THINKING, ORDINARY])
-def test_recorded_greeting_finalizes_at_idle_only_on_thinking_route(gemini, model):
+def test_recorded_greeting_finalizes_at_native_idle_on_both_routes(gemini, model):
     async def run():
         session, wire = make_session(gemini, model=model)
         try:
@@ -89,15 +89,14 @@ def test_recorded_greeting_finalizes_at_idle_only_on_thinking_route(gemini, mode
                 if line == 626:
                     assert not session.renewal_ready  # Generation alone has no final transcript.
             expected = dict(speaker="ouroboros", item_id=audio_item, text=GREETING, final=True)
-            assert finals(emitted) == ([expected] if model == THINKING else [])
-            assert session.renewal_ready is (model == THINKING)
+            assert finals(emitted) == [expected]
+            assert session.renewal_ready
             repeated = await receive(session, wire, {"serverContent": {
                 "turnComplete": True, "interactionStatus": "IDLE"}})
             assert not finals(repeated)
-            if model == THINKING:
-                assert session.final_captions() == []  # Stop must not repeat a completed row.
+            assert session.final_captions() == []  # Stop must not repeat a completed row.
             next_events = await receive(session, wire, REPLAY[-1][1])
-            assert finals(next_events) == ([] if model == THINKING else [expected])
+            assert finals(next_events) == []
             next_item = next(e.data["item_id"] for e in next_events if e.kind == "audio")
             assert next_item != audio_item
             assert not session.renewal_ready

@@ -104,13 +104,14 @@ def test_gemini_partial_then_late_final_keeps_complete_caption_and_audio_identit
             "outputTranscription": {"text": "First words "}}})
         item = next(e.data["item_id"] for e in first if e.kind == "audio")
         boundary = await adapter.convert({"serverContent": {"turnComplete": True}})
-        assert not adapter.renewal_ready
-        assert not any(e.kind == "caption" and e.data["final"] for e in boundary)
+        assert adapter.renewal_ready
+        assert [e.data['text'] for e in boundary if e.kind == 'caption' and e.data['final']] == ['First words ']
         late = await adapter.convert({"serverContent": {
             "outputTranscription": {"text": "and the ending.", "finished": True}}})
         final = next(e for e in late if e.kind == "caption" and e.data["final"])
         assert final.data["item_id"] == item
         assert final.data["text"] == "First words and the ending."
+        assert final.data['replace'], 'late words revise the same canonical caption'
         assert not any(e.kind == "response_started" for e in late)
         assert adapter.renewal_ready
     asyncio.run(scenario())

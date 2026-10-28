@@ -233,6 +233,26 @@ test('vision comes from the selected catalog model, even if admission disagrees'
     } finally { f.session.end(); }
 });
 
+for (const vision of [true, false]) test(`sharing remains available with native vision=${vision}`, async () => {
+    const f = fixture();
+    f.session.model = () => ({ vision });
+    const requested = [];
+    f.session.vision.toggle = kind => { requested.push(kind); };
+    try {
+        await f.session.start();
+        f.sockets[0].connect();
+        assert.equal(f.session.supportsVision, vision, 'the engine sense remains truthful');
+        assert.equal(f.sockets[0].sent[0].video, true, 'blind engines receive exact retained-frame paths');
+        f.session.toggleVision('camera');
+        f.session.toggleVision('screen');
+        f.session.toggleVision('invented');
+        assert.deepEqual(requested, ['camera', 'screen']);
+        f.session.end();
+        f.session.toggleVision('camera');
+        assert.equal(requested.length, 2, 'an ended call cannot begin capture');
+    } finally { f.session.end(); }
+});
+
 test('a call shows its own phases: permission, admission, then every server phase it reports', async () => {
     const f = fixture();
     try {

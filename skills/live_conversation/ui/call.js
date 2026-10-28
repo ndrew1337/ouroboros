@@ -189,7 +189,7 @@ export class CallSession {
                 if (!current()) return;
                 const vision = visionAvailability(this.env);
                 this.send({ type: 'hello', protocol: 1, role: 'owner', mic: true, speaker: true,
-                    video: this.supportsVision && (vision.screen || vision.camera), rate: context.sampleRate, label: 'Owner' });
+                    video: vision.screen || vision.camera, rate: context.sampleRate, label: 'Owner' });
                 this.capture();
             };
             socket.onmessage = ({ data }) => {
@@ -270,7 +270,7 @@ export class CallSession {
     }
 
     toggleVision(kind) {
-        if (this.active && this.supportsVision && ['screen', 'camera'].includes(kind)) void this.vision.toggle(kind);
+        if (this.active && ['screen', 'camera'].includes(kind)) void this.vision.toggle(kind);
     }
 
     onAudio(data) {
@@ -444,9 +444,7 @@ export function mountCall({ page, chatId, env = globalThis, ws = null, label = (
         talk: () => session.start(),
         mute: () => session.setMuted(!session.muted),
         show: kind => session.toggleVision(kind),
-        vision: () => session.supportsVision ? visionAvailability(env) : { screen: false, camera: false,
-            unsupported: Boolean(session.callId),
-            reason: 'This voice engine does not accept images.', cameraReason: 'This voice engine does not accept images.' },
+        vision: () => visionAvailability(env), // a blind route receives the exact saved frame's reader path
         end: () => session.end(),
         dismiss: () => session.dismiss(),
         act: action => act(action),

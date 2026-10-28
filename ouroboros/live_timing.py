@@ -6,6 +6,9 @@ from ouroboros.contracts.realtime import canonical_json
 
 def record_timing(host, event, *, at=None):
     """One journal fact per renewal; absent boundaries remain explicitly unknown."""
+    if event.startswith('offer_wait:') or event in {'offer_idle', 'offer_wait_done'}:
+        _offer_wait(host, event, time.monotonic() if at is None else at)
+        return
     stamp = time.time() if at is None else at
     current = getattr(host, "_renewal_timing", None)
     if event in {"requested", "closed"} and current is not None:
@@ -33,3 +36,26 @@ def record_timing(host, event, *, at=None):
     if event == "first_audio":
         host._renewal_timing = None
         host.observe("host", canonical_json({"type": "call.timing", **current}))
+
+
+def _offer_wait(host, event, stamp):
+    """Boundary measurements, no timer policy. Concurrent blockers overlap; total does not."""
+    state = getattr(host, '_offer_wait_timing', None)
+    if state is None:
+        state = host._offer_wait_timing = dict(at=stamp, pending=False, blockers=(), total=0.0, seconds={}, done=False)
+    if state['done']:
+        return
+    elapsed = max(0.0, stamp - state['at'])
+    if state['pending']:
+        state['total'] += elapsed
+        for name in state['blockers']:
+            state['seconds'][name] = state['seconds'].get(name, 0.0) + elapsed
+    state.update(at=stamp, pending=event.startswith('offer_wait:'), blockers=tuple(event.partition(':')[2].split(',')))
+    state['blockers'] = tuple(name for name in state['blockers'] if name)
+    if event == 'offer_wait_done':
+        state['done'] = True
+        times = state['seconds']
+        host.observe('host', canonical_json({'type': 'call.offer_wait',
+            'pending_seconds': round(state['total'], 6),
+            'longest_blocker': max(sorted(times), key=times.get) if times else None,
+            'seconds_by_blocker': {k: round(v, 6) for k, v in sorted(times.items())}}))

@@ -71,3 +71,38 @@ def test_driver_records_requested_quiet_ready_audio_once_and_not_initial_open():
             host.hub.ended_by_owner = True
             await asyncio.wait_for(task, 2)
     asyncio.run(scenario())
+
+
+def test_offer_wait_is_one_end_fact_with_overlap_counted_only_once(host_world):
+    host = host_world.host
+    host.timing_event('offer_idle', at=0)
+    host.timing_event('offer_wait:input_open,session.input_pending', at=10)
+    host.timing_event('offer_wait:session.output_pending', at=12)
+    host.timing_event('offer_idle', at=19)
+    host.timing_event('offer_wait:unheard', at=30)
+    assert not host.wire_path.exists(), 'no per-poll or per-interval journal records'
+    host.timing_event('offer_wait_done', at=33)
+    host.timing_event('offer_wait_done', at=34)
+    assert [r for r in host_events(host) if r.get('type') == 'call.offer_wait'] == [{
+        'type': 'call.offer_wait', 'pending_seconds': 12.0, 'longest_blocker': 'session.output_pending',
+        'seconds_by_blocker': {'input_open': 2.0, 'session.input_pending': 2.0,
+                              'session.output_pending': 7.0, 'unheard': 3.0}}]
+
+
+def test_driver_only_times_an_offer_or_due_revisit_and_records_end():
+    from skills.live_conversation.driver import _Call
+    from tests.test_live_conversation_driver import Session
+    host = Host()
+    phases = []
+    host.timing_event = phases.append
+    call = _Call(host)
+    call.session = Session()
+    call.input_open = True
+    call.track_offer_wait()
+    assert phases == ['offer_idle'], 'ordinary listening with no offer is not waiting for the floor'
+    call.pending_offers.append({'role': 'user', 'content': 'Synthetic host fact'})
+    call.track_offer_wait(); call.track_offer_wait()
+    assert phases == ['offer_idle', 'offer_wait:input_open'], 'polling records boundaries, not one event per tick'
+    call.pending_offers.clear()
+    call.track_offer_wait()
+    assert phases[-1] == 'offer_idle'

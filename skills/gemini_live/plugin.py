@@ -247,7 +247,12 @@ class GeminiSession(JsonSession):
 
     @property
     def renewal_ready(self):
-        return not (self.input_pending or self.output_pending or self.turn_busy or self.calls or self.held_context)
+        return not self.renewal_blockers
+
+    @property
+    def renewal_blockers(self):
+        return tuple('session.' + name for name in
+                     ('input_pending', 'output_pending', 'turn_busy', 'calls', 'held_context') if getattr(self, name))
 
     def tools_need_renewal(self, tools):
         """A live session keeps its declarations: different tools need a new session."""
@@ -367,6 +372,13 @@ class GeminiSession(JsonSession):
         if replayed_response:
             content = {}
         if event.get('voiceActivity', {}).get('type') == 'ACTIVITY_START':
+            if self.input_boundary and 'owner' in self.text:
+                # The preceding utterance omitted `finished`. Settle it before
+                # opening this one, or an interrupted response's turnComplete
+                # can mistake those old words for the new speaker's completion.
+                result.append(self.finish_text('owner'))
+                result.append(LiveEvent('input_done'))
+                self.input_pending = False
             if not self.input_pending:
                 result.append(LiveEvent('input_started'))
             self.input_pending = True
@@ -416,8 +428,8 @@ class GeminiSession(JsonSession):
                     self.input_final = False
                     result.append(LiveEvent('input_started'))
                 elif speaker == 'ouroboros':
-                    if thinking and self.output_final:
-                        # IDLE can precede a transcription tail. Revise the same
+                    if self.output_final:
+                        # A native completion can precede a transcription tail. Revise the same
                         # completed item with its full text, never a second row.
                         if part.get('text'):
                             previous = self.output_caption
@@ -460,7 +472,10 @@ class GeminiSession(JsonSession):
         if content.get('turnComplete'):
             # Generation completion may precede outputTranscription. Keep both
             # the response and audio item identity until that caption arrives.
-            if thinking and content.get('interactionStatus') == 'IDLE':
+            # Ordinary Gemini omits caption `finished` (bf43cbf3, 28.10).
+            # Its turnComplete is the boundary; thinking still needs native IDLE.
+            # A late tail above revises this item, never holds quiet forever.
+            if content.get('interactionStatus') == 'IDLE' or (not thinking and 'interactionStatus' not in content):
                 self.output_final = True
                 if 'ouroboros' in self.text:
                     result.append(self.finish_text('ouroboros'))

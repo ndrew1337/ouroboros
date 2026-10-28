@@ -13,7 +13,7 @@ from tests.test_live_proactive_host import synthetic_jpeg
 
 
 @pytest.mark.parametrize('owner_interrupts', [False, True])
-def test_blind_revisit_frame_fact_reaches_engine_even_when_owner_consumes_offer(tmp_path, owner_interrupts):
+def test_blind_revisit_frame_fact_and_requested_offer_survive_owner_input(tmp_path, owner_interrupts):
     async def scenario():
         host = Host()
         host.model = replace(host.model, vision=False)
@@ -25,7 +25,6 @@ def test_blind_revisit_frame_fact_reaches_engine_even_when_owner_consumes_offer(
         async def retain(data, mime, *, source=''):
             if owner_interrupts:
                 # Same sequence as provider(input_started) while disk retention yields.
-                call.consume_revisit()
                 call.input_open = True
                 rows = await call.attention.deliver(call.session)
                 owner_rows.extend(rows)
@@ -40,6 +39,8 @@ def test_blind_revisit_frame_fact_reaches_engine_even_when_owner_consumes_offer(
         call.attention.frame(cp.PeerVideo('remote', cp.PEER_OWNER, 'image/jpeg', b'exact-frame'))
         await call.offer_fact('This is the look you asked for.', requested_look=True)
         await call.offer_pending()
+        if owner_interrupts:
+            assert not call.session.sent and call.pending_offers, 'speech defers both the frame fact and the look'
         # Finish the owner's turn and try the next physical boundary as well.
         call.input_open = False
         next_rows = await call.attention.deliver(call.session)
@@ -53,8 +54,8 @@ def test_blind_revisit_frame_fact_reaches_engine_even_when_owner_consumes_offer(
             f'claimed={call.attention.seen}, owner_rows={owner_rows}')
         assert sum('remote-frame.jpg' in str(row) for row in sent) == 1
         if owner_interrupts:
-            assert not any('look you asked' in str(row) for row in sent)
-            assert not call.response_open, 'the owner gets context, not an extra revisit answer'
+            assert sum('look you asked' in str(row) for row in sent) == 1
+            assert call.response_open, 'the mind-named look is offered once after speech ends'
     asyncio.run(scenario())
 
 

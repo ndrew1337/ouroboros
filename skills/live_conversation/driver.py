@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import time
 from pathlib import Path
+from websockets.exceptions import ConnectionClosed
 
 from ouroboros import call_protocol as cp
 from ouroboros.contracts.live_conversation import Audio, CallTool, ContextUpdate, Interrupt, LiveHost, LiveOptions, Respond, ToolOutputs
@@ -202,6 +203,7 @@ class _Call:
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
         self.unproven_resumes = 0  # provider drops since the last completed answer
+        self.offer_wait_event = None
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -212,6 +214,7 @@ class _Call:
                 await task
         finally:
             self.consume_revisit()
+            self.timing("offer_idle")  # teardown is no longer waiting for a turn
             # A resume never cancels tools. Actual call teardown owns and joins
             # them; the host also joins any already-dispatched side effects.
             for task in workers:
@@ -222,6 +225,7 @@ class _Call:
             finally:
                 writer.cancel()
                 await joined(asyncio.gather(writer, return_exceptions=True))
+                self.timing("offer_wait_done")
         if self.hub.ended_by_ouroboros and not self.hub.ended_by_owner and not self.hub.closed:
             self.hub.send_state(cp.STATE_CLOSED, "ouroboros_bye")
 
@@ -258,12 +262,23 @@ class _Call:
         self.timed_audio = False
         resumed = replacing = False
         peers = asyncio.create_task(self.peers())
-        children = [asyncio.create_task(self.provider()), peers, asyncio.create_task(self.mailbox())]
+        provider = asyncio.create_task(self.provider())
+        children = [provider, peers, asyncio.create_task(self.mailbox())]
         children.append(asyncio.create_task(self.tool_refit.wait()))
         try:
             done, _ = await asyncio.wait(children, return_when=asyncio.FIRST_COMPLETED)
             for child in done:
-                await child
+                try:
+                    await child
+                except ConnectionClosed:
+                    if child is provider:
+                        raise
+                    # A microphone/context write can see the closed socket first.
+                    # The native reader still owns the receipts and resumption
+                    # authority. No failed write is replayed or paid retry invented.
+                    await provider
+                    if not self.provider_closed:
+                        raise
             await self.rows.join()
             if self.tool_refit.is_set():
                 # Finish already-requested effects before fitting their rows.
@@ -319,7 +334,6 @@ class _Call:
                     "[Host fact; not owner words] New room context is in the fitted history. You may answer, act or stay silent."})
             self.request_renewal()
         else:
-            self.consume_revisit()
             await self.session.send(ContextUpdate(tuple(rows)))
 
     def timing(self, phase):
@@ -351,9 +365,25 @@ class _Call:
         return any(item not in self.interrupted and not self.heard(item) for item in self.audio_ms)
 
     def quiet(self):
-        return (not self.response_open and not self.input_open and not self.tools_running
-                and self.tool_queue.empty() and not self.pending_spoken and not self.unheard()
-                and self.session.renewal_ready)
+        return not self.quiet_blockers()
+
+    def quiet_blockers(self):
+        blocked = [name for name, active in (
+            ("response_open", self.response_open), ("input_open", self.input_open),
+            ("tools_running", self.tools_running), ("tool_queue", not self.tool_queue.empty()),
+            ("pending_spoken", bool(self.pending_spoken)), ("unheard", self.unheard())) if active]
+        if self.session is None:
+            blocked.append("connection")
+        elif not self.session.renewal_ready:
+            blocked.extend(getattr(self.session, "renewal_blockers", ("session.renewal_ready",)))
+        return tuple(blocked)
+
+    def track_offer_wait(self):
+        pending = self.pending_offers or self.attention.revisit_due()
+        event = "offer_wait:" + ",".join(self.quiet_blockers()) if pending else "offer_idle"
+        if event != self.offer_wait_event:
+            self.timing(event)
+            self.offer_wait_event = event
 
     async def finish_spoken(self, item, *, interrupted=False, completed=False):
         caption = self.pending_spoken.pop(item, None)
@@ -438,6 +468,11 @@ class _Call:
                     # A deliberate goodbye needs only playback, no further
                     # native result or connection that could cut it short.
                 else:
+                    if any(call["id"] not in silent for call in calls):
+                        # An ordinary result requests continuation. Between the
+                        # write and its native answer, quiet must not reopen the
+                        # session and swallow the opening's first spoken words.
+                        self.response_open = True
                     await self.send(ToolOutputs(tuple(changes) + tuple(images), tuple(self.host.schemas), silent=silent))
                 if len(silent) == len(calls) and not self.active_responses:
                     self.response_open = False
@@ -497,7 +532,6 @@ class _Call:
                 elif event.kind == "speech_started":
                     await self.interrupt()
                 elif event.kind == "input_started":
-                    self.consume_revisit()
                     self.input_open = True
                     frames = await self.attention.deliver(self.session)
                     if frames:
@@ -562,6 +596,7 @@ class _Call:
         # The host's independent control watcher owns Stop/Panic/budget reads.
         # Awaiting those store reads here makes owner audio queue and overflow.
         while True:
+            self.track_offer_wait()
             if self.hub.closed or self.hub.ended_by_owner:
                 return
             if self.provider_closed:
@@ -652,12 +687,13 @@ class _Call:
                         self.pending_offers.append({**row, "_canonical": True})
                 await asyncio.sleep(0)
             if not self.renewing and (self.pending_offers or self.attention.revisit_due()) and self.quiet():
-                if not self.pending_offers and self.attention.revisit_due():
+                if self.attention.revisit_due():
                     self.attention.revisit_at = None  # one shot, even if the offer must await a refit
                     await self.offer_fact("This is the look you asked to be offered after the time you named. "
                                           "You may speak, act or stay silent.", requested_look=True)
                 if self.pending_offers:
                     await self.offer_pending()
+            self.track_offer_wait()
             await asyncio.sleep(.01)
 
     async def offer_fact(self, text, *, requested_look=False):
@@ -692,10 +728,6 @@ class _Call:
         self.attention.include_images(self.pending_offers)
         requested = any(row.get("_requested_look") for row in self.pending_offers)
         frames = await self.attention.deliver(self.session, requested=requested)
-        if requested and not any(row.get("_requested_look") for row in self.pending_offers):
-            if frames:
-                await self.context_update(frames)  # the owner's turn inherits the retained frame, without a revisit offer
-            return
         self.pending_offers = [*frames, *self.pending_offers]
         if self.host.renewal_due():
             self.request_renewal()
@@ -705,7 +737,6 @@ class _Call:
         if not self.quiet():
             return
         rows, self.pending_offers = self.pending_offers, []
-        self.consume_revisit()
         await self.session.send(ContextUpdate(tuple(rows)))
         self.response_open = True
 

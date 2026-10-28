@@ -87,6 +87,8 @@ class Attention:
         if revisit is not None:
             self.revisit_at = monotonic() + revisit
             result['revisit_after_s'] = revisit
+            result['revisit'] = ('One request gives one look at the first quiet moment after that time, even if speech '
+                                 'or another offer intervenes. Ask again from that look to keep watching.')
         if arguments.get('look'):
             frames, images = [], []
             for source, frame in tuple(self.frames.items()):
@@ -144,7 +146,8 @@ def attend_tool():
         '(every new frame), asked (only when I look). look=true returns the latest live sources and continues '
         'this turn; unchanged images are already visible. With no change, finish this turn without words. '
         'Null means no change; false does not ask to look. revisit_after_s names seconds until one offer with the current view, '
-        'at the next quiet moment. There is no default or repeat; another offer or owner turn consumes it.',
+        'at the next quiet moment. There is no default or repeat. Speech and other offers do not cancel it. '
+        'One request gives one look; ask again from that look to keep watching.',
         {'type': 'object', 'properties': {
             'see': {'type': ['string', 'null'], 'enum': ['turns', 'stream', 'asked', None]},
             'look': {'type': ['boolean', 'null']},
