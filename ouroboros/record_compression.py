@@ -1,7 +1,9 @@
 """Transparent compression of finished records: the maintenance child's ``record_compression`` job.
 
-Finished records stay whole (PERSISTENCE ``[record]``); where the filesystem compresses transparently
-their bytes can occupy less with no byte a reader sees changed. Two planes (``PLANES``):
+Finished records stay whole while retained; where the filesystem compresses transparently their bytes
+can occupy less with no byte a reader sees changed. Task evidence remains PERSISTENCE ``[record]``;
+the call wire journal alone follows shared GC retention (``maintenance_retirement.prune_call_wire_journals``),
+also requiring a task proven over. Compression preserves its age. Two planes (``PLANES``):
 
 - ``evidence``: the published evidence of a task proven over (``subagent_worktrees._task_proven_over``: a
   terminal record, a negative live probe, no lineage process; this child holds no queue, so its probe is
