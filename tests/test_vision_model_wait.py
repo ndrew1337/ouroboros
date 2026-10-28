@@ -289,7 +289,7 @@ def test_real_child_reconstructs_provider_field_display_after_settlement(child_f
     assert error.code == "invalid_request" and error.status_code == 400 and error.retryable is False
     assert error.operation_id == "operation-exact" and error.route == ROUTE and error.model_role == "vision"
     assert error.body == error.problem and error.problem["context"]["providerMessage"] == "private provider body"
-    assert "provider_code=string_above_max_length, parameter=instructions" in error.display_message[:220]
+    assert "provider_error_type=string_above_max_length, parameter=instructions" in error.display_message[:220]
     assert "private provider body" not in error.display_message
     assert str(error) == "invalid_request: controlled refusal"
     assert error.physical_attempt_capture.state == "settled"
@@ -359,15 +359,26 @@ def test_killed_child_retains_exact_operation_checkpoint(child_fixture):
     assert rows[-1]["state"] == "dispatched" and not any(row["state"] == "released" for row in rows)
 
 
-def test_strict_child_schema_rejects_false_capture_and_wrong_receipt():
+@pytest.mark.parametrize("reserve,bound", [(0, False), (65536, True)])
+def test_strict_child_schema_rejects_false_capture_and_wrong_receipt(reserve, bound):
     assert set(vision_process._CAPTURE["properties"]) == {field.name for field in fields(ua.PhysicalAttemptCapture)}
     assert set(vision_process._CONTEXT["properties"]) == {field.name for field in fields(ua.PhysicalAttemptContext)}
     capture = asdict(ua.PhysicalAttemptCapture("a", MODEL, "claudexor", "released", "opaque"))
     capture["physical_context"] = asdict(ua.PhysicalAttemptContext(
-        "owner_low", "low", "cold_estimate", "route", "round", None, None, False, False, view_kind="focus"))
+        "owner_low", "low", "cold_estimate", "route", "round", None, None, False, False,
+        view_kind="focus", response_reserve_tokens=reserve, window_witness_bound=bound))
     receipt = {"receipt_id": "ours", "custody": None, "capture": capture}
     vision_process._read_receipt(receipt, "ours")
-    assert vision_process._restore_capture(capture).physical_context.view_kind == "focus"
+    restored = vision_process._restore_capture(capture).physical_context
+    assert restored.view_kind == "focus"
+    assert restored.response_reserve_tokens == reserve and restored.window_witness_bound is bound
+    for key, invalid in (("response_reserve_tokens", -1), ("response_reserve_tokens", "8192"),
+                         ("response_reserve_tokens", True), ("window_witness_bound", "true")):
+        saved = capture["physical_context"][key]
+        capture["physical_context"][key] = invalid
+        with pytest.raises(Exception):
+            vision_process._read_receipt(receipt, "ours")
+        capture["physical_context"][key] = saved
     capture["physical_context"]["view_kind"] = ["focus"]
     with pytest.raises(Exception):
         vision_process._read_receipt(receipt, "ours")
@@ -476,7 +487,7 @@ def test_tool_result_carries_the_reconstructed_typed_provider_projection(child_f
     text = (vision._vlm_query(ctx, prompt="Describe only this image", image_url="data:image/png;base64,AAAA")
             if tool == "vlm_query" else vision._analyze_screenshot(ctx, prompt="Describe only this image"))
     first = text.splitlines()[0]
-    assert first.startswith(f"⚠️ {label}: ") and "provider_code=string_above_max_length" in first
+    assert first.startswith(f"⚠️ {label}: ") and "provider_error_type=string_above_max_length" in first
     assert "parameter=instructions" in first and "invalid_request: controlled refusal" in first
     assert "private provider body" not in text  # the raw provider body never joins the projection
     published = _published_tool_result(ctx, None)

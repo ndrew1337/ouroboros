@@ -360,7 +360,8 @@ def _collect_review_findings(ctx: ToolContext, model_results: list, row_plan: Op
     triad_raw_results = [record.to_dict() for record in parsed.actor_records]
     advisers = {sid for sid, extra in zip(plan.get("slot_ids") or [], plan.get("additional") or []) if extra}
     for raw in triad_raw_results:
-        raw["additional"] = raw.get("slot_id") in advisers
+        if not raw.get("outcome"):  # Historical envelopes have no saved assignment result.
+            raw["additional"] = raw.get("slot_id") in advisers
     errored_models = [record.model_id for record in parsed.actor_records if record.status == "error"]
 
     for record in parsed.actor_records:
@@ -511,14 +512,14 @@ def _triad_governance_usable_window(api_models: list, api_slots: list) -> int:
     the QUORUM limit the fit ladder already sizes the packet with (one SSOT),
     never the narrowest row — one small slot degrades its own seat instead of
     stripping the whole panel's rules."""
-    from ouroboros.reviewer_window import reviewer_window_binding
+    from ouroboros.reviewer_window import reviewer_input_limit, reviewer_window_binding
 
     usable: dict = {}
     for model, slot in zip(api_models, api_slots):
         window = reviewer_context_window(model, **(binding := reviewer_window_binding(slot)))
         output_reserve, tokenizer_margin = window_scaled_reserves(
             window, output_reserve=_review_output_budget(), tokenizer_margin=50_000, model_id=model, binding=binding)
-        usable[slot.slot_id] = max(0, int(window) - int(output_reserve) - int(tokenizer_margin))
+        usable[slot.slot_id] = max(0, reviewer_input_limit(window, output_reserve) - int(tokenizer_margin))
     return _quorum_input_token_limit(list(usable), usable) if usable else 0
 
 
@@ -697,6 +698,9 @@ def _prepare_unified_review(ctx: ToolContext, commit_message: str,
         )
         if result is not None:
             return None, result, True
+        from ouroboros.preflight_receipts import with_preparation_finding  # the seats see what the wave continued past
+        ctx._preflight_execution = with_preparation_finding(getattr(ctx, "_preflight_execution", None), preflight_err,
+            continued_under="Advisory enforcement" if review_enforcement_blocks("blocking") else "Cyber Pro")
 
     rebuttal_section = build_rebuttal_section(review_rebuttal)
 
@@ -1049,13 +1053,15 @@ def _dispatch_unified_review(ctx: ToolContext, commit_message: str, prepared: di
     quorum = verdict["quorum"]
     if verdict["aggregate"] in ("QUORUM_FAILED", "NOT_DISPATCHED"):  # a wave that sent nothing ($0) has no quorum
         ctx._last_review_block_reason = "review_quorum"
-        unavailable_str = ", ".join(failed_actors or errored_models or (sorted(  # each $0 refusal names its cause
-            {str(r.get("raw_text") or "") for r in triad_raw}) if verdict["aggregate"] == "NOT_DISPATCHED" else []))
+        from ouroboros.review_records import review_failure_summary
+
+        unavailable_str = "\n".join(review_failure_summary(row) for row in triad_raw
+                                    if row.get("status") != "responded") or ", ".join(errored_models)
         blocked_msg = (
             f"⚠️ REVIEW_BLOCKED: Only {quorum['responded']} of {quorum['assigned']} review "
             f"models responded successfully (minimum {quorum['required']} required). "
-            f"Unavailable/failed: {unavailable_str}.\n"
-            "Retry the commit — transient model failures usually resolve quickly."
+            f"Unavailable/failed:\n{unavailable_str}\n"
+            "No retry recommendation is inferred from these failures."
         )
         return _handle_review_block_or_warning(
             ctx, blocking_review, blocked_msg,

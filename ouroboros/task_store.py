@@ -10,7 +10,7 @@ projections (a tool claim, a model wait, a retired consumer) without a body writ
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from ouroboros import store, store_task_cards
 from ouroboros.store import Txn, open_store
@@ -45,6 +45,25 @@ def exists(root: Any, task_id: str) -> bool:
         return txn.row(str(task_id), "task_id") is not None
 
 
+def receipt_anchor(root: Any, task_id: str) -> Optional[Tuple[str, bool]]:
+    """``(root_task_id, root_has_swarm_receipt)`` of one task without decoding a body.
+
+    The root is the task's typed column, else the body's ``metadata.root_task_id``,
+    else the task itself; ``None`` for an absent task. A publication hook asks this
+    instead of parsing two task results merely to learn whether a receipt exists."""
+    with open_store(root, write=False) as txn:
+        record = txn.conn.execute(
+            "SELECT COALESCE(NULLIF(t.root_task_id, ''), NULLIF(json_extract(b.body, '$.metadata.root_task_id'), ''),"
+            " t.task_id) AS root_id FROM tasks AS t JOIN task_bodies AS b ON b.task_id = t.task_id WHERE t.task_id = ?",
+            (str(task_id),)).fetchone()
+        if record is None:
+            return None
+        root_id = str(record["root_id"])
+        receipt = txn.conn.execute("SELECT json_type(body, '$.swarm_receipt') AS kind FROM task_bodies WHERE task_id = ?",
+                                   (root_id,)).fetchone()
+    return root_id, bool(receipt is not None and receipt["kind"] not in (None, "null"))
+
+
 def signature(root: Any, task_id: str, *, txn: Optional[Txn] = None) -> Optional[Tuple[int, str]]:
     """``(write_seq, updated_at)``: changes on every write; ``None`` for an absent task. The key
     the memos compare that used to compare a result file's stat."""
@@ -52,6 +71,17 @@ def signature(root: Any, task_id: str, *, txn: Optional[Txn] = None) -> Optional
         return txn.row(str(task_id), "write_seq", "updated_at")
     with open_store(root, write=False) as txn:
         return signature(root, task_id, txn=txn)
+
+
+def terminal_writes_since(root: Any, counter: int) -> List[str]:
+    """The task ids whose rows were written terminal after the terminal-write counter stood at COUNTER
+    (``obligations.task_written`` stamps each such row with the counter's new value, ``terminal_seq``),
+    in that order, through the ``tasks_terminal_seq`` index: what a pass keyed on the counter looks at
+    again, never the rows it did not move."""
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            "SELECT task_id FROM tasks INDEXED BY tasks_terminal_seq WHERE terminal_seq>? ORDER BY terminal_seq, task_id",
+            (int(counter),))]
 
 
 def delete_document(root: Any, task_id: str) -> bool:
@@ -144,14 +174,16 @@ def patch_handoff(root: Any, task_id: str, kind: str, op_id: str,
         return None if updated is DELETE_ROW else updated
 
 
-def put_handoffs(root: Any, task_id: str, kind: str, rows: Dict[str, Any]) -> None:
-    """Upsert several operation rows of one projection in one transaction (``LookupError`` as above)."""
+def put_handoffs(root: Any, task_id: str, kind: str, rows: Dict[str, Any], *, only_absent: bool = False) -> None:
+    """Upsert several operation rows of one projection in one transaction (``LookupError`` as above).
+    ``only_absent`` keeps a row already recorded, decided inside the same write."""
     task_id = str(task_id)
     with open_store(root, write=True) as txn:
         if not txn.row(task_id, "status"):
             raise LookupError(f"task {task_id} has no lifecycle row")
         for op_id, facts in rows.items():
-            txn.put_handoff(task_id, kind, str(op_id), facts)
+            if not (only_absent and txn.handoff(task_id, str(op_id)) is not None):
+                txn.put_handoff(task_id, kind, str(op_id), facts)
         txn.touch(task_id)
 
 
@@ -163,6 +195,35 @@ def list_documents(root: Any, *, statuses: Optional[Iterable[str]] = None) -> Li
         return []
     with open_store(root, write=False) as txn:
         fetched = _fetch(txn) if wanted is None else _fetch(txn, f"t.status IN ({','.join('?' * len(wanted))})", wanted)
+    return _decode(*fetched)
+
+
+def filtered_list_candidates(root: Any, statuses: Iterable[str], limit: Optional[int]) -> List[Dict[str, Any]]:
+    """Full documents only for the stable page and rows needing an effective overlay.
+
+    A stable row's status/ts cannot change in that overlay (``task_status`` owns
+    the writer's predicate). Its first N matches therefore suffice for a global
+    top N, even when every uncertain row sorts ahead of them. Those other rows
+    still run through the complete effective reader before filtering/limiting.
+    Read selection and bodies in one transaction; preserve task-id tie order.
+    Old schemas/NULLs fall back per row, without GET writes. Maintenance's
+    existing hot_facts job derives legacy NULLs under the body's write_seq CAS.
+    """
+    from ouroboros.store_hot_facts import LIST_VERSION
+
+    wanted = sorted(set(statuses))
+    if not wanted:
+        return []
+    with open_store(root, write=False) as txn:
+        if int(txn.meta("schema_version") or 1) < LIST_VERSION:
+            fetched = _fetch(txn)
+        else:
+            bound = "" if limit is None else " LIMIT ?"
+            params = (*wanted,) if limit is None else (*wanted, int(limit))
+            selected = ("SELECT task_id FROM tasks WHERE list_stable=1 "
+                        f"AND status IN ({','.join('?' * len(wanted))}) "
+                        f"ORDER BY ts DESC, task_id ASC{bound}")
+            fetched = _fetch(txn, f"t.list_stable IS NULL OR t.list_stable=0 OR t.task_id IN ({selected})", params)
     return _decode(*fetched)
 
 
@@ -229,7 +290,34 @@ def newest_ids(root: Any, limit: Optional[int] = None, *, where: str = "", param
                 txn.conn.execute(f"SELECT task_id FROM tasks {clause}{_NEWEST_ORDER}{bound}", tuple(params))]
 
 
-ROOT_RESULT_WHERE = "parent_task_id IS NULL AND (delegation_role IS NULL OR delegation_role != 'subagent')"
+ROOT_RESULT_WHERE = store.ROOT_RESULT_WHERE
+
+
+def newest_root_ids(root: Any, limit: Optional[int] = None, *, project_id: str = "") -> List[str]:
+    """Root task ids (``ROOT_RESULT_WHERE``) newest first, walked in the root-only index of that
+    order (``store.ROOT_WINDOWS``: one project's ``tasks_project_root_ts``, the whole
+    store's ``tasks_root_ts``), so ``limit`` bounds the entries read: no child is visited, however
+    many are newer than the roots or between them. Unpinned, the planner reads every root through
+    ``tasks_parent`` and sorts them all."""
+    if not project_id and limit is None:
+        raise ValueError("the whole store's newest roots need a limit")
+    index, scope, params = (("tasks_project_root_ts", "project_id=? AND ", (project_id,)) if project_id
+                            else ("tasks_root_ts", "", ()))
+    bound = "" if limit is None else f" LIMIT {int(limit)}"
+    with open_store(root, write=False) as txn:
+        return [record["task_id"] for record in txn.conn.execute(
+            f"SELECT task_id FROM tasks INDEXED BY {index} WHERE {scope}{ROOT_RESULT_WHERE} {_NEWEST_ORDER}{bound}", params)]
+
+
+def project_result_counts(root: Any, project_id: str) -> Tuple[int, int]:
+    """``(roots, children)`` among one project's results, counted without a body: its roots over
+    its root index, all its rows over ``tasks_project`` alone (a child's table row is never read)."""
+    with open_store(root, write=False) as txn:
+        roots = txn.conn.execute(f"SELECT COUNT(*) FROM tasks INDEXED BY tasks_project_root_ts WHERE project_id=? "
+                                 f"AND {ROOT_RESULT_WHERE}", (project_id,)).fetchone()[0]
+        results = txn.conn.execute("SELECT COUNT(*) FROM tasks INDEXED BY tasks_project WHERE project_id=?",
+                                   (project_id,)).fetchone()[0]
+    return int(roots), int(results) - int(roots)
 
 
 def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, Any]]:
@@ -237,8 +325,9 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
     if not ids:
         return {}
     with open_store(root, write=False) as txn:
-        fetched = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
-    return {str(document.get("task_id")): document for document in _decode(*fetched)}
+        rows, handoffs = _fetch(txn, f"t.task_id IN ({','.join('?' * len(ids))})", ids)
+    # Keyed by each row's stored id: a body that names another task never stands for that one.
+    return {str(record["task_id"]): document for record, document in zip(rows, _decode(rows, handoffs))}
 
 
 # A display read (``task_reads``: history cards; ``effective_task_result`` with
@@ -251,7 +340,7 @@ def documents_by_ids(root: Any, task_ids: Iterable[str]) -> Dict[str, Dict[str, 
 # A display reader that needs a dropped path names it here; ``tests/test_task_reads.py``
 # builds a page from display views and from full documents and requires the same page.
 DISPLAY_DROPPED: Tuple[str, ...] = (
-    "loop_outcome", "trace_refs", "review_evidence", "artifacts", "result", "trace_summary",
+    "trace_refs", "review_evidence", "artifacts", "result", "trace_summary",
     "governing_owner_words", "verification_ledger", "plan_review_state", "acceptance_debt",
     "mutation_evidence", "configured_subagent", "context", "continuation_narrative", "origin_message_text",
     "owner_mailbox", "subagent_availability", "plan_record", "review_status", "schedule_admission",
@@ -262,7 +351,10 @@ DISPLAY_DROPPED: Tuple[str, ...] = (
         "origin_message_text", "wake_observation", "project_last_task_result", "current_chat",
         "workspace_preflight", "workspace_copy", "late_answer")),
 )
-DISPLAY_KEPT: Dict[str, Tuple[str, ...]] = {"artifact_bundle": ("status",), "task_contract": ("deadline_at",)}
+DISPLAY_KEPT: Dict[str, Tuple[str, ...]] = {
+    "artifact_bundle": ("status",), "task_contract": ("deadline_at",),
+    "loop_outcome": ("usage",), "loop_outcome.usage": ("total_rounds",),  # history's accepted solve responses
+}
 _KEEP = "__keep__"  # a path no kept object holds: the no-op target of a conditional edit
 
 
@@ -284,7 +376,10 @@ def _display_sql(column: str = "b.body") -> str:
                            f"ELSE {path(_KEEP)} END" for sub in kept)
         view = (f"json_replace({view}, CASE WHEN {is_object} THEN {path(key)} ELSE {path(key, _KEEP)} END, "
                 f"CASE WHEN {is_object} THEN json_remove({built}, {absent}) END)")
-    return view
+    # The old-review presenter needs affirmative answer evidence even when this view
+    # drops result. Project one bit from the same body; no extra read or stored field.
+    present = f"json_type({column}, '$.result') = 'text' AND json_extract({column}, '$.result') <> ''"
+    return f"json_set({view}, '$._result_text_present', json(CASE WHEN {present} THEN 'true' ELSE 'false' END))"
 
 
 def _card_sql(view: str) -> str:
@@ -338,66 +433,138 @@ def task_versions(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[int, st
             for task_id, seq, status, owes in json.loads(record[0] or "[]")}
 
 
+def task_drive_status(root: Any, task_ids: Iterable[str]) -> Dict[str, Tuple[str, str]]:
+    """Each stored task's ``(status, its own drive)`` from typed columns in ONE read, no body
+    decoded: the drive is its ``child_drive_root``, else ``headless_child_drive_root``, else
+    ``drive_root`` (``""`` for none). An id the store does not hold is absent from the answer."""
+    ids = sorted({str(task_id) for task_id in task_ids if str(task_id or "").strip()})
+    if not ids:
+        return {}
+    with open_store(root, write=False) as txn:
+        records = txn.conn.execute(
+            "SELECT task_id, status, COALESCE(child_drive_root, headless_child_drive_root, drive_root) FROM tasks "
+            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(ids),)).fetchall()
+    return {str(record[0]): (str(record[1] or ""), str(record[2] or "")) for record in records}
+
+
 def task_ids(root: Any) -> List[str]:
     with open_store(root, write=False) as txn:
         return txn.task_ids()
 
 
-def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
-               queue_rows: Iterable[dict] = ()) -> Dict[str, dict]:
-    """Typed membership; only underived roots need their legacy body.
+class TreeCensus(NamedTuple):
+    """One tree's membership read (``tree_facts``): ``members`` by task id, and ``unresolved``, each
+    row whose own record could not be read, as ``{"reason", "linked"}``. A member reached by ancestry
+    is in both: its membership is proven, its own record is still unknown."""
+    members: Dict[str, dict]
+    unresolved: Dict[str, dict]
 
-    Descendant selection closes over the indexed parent chain, including bridges
-    present only in the queue snapshot. Durable rows win over queue rows. The
-    caller still applies its own depth/ancestry rule to this selected superset.
+
+_TREE_ROW = ("task_id", "status", "parent_task_id", "root_task_id", "retry_task_id", "superseded_by")
+_TREE_SQL = ",".join(f"t.{name}" for name in _TREE_ROW)
+_LINKS = ("parent_task_id", "retry_task_id", "superseded_by")
+
+
+def _validated(tree_id: str, selected: Dict[str, dict], captured: list) -> Tuple[dict, dict, dict]:
+    """``(members, rows, faults)`` once each CAPTURED body is validated as its own row's object:
+    ``rows`` hold the root each captured row may be read with (``None``: unknown)."""
+    from ouroboros.store_hot_facts import lineage_root, own_document
+
+    members, rows, faults = dict(selected), {}, {}
+    for record in captured:
+        tid, row = record["task_id"], {name: record[name] for name in _TREE_ROW}
+        document, fault = own_document(tid, record["body"])
+        if fault:
+            faults[tid], row["root_task_id"] = fault, None
+            members.pop(tid, None)  # a flagged row's typed root may be another task's
+        elif row["root_task_id"] is None:
+            row["root_task_id"] = lineage_root(document)
+            if row["root_task_id"] == tree_id:
+                members[tid] = row
+        rows[tid] = row
+    return members, rows, faults
+
+
+def _tied(tree_id: str, members: Dict[str, dict], rows: Dict[str, dict], faults: Dict[str, str],
+          ties: set) -> Dict[str, dict]:
+    """Each fault, ``linked`` when it is a member or typed edges to or from this tree or TIES tie it."""
+    tied = {tid for tid in faults if tid == tree_id or tid in ties or tid in members}
+    while True:
+        known = {tree_id, *members, *tied}
+        named = {row.get(link) for row in (*members.values(), *(rows[tid] for tid in tied)) for link in _LINKS}
+        more = {tid for tid in faults.keys() - tied if tid in named or {rows[tid][link] for link in _LINKS} & known}
+        if not more:
+            return {tid: {"reason": fault, "linked": tid in tied} for tid, fault in sorted(faults.items())}
+        tied |= more
+
+
+def tree_facts(root: Any, tree_id: str, *, descendants: bool = False,
+               queue_rows: Iterable[dict] = (), linked: Iterable[str] = ()) -> TreeCensus:
+    """Typed membership; a row whose root rests on its own record is validated alone.
+
+    The indexed root column selects the tree. An underived (NULL) root, and this tree's
+    flagged row (``control_valid=0``: a bad status, or an older job's columns from another
+    task's body), counts once its body is its own object, rooted by ``store_hot_facts.lineage_root``.
+    A missing, unparsable, non-object or other task's body leaves that ROW unresolved, never the
+    census: ``linked`` when a typed parent/retry/supersession edge to or from this tree, a handoff
+    naming it or a caller's ``linked`` id (queue, custody, model request) ties it here; otherwise
+    a named gap, neither member nor proof of absence. A store failure raises. Bodies are decoded
+    after the read, unless descendant anchors need them within it (one snapshot either way).
+    Descendant selection closes over the indexed parent chain, including bridges present only in
+    the queue snapshot; a row reached so is a member by ancestry, and a damaged one stays named
+    (linked) beside it. Durable rows win over queue rows. The caller still applies its own
+    depth/ancestry rule to this selected superset.
     """
-    from ouroboros.store_hot_facts import task_columns
+    from ouroboros.store_hot_facts import VERSION
 
     tree_id = str(tree_id)
     with open_store(root, write=False) as txn:
-        legacy = {}
-        for record in txn.conn.execute(
-                "SELECT t.task_id,t.status,t.parent_task_id,b.body FROM tasks AS t "
-                "JOIN task_bodies AS b ON b.task_id=t.task_id WHERE t.root_task_id IS NULL"):
-            document = json.loads(record["body"])
-            legacy[record["task_id"]] = {"task_id": record["task_id"], "status": record["status"],
-                "parent_task_id": record["parent_task_id"], "root_task_id": task_columns(document)["root_task_id"]}
+        flagged = int(txn.meta("schema_version") or VERSION) >= VERSION  # control_valid exists
+        captured = txn.conn.execute(
+            f"SELECT {_TREE_SQL},b.body FROM tasks AS t LEFT JOIN task_bodies AS b ON b.task_id=t.task_id "
+            "WHERE t.root_task_id IS NULL" + (" OR (t.root_task_id=? AND t.control_valid=0)" if flagged else ""),
+            (tree_id,) if flagged else ()).fetchall()
         selected = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            "SELECT task_id,status,parent_task_id,root_task_id FROM tasks WHERE root_task_id=?", (tree_id,))}
-        selected.update({tid: row for tid, row in legacy.items() if row["root_task_id"] == tree_id})
-        if not descendants:
-            return selected
-        queued = {}
-        for row in queue_rows:
-            tid = str(row.get("task_id") or row.get("id") or "")
-            if tid:
-                queued.setdefault(tid, row)
-        # A queue record cannot replace a durable row, even when that row is
-        # outside the selected tree. This addressed read preserves that rule.
-        durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
-            "SELECT task_id,status,parent_task_id,root_task_id FROM tasks "
-            "WHERE task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
-        queued.update({tid: legacy.get(tid, row) for tid, row in durable_queue.items()})
-        anchors = {tree_id, *selected}
-        while True:
-            rows = txn.conn.execute(
-                "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
-                "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
-                "SELECT task_id,status,parent_task_id,root_task_id FROM tasks "
-                "WHERE task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
-            selected.update({row["task_id"]: legacy.get(row["task_id"], dict(row)) for row in rows})
-            reached = {tree_id, *selected}
+            f"SELECT {_TREE_SQL} FROM tasks AS t WHERE t.root_task_id=?", (tree_id,))}
+        ties = {*map(str, linked), *(row[0] for row in txn.conn.execute(  # a damaged handoff ties nothing
+            "SELECT task_id FROM task_handoffs WHERE task_id IN (SELECT value FROM json_each(?)) AND "
+            "CASE WHEN json_valid(facts) THEN json_extract(facts, '$.root_task_id') END=?",
+            (json.dumps([r["task_id"] for r in captured]), tree_id)))}
+        if descendants:
+            members, rows, faults = _validated(tree_id, selected, captured)
+            queued = {}
+            for row in queue_rows:
+                tid = str(row.get("task_id") or row.get("id") or "")
+                if tid:
+                    queued.setdefault(tid, row)
+            # A queue record cannot replace a durable row, even when that row is
+            # outside the selected tree. This addressed read preserves that rule.
+            durable_queue = {row["task_id"]: dict(row) for row in txn.conn.execute(
+                f"SELECT {_TREE_SQL} FROM tasks AS t "
+                "WHERE t.task_id IN (SELECT value FROM json_each(?))", (json.dumps(list(queued)),))}
+            queued.update({tid: rows.get(tid, row) for tid, row in durable_queue.items()})
+            anchors = {tree_id, *members}
             while True:
-                extra = {tid for tid, row in queued.items() if tid not in reached and (
-                    str(row.get("root_task_id") or "") == tree_id or str(row.get("parent_task_id") or "") in reached)}
-                if not extra:
-                    break
-                reached.update(extra)
-            new = reached - anchors - selected.keys()
-            selected.update({tid: row for tid, row in queued.items() if tid in reached and tid not in selected})
-            if not new:
-                return selected
-            anchors.update(reached)
+                reach = txn.conn.execute(
+                    "WITH RECURSIVE reach(id) AS (SELECT value FROM json_each(?) UNION "
+                    "SELECT t.task_id FROM tasks AS t JOIN reach ON t.parent_task_id=reach.id) "
+                    f"SELECT {_TREE_SQL} FROM tasks AS t "
+                    "WHERE t.task_id IN (SELECT id FROM reach)", (json.dumps(sorted(anchors)),)).fetchall()
+                members.update({row["task_id"]: rows.get(row["task_id"], dict(row)) for row in reach})
+                reached = {tree_id, *members}
+                while True:
+                    extra = {tid for tid, row in queued.items() if tid not in reached and (
+                        str(row.get("root_task_id") or "") == tree_id or str(row.get("parent_task_id") or "") in reached)}
+                    if not extra:
+                        break
+                    reached.update(extra)
+                new = reached - anchors - members.keys()
+                members.update({tid: row for tid, row in queued.items() if tid in reached and tid not in members})
+                if not new:
+                    return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
+                anchors.update(reached)
+    members, rows, faults = _validated(tree_id, selected, captured)
+    return TreeCensus(members, _tied(tree_id, members, rows, faults, ties))
 
 
 _COLLECTION_BATCH = 64  # bounds selection/materialization and one classification commit

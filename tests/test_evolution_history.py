@@ -220,12 +220,16 @@ def test_a_missing_blob_leaves_its_version_unmeasured_and_a_forced_refresh_recov
     assert {v["tag"]: v["code_lines"] for v in healed["versions"]}["v1.1.1"] == 3
 
 
-def test_an_appended_journal_row_is_read_without_reparsing_the_journal(repo, tmp_path, monkeypatch):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_an_appended_journal_row_is_read_without_reparsing_the_journal(repo, tmp_path, monkeypatch, newline):
     data = tmp_path / "data"
     journal = data / "memory" / "scratchpad_journal.jsonl"
     journal.parent.mkdir(parents=True)
-    row = lambda ts, n: json.dumps({"ts": ts, "type": "block_appended", "content_len": n}) + "\n"  # noqa: E731
-    journal.write_text(row("2026-06-01T00:00:00+00:00", 10), encoding="utf-8")
+
+    def row(ts, n):
+        return (json.dumps({"ts": ts, "type": "block_appended", "content_len": n}) + newline).encode("utf-8")
+
+    journal.write_bytes(row("2026-06-01T00:00:00+00:00", 10))
     digest, versions = eh.list_versions(str(repo))
     eh.refresh(str(repo), str(data), digest, versions, None)
     owner = eh.EvolutionHistory()
@@ -233,19 +237,19 @@ def test_an_appended_journal_row_is_read_without_reparsing_the_journal(repo, tmp
     reads = []
     real = eh._journal_series
     monkeypatch.setattr(eh, "_journal_series", lambda path, field, start=0, known=None: reads.append(start) or real(path, field, start, known))
-    with journal.open("a", encoding="utf-8") as handle:
+    with journal.open("ab") as handle:
         handle.write(row("2026-06-03T00:00:00+00:00", 30))
         handle.write(row("2026-06-02T00:00:00+00:00", 20)[:-12])  # a row still being written
     install = owner.projection(str(repo), str(data))["install"]["scratchpad"]
     assert install["latest"] == {"at": "2026-06-03T00:00:00+00:00", "chars": 30}
-    assert reads and reads[-1] == len(row("2026-06-01T00:00:00+00:00", 10)), "only the appended bytes were read"
-    with journal.open("a", encoding="utf-8") as handle:
+    assert reads == [len(row("2026-06-01T00:00:00+00:00", 10))], "only the appended bytes were read"
+    with journal.open("ab") as handle:
         handle.write(row("2026-06-02T00:00:00+00:00", 20)[-12:])  # its newline arrives
     series = owner.projection(str(repo), str(data))["install"]["scratchpad"]
     assert series["latest"]["chars"] == 30, "an out-of-order row joins in time order"
     # Versions dated 1 June 10:00 and 2 June 10:00 hold 10, 20, 20: the late 2 June row joined in its time order.
     assert series["at_versions"][1:] == [10, 20, 20], "the rows stand at the dates they were recorded"
-    journal.write_text(row("2026-06-05T00:00:00+00:00", 7), encoding="utf-8")  # replaced and shorter: read whole
+    journal.write_bytes(row("2026-06-05T00:00:00+00:00", 7))  # replaced and shorter: read whole
     assert owner.projection(str(repo), str(data))["install"]["scratchpad"]["latest"]["chars"] == 7
 
 

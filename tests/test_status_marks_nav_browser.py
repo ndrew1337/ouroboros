@@ -372,6 +372,7 @@ def test_the_collapse_is_remembered_on_this_device_and_only_there(nav_ui, tmp_pa
         page.locator('#nav-projects-toggle').click()
         settle(page)
         facts['collapsed'] = [page.evaluate(expanded), page.evaluate(rows)]
+        ui['errors'].watch(page)  # the reload may cut off this page's own reads; the other pages stay strict
         page.reload()
         page.wait_for_selector('#nav-projects-list [data-project-id]', state='attached')
         settle(page)
@@ -401,7 +402,7 @@ def test_the_collapse_is_remembered_on_this_device_and_only_there(nav_ui, tmp_pa
     assert facts['collapsed'] == facts['reloaded'] == ['false', len(pins)], facts
     assert facts['other'] == ['true', everything], facts
     assert facts['locked'] == ['true', everything] and facts['locked_collapsed'] == ['false', len(pins)], facts
-    assert not ui['errors'], ui['errors']
+    assert not ui['errors'].unexpected(), ui['errors'].report()
 
 
 STATUS = """menu => {
@@ -517,6 +518,9 @@ def test_a_long_press_opens_a_rows_menu_on_touch_where_the_dots_take_no_column(c
         with page.expect_request(lambda request: request.url.endswith(update)) as pressed:
             page.locator(f'{MENU} [data-prm="pin"]').tap()
         facts['pressed'] = pressed.value.post_data_json
+        # The shared fake returns {} for this POST, so the save settles as unconfirmed.
+        # While it is pending, Pin is disabled and Rename correctly receives the menu's focus.
+        expect()(page.locator('#toast-stack')).to_contain_text('Pin state was not confirmed')
         # The keyboard still has the ⋯: focused, it is drawn again with its column.
         kebab = page.locator(f'[data-nav-project-id="{sending}"] .nav-project-kebab')
         kebab.focus()
@@ -550,16 +554,22 @@ def test_a_long_press_opens_a_rows_menu_on_touch_where_the_dots_take_no_column(c
     assert under['size'] == [44, 44] and under['expanded'] == 'true' and under['focus'] == 'pin', facts
 
 
-def test_the_more_capsule_shows_a_mode_by_its_tone_alone(nav_ui, tmp_path):
+def test_the_consciousness_chip_says_a_campaign_by_its_word_and_paints_no_tone(nav_ui, tmp_path):
     ui = nav_ui
-    page, _sync = open_app(ui, 1280, 800, {**snapshot(), 'evolution_enabled': True})
+    # The host's own sentence for this state (consciousness_view.py): the chip's label says it.
+    body = {**snapshot(), 'evolution_enabled': True, 'bg_consciousness_enabled': False,
+            'bg_consciousness_state': {'status': 'disabled', 'detail': 'Background consciousness is off.'}}
+    page, _sync = open_app(ui, 1280, 800, body)
     try:
-        summary = page.locator('.chat-header-more > summary')
-        expect()(summary).to_have_class(re.compile(r'\bhas-active\b'))
-        facts = summary.evaluate("""el => ({after: getComputedStyle(el, '::after').content,
-            background: getComputedStyle(el).backgroundColor})""")
+        chip = page.locator('#page-chat .cx-chip')
+        expect()(chip).to_contain_text('Evolving')
+        facts = chip.evaluate("""el => ({after: getComputedStyle(el, '::after').content,
+            background: getComputedStyle(el).backgroundColor, mark: el.querySelector('.status-mark').dataset.shape,
+            label: el.getAttribute('aria-label')})""")
     finally:
         page.close()
     assert facts['after'] in ('none', 'normal', ''), facts
-    assert facts['background'] not in ('rgba(0, 0, 0, 0)', 'transparent'), facts
+    assert facts['background'] not in ('rgba(0, 0, 0, 0)', 'transparent'), 'a capsule of the bar'
+    assert facts['mark'] == 'none', 'a campaign that goes on by itself draws no mark, never amber'
+    assert facts['label'] == 'Consciousness: Background consciousness is off. · evolution campaign running', facts
     print(json.dumps(facts))

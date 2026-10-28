@@ -182,7 +182,9 @@ def test_attach_only_usage_uses_recorded_attribution_without_new_effects(tmp_pat
         assert row["usage"]["input_token_usage"] == split
     else:
         assert "input_token_usage" not in row["usage"]
-    assert calls == [("handshake",), ("get_run", "run-cold"), ("close",)] * 3
+    # The first collection retains the complete observation; later collections reuse that
+    # receipt (collection by reference) and never read the engine again.
+    assert calls == [("handshake",), ("get_run", "run-cold"), ("close",)]
 
 
 @pytest.mark.parametrize("parent,root", [("parent", "root"), ("", "")])

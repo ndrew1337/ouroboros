@@ -175,15 +175,22 @@ def test_skill_review_retrieving_assignment_allows_binary_inspection():
     assert "say in the finding which you did" in _PAYLOAD_SOURCES
 
 
-def test_frozen_payload_files_carry_the_read_receipt_identity(tmp_path):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_frozen_payload_files_carry_the_read_receipt_identity(tmp_path, newline):
     """Each text file of the frozen copy carries the identity a ``read_file`` receipt stamps, so a
     retrieving seat's coverage of it is observable; a binary file is only its descriptor."""
     skill_dir = tmp_path / "skills" / "ident"
     skill_dir.mkdir(parents=True)
-    (skill_dir / "SKILL.md").write_text("---\nname: ident\n---\nbody\n", encoding="utf-8")
+    # Exact fixture bytes: Windows text-mode writes would translate LF to CRLF.
+    payload = "---\nname: ident\n---\nbody\n".replace("\n", newline).encode("utf-8")
+    (skill_dir / "SKILL.md").write_bytes(payload)
     (skill_dir / "blob.bin").write_bytes(b"\x80\x81")
     entries = {entry["path"]: entry for entry in frozen_payload_files(skill_dir)}
-    assert entries["SKILL.md"]["sha256"] == hashlib.sha256(b"---\nname: ident\n---\nbody\n").hexdigest()
+    assert entries["SKILL.md"]["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert entries["SKILL.md"]["source_revision"] == hashlib.sha256(payload).hexdigest()
+    assert entries["SKILL.md"]["complete_sha256"] == hashlib.sha256(b"---\nname: ident\n---\nbody\n").hexdigest()
+    assert entries["SKILL.md"]["text"] == payload.decode("utf-8")
+    assert entries["SKILL.md"]["size"] == len(payload)
     assert entries["SKILL.md"]["complete_chars"] == len("---\nname: ident\n---\nbody\n")
     assert set(entries["SKILL.md"]) >= {"source_revision", "complete_sha256", "range_basis", "text", "size"}
     assert entries["blob.bin"]["binary"]["size"] == 2 and "text" not in entries["blob.bin"]

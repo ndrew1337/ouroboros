@@ -30,11 +30,8 @@ _POSIX_ONLY = pytest.mark.skipif(
     os.name == "nt", reason="custody spawn/reap mechanics are POSIX-only"
 )
 
-# Popen call sites that legitimately bypass spawn_supervised: short-lived
-# synchronous helpers (waited within the call), panic/cleanup layers, the
-# launcher (custody host), and custody itself. Adding a NEW long-lived spawn
-# site requires routing it through spawn_supervised/record_process or
-# explicitly justifying it here.
+# Raw Popen exemptions: waited helpers, cleanup layers and custody hosts.
+# Long-lived sites require spawn_supervised/record_process or an explicit justification.
 _POPEN_ALLOWLIST = {
     "launcher.py",                        # custody host process (pre-runtime)
     # exec_source_launcher spawns the next custody host and exits. Interactive OS
@@ -58,6 +55,12 @@ _POPEN_ALLOWLIST = {
     "ouroboros/subagent_worktrees.py",
     "ouroboros/preflight_runner.py",      # waited hermetic pytest child
     "ouroboros/tools/shell_process.py",   # bounded foreground commands (waited + tracked)
+    # GitHub's exact-byte capture starts one bounded foreground CLI: a timer
+    # kills it at the deadline, cap overflow kills it, and the call waits in
+    # both the normal path and cleanup before returning.
+    "ouroboros/tools/github.py",
+    # Bounded Git read: waits, kills/reaps on timeout, then joins both pipe readers.
+    "ouroboros/tools/vcs_read.py",
     "ouroboros/tools/skill_exec.py",      # bounded skill run (waited + tracked)
     "ouroboros/tools/skill_preflight.py", # waited preflight child
     "ouroboros/marketplace/isolated_deps.py",  # waited installer child

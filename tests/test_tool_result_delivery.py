@@ -212,10 +212,10 @@ def test_only_requested_content_over_the_window_can_shrink_a_chosen_form(
     fit = measured_fit(window=window, target=target, reserve=reserve, calls=calls)
     messages, trace = _deliver(ctx, rows, fit)
     receipt = trace["tool_result_delivery"][0]
-    assert len(calls) == receipt["measurements"] <= 13  # same bounded measurement pass
+    assert len(calls) == receipt["measurements"] <= 21  # same bounded measurement pass
     assert all(call["response_reserve_tokens"] == reserve for call in calls)
     by_id = {row.get("tool_call_id"): row for row in messages}
-    chosen_fits = window is None or receipt["chosen_tokens"] + reserve <= window
+    chosen_fits = window is None or receipt["chosen_body_tokens"]["asked"] + reserve <= window
     expected = [[0, part], [len(text) - part, len(text)]]
     assert (_view_json(by_id["asked"]["content"])["shown_ranges"] == expected) == chosen_fits
     if chosen_fits and multiple:
@@ -223,7 +223,7 @@ def test_only_requested_content_over_the_window_can_shrink_a_chosen_form(
         assert _view_json(by_id["tail"]["content"])["shown_ranges"] == [[100_000, 108_000]]
     assert by_id["tiny"]["content"] == "ok\r\n" and owner in messages
     assert receipt["reserve_tokens"] == reserve
-    margin = math.ceil(window / RECLAIM_LOW_WATER_DIVISOR) if not chosen_fits else 0
+    margin = 0
     assert receipt["requested_room_tokens"] == (None if window is None else
                                                   window - reserve - receipt["minimum_tokens"] - margin)
     assert receipt["unsolicited_body_tokens"] <= receipt["unsolicited_allowance_tokens"]
@@ -521,6 +521,31 @@ def test_requested_result_view_classifies_declared_range_parameters():
     assert requested_result_view({"path": "a", "max_lines": 10}) == (None, None)
     assert requested_result_view({"task_id": "t", "source_start_char": 0, "source_end_char": 9}) == (None, None)
     assert requested_result_view({"task_id": "t", "offset": 2, "limit": 5}) == (None, None)
+    assert requested_result_view({"run_id": 7, "page": 2}) is None
+    assert requested_result_view({"cursor": "2"}) is None
+    assert requested_result_view({"run_id": 7, "tail_lines": 500}) == (None, None)
+
+
+@pytest.mark.parametrize("args,explicit", [
+    ({"method": "list", "kind": "artifact", "target": 7, "cursor": "2"}, False),
+    ({"method": "list", "kind": "artifact", "target": 7, "page": 2}, False),
+    ({"method": "get", "kind": "run", "target": 7, "include": ["log"], "tail_lines": 500}, True),
+])
+def test_github_line_windows_but_not_navigation_tokens_choose_result_form(tmp_path, args, explicit):
+    tool = "github_read"
+    # The produced view exceeds the unsolicited share but fits the physical frame.
+    # An otherwise identical unrequested result remains subject to that share.
+    text = "chosen result\n" + "x" * 120_000 + "\nEND"
+    asked, asked_trace = _deliver(_ctx(tmp_path, "asked"),
+        [_row("asked", tool, text, args=args)], measured_fit(window=60_000, reserve=2_000))
+    plain, plain_trace = _deliver(_ctx(tmp_path, "plain"),
+        [_row("plain", tool, text, args={"run_id": 7})], measured_fit(window=60_000, reserve=2_000))
+    assert (asked[0]["content"] == text) is explicit
+    assert bool(asked_trace["tool_calls"][0].get("result_partial")) is not explicit
+    assert plain_trace["tool_calls"][0]["result_partial"] is True
+    assert plain[0]["content"] != text
+    ref = _source_ref(plain[0]["content"])
+    assert artifacts.read_actor_source_bytes(tmp_path, "plain", ref).decode() == text
 
 
 def test_producer_page_sizes_stay_positive_ints_for_every_paging_consumer():
@@ -535,3 +560,20 @@ def test_producer_page_sizes_stay_positive_ints_for_every_paging_consumer():
                    "ouroboros.delegate_interactions", "ouroboros.tools.recent_tasks"):
         source = inspect.getsource(importlib.import_module(module))
         assert "tool_result_limit(" in source, module
+
+
+@pytest.mark.parametrize("body_chars,cut", [(20_000, False), (100_000, True)])
+def test_chosen_body_survives_a_full_host_prefix_unless_it_alone_exceeds_usable_input(tmp_path, body_chars, cut):
+    ctx = _ctx(tmp_path)
+    text = "r" * body_chars
+    fit = measured_fit(window=20_000, reserve=2_000)
+    messages, trace = _deliver(ctx, [_row("chosen", "read_file", text, args={"max_lines": 2000})], fit,
+        messages=[{"role": "system", "content": "host material " * 10_000}])
+    delivered = next(m for m in messages if m.get("tool_call_id") == "chosen")
+    assert (delivered["content"] != text) == cut
+    receipt = trace["tool_result_delivery"][0]
+    assert receipt["recovery_required"] is True
+    if cut:
+        assert trace["tool_calls"][0]["result_source_view"]["cut_reason"] == "chosen_body_exceeds_usable_input"
+    else:
+        assert not trace["tool_calls"][0].get("result_partial")

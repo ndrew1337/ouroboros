@@ -34,6 +34,7 @@ from urllib.parse import quote, urlencode
 import httpx
 
 from ouroboros.gateways.claudexor_maintenance import ClaudexorMaintenanceGateway
+from ouroboros.gateways.claudexor_uploads import ClaudexorUploadGateway
 from ouroboros.gateways import claudexor_metadata as metadata
 from ouroboros.effort_evidence import validated_effort_resolution, validated_prompt_cache_ttl
 from ouroboros.observability import timed_phase
@@ -210,6 +211,9 @@ def run_failure_error(run_id: str, run_state: str, failure: Any) -> ClaudexorUna
     exc = (_window_exhausted_refusal(code, message, failure.get("resetsAt"))
            or ClaudexorUnavailable(code or f"run_{run_state or 'unknown'}", message))
     exc.reported_cause = run_failure_cause(failure)
+    from ouroboros.observability import redact_projection
+
+    exc.failure_details = redact_projection(failure).value
     return exc
 
 
@@ -427,7 +431,7 @@ def run_message_supported(operations: list[dict]) -> bool:
     )
 
 
-class ClaudexorGateway(ClaudexorMaintenanceGateway):
+class ClaudexorGateway(ClaudexorUploadGateway, ClaudexorMaintenanceGateway):
     """Thin typed client over the Claudexor ``/v2`` control API."""
 
     def __init__(self, endpoint: Optional[DaemonEndpoint] = None, *, home: Optional[pathlib.Path] = None):
@@ -725,8 +729,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
             if status.get("uploadId") != upload_id:
                 raise ClaudexorUnavailable("malformed_response", "Model upload status identity mismatch")
             if status.get("state") == "open":
-                self._request("PUT", f"{path}/bytes", content_body=data,
-                              headers={"Content-Type": "application/octet-stream"})
+                self.put_upload_bytes(upload_id, data)
             elif status.get("state") != "uploaded":
                 raise ClaudexorUnavailable("model_upload_unavailable", "Model upload is not ready for finalization")
         resource = _model_object(self._request(
@@ -937,17 +940,14 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
     def start_run(self, request: Dict[str, Any], *, idempotency_key: str = "") -> Dict[str, Any]:
         """POST /v2/runs with a caller-built, schema-valid request body.
 
-        ``idempotency_key`` is the caller's LOGICAL INVOCATION ID — minted once per
-        intended invocation, reused verbatim on a transport retry. The engine's replay
-        check (control-api ``handleRunCreate`` → daemon command store) runs BEFORE any
-        preflight: a replayed key with the byte-identical request returns the ORIGINAL
-        accepted job's handle, and a replayed key with a different request digest is a
-        409 ``idempotency_conflict`` — so a retry must reuse the id AND reproduce the
-        body exactly. A fresh random key per POST makes an accepted start whose
-        response was lost come back as a SECOND live run that nothing knows about; a
-        stale content-stable key makes a deliberate re-run come back as the finished
-        OLD run. Callers with no invocation identity keep the random default.
+        The logical invocation key and exact request replay one accepted run.
+        Host-owned thread bindings use the same producer and recovery identity.
         """
+        if request.get("_thread_id"):
+            from ouroboros.review_thread_continuity import start_review_thread_turn
+
+            return start_review_thread_turn(self, request["_thread_id"], request,
+                                            idempotency_key=str(idempotency_key))
         body = self._request(
             "POST", "/v2/runs",
             json_body=dict(request),
@@ -1076,7 +1076,8 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
         return body
 
     def answer_interaction(self, run_id: str, interaction_id: str,
-                           answers: List[Dict[str, Any]]) -> Dict[str, Any]:
+                           answers: List[Dict[str, Any]], *,
+                           timeout_sec: Optional[float] = None) -> Dict[str, Any]:
         """POST /v2/runs/:id/interactions/:iid/answer — deliver one answer set.
 
         Transport, not translation: ``answers`` rows are already the strict
@@ -1093,7 +1094,7 @@ class ClaudexorGateway(ClaudexorMaintenanceGateway):
                 f"/interactions/{quote(str(interaction_id), safe='')}/answer")
         try:
             response = self._client.request("POST", path,
-                                            json={"answers": list(answers or [])})
+                                            json={"answers": list(answers or [])}, **_request_timeout(timeout_sec))
         except httpx.HTTPError as exc:
             raise ClaudexorUnavailable(
                 "daemon_unreachable",

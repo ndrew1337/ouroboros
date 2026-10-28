@@ -36,10 +36,16 @@ def hit_box(locator):
 
 
 @pytest.mark.parametrize("width", [390, 1440])
-def test_chat_header_decoration_does_not_clip_menu_and_system_actions_keep_gap(subscription_ui, width):
+def test_chat_header_decoration_does_not_clip_its_shade_and_system_actions_keep_gap(subscription_ui, width):
     ui = subscription_ui
     page = ui["page"]
     page.set_viewport_size({"width": width, "height": 600})
+    # Consciousness sleeps until its next wake: the bar's chip says it and opens its Shade.
+    page.route("**/api/state", lambda route: route.fulfill(json={
+        "supervisor_ready": True, "active_chat_activities": [], "projects": [], "bg_consciousness_enabled": True,
+        "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00+00:00",
+                                   "spent_24h_usd": 1.5, "daily_usd": 20}}))
+    page.route("**/api/consciousness", lambda route: route.fulfill(json={"enabled": True, "recent_wakes": []}))
     rows = [{"role": "system", "text": text, "markdown": markdown,
              "system_type": "project_completion_summary", "project_id": "fixture-project",
              "project_name": "Fixture project", "ts": f"2026-09-09T00:00:0{i}Z"}
@@ -68,21 +74,27 @@ def test_chat_header_decoration_does_not_clip_menu_and_system_actions_keep_gap(s
         assert metrics["below"] == pytest.approx(12, abs=0.5), metrics
     header = page.locator(".chat-page-header")
     paint = header.evaluate("""el => ({mask:getComputedStyle(el).maskImage,
-        overflow:getComputedStyle(el).overflow, fade:getComputedStyle(el,'::before').maskImage,
-        blur:getComputedStyle(el,'::before').backdropFilter,
-        pointer:getComputedStyle(el,'::before').pointerEvents})""")
+        overflow:getComputedStyle(el).overflow, background:getComputedStyle(el).backgroundColor,
+        before:getComputedStyle(el,'::before').content})""")
     assert paint["mask"] == "none" and paint["overflow"] == "visible", paint
-    assert "gradient" in paint["fade"] and "blur" in paint["blur"], paint
-    assert paint["pointer"] == "none"
+    # The full-width fade gave way to individually backed capsules (#2193); menus still escape the bar.
+    assert paint["background"] == "rgba(0, 0, 0, 0)" and paint["before"] in ("none", "normal"), paint
+    backing = header.locator('.app-page-title-row').evaluate("""el => {
+        const s = getComputedStyle(el), channels = s.backgroundColor.match(/[0-9.]+/g).map(Number);
+        return {alpha: channels[3] ?? 1, blur: s.backdropFilter, shadow: s.boxShadow};
+    }""")
+    assert backing["alpha"] >= 0.98 and "blur" in backing["blur"] and backing["shadow"] != "none", backing
     page.locator("#chat-messages").evaluate("el=>el.scrollTop=0")
     setup_browser.capture(page, f"shell-chat-actions-{width}")
     page.locator("#chat-messages").evaluate("el=>el.scrollTop=160")
-    page.locator(".chat-header-more > summary").click()
-    for item in page.locator(".chat-header-menu-item").all():
+    page.locator("#page-chat .cx-chip:not([hidden])").click()
+    controls = page.locator("#page-chat .cx-shade button:visible").all()
+    assert len(controls) >= 2, "Start or Stop, and Dashboard ›"
+    for item in controls:
         box = hit_box(item)
         assert box["reachable"] and box["bottom"] <= 600 and box["right"] <= width, box
-    setup_browser.capture(page, f"shell-chat-menu-{width}")
-    page.locator(".chat-header-more > summary").click()
+    setup_browser.capture(page, f"shell-chat-shade-{width}")
+    page.locator("#page-chat .cx-chip").click()
 
 
 def test_scroll_fade_tracks_edges_late_content_and_stops_after_disposal(subscription_ui):
@@ -187,6 +199,8 @@ def test_photo_menu_escapes_gallery_crop_downloads_and_cleans_up(subscription_ui
     assert menu.is_visible()
     page.evaluate("shellPhoto.media.destroy()")
     assert not menu.count() and page.locator(".chat-gallery-item").count() == 0
+    # A leaving menu's inert picture must also leave the DOM once its fade ends.
+    page.wait_for_function("!document.querySelector('body > .chat-photo-menu')", timeout=5_000)
 
 
 def test_settings_footer_controls_are_reachable_at_content_breakpoints(subscription_ui):

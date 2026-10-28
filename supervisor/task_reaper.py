@@ -311,7 +311,7 @@ def withdraw_finalization_grace(
             # the supervisor cannot see, and claiming a cancelled stop after the task
             # took the order was a plain lie. Correcting the sentence, not adding an ack.
             "text": (
-                f"▶️ Task {task_id} resumed work before the {reason} grace window closed; "
+                f"Task {task_id}: the {reason} finalization condition no longer applies; "
                 "the stop request was retracted from its mailbox — if the task had "
                 "already read it, it may still finalize."
             ),
@@ -1287,7 +1287,7 @@ def reap_timed_out_task(job: Dict[str, Any]) -> None:
     workers_mod._reconcile_confirmed_dead_review_owner(int(getattr(proc, "pid", 0) or 0))
     with _q._queue_lock:
         from supervisor.worker_health import _retire_dead_model_consumers
-        _retire_dead_model_consumers(job, captured_timeout=True)
+        _retire_dead_model_consumers(job)
 
     try:
         from ouroboros.tools.services import archive_task_service_logs

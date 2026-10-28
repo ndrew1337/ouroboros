@@ -95,6 +95,26 @@ test('a child card paints the chip from its frames and keeps it across frames wi
     } finally { f.close(); }
 });
 
+// The Coordinator row of the details states the coordinating model and, when the schedule recorded one,
+// its provenance (chosen_by): escaped through the renderer, never inferred from a role or a model name.
+test('the coordinator row carries the recorded provenance and escapes a chosen row name', () => {
+    const f = fixture();
+    try {
+        f.emit({ role: 'assistant', task_id: ROOT, content: 'Child done', subagent_event: 'completed', status: 'completed',
+            result: 'ok', ...lineage('kid-p', 'auditor'), model: 'claudexor::codex=gpt-6-astra', executor_route: 'claude',
+            execution_evidence: { delegated_runs_started: 1, delegated_runs_settled: 1, delegated_runs_succeeded: 1,
+                delegated_runs_failed: 0, subscription_cost_usd: 0, harness_models: ['claude-opus-5-5[1m]'] },
+            parent_cognitive_route: { model: 'claudexor::codex=gpt-6-astra', chosen_by: 'delegator',
+                selected_supervisor_snapshot: { selected_subagent_id: '<chosen&row>' } } });
+        const facts = f.facts('kid-p');
+        assert.match(facts, /<dt>Coordinator<\/dt><dd>codex=gpt-6-astra \(chosen by the delegator \(&lt;chosen&amp;row&gt;\)\)<\/dd>/);
+        assert.doesNotMatch(facts, /<chosen&row>/);
+        assert.doesNotMatch(f.meta('kid-p'), /chosen by the delegator/, 'the compact line never carries provenance');
+    } finally {
+        f.close();
+    }
+});
+
 // A session child's effort carrier is the LEAF's dispatch decision, not the nanny's reasoning level.
 // Keep it visible with the executor identity, using the same chosen/requested/source wording as native children.
 test('a delegated child keeps its leaf dispatch effort visible while the coordinator stays in details', () => {

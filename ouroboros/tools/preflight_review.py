@@ -99,7 +99,8 @@ def _preflight_review_params() -> Dict[str, Any]:
 
 
 _PREFLIGHT_DESCRIPTION = (
-    "Optional early look by ONE named enabled catalog row, in the review pool or not. Reads the system "
+    "Optional paid early look at the system worktree by ONE named enabled catalog row, in the review pool or "
+    "not; deterministic_only is the free diagnostic form. Reads the system "
     "worktree via review_change(subject=worktree, surface=preflight, reviewers=[reviewer]), also used by "
     "commit_reviewed(preflight_reviewer=...). Informational, never a gate or an answer for the commit panel; "
     "unchanged worktree reuses its settled record free. No tests here; commit_reviewed runs them. "

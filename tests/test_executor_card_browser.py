@@ -98,22 +98,19 @@ def test_observed_executor_role_activity_and_project_pointer_live_replay(subscri
             #executor-proof .rw-trigger .status-badge { min-width: 81px; }
         ''')
     assert trigger.bounding_box()['height'] <= 40
-    # The common history disclosure has its own readable, wrapping row below the control.
+    # The common history gap disclosure stays at the in-feed Load-older edge, not in the header bar.
     bar = page.locator('#executor-proof .chat-panel-statusbar')
-    note = bar.locator('.chat-history-status')
+    assert bar.locator('.chat-history-status').count() == 0
+    note = page.locator('#executor-proof .chat-load-older .chat-load-older-note')
     assert note.inner_text() == 'Some saved history is not loaded. Shown messages may have gaps.'
     assert page.locator('#executor-proof .chat-load-older-note').count() == 1
-    geometry = bar.evaluate('''bar => {
-        const box = selector => bar.querySelector(selector).getBoundingClientRect();
-        const control = box('.rw-trigger'), note = box('.chat-history-status');
-        const css = getComputedStyle(bar), rect = bar.getBoundingClientRect();
-        return {control, note, bar:rect,
-            spacing:parseFloat(css.paddingTop)+parseFloat(css.paddingBottom)+parseFloat(css.rowGap || 0)};
+    geometry = page.locator('#executor-proof').evaluate('''panel => {
+        const box = selector => panel.querySelector(selector).getBoundingClientRect();
+        return {control: box('.rw-trigger'), note: box('.chat-load-older-note'), bar: box('.chat-panel-statusbar')};
     }''')
     assert geometry['note']['y'] >= geometry['control']['bottom']
     assert geometry['note']['x'] >= geometry['bar']['x']
     assert geometry['note']['right'] <= geometry['bar']['right'] + 1
-    assert geometry['bar']['height'] <= geometry['control']['height'] + geometry['note']['height'] + geometry['spacing'] + 3
     input_box=page.locator('#proof-input')
     input_box.fill('Message stays in this Project')
     trigger.click()

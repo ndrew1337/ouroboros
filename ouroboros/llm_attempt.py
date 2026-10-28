@@ -158,6 +158,20 @@ class ProviderPolicyRefusal(RuntimeError):
     code = PROVIDER_POLICY_REFUSAL
 
 
+class ConnectionUnavailable(ProviderPolicyRefusal):
+    """The route names an API connection that cannot serve it: ``missing`` (no such
+    row, or it lacks its credential/endpoint), ``disabled``, ``kind_mismatch`` (the
+    name belongs to another kind) or ``invalid`` (a malformed spelling). Raised while
+    the target is resolved, so nothing is dispatched ($0); never re-sent on another
+    connection's key (``provider_connections.connection_values``)."""
+
+    def __init__(self, connection: str, reason: str) -> None:
+        self.code = "connection_unavailable"
+        self.connection, self.reason = connection, reason
+        super().__init__(f"connection_unavailable: {connection or 'this route'} is {reason.replace('_', ' ')}; "
+                         "it is not sent on another connection's key")
+
+
 def _is_provider_policy_refusal(exc: BaseException) -> bool:
     """Structural test: a typed refusal, by class or by the declared ``code``."""
     return isinstance(exc, ProviderPolicyRefusal) or (
@@ -261,8 +275,10 @@ def openai_family_route(target: Dict[str, Any]) -> bool:
 
 
 def _route_normalizes_cache_breakpoints(target: Dict[str, Any]) -> bool:
-    """Whether the send-time finalizer may normalize cache breakpoints."""
-    if str(target.get("provider") or "") == "anthropic":
+    """Whether the send-time finalizer may normalize cache breakpoints: direct Anthropic,
+    OpenRouter ``anthropic/`` and the generic compatible lane, which sends this family's
+    markers and drops a refused one by request-wire recovery on that exact route."""
+    if str(target.get("provider") or "") in {"anthropic", "openai-compatible"}:
         return True
     model = str(target.get("resolved_model") or "").strip().lstrip("~")
     return bool(
@@ -506,12 +522,13 @@ def main_context_fit_refusal(request: AttemptRequest) -> Optional[Dict[str, Any]
     window = request.context_window_tokens_exact or physical.capacity_total_tokens
     if window is None:
         return None  # unknown capacity leaves the first full request admissible
-    reserve = context_mode_limits(physical.rendered_mode, "", request.max_completion_tokens)[1]
+    reserve = physical.response_reserve_tokens or context_mode_limits(
+        physical.rendered_mode, "", request.max_completion_tokens)[1]
     exact = request.prompt_tokens_exact is not None
     size = request.prompt_tokens_exact if exact else math.ceil(
         request.prompt_tokens_bounded_estimate * (physical.measurement_density or 1.0))
     free = window - reserve - size
-    if free > 0:
+    if free >= 0:
         return None  # only physical W gates; the owner target never vetoes a send
     return refused_candidate_facts(
         request, capacity_total_tokens=window, response_reserve_tokens=reserve, free_tokens=free,
@@ -884,8 +901,9 @@ class _PayloadCachePolicyMixin:
         ordering stays legal by construction (the 176567b every-call-400 class).
         'default' keeps the pre-setting behavior byte-for-byte: bare markers stay bare
         and a caller-declared ttl stands. It never CREATES a marker (the d32f703d
-        empty-block 400 class), and non-Anthropic wire formats are untouched (the
-        v5.30.0 Gemini ttl-field class).
+        empty-block 400 class), and other wire formats are untouched (the v5.30.0
+        Gemini ttl-field class); a compatible server that refuses the ``ttl`` this
+        family carries is answered by request-wire recovery (``cache_control.ttl``).
         """
         breakpoints = self._payload_cache_breakpoints(payload)
         note: Optional[Dict[str, Any]] = None

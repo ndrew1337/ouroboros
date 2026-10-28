@@ -73,11 +73,17 @@ def _bounded(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         for key in ("attemptId", "harnessId", "messageId", "outcome"):
             if isinstance(row.get(key), str) and row[key]:
                 item[key] = _label(row[key])
+        # The engine's opaque utterance key is compared whole, never cut.
+        for key in ("speechKey", "speechOp"):
+            if isinstance(row.get(key), str) and row[key]:
+                item[key] = row[key]
         if row.get("textKind") in _TEXT_KINDS and isinstance(row.get("detail"), str):
             # The typed body preserves stream whitespace; the engine's title is
             # only a preview. Keep the same disclosed bound, without a second copy.
             item.update(title=_label(row["detail"]), textKind=row["textKind"],
                         textDelta=row.get("textDelta") is True)
+            if row.get("textFinal") is True:
+                item["textFinal"] = True
         out.append(item)
     return out
 
@@ -279,7 +285,7 @@ class WindowObservations:
 # maxSeconds horizon, this absolute ceiling), and releases it when the wait
 # returns. The ceiling exceeds the delegate_wait ToolEntry timeout (2100s, which
 # DELEGATE_WAIT_CEILING_SEC equals) by +300 headroom so a full window plus its
-# own teardown can never be idle-killed mid-hold.
+# own teardown never draws silence attention mid-hold.
 DELEGATE_WAIT_LEASE_GRACE_SEC = 120
 EXTERNAL_WAIT_LEASE_CEILING_SEC = DELEGATE_WAIT_CEILING_SEC + 300
 
@@ -534,6 +540,7 @@ def _fitted_pending(payload: Dict[str, Any], pending: List[Dict[str, Any]],
 
 def live_line(run_id: str, advance: _Advance) -> str:
     parts: List[str] = []
+    keyed: Dict[Any, int] = {}
     previous_stream = None
     for row in advance.events:
         text_kind = row.get("textKind")
@@ -543,6 +550,18 @@ def live_line(run_id: str, advance: _Advance) -> str:
             actor = "/".join(str(row[key]) for key in ("harnessId", "attemptId") if row.get(key))
             if actor:
                 text = f"[{actor}] {text}"
+        # One engine-keyed utterance: its fragments join and its complete text replaces them.
+        scope = (row.get("attemptId"), row.get("harnessId"), row.get("speechKey"))
+        if is_text and text_kind == "message" and scope[2] and row.get("speechOp") in ("fragment", "complete") \
+                and not row.get("textFinal"):
+            if scope in keyed:
+                at = keyed[scope]
+                parts[at] = text if row["speechOp"] == "complete" else parts[at] + text
+            elif text:
+                keyed[scope] = len(parts)
+                parts.append(text)
+            previous_stream = None
+            continue
         stream = (text_kind, row.get("attemptId"), row.get("harnessId")) \
             if is_text and row.get("textDelta") is True else None
         if not text:
@@ -671,6 +690,40 @@ def paused_note(pending_interactions: Optional[List[Dict[str, Any]]]) -> str:
             "later round), or "
             f"keep waiting (call again) — {waiting_expiry_clause(pending_interactions)}. "
             "Do not cancel a run merely because it asked a question.")
+
+
+def message_journal_receipt(ctx: Any, result: Any) -> Any:
+    """Attach peer journal rows at the ordinary receipt boundary, never a wake.
+
+    Receipts may repeat rows by message_id. No read cursor or ACK advances
+    here, so losing a receipt before transcript insertion loses no message.
+    The existing wake renderer retains oversized receipts before projecting.
+    """
+    from ouroboros.delegate_message_store import journal
+    from ouroboros.delegate_shared import delegate_payload, delegate_result
+    from ouroboros.tool_capabilities import tool_result_limit
+
+    payload = delegate_payload(result)
+    run_id = str(payload.get("run_id") or "")
+    if not run_id or payload.get("message_id") or payload.get("ok") is False:
+        return result
+    rows = []
+    try:
+        rows = journal(ctx, run_id)
+    except Exception:
+        payload["peer_messages_delivery"] = {"complete": False, "reason": "journal_unavailable"}
+    else:
+        if not rows:
+            return result
+        payload["peer_messages"] = rows
+    if len(json.dumps(payload, ensure_ascii=False, indent=2)) > tool_result_limit("delegate_wait"):
+        from ouroboros.delegate_supervision import _render_wake_payload
+
+        payload = delegate_payload(_render_wake_payload(ctx, payload))
+        if "wake_delivery" in payload and rows:
+            payload["wake_delivery"]["note"] = (
+                f"Full receipt and {len(rows)} peer messages at source. Read before relying on omitted detail.")
+    return delegate_result(payload, meta=result.meta)
 
 
 def window_payload(

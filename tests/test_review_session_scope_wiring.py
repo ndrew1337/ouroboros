@@ -824,12 +824,6 @@ def test_the_brief_of_a_three_file_change_on_the_real_tree_is_measured(tmp_path)
     """The two-part brief's size on the REAL repository, without the staged
     diff, with its composition printed. The number is the whole reason the
     packet is gone: the retired scope packet's fixed part alone was 1.21 MB.
-
-    The ceiling is measured, not aspirational — it is the sum of the owner's own
-    decisions: tier-1 BIBLE plus the standing disclosures inline, the repository
-    index over the tracked paths, the DEVELOPMENT chapters this change activates,
-    the book navigation, and now BOTH checklists (the change checklist of Part 1
-    beside the coupling questions of Part 2).
     """
     from ouroboros.tools.review_brief_coupling import BriefInputs, build_retrieving_brief
     from ouroboros.tools.review_helpers import REPO_ROOT, load_checklist_section
@@ -856,13 +850,17 @@ def test_the_brief_of_a_three_file_change_on_the_real_tree_is_measured(tmp_path)
           f"({without_diff:,} without the diff slot)")
     for name, chars in sorted(sections.items(), key=lambda item: -item[1]):
         print(f"  {name:32s} {chars:>9,}")
+    assert manifest["brief_chars"] == len(task)
+    assert without_diff == manifest["brief_chars"] - sections["diff_slot"]
     # Measured without the diff slot (2026-10-08): 207,462 on packet B's tree,
     # 210,553 on the integrated PR-3 tree, whose canon adds the BIBLE review
     # paragraph and the Coupling questions section (the retired scope brief
     # alone measured 209,106). The ceiling keeps about the same headroom for the
     # next index growth (~23K), not a rounding of the measurement.
     # The engine facts/lifecycle merge (2026-10-08) adds 161 index chars inside this headroom.
-    assert without_diff < 234_000, without_diff
+    # The review/swarm/nanny merge (2026-10-22) measures 237,439: its ~20 new modules
+    # grew the repository index past the old 234,000 ceiling; same headroom again.
+    assert without_diff < 260_000, without_diff
     assert sections["repository_index"] > 20_000          # the index really ran
     assert sections["governance_stable_inline"] > 40_000  # BIBLE really inline
     assert sections["change_checklist"] > 0 and sections["coupling_checklist"] > 0

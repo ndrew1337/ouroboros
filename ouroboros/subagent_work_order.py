@@ -20,11 +20,13 @@ def input_source_selection_receipt(task: Mapping[str, Any]) -> dict[str, Any]:
 
     if task_input_sources(task) != "declared":
         return {}
+    selected = ["explicitly selected task documents (attachment_paths), copied as this task's inputs"
+                ] if _selected_documents(task) else []
     return {
         "input_sources": "declared",
         "included": [
             "SYSTEM.md and BIBLE.md; reference-book projections; own-body DESIGN navigation or source-gap disclosure",
-            "explicit assignment, question, evidence and normalized task authority",
+            "explicit assignment, question, evidence and normalized task authority", *selected,
             "runtime access, tools, workspace, clock, resource and budget facts",
             "the inherited delegation_budget.intent_note: parent-authored advice carried in the task contract, never authority",
             "this child's own retained progress, tool and event history",
@@ -56,6 +58,16 @@ def input_source_selection_receipt(task: Mapping[str, Any]) -> dict[str, Any]:
             "order; files the harness loads from its project and vendor-side memory are unobserved."
         ),
     }
+
+
+def _selected_documents(task: Mapping[str, Any]) -> str:
+    """The parent's ``attachment_paths`` disclosure; "" when the task selected none."""
+    paths = task.get("attachment_paths")
+    if not isinstance(paths, list) or not paths:
+        return ""
+    return ("The parent selected these retained inputs (attachment_paths). The host attaches them to the first "
+            "start of this work order as immutable engine documents; a later start attaches only the documents "
+            "its own request selects.\n" + "\n".join(f"- {path}" for path in paths))
 
 
 def _text(value: Any) -> str:
@@ -148,6 +160,7 @@ def _render_external_work_order(task: Mapping[str, Any]) -> str:
         ("ACCEPTANCE CLAIMS", contract.get("acceptance_claims")),
         ("TASK CONTRACT AUTHORITY", remaining_contract),
         ("INHERITED TASK INPUTS", contract.get("attachment_manifest")),
+        ("SELECTED DOCUMENTS", _selected_documents(task)),
     ]
     authority = {
         "task_id": str(task.get("id") or ""),
@@ -376,6 +389,25 @@ def session_design_navigation(ctx: Any, *, target_root: str, source_root: str) -
             + navigation + digest)
 
 
+def session_constitution_pointer(ctx: Any, *, target_root: str, source_root: str) -> str:
+    """Point an own-body session at the constitution of the body it works on, beside DESIGN.
+
+    The leaf is an executor, not Ouroboros, and starts before its nanny's first turn; a path
+    and the pinned bytes' digest let its first proposals meet P1. The text is never inlined."""
+    source, _prepared = _own_body_source(ctx, target_root, source_root)
+    if source is None:
+        return ""
+    path = source / "BIBLE.md"
+    head = "\n\nCONSTITUTION DELIVERY (host instructions, separate from canonical work order)\n"
+    try:
+        digest = sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return head + f"BIBLE.md source unavailable at {path}; no constitution delivered."
+    return head + (f"This work concerns the body of Ouroboros, which {path} governs. Before your first proposal, "
+                   "read its Principle 1 (continuity, memory and the cognitive horizon); read the rest as the "
+                   f"work needs.\nSource bytes SHA-256: {digest}.")
+
+
 def session_service_directories(ctx: Any, gateway: Any, route: Any, authority: Any, *, snapshot: Any,
                                 payload: bool, execution_root: str) -> Any:
     """What ONE first start's private copy may write outside it, prepared before the binding, the host
@@ -400,7 +432,7 @@ def session_host_references(ctx: Any, *, target_root: str, source_root: str,
                             private_copy: bool = False, payload_skill: str = "", service: Any = None) -> str:
     """Host references pinned in a session's start request, computed once at first start.
 
-    Own-body DESIGN navigation and the installed instruction-skill index for any workspace;
+    Own-body DESIGN navigation and BIBLE path, and the installed instruction-skill index for any workspace;
     a skill-payload builder also gets the serving host's skill contract, whatever its input
     selection, and any other private copy its environment facts: dependency files read at the
     copy's repository root, the environment placed where the session may write (``source_root``,
@@ -408,7 +440,9 @@ def session_host_references(ctx: Any, *, target_root: str, source_root: str,
     has no copy, so it gets neither. A retry replays the recorded bytes."""
     from ouroboros.skill_catalogue import session_skill_index, skill_contract_references  # lazy skill reads
 
-    text = session_design_navigation(ctx, target_root=target_root, source_root=source_root) + session_skill_index(ctx)
+    text = (session_design_navigation(ctx, target_root=target_root, source_root=source_root)
+            + session_constitution_pointer(ctx, target_root=target_root, source_root=source_root)
+            + session_skill_index(ctx))
     if payload_skill:
         from ouroboros.body_candidate import serving_repo_dir_for
 

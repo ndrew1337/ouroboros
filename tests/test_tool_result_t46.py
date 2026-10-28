@@ -256,11 +256,13 @@ def test_registry_run_script_wrapper_preserves_native_process_meta(
     assert result == ToolResult(
         status="error",
         code="SHELL_EXIT_ERROR",
-        text=f"{base_text}\n# script_path={captured['script_path']}",
+        text=(f"{base_text}\n# script_path={captured['script_path']} (temporary file removed after the run; "
+              "its text was not retained (no dispatch record for this call))"),
         meta={
             "exit_code": -15,
             "signal": "SIGTERM",
             "artifact_registered": True,
+            "script_source": {"status": "no dispatch record for this call"},
         },
     )
 
@@ -447,7 +449,7 @@ def test_native_review_and_git_producers_bypass_adapter_and_keep_legacy_loop_fie
     assert reviewable_effect_projection(trace) == []
 
 
-def test_physical_vcs_status_exception_is_native(
+def test_physical_vcs_read_status_exception_is_native(
     tmp_path,
     monkeypatch,
 ) -> None:
@@ -473,7 +475,7 @@ def test_physical_vcs_status_exception_is_native(
         ),
     )
 
-    result = registry.execute_result("vcs_status", {"root": "system_repo"})
+    result = registry.execute_result("vcs_read", {"action": "status", "root": "system_repo"})
 
     assert result == ToolResult(
         status="ok",

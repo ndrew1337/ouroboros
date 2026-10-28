@@ -323,7 +323,6 @@ def dialogue_slot_inputs(slots: list, *, system_prompt: str, user_content: str,
     Each slot's fit lands in ``dialogue_delivery``; a session slot with an engine bound also
     records ``input_limit`` (the bound, the measured ``prompt_chars``, ``fits``).
     """
-    from ouroboros.model_slots import MODEL_CONTEXT_WINDOWS_KEY, model_role_option
     from ouroboros.tools.plan_review_runtime import PLAN_REVIEW_MAX_TOKENS, slot_retrieves, slot_is_session
     from ouroboros.tools.review_synthesis import build_plan_review_messages, per_slot_input_token_limits
     from ouroboros.tools.plan_packet import plan_user_stable_len
@@ -331,7 +330,7 @@ def dialogue_slot_inputs(slots: list, *, system_prompt: str, user_content: str,
 
     contract = str(output_contract)
     from ouroboros.review_native_episode import review_native_transcript_bound, native_landing_at, native_first_send_chars
-    from ouroboros.reviewer_window import reviewer_window_binding
+    from ouroboros.reviewer_window import resolve_reviewer_window, reviewer_window_binding
     from ouroboros.review_execution import _messages_char_count
     from ouroboros.review_session_preparation import render_review_session_prompt
     from types import SimpleNamespace
@@ -386,13 +385,14 @@ def dialogue_slot_inputs(slots: list, *, system_prompt: str, user_content: str,
             tasks[sid], coverage[sid] = fit_dialogue_view(session_task + seat, own,
                 native_landing_at(bound) - governance_read - 1, measure=first_send)
         else:
-            # Native input capacity and an owner-selected context window are different facts.
+            # Native input capacity and the resolved route window are different facts.
             # Only the inline projection yields: its complete source stays in task custody.
             bound = (session_limits or {}).get(sid)
             capacity = bound["prompt_budget"] if bound else None
-            asserted = int(model_role_option(MODEL_CONTEXT_WINDOWS_KEY, reviewer_window_binding(slot)["model_role"]))
-            if asserted > 0:
-                limit = per_slot_input_token_limits([slot.model], context_window=asserted, slots=[slot],
+            resolved = resolve_reviewer_window(slot.model, session=True, **reviewer_window_binding(slot))
+            known = resolved.window_record is not None and resolved.window_record.boundary is not None
+            if known:
+                limit = per_slot_input_token_limits([slot.model], context_window=resolved.sizing_window(), slots=[slot],
                                                     output_reserve=PLAN_REVIEW_MAX_TOKENS, tokenizer_margin=155_000)
                 capacity = min(capacity, int(limit[sid]) * 4) if capacity is not None else int(limit[sid]) * 4
             request = SimpleNamespace(surface="plan_review", policy={"output_contract": contract})
@@ -402,7 +402,7 @@ def dialogue_slot_inputs(slots: list, *, system_prompt: str, user_content: str,
                 tasks[sid], coverage[sid] = fit_dialogue_view(session_task + seat, own, capacity, measure=session_chars)
             else:
                 tasks[sid], coverage[sid] = session_task + seat, dialogue_view(own)[1]
-            coverage[sid].update(window="asserted" if asserted > 0 else "unasserted", file=own.get("file") or "")
+            coverage[sid].update(window=resolved.sizing_source if known else "unknown", file=own.get("file") or "")
             if bound:
                 coverage[sid]["input_limit"] = {**bound, "prompt_chars": session_chars(tasks[sid]),
                                                 "fits": session_chars(tasks[sid]) <= bound["prompt_budget"]}

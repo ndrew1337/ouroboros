@@ -1359,9 +1359,9 @@ def test_final_route_observation_absence_is_disclosed_without_discarding_the_ver
         (final / "telemetry.yaml").write_text(raw, encoding="utf-8")
     # The transport supplies only the summary; the real reader sees the file above.
     fake_route.run_dir = None
-    fake_route.detail = _terminal_detail(json.dumps({"findings": [
-        {"item": "route", "verdict": "PASS", "severity": "advisory"},
-    ]}), conformance="passed")
+    from tests._contributor_packet_shared import _coupling_matrix
+    fake_route.detail = _terminal_detail(json.dumps({"findings": _coupling_matrix("route reviewed")}),
+                                         conformance="passed")
     fake_route.detail["summary"].update(
         runDir=str(run_dir), harnesses=["fake-review"], effectiveAccess="readonly",
         route={"harnessId": "earlier-route", "observedModel": "earlier-model", "verified": True},

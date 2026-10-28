@@ -23,7 +23,16 @@ from tests._store_journal_shared import exclusive_hold
 from tests.test_g1_followup_policy import _assignment_world, register, row, world as _world
 
 pytestmark = pytest.mark.serial
-world = _world  # requested by name: re-bound so the CI ruff gate sees no F811
+followup_world = _world  # fixture alias: injection does not shadow the import (F811)
+
+
+@pytest.fixture
+def world(followup_world, monkeypatch):
+    from supervisor import workers
+
+    # The real launch writes drive obligations through the pool, too.
+    monkeypatch.setattr(workers, "DRIVE_ROOT", followup_world[1])
+    return followup_world
 
 
 @contextlib.contextmanager

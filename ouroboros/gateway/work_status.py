@@ -57,7 +57,14 @@ REASON_TEXT = {
     "queued": "Waiting for a free worker",
     "review_work_finishing": "Review work finishing",
     "external_runs_unconfirmed": ("1 external run may still be running", "{count} external runs may still be running"),
+    # A preparing direct turn's start step (census ``turn_phase``, supervisor.active_activity.TURN_PHASES).
+    "turn_admitted": "Setting up the turn",
+    "turn_started": "Starting the turn",
+    "turn_context_building": "Building context",
+    "turn_context_built": "Context ready",
 }
+_TURN_STEPS = ("admitted", "started", "context_building", "context_built")
+_CALL_STEPS = ("requested", "dispatched")  # its Main call started (supervisor.active_activity.CALL_PHASES)
 
 
 def reason(code: str, *, count: Optional[int] = None, ids: Iterable[str] = (), since: Any = None,
@@ -107,10 +114,11 @@ def _current_waits(row: Mapping[str, Any]) -> List[tuple]:
 
 
 def _call(row: Mapping[str, Any]) -> str:
-    """The exact-call word a working member is in (the cards' modelActivityPresentation)."""
+    """The exact-call word a working member is in (the cards' modelActivityPresentation); a direct turn
+    whose own call start precedes its census phase's move says the word that move gives, never more."""
     phase = row.get("phase")
     if phase == "preparing":
-        return "preparing"
+        return "working" if row.get("turn_phase") in _CALL_STEPS else "preparing"
     activity = row.get("model_activity") if isinstance(row.get("model_activity"), dict) else {}
     operation = activity.get("phase")
     if operation in {"dispatching", "awaiting_response"}:
@@ -127,7 +135,8 @@ def classify_member(row: Mapping[str, Any], raw: Optional[Mapping[str, Any]] = N
 
     ``raw`` carries the queue row's hold and pause records, the declared author of the tree's Pause
     (``pause_by``, ``control_actor.pause_author``), the members that Pause already parked and the task's
-    own identity facts (see ``work_projection``), ``running`` when the queue runs it, and ``sent_review`` while a
+    own identity facts (see ``work_projection``), ``running`` when the queue runs it, its current worker ``owner_wait``,
+    and ``sent_review`` while a
     review it sent from a warm park still runs. Returns the member's
     own state only; ``live`` says whether the member itself executes now: under a settling Pause only a running
     member the Pause has not parked does, never a queued one or one that already saved its place."""
@@ -166,6 +175,15 @@ def classify_member(row: Mapping[str, Any], raw: Optional[Mapping[str, Any]] = N
     if wait == "unknown":
         state["confirmed"] = False
         return state
+    # A warm sleeper keeps its worker and frozen census phase, but executes nothing.
+    # A current Pause above wins; an ended or older attempt's wait proves no sleep.
+    waiting = raw.get("owner_wait")
+    if isinstance(waiting, dict) and waiting.get("state") == "waiting" and waiting.get("reason") == "sleep" \
+            and waiting.get("task_attempt") == int(row.get("task_attempt") or 1) \
+            and isinstance(waiting.get("sleep"), dict) and waiting["sleep"].get("mode") == "warm":
+        state["activity"] = "waiting"
+        state["reasons"].append(reason("sleeping"))
+        return state
     waits = _current_waits(row)
     if waits:
         human = sorted(_owner_actions(row)[0])
@@ -198,6 +216,9 @@ def classify_member(row: Mapping[str, Any], raw: Optional[Mapping[str, Any]] = N
         return state
     if phase in {"working", "thinking", "preparing"}:
         state.update(activity="working", call=_call(row), live=True)
+        step = str(row.get("turn_phase") or "")
+        if phase == "preparing" and step in _TURN_STEPS:
+            state["reasons"].append(reason(f"turn_{step}"))
         return state
     state["confirmed"] = False
     return state
@@ -221,9 +242,9 @@ def controls_for(current: Optional[Mapping[str, Any]], current_row: Optional[Map
         phase = str(current_row.get("phase") or "")
         codes = {entry.get("code") for entry in current.get("reasons") or ()}
         # A live root, managed or a direct turn, and an answered root's upkeep: the hurry, stop and Pause doors
-        # take them all; the Pause ends that upkeep at once.
-        if current["activity"] == "working" and current.get("transition") in {"none", "finalizing"} \
-                and phase in _RUNNING_PHASES:
+        # take them all; the Pause ends that upkeep at once. A warm sleep keeps both: either control wakes it.
+        if ((current["activity"] == "working" and current.get("transition") in {"none", "finalizing"})
+                or (current["activity"] == "waiting" and "sleeping" in codes)) and phase in _RUNNING_PHASES:
             controls += [{"action": "wrap_up", "target": target}, {"action": "hurry", "target": target}]
         # A Pause still settling keeps its Pause: the door coalesces a repeat, which retries an uncertain reply.
         if current.get("transition") in {"none", "finalizing", "pausing"} \
@@ -254,6 +275,18 @@ def _outcome(row: Mapping[str, Any]) -> str:
     axes = row.get("outcome_axes") if isinstance(row.get("outcome_axes"), dict) else {}
     lifecycle = axes.get("lifecycle") if isinstance(axes.get("lifecycle"), dict) else {}
     return str(lifecycle.get("status") or row.get("status") or "")
+
+
+def shown_outcome(row: Mapping[str, Any]) -> str:
+    """The settled word a work says beside ``Finalizing…``: its stored lifecycle, except a turn the owner
+    stopped, which reads ``cancelled`` wherever its card's status fold says Stopped (``outcome_phase``)."""
+    status = _outcome(row)
+    if status in {"completed", "failed"} and isinstance(row.get("cancel_origin"), dict):
+        from ouroboros.project_dialogue import outcome_phase
+
+        if outcome_phase({**row, "root_phase_checkpoint": {}}, {}) == "cancelled":
+            return "cancelled"
+    return status
 
 
 def mark_of(activity: str, confirmed: bool, *, live: bool = False, unknown: bool = False) -> str:

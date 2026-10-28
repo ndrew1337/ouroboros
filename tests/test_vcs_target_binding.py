@@ -68,7 +68,7 @@ def _allow_safety(monkeypatch):
 
 def test_generic_vcs_schema_has_only_active_or_system_root(tmp_path):
     registry, _ctx, _system, _project = _registry(tmp_path)
-    for name in ("vcs_status", "vcs_diff", "vcs_pull_ff", "vcs_restore", "vcs_revert"):
+    for name in ("vcs_read", "vcs_pull_ff", "vcs_restore", "vcs_revert"):
         schema = registry.get_schema_by_name(name)
         root = schema["function"]["parameters"]["properties"]["root"]
         assert root == {
@@ -88,14 +88,14 @@ def test_delegated_child_profiles_keep_their_specialized_vcs_surface(tmp_path):
         allow_enable=False,
         surface="external_workspace",
     )
-    status_schema = registry.get_schema_by_name("vcs_status")
+    status_schema = registry.get_schema_by_name("vcs_read")
     assert status_schema["function"]["parameters"]["properties"]["root"]["enum"] == [
         "active_workspace"
     ]
     assert registry.get_schema_by_name("vcs_restore") is None
 
     ctx.task_constraint = TaskConstraint(mode="local_readonly_subagent", allow_enable=False)
-    readonly_status = registry.get_schema_by_name("vcs_status")
+    readonly_status = registry.get_schema_by_name("vcs_read")
     assert readonly_status["function"]["parameters"]["properties"]["root"]["enum"] == [
         "active_workspace", "system_repo"
     ]
@@ -107,10 +107,10 @@ def test_status_and_diff_default_to_project_and_explicit_system_is_distinct(tmp_
     (project / "project.txt").write_text("project changed\n", encoding="utf-8")
     (system / "system.txt").write_text("system changed\n", encoding="utf-8")
 
-    project_status = registry.execute("vcs_status", {})
-    system_status = registry.execute("vcs_status", {"root": "system_repo"})
-    project_diff = registry.execute("vcs_diff", {})
-    system_diff = registry.execute("vcs_diff", {"root": "system_repo"})
+    project_status = registry.execute("vcs_read", {"action": "status"})
+    system_status = registry.execute("vcs_read", {"action": "status", "root": "system_repo"})
+    project_diff = registry.execute("vcs_read", {"action": "diff"})
+    system_diff = registry.execute("vcs_read", {"action": "diff", "root": "system_repo"})
 
     assert "project.txt" in project_status and "system.txt" not in project_status
     assert "system.txt" in system_status and "project.txt" not in system_status

@@ -141,11 +141,13 @@ def test_top_level_workspace_focus_has_tool_and_schema_parity(tmp_path, monkeypa
         LOCAL_READONLY_SUBAGENT_TOOL_NAMES,
     )
 
-    assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES <= names, (
+    # Exact callable aliases intentionally have no second advertised schema.
+    aliases = {entry.name for entry in registry._entries.values() if entry.alias_for in names}
+    assert LOCAL_READONLY_SUBAGENT_TOOL_NAMES <= names | aliases, (
         f"read-only child tools missing from the workspace tool surface: "
         f"{sorted(LOCAL_READONLY_SUBAGENT_TOOL_NAMES - names)}"
     )
-    assert ACTING_SUBAGENT_TOOL_NAMES <= names, (
+    assert ACTING_SUBAGENT_TOOL_NAMES <= names | aliases, (
         f"acting child tools missing from the workspace tool surface: "
         f"{sorted(ACTING_SUBAGENT_TOOL_NAMES - names)}"
     )
@@ -420,9 +422,7 @@ def test_ordinary_fresh_start_ignores_actor_first_zero_run_receipt_surface(tmp_p
 
     claimed, refusal = claimed_start_request(
         data,
-        claim_target="",
         actor_ctx=ctx,
-        enforce_actor_idle=True,
         run_id="",
         task_id=ctx.task_id,
         idempotency_key="ordinary-root-invocation",

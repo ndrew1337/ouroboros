@@ -172,7 +172,7 @@ def test_no_delegated_session_starts_under_an_unreadable_bucket(data_root):
         custody.record_start_requested(data_root, task_id="S", root_task_id="S", invocation_id="i-1",
                                        request={"prompt": "x"}, idempotency_key="i-1")
     requested, refusal = claimed_start_request(
-        data_root, claim_target="", payload_busy=lambda *_a: "", run_id="", task_id="S", root_task_id="S",
+        data_root, run_id="", task_id="S", root_task_id="S",
         invocation_id="i-2", request={"prompt": "x"}, idempotency_key="i-2")
     assert requested is False and refusal["reason"] == "billing_authority_unavailable"
     assert refusal["billing_authority"] == "unreadable" and "budget" not in refusal["detail"]

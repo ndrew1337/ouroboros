@@ -37,6 +37,7 @@ class ReviewActorRecord:
     http_status: Optional[int] = None
     transport_status: str = ""
     reported_cause: str = ""  # the failing owner's reported cause; opaque, "" = none
+    failure_details: Dict[str, Any] = field(default_factory=dict)
     operation_id: str = ""
     operation_state: str = "settled"
     late_result_pending: bool = False
@@ -55,6 +56,7 @@ class ReviewActorRecord:
     review_wave_id: str = ""
     additional: bool = False
     cost_kind: str = "unknown"
+    outcome: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         # The durable id is the one the review substrate actually ran this row
@@ -73,6 +75,7 @@ class ReviewActorRecord:
             "tokens_out": self.tokens_out,
             "cost_usd": self.cost_usd,
             "cost_kind": self.cost_kind,
+            **({"outcome": dict(self.outcome)} if self.outcome else {}),
             "additional": self.additional,
             "slot": self.slot,
             # LEGACY-READ-ONLY fallback: every live producer stamps slot_id (the one
@@ -87,6 +90,7 @@ class ReviewActorRecord:
             "http_status": self.http_status,
             "transport_status": self.transport_status,
             **({"reported_cause": self.reported_cause} if self.reported_cause else {}),
+            **({"failure_details": dict(self.failure_details)} if self.failure_details else {}),
             "operation_id": self.operation_id,
             "operation_state": self.operation_state,
             "late_result_pending": self.late_result_pending,
@@ -110,11 +114,12 @@ class ParsedTriadReview:
 
     @property
     def quorum_met(self) -> bool:
-        from ouroboros.config import adaptive_quorum
-        # actor_records holds ALL dispatched reviewers (responsive + errored), so
-        # this honors the configured count: configured=1 & responded=1 -> met;
-        # configured=3 & responded=1 -> NOT met (loud degraded surfaces).
-        return len(self.responsive_models) >= adaptive_quorum(sum(not r.additional for r in self.actor_records))
+        from ouroboros.review_ledger import reduce_verdict
+
+        rows = [{"seat_id": r.slot_id, "status": r.status, "parts": r.parts, "answers": r.answers}
+                for r in self.actor_records if not r.additional]
+        quorum = reduce_verdict(rows)["quorum"]
+        return quorum["responded"] >= max(1, quorum["required"])
 
     @property
     def degraded_reasons(self) -> List[str]:
@@ -134,6 +139,7 @@ def _actor_record(
     raw_text: str,
     parsed_items: Optional[List[Dict[str, Any]]] = None,
 ) -> ReviewActorRecord:
+    cost = actor.get("cost_estimate") if actor.get("cost_estimate") is not None else actor.get("cost_usd")
     return ReviewActorRecord(
         model_id=model_label,
         status=status,
@@ -141,9 +147,9 @@ def _actor_record(
         parsed_items=parsed_items or [],
         tokens_in=int(actor.get("tokens_in", 0) or 0),
         tokens_out=int(actor.get("tokens_out", 0) or 0),
-        cost_usd=(float(actor["cost_estimate"]) if actor.get("cost_estimate") is not None else None),
+        cost_usd=float(cost) if cost is not None else None,
         additional=bool(actor.get("additional")),
-        cost_kind=str(actor.get("cost_kind") or ("measured" if actor.get("cost_estimate") is not None else "unknown")),
+        cost_kind=str(actor.get("cost_kind") or ("measured" if cost is not None else "unknown")),
         slot=idx + 1,
         slot_id=str(actor.get("slot_id") or ""),
         prompt_ref=dict(actor.get("prompt_ref") or {}),
@@ -153,6 +159,7 @@ def _actor_record(
         http_status=(int(actor["http_status"]) if isinstance(actor.get("http_status"), int) else None),
         transport_status=str(actor.get("transport_status") or ""),
         reported_cause=str(actor.get("reported_cause") or ""),
+        failure_details=dict(actor.get("failure_details") or {}),
         operation_id=str(actor.get("operation_id") or ""),
         operation_state=str(actor.get("operation_state") or "settled"),
         late_result_pending=bool(actor.get("late_result_pending")),
@@ -390,7 +397,7 @@ def _change_items(entries: List[Dict[str, Any]], *, model_label: str, slot_id: s
         items.append({
             "item": item, "verdict": verdict,
             "severity": str(entry.get("severity") or "advisory").lower(),
-            "reason": str(entry.get("reason") or "").strip(),
+            "reason": str(entry.get("reason") or entry.get("evidence") or "").strip(),
             "model": model_label, "slot_id": slot_id,
             **({"obligation_id": str(entry.get("obligation_id") or "")} if entry.get("obligation_id") else {}),
         })
@@ -487,74 +494,92 @@ def parse_two_part_answer(raw_text: str, parts: Sequence[str], *, model_label: s
     return answers
 
 
-def parse_seat_answers(result_json: Dict[str, Any], row_parts: Dict[str, Sequence[str]], *,
-                       severity_policy: Any = None) -> ParsedTriadReview:
-    """Every seat of ONE wave → one actor record with ``parts`` and ``answers``.
-    ``row_parts`` maps slot id → the parts that seat was asked; a seat asked only
-    ``change`` answers contract A (the findings array, ``[]`` + NO_FINDINGS clean),
-    as does every single-question seat (``result``, ``skill``); a seat asked
-    ``coupling`` answers contract B (``parse_two_part_answer``). A seat is
-    *responsive* for quorum when at least one asked part has a usable answer;
-    ``findings`` carries every FAIL item of every responsive seat. ``severity_policy``
-    (``review_ledger.apply_severity_policy``) decides a contract-A finding's severity
-    by its item before the seat's verdict is read."""
+def parse_seat_answer(actor: Dict[str, Any], parts: Sequence[str], *, idx: int = 0,
+                      severity_policy: Any = None) -> ReviewActorRecord:
+    """Read the saved outcome, or finalize one legacy response by its declared parts."""
     from ouroboros.tools.scope_required_sources import coverage_state
 
-    findings: List[Dict[str, Any]] = []
-    responsive: List[str] = []
-    records: List[ReviewActorRecord] = []
+    model = str(actor.get("model") or actor.get("request_model") or "").strip()
+    raw_text = str(actor.get("text") or "")
+    model_label = model or "reviewer"
+    slot_id = str(actor.get("slot_id") or "")
+    parts = [p for p in ("change", "coupling", "result", "skill") if p in tuple(parts or ("change",))]
+    outcome = actor.get("outcome") or {}
+    if outcome:
+        record = _actor_record(actor, idx=idx, model_label=model_label,
+                               status=outcome["status"], raw_text=raw_text,
+                               parsed_items=outcome.get("parsed_items") or [])
+        record.parts = list(outcome["parts"])
+        record.answers = dict(outcome["answers"])
+        record.coverage = str(outcome.get("read_coverage") or "")
+        record.context_manifest = dict(outcome.get("context_manifest") or {})
+        record.additional = bool(outcome.get("additional"))
+        record.outcome = dict(outcome)
+        return record
+    state = str(actor.get("operation_state") or "")
+    if (actor.get("late_result_pending") and state != "custody_lost") or state in {"in_flight", "pending_dispatch"}:
+        record = _actor_record(actor, idx=idx, model_label=model_label, status="pending", raw_text=raw_text)
+    elif actor.get("transport_status") == "interrupted" or actor.get("failure_code") == "review_run_cancelled":
+        record = _actor_record(actor, idx=idx, model_label=model_label, status="interrupted", raw_text=raw_text)
+    elif state == "not_dispatched":
+        record = _actor_record(actor, idx=idx, model_label=model_label, status="not_dispatched", raw_text=raw_text)
+    elif str(actor.get("verdict") or "").upper() == "ERROR":
+        record = _actor_record(actor, idx=idx, model_label=model_label, status="error", raw_text=raw_text)
+    else:
+        if len(parts) == 1 and parts[0] != "coupling":
+            # Contract A: the change question of a packet seat, and the one question of every
+            # single-question seat (a result, a skill payload), answer the findings array.
+            parsed = extract_json_array(raw_text, normalize=True)
+            if parsed is None or (not parsed and not empty_array_is_verified_clean(raw_text)):
+                answers = None
+            else:
+                items = _change_items([e for e in parsed if isinstance(e, dict)], model_label=model_label,
+                                      slot_id=slot_id)
+                if parsed and not items:
+                    # The seat wrote entries the gate cannot read (no ``item``, a verdict outside
+                    # PASS/FAIL): no answer, not a clean one — the rule contract B applies to its
+                    # change block, for every contract-A part alike.
+                    answers = {parts[0]: _unanswered(parts[0], (
+                        f"none of the {len(parsed)} entries has an item and a PASS/FAIL verdict"))}
+                else:
+                    answers = {parts[0]: _change_answer(items, severity_policy)}
+        else:
+            answers = parse_two_part_answer(raw_text, parts, model_label=model_label, slot_id=slot_id)
+        if answers is None:
+            record = _actor_record(actor, idx=idx, model_label=model_label, status="parse_failure", raw_text=raw_text)
+        else:
+            usable = [p for p in parts if answers[p]["status"] == "responded"]
+            items = [f for p in usable for f in answers[p].pop("items", answers[p]["findings"])]
+            record = _actor_record(actor, idx=idx, model_label=model_label,
+                                   status="responded" if usable else "parse_failure", raw_text=raw_text,
+                                   parsed_items=items)
+            record.answers = answers
+
+    record.parts = parts
+    if "coupling" in parts:
+        fact = actor.get("native_read_coverage")
+        record.coverage = coverage_state(fact)
+        if isinstance(fact, dict):
+            record.context_manifest = {"native_read_coverage": fact,
+                                       "read_provenance": str(actor.get("read_provenance") or "")}
+    return record
+
+
+def parse_seat_answers(result_json: Dict[str, Any], row_parts: Dict[str, Sequence[str]], *,
+                       severity_policy: Any = None) -> ParsedTriadReview:
+    """Read ONE producer outcome per seat; legacy rows use the same contract finalizer."""
+    findings, responsive, records = [], [], []
     for idx, actor in enumerate(result_json.get("results") or []):
         if not isinstance(actor, dict):
             continue
-        model = str(actor.get("model") or actor.get("request_model") or "").strip()
-        raw_text = str(actor.get("text") or "")
-        model_label = model or "reviewer"
         slot_id = str(actor.get("slot_id") or "")
-        parts = [p for p in ("change", "coupling", "result", "skill") if p in tuple(row_parts.get(slot_id) or ("change",))]
-        if str(actor.get("operation_state") or "") == "not_dispatched":
-            record = _actor_record(actor, idx=idx, model_label=model_label, status="not_dispatched", raw_text=raw_text)
-        elif str(actor.get("verdict") or "").upper() == "ERROR":
-            record = _actor_record(actor, idx=idx, model_label=model_label, status="error", raw_text=raw_text)
-        else:
-            if len(parts) == 1 and parts[0] != "coupling":
-                # Contract A: the change question of a packet seat, and the one question of every
-                # single-question seat (a result, a skill payload), answer the findings array.
-                parsed = extract_json_array(raw_text, normalize=True)
-                if parsed is None or (not parsed and not empty_array_is_verified_clean(raw_text)):
-                    answers = None
-                else:
-                    items = _change_items([e for e in parsed if isinstance(e, dict)], model_label=model_label,
-                                          slot_id=slot_id)
-                    if parsed and not items:
-                        # The seat wrote entries the gate cannot read (no ``item``, a verdict outside
-                        # PASS/FAIL): no answer, not a clean one — the rule contract B applies to its
-                        # change block, for every contract-A part alike.
-                        answers = {parts[0]: _unanswered(parts[0], (
-                            f"none of the {len(parsed)} entries has an item and a PASS/FAIL verdict"))}
-                    else:
-                        answers = {parts[0]: _change_answer(items, severity_policy)}
-            else:
-                answers = parse_two_part_answer(raw_text, parts, model_label=model_label, slot_id=slot_id)
-            if answers is None:
-                record = _actor_record(actor, idx=idx, model_label=model_label, status="parse_failure", raw_text=raw_text)
-            else:
-                usable = [p for p in parts if answers[p]["status"] == "responded"]
-                items = [f for p in usable for f in answers[p].pop("items", answers[p]["findings"])]
-                record = _actor_record(actor, idx=idx, model_label=model_label,
-                                       status="responded" if usable else "parse_failure", raw_text=raw_text,
-                                       parsed_items=items)
-                record.answers = answers
-                if usable:
-                    findings.extend(f for p in usable for f in answers[p]["findings"])
-                    responsive.append(f"{model_label} [{slot_id}]" if slot_id else f"{model_label}#{idx + 1}")
-        record.parts = parts
-        if "coupling" in parts:
-            fact = actor.get("native_read_coverage")
-            record.coverage = coverage_state(fact)
-            if isinstance(fact, dict):
-                record.context_manifest = {"native_read_coverage": fact,
-                                           "read_provenance": str(actor.get("read_provenance") or "")}
+        record = parse_seat_answer(actor, row_parts.get(slot_id) or ("change",), idx=idx,
+                                   severity_policy=severity_policy)
         records.append(record)
+        if record.status == "responded":
+            findings.extend(f for answer in record.answers.values() for f in answer.get("findings", []))
+            if not record.additional:
+                responsive.append(f"{record.model_id} [{slot_id}]" if slot_id else f"{record.model_id}#{idx + 1}")
     return ParsedTriadReview(findings=findings, responsive_models=responsive, actor_records=records)
 
 
@@ -702,6 +727,16 @@ def empty_array_is_verified_clean(raw_text: str) -> bool:
     return bool(_CLEAN_EMPTY_RESPONSE_RE.match(text))
 
 
+def _not_model_loss(row: Dict[str, Any]) -> bool:
+    """Leaving a live wave or interrupting its host is never a reviewer failure."""
+    state = str(row.get("operation_state") or "")
+    return (state in {"in_flight", "pending_dispatch", "interrupted"}
+            or (row.get("late_result_pending") and state != "custody_lost")
+            or row.get("transport_status") == "interrupted"
+            or row.get("failure_code") == "review_run_cancelled"
+            or bool((row.get("usage") or {}).get("owner_pause_preparing")))
+
+
 def emit_review_model_error_events(ctx: Any, parsed: ParsedTriadReview, *, source: str, skill_name: str = "") -> None:
     """Parser-level failures (error, parse_failure, partial) through the one durable owner.
 
@@ -731,7 +766,7 @@ def emit_review_run_errors(ctx: Any, request: Any, actors: Sequence[Any], *, dri
     """
     for actor in actors:
         actor.review_wave_id = str(getattr(actor, "review_wave_id", "") or getattr(request, "resolved_wave_id", "") or "")
-        if actor.error_event_logged or actor.parse_status == "awaiting" or actor.late_result_pending:
+        if actor.error_event_logged:
             continue
         if actor.status not in {"error", "not_dispatched", "empty"} and (
                 actor.parse_status != "malformed" or REVIEW_OUTPUT_SHAPES.get(request.surface) in ("report", "plan_reply")):
@@ -810,6 +845,8 @@ def _append_review_model_error(ctx: Any, row: Dict[str, Any], *, source: str,
         from ouroboros.usage_accounting import current_usage_scope
         from ouroboros.review_records import review_failure_facts
 
+        if _not_model_loss(row):
+            return False
         row = {**row, **review_failure_facts(row)}
         binding, usage = row.get("recovery_binding") or {}, row.get("usage") or {}
         receipt = usage.get("claudexor") if isinstance(usage.get("claudexor"), dict) else {}

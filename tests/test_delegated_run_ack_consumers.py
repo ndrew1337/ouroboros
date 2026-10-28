@@ -11,7 +11,7 @@ callers and the one same-attempt rebuild, not the helper alone:
 * an owner-wait planned restart resumes the SAME attempt through ``run_llm_loop``:
   the first request after it omits the own-run line exactly when the restored
   dialogue carries the terminal wake; otherwise the unread-result line names
-  the output the body collected at loop exit, without acknowledging a wake;
+  the output the body collected during the attempt, named at the loop's exit, without acknowledging a wake;
 * the row survives the marker-filtered custody chain and the current closed-run
   receipt, so every custody reader replays the same acknowledgement.
 
@@ -165,13 +165,19 @@ def test_a_same_attempt_cold_resume_keeps_the_restored_wake_and_its_ack(tmp_path
         return {"role": "assistant", "content": "parking for the owner", "tool_calls": []}, 0.0
 
     monkeypatch.setattr(loop, "_dispatch_round_model", model)
+    if not waited:
+        # The body's collector retains the settled output during the attempt (#2205); the loop's
+        # exit then names the never-read omission.
+        from ouroboros.delegate_collection import collect_terminal
+
+        collect_terminal(tmp_path, "run-1", gateway=engine)
     loop.run_llm_loop(**_loop_kwargs(tmp_path, live, first))
     transcript = live._ctx.messages
     tool_rows = [row for row in transcript if row.get("role") == "tool" and row.get("tool_call_id") == "call-wait"]
     if waited:
         from ouroboros.delegate_supervision import supervision_checkpoint
 
-        wake_id = supervision_checkpoint(live._ctx)["last_acknowledged_wake"]["wake_id"]
+        wake_id = supervision_checkpoint(live._ctx)["runs"]["run-1"]["last_acknowledged_wake"]["wake_id"]
         assert len(tool_rows) == 1 and '"status": "terminal"' in tool_rows[0]["content"]
         assert wake_id in tool_rows[0]["content"]
         assert _acks(tmp_path) == [("run-1", TASK, "1")]

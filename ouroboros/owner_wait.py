@@ -116,13 +116,18 @@ class OwnerWaitSuperseded(ValueError):
     """A compare-and-set lost: the wait row changed identity or state since its read."""
 
 
-def set_owner_wait(root: Any, task_id: str, wait: dict,
+def set_owner_wait(root: Any, task_id: str, wait: Any,
                    expected_wait_id: str | None = None, *, expected_state: str | None = None) -> dict:
-    """Update only the existing continuation projection, preserving siblings."""
+    """Update only the existing continuation projection, preserving siblings.
+
+    A callable ``wait`` derives the new row from the CURRENT one inside this same write: a
+    transition (``resumed``) never drops what another writer recorded on that wait meanwhile."""
     from ouroboros.task_results import (
         require_writable_task_result_schema,
         stamp_task_result_schema,
     )
+
+    written: dict = {}
 
     def update(current: dict) -> dict:
         require_writable_task_result_schema(current)
@@ -135,10 +140,12 @@ def set_owner_wait(root: Any, task_id: str, wait: dict,
             raise OwnerWaitSuperseded("owner wait identity changed")
         if expected_state is not None and old.get("state") != expected_state:
             raise OwnerWaitSuperseded("owner wait state changed")
-        return stamp_task_result_schema({**current, "owner_wait": dict(wait)})
+        written.clear()
+        written.update(wait(dict(old)) if callable(wait) else wait)
+        return stamp_task_result_schema({**current, "owner_wait": dict(written)})
 
     patch_document(root, task_id, update)
-    return dict(wait)
+    return dict(written)
 
 
 def _wait_bound_fields(ctx: Any) -> dict:
@@ -201,10 +208,16 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
         "open_relays": dict(getattr(ctx, "_open_relays", None) or {}),
         # Own routing acts still unconfirmed: a resumed turn reports their outcomes too.
         "unconfirmed_routing_acts": list(getattr(ctx, "unconfirmed_routing_acts", None) or []),
+        "restart": {
+            "request": dict(getattr(ctx, "pending_restart_request", None) or {}),
+            "reason": getattr(ctx, "pending_restart_reason", None),
+            "evolution": bool(getattr(ctx, "pending_restart_is_evolution", False)),
+        },
         "route": {key: getattr(ctx, key, None) for key in (
             "active_model", "active_effort", "active_use_local", "active_context_mode",
             "active_model_override", "active_effort_override", "active_use_local_override",
             "active_role_override", "route_wait_on_primary", "primary_route", "_route_facts_pending",
+            "route_choice",  # following its role, or the task's own (route_choice)
         )},
         "delivery_candidate": asdict(candidate) if candidate is not None else None,
         "delivery": {key: getattr(ctx, key, None) for key in (
@@ -217,7 +230,7 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
             "_presence_forced_declaration", "_presence_forced_pending", "_presence_completion_accepted",
             "_presence_selection_seq", "_presence_released",
             "_task_acceptance_sealed_fence_token", "_task_acceptance_sealed_fence_generation", "_owner_reply_revision",
-
+            "_owner_message_sent",
         ) if getattr(ctx, key, None) is not None},
         # The block keeps its stored name; the task-acceptance flags it once carried are gone
         # (a pre-fold continuation still has them: ``restore_continuation_state`` ignores them).
@@ -444,6 +457,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
     deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))
     parked = resume_requested = False
     outcome = "unknown"
+    from ouroboros import custody_owed
+
     while True:
         try:
             command = in_q.get(timeout=1.0)
@@ -464,6 +479,8 @@ def worker_owner_wait(wid: int, in_q: Any, out_q: Any, ctx: Any,
                     return outcome
                 elif phase == "refused":
                     raise RuntimeError(str(command.get("reason") or "owner wait refused"))
+        if custody_owed.pending():  # this park's own poll services what the worker owes (its wake lands here too)
+            custody_owed.drain()
         if not parked and (reason := _hold_control_reason(ctx)):
             from ouroboros.model_wait import ModelWaitInterrupted
 
@@ -539,8 +556,12 @@ def _sleep_wake(ctx: Any, checkpoint: dict) -> str | None:
         # A left review's park also ends at its wave's settlement, notice written or not.
         left = getattr(ctx, "_left_review_wait", None)
         binding = (checkpoint or {}).get("review_binding")
-        if binding and isinstance(left, dict) and left.get("binding") == binding and left.get("done"):
-            return str(left.get("wake_reason") or "review_settled")
+        if binding and isinstance(left, dict) and left.get("binding") == binding:
+            from ouroboros.review_waiting import wake_reason
+            reason = wake_reason(ctx, left)
+            if reason:
+                return "helper_result" if reason.startswith(("task:", "run:")) else reason
+            return str(left.get("wake_reason") or "review_settled") if left.get("done") else ""
         return "question_closed" if _question_closed(ctx, checkpoint) else None
     from ouroboros.model_sleep import wake_reason
     from ouroboros.store import acquisition_budget
@@ -597,7 +618,7 @@ def park_owner_pause_warm(limit_ctx: Any, ctx: Any, *, fence: dict, detached: li
     usage_for_state = {key: value for key, value in limit_ctx.accumulated_usage.items()
                        if key not in ("execution_status", "reason_code", "_best_effort_extracted",
                                       "budget_pause_hold", "_llm_round_started")}
-    from ouroboros.external_runs import STOP_POLICY_TASK_OWNED, observe_task_runs
+    from ouroboros.external_runs import STOP_POLICY_TASK_OWNED, episode_fields, observe_task_runs
 
     try:  # the member's OWN runs stop exactly as at a cold Pause; its reviewers' runs are spared
         from ouroboros import delegate_custody as custody
@@ -608,7 +629,7 @@ def park_owner_pause_warm(limit_ctx: Any, ctx: Any, *, fence: dict, detached: li
         external = {"runs": [], "custody_read": "failed", "error": f"{type(exc).__name__}: {str(exc)[:200]}"}
     pause = {"fence_id": str(fence.get("fence_id") or ""), "generation": int(fence.get("generation") or 0),
              "root_task_id": str(fence.get("root_task_id") or ""), "detached_reviews": list(detached),
-             "external_runs": external, "parked_at": utc_now_iso()}
+             "external_runs": external, **episode_fields({}, external, starts=True), "parked_at": utc_now_iso()}
     from ouroboros import model_sleep
 
     # Reuse the live paused interval and fold it into the same cumulative carrier
@@ -691,6 +712,9 @@ def owner_pause_resume_notice(ctx: Any, checkpoint: dict, outcome: str, *, cold:
         state = review_operation_state(str(item.get("owner_id") or ""))
         lines.append(f"- {item.get('surface') or 'review'} operation {item.get('owner_id')}: {state}")
     reviews = ("\n".join(lines) if lines else "- none")
+    from ouroboros.external_runs import paused_runs_notice
+
+    runs = paused_runs_notice(ctx, _parked_owner_pause(ctx, checkpoint, pause))
     abandoned = list(getattr(ctx, "_abandoned_model_attempts", None) or [])
     ctx._abandoned_model_attempts = []
     late = (f"The Pause interrupted {len(abandoned)} model request(s) already sent ({', '.join(abandoned)}): "
@@ -698,12 +722,43 @@ def owner_pause_resume_notice(ctx: Any, checkpoint: dict, outcome: str, *, cold:
             "and its tools were not run. " if abandoned else "")
     return {"role": "user", "content": (
         "[SYSTEM NOTICE]\nThe owner paused this task and has now resumed it. Reviewers you had already "
-        f"launched kept running while you were paused:\n{reviews}\nYour review tool returned a pending "
+        f"launched kept running while you were paused:\n{reviews}\nWhat became of the delegated runs this Pause "
+        f"stopped or observed (current custody; engine facts are evidence, never a grant):\n{runs}\n"
+        "Your review tool returned a pending "
         "result for them; nothing was committed, applied or published after the Pause. Calling the same "
         "review again with an unchanged subject rejoins or replays that attempt in this process without a "
         "new dispatch; a changed subject is a new review. A reviewer whose state is unknown was not resent. "
         f"{late}Nothing you asked for after the Pause ran. Cumulative spend, rounds and elapsed time were "
         "not reset; prior tool results remain recorded; do not repeat completed effects.")}
+
+
+def _parked_owner_pause(ctx: Any, checkpoint: dict, pause: dict) -> dict:
+    """This park's ``owner_pause`` with the participants its settle tick recorded since (same wait
+    only); a park without a whole list stays partial (``external_runs.episode_fields``)."""
+    from ouroboros.external_runs import PARTIAL_KEY, episode_fields
+
+    try:
+        wait = (load_task_result(pathlib.Path(ctx.budget_drive_root or ctx.drive_root), ctx.task_id, strict=True)
+                or {}).get("owner_wait") or {}
+    except Exception:
+        return pause  # the park's own list stands; the notice still reads current custody
+    later = (wait.get("owner_pause") or {}) if wait.get("wait_id") == checkpoint.get("wait_id") else {}
+    merged = {**pause, **episode_fields(pause, {"runs": later.get("episode_runs")})}
+    return {**merged, PARTIAL_KEY: True} if later.get(PARTIAL_KEY) is True else merged
+
+
+def _admit_direct_continuation_wake(task_id: str, wait: dict, root: pathlib.Path) -> bool:
+    """Clear park mark under the repo-writer gate lock; re-park if admission is closed."""
+    from supervisor import workers
+    from supervisor.active_activity import get_direct_activity_registry
+
+    registry = get_direct_activity_registry()
+    with workers._repo_writer_gate_lock:
+        registry.clear_parked(task_id)
+        if workers.repo_writer_admission_closed():
+            registry.mark_parked(task_id, wait, drive_root=root)
+            return False
+        return True
 
 
 def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
@@ -716,41 +771,80 @@ def direct_owner_wait(ctx: Any, checkpoint: dict) -> str:
     so Stop, the task deadline and the absolute ceiling keep precedence.
     """
     from ouroboros.deadline_utils import parse_deadline_ts, utc_now
+    from supervisor.active_activity import get_direct_activity_registry
 
     control = ctx.model_wait_context
     root = pathlib.Path(ctx.budget_drive_root or ctx.drive_root)
+    if getattr(ctx, "event_queue", None) is None:
+        from ouroboros.presence_owner_contact import flush_owner_events
+        flush_owner_events(root, ctx.pending_events)
     # Without a queue (a Presence turn may have none) the buffer keeps its events for the final flush.
     while ctx.pending_events and getattr(ctx, "event_queue", None) is not None:
         ctx.event_queue.put(dict(ctx.pending_events[0]))
         del ctx.pending_events[0]
-    wait = set_owner_wait(root, ctx.task_id, {**checkpoint, "state": "waiting"})
+    wait = set_owner_wait(root, ctx.task_id, {**checkpoint, "state": "waiting", "is_direct_chat": True})
+    get_direct_activity_registry().mark_parked(ctx.task_id, wait, drive_root=root)
     peek = OwnerMailboxPeek()
     deadline = parse_deadline_ts((checkpoint or {}).get("wait_deadline_at"))  # None = unbounded
     outcome = "unknown"
     warm_pause = checkpoint.get("reason") == REASON_OWNER_PAUSE_WARM
-    while not control.control_reason():
-        woke = _sleep_wake(ctx, checkpoint)
-        if woke:
-            outcome = woke
-            break
-        if warm_pause:
-            woke = _owner_pause_wake(ctx, checkpoint)
+    control_reason = ""
+    try:
+        while True:
+            control_reason = str(control.control_reason() or "")
+            if control_reason:
+                if control_reason not in {"finalize_requested", "finalize_now"}:
+                    break
+                if _admit_direct_continuation_wake(ctx.task_id, wait, root):
+                    break
+                time.sleep(0.05)
+                continue
+            woke = _sleep_wake(ctx, checkpoint)
             if woke:
-                outcome = woke
-                break
-        elif woke is None and peek.pending(
-                pathlib.Path(ctx.drive_root), ctx.task_id,
-                set(getattr(ctx, "_loop_mailbox_seen_ids", set())), ctx.task_attempt or 1):
-            break
-        if deadline is not None and utc_now() >= deadline:
-            outcome = "timeout"
-            break
-        time.sleep(1.0)
-    control_reason = control.control_reason()
+                if _admit_direct_continuation_wake(ctx.task_id, wait, root):
+                    outcome = woke
+                    break
+                time.sleep(0.05)
+                continue
+            if warm_pause:
+                woke = _owner_pause_wake(ctx, checkpoint)
+                if woke:
+                    if (woke.startswith("control:")
+                            and woke not in {"control:owner_resume", "control:owner_pause",
+                                             "control:finalize_requested", "control:finalize_now"}):
+                        outcome = woke
+                        break
+                    if _admit_direct_continuation_wake(ctx.task_id, wait, root):
+                        outcome = woke
+                        break
+                    time.sleep(0.05)
+                    continue
+            elif woke is None and peek.pending(
+                    pathlib.Path(ctx.drive_root), ctx.task_id,
+                    set(getattr(ctx, "_loop_mailbox_seen_ids", set())), ctx.task_attempt or 1):
+                if _admit_direct_continuation_wake(ctx.task_id, wait, root):
+                    break
+                time.sleep(0.05)
+                continue
+            if deadline is not None and utc_now() >= deadline:
+                if _admit_direct_continuation_wake(ctx.task_id, wait, root):
+                    outcome = "timeout"
+                    break
+                time.sleep(0.05)
+                continue
+            time.sleep(1.0)
+    finally:
+        get_direct_activity_registry().clear_parked(ctx.task_id)
+    if not control_reason:
+        # Every continuation exit above was already admitted (or is terminal); a late
+        # control only joins it. Re-checking admission here could re-park a stack that
+        # is already resuming and hide it from the update drain (#2191).
+        control_reason = str(control.control_reason() or "")
     outcome = (f"control:{control_reason}" if control_reason else outcome if warm_pause else
                _fresh_wake(ctx, str(checkpoint.get("quiz_id") or ""), outcome))
-    set_owner_wait(root, ctx.task_id,
-                   {**wait, "state": "resumed", "resume_reason": outcome}, wait["wait_id"])
+    # The current same wait, in one write: a settle tick's facts recorded meanwhile stay (#1562).
+    set_owner_wait(root, ctx.task_id, lambda current: {**current, "state": "resumed", "resume_reason": outcome},
+                   wait["wait_id"])
     if not outcome.startswith("control:"):
         announce_wait_ended(root, ctx.task_id, str(checkpoint.get("quiz_id") or ""),
                             int(getattr(ctx, "current_chat_id", 0) or 0))
@@ -764,9 +858,12 @@ def announce_wait_ended(root: Any, task_id: str, quiz_id: str, chat_id: int) -> 
     if not quiz_id:
         return
     try:
-        from ouroboros.owner_quiz import mark_wait_ended
+        from ouroboros.owner_quiz import mark_wait_ended, quiz_states
+        from ouroboros.presence_owner_contact import private_main_contact
 
         changed = mark_wait_ended(root, task_id, quiz_id)
+        block = quiz_states(root, task_id).get(quiz_id) or {}
+        chat_id = int(block.get("publication_chat_id", 1 if private_main_contact(block, task_id) else chat_id))
     except Exception:
         log.debug("owner-wait end not recorded on quiz %s", quiz_id, exc_info=True)
         return
@@ -854,6 +951,9 @@ def append_wake_notice(ctx: Any, checkpoint: dict, outcome: Any, messages: list)
     outcome = str(outcome or "")
     if checkpoint.get("reason") == REASON_OWNER_PAUSE_WARM:
         return  # ``park_owner_pause_warm`` writes the Resume notice itself
+    if checkpoint.get("review_binding") and (outcome in {"helper_result", "review_result", "timeout"} or outcome.startswith("run_question:")):
+        from ouroboros.review_waiting import append_helper_notice
+        append_helper_notice(ctx, messages)
     if checkpoint.get("review_binding") or not (
             outcome in {"timeout", "hurry", "unknown", "question_closed"} or outcome.startswith("mail")):
         return
@@ -899,9 +999,9 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
         ctx._owner_wait_deadline_at = ""
         return
     callback = getattr(ctx, "owner_wait_callback", None)
-    # A Presence author has only the narrow review-wait owner (``presence_continuation``): it
-    # parks for a review it left and never gains owner quizzes, sleeps or budget pauses through it.
-    review_callback = getattr(ctx, "review_wait_callback", None) if review_binding else None
+    # Presence validates its own review/private question at this narrow seam;
+    # the callback grants no sleep, detach, owner Pause or budget-pause capability.
+    review_callback = getattr(ctx, "review_wait_callback", None)
     if not callable(callback) and not callable(review_callback):
         raise RuntimeError("required owner wait has no worker continuation owner")
     checkpoint = checkpoint_owner_wait(ctx, messages, trace, usage, round_idx, tool_schemas, seen,
@@ -909,7 +1009,8 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
     from ouroboros import model_sleep
 
     if not callable(callback):
-        review_callback(ctx, checkpoint, messages)
+        outcome = review_callback(ctx, checkpoint, messages)
+        append_wake_notice(ctx, checkpoint, outcome, messages)
     elif sleep := checkpoint.get("sleep"):
         model_sleep.begin(ctx)
         checkpoint["sleep_started_at"] = ctx._model_sleep_started
@@ -945,6 +1046,8 @@ def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress
         return False
     restored = wait.get("owner") != PROCESS_TOKEN
     if str(wait.get("msg_id") or "") in limit_ctx.owner_msg_seen:
+        ctx._review_wait_selection = dict(wait)
+        ctx._left_review_wait = None
         return False  # its notice was read: that wave is over
     from ouroboros.loop_messages import _emit_round_progress
 
@@ -958,6 +1061,11 @@ def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress
         limit_ctx.messages.append({"role": "user", "content": left_review_custody_note(wait)})
         return True
     if not wait.get("done"):
+        from ouroboros.review_waiting import wake_reason
+        if reason := wake_reason(ctx, wait):
+            append_wake_notice(ctx, {"review_binding": wait.get("binding")},
+                               "helper_result" if reason.startswith(("task:", "run:")) else reason, limit_ctx.messages)
+            return True
         wait_after_tools(ctx, limit_ctx.messages, limit_ctx.llm_trace, limit_ctx.accumulated_usage,
                          limit_ctx.round_idx, limit_ctx.tool_schemas, limit_ctx.owner_msg_seen,
                          review_binding=str(wait.get("binding") or ""))
@@ -1001,6 +1109,15 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
     ctx._held_owner_messages = dict(state.get("held_owner_messages") or {})
     ctx._open_relays = dict(state.get("open_relays") or {})
     ctx.unconfirmed_routing_acts = [dict(act) for act in state.get("unconfirmed_routing_acts") or [] if isinstance(act, dict)]
+    restart = state.get("restart") or {}
+    request = restart.get("request") or {}
+    # Cold Pause/Resume keeps the requester's obligation without sending again.
+    # A new task or attempt inherits no authority to finish this Restart.
+    if (request.get("task_id"), request.get("task_attempt")) == (
+            ctx.task_id, int(getattr(ctx, "task_attempt", None) or 1)):
+        ctx.pending_restart_request = dict(request)
+        ctx.pending_restart_reason = restart.get("reason")
+        ctx.pending_restart_is_evolution = bool(restart.get("evolution"))
     # Match the agent's native handoff clock; a budget grant overrides it separately.
     ctx._budget_paused_sec = budget_paused_seconds(adopt_handoff_clock(
         state.get("model_wait") or {}, getattr(ctx, "owner_wait_resume", None)))
@@ -1010,6 +1127,10 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
               if key in {"_acceptance_pending_review_choice", "_left_review_wait"}}
     for key, value in {**state["route"], **state["delivery"], **review}.items():
         setattr(ctx, key, value)
+    from ouroboros.route_choice import restored_choice
+
+    ctx.route_choice = restored_choice(ctx, state)  # a saved choice, else the legacy classification (D5)
+    ctx._route_binding = None  # the first round compares to the restored acting route (route_choice.round_route)
     candidate = state.get("delivery_candidate")
     ctx._delivery_candidate = DeliveryCandidate(**{key: value for key, value in candidate.items()
         if key != "repair_attempted"}) if candidate else None
@@ -1093,7 +1214,7 @@ def resume_native_loop(tools: Any, state: dict, messages: list, trace: dict,
 
 
 def prepare_owner_wait_handoffs(root: Any, running: dict, transaction_id: str, *,
-                                include_sleep: bool = True) -> set[str]:
+                                include_sleep: bool = True, direct: Any = None) -> set[str]:
     """Prepare returning waits; owner-Pause keeps its own retention.
 
     Planned restarts and updates may return a sleeper to its existing wait.
@@ -1101,8 +1222,20 @@ def prepare_owner_wait_handoffs(root: Any, running: dict, transaction_id: str, *
     """
     selected = set()
     reasons = {"owner", "review", "sleep"} if include_sleep else {"owner", "review"}
-    for task_id, meta in running.items():
-        task = meta.get("task") or {}
+    if direct is None:
+        try:
+            from supervisor.workers import direct_chat_turns
+
+            direct = direct_chat_turns()
+        except Exception:
+            direct = ()
+    candidates = [
+        *((str(task_id or ""), (meta or {}).get("task") or {}) for task_id, meta in (running or {}).items()),
+        *((str((task or {}).get("id") or ""), task if isinstance(task, dict) else {}) for task in (direct or ())),
+    ]
+    for task_id, task in candidates:
+        if not task_id or task_id in selected:
+            continue
         try:
             row = load_task_result(root, task_id, strict=True) or {}
         except (OSError, ValueError, TypeError, RuntimeError):

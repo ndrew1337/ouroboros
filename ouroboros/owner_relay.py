@@ -117,13 +117,14 @@ def relay_envelope(relay_id: str, quotes: list, *, chat_id: int, summary: str = 
 
 
 def relay_sender_facts(root, teller_task_id: str) -> dict:
-    """Where a note was written, for the receiving room's note card: the teller's room, else its title."""
+    """Where a note was written, for the receiving room's note card: the teller's room, else its name ("" for a
+    nameless work: the card says `Another work`)."""
     from ouroboros.task_results import load_task_result
     task = load_task_result(root, teller_task_id) if teller_task_id else None
     if not task:
         return {}
     facts = relay_target_facts(root, teller_task_id, task)
-    name = facts["target_titles"][0] if facts["project_chat_id"] == 0 else facts["project_name"]
+    name = (facts["target_titles"] or [""])[0] if facts["project_chat_id"] == 0 else facts["project_name"]
     return {"task_id": teller_task_id, "chat_id": facts["project_chat_id"], "name": name}
 
 
@@ -224,28 +225,40 @@ def acknowledge_relay(root, target: str, entry: dict) -> None:
                                    **relay_target_facts(root, target))
 
 
+def work_display_name(task) -> str:
+    """The work's name as the UI shows it (room_work.js: its suggested name, then its title); never its id or its text."""
+    return str((task or {}).get("suggested_name") or (task or {}).get("title") or "").strip()
+
+
 def relay_target_facts(root, target: str, task=None) -> dict:
     from ouroboros.projects_registry import project_chat_for_task, list_reserved_projects
     from ouroboros.task_results import load_task_result
     task = task or load_task_result(root, target) or {}
     chat_id = project_chat_for_task(root, target) or task.get("chat_id", 1)
     project = next((p for p in list_reserved_projects(root) if p["chat_id"] == chat_id), {})
+    name = work_display_name(task)  # never the work's text or id: a nameless work is the receipt's `the work`
     return {"project_id": str(project.get("id") or ""), "project_name": str(project.get("name") or ("Main" if chat_id else "Hidden")),
-            "project_chat_id": int(chat_id), "target_task_ids": [target],
-            "target_titles": [str(task.get("title") or task.get("text") or target)]}
+            "project_chat_id": int(chat_id), "target_task_ids": [target], "target_titles": [name] if name else []}
 
 
 def publish_relay_ack(root, target: str, relay: dict, bridge) -> None:
-    """The receiver's saved ACK updates the same source annotation live."""
+    """The receiver's saved ACK updates the same source annotation live, with the row as saved (#968),
+    never a second read of the work. A read row the sidecar could not take still goes out from the
+    work's facts, as before: the mailbox ACK is the authority."""
     if bridge is None:
         return
-    facts = relay_target_facts(root, target)
+    from ouroboros.project_dialogue import ROUTING_RECEIPT_FIELDS, chat_annotation_receipt
     for quote in relay.get("quotes") or []:
         source = quote["source"]
         if source.get("client_message_id"):
-            bridge.send_routing_ack(source["chat_id"], client_message_id=source["client_message_id"],
-                                    action="steer_task", target=target, status="read",
-                                    routing_token=relay["relay_id"], **facts)
+            try:
+                saved = chat_annotation_receipt(root, source["client_message_id"], relay["relay_id"])
+            except OSError:  # an unreadable sidecar sends the ack from the work's facts, as before
+                saved = {}
+            fields = ({key: saved[key] for key in ROUTING_RECEIPT_FIELDS if key in saved} if saved.get("status") == "read"
+                      else {"action": "steer_task", "target": target, "status": "read",
+                            "routing_token": relay["relay_id"], **relay_target_facts(root, target)})
+            bridge.send_routing_ack(source["chat_id"], client_message_id=source["client_message_id"], **fields)
 
 
 def publish_relay(root, target: str, entry: dict, bridge, task=None) -> None:
@@ -254,6 +267,8 @@ def publish_relay(root, target: str, entry: dict, bridge, task=None) -> None:
     from supervisor.message_bus import log_chat
     from ouroboros import dialogue_store
     from ouroboros.chat_references import projection_fields
+    from ouroboros.task_results import load_task_result
+    task = task or load_task_result(root, target) or {}
     facts = relay_target_facts(root, target, task)
     with _INGRESS_LOCK:
         # The saved row of this relay id, by its indexed client id: an append-before-receipt crash
@@ -261,11 +276,16 @@ def publish_relay(root, target: str, entry: dict, bridge, task=None) -> None:
         stored = next((dict(found.row) for found in dialogue_store.rows_by_client_id(root, entry["msg_id"])
                        if found.row.get("type") == KIND_RELAY), None)
         if stored is None:
-            # The saved row also names the room the note came from (the mailbox entry keeps its identity bytes).
+            # The saved row also names the room the note came from and the work it was written for, by the name
+            # the UI showed then (the mailbox entry keeps its identity bytes; Main's note card reads the receiver
+            # from it, and says `this work` for a work without a readable name).
             sender = relay_sender_facts(root, str(entry.get("source_task_id") or ""))
+            title = work_display_name(task)
+            receiver = {"task_id": target, **({"title": title} if title else {})}
             stored = log_chat("out", facts["project_chat_id"], 0, entry["text"], ts=entry["ts"],
                               task_id=target, record_type=KIND_RELAY, client_message_id=entry["msg_id"],
-                              message_meta={"relay": {**entry["relay"], **({"sender": sender} if sender else {})}},
+                              message_meta={"relay": {**entry["relay"], **({"sender": sender} if sender else {}),
+                                                      "target": receiver}},
                               drive_root=root, require_write=True)
     if bridge is not None and stored["chat_id"]:
         try:

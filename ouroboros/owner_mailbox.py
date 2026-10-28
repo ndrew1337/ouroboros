@@ -344,8 +344,10 @@ def write_task_message(
     relayed_from_task_id: str = "",
     msg_id: Optional[str] = None,
     review_feedback: Optional[Dict[str, Any]] = None,
+    work_attention: Optional[Dict[str, Any]] = None,
     relation: str = "",
     sender_origin: Optional[Dict[str, Any]] = None,
+    reply_to: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an addressed task-tree message without forging owner provenance.
 
@@ -355,6 +357,9 @@ def write_task_message(
     room/event), never the author of the words it quotes.
     """
 
+    from ouroboros.delegate_reply import normalize_reply_to
+
+    address = normalize_reply_to(reply_to)
     if provenance not in TASK_MESSAGE_PROVENANCES:
         return False
     from ouroboros.install_identity import StoreForeign, require_owned_root
@@ -370,6 +375,8 @@ def write_task_message(
         "provenance": provenance,
         "source_task_id": str(source_task_id or ""),
     }
+    if address is not None:
+        entry["reply_to"] = address
     if relayed_from_task_id:
         entry["relayed_from_task_id"] = str(relayed_from_task_id)
     if str(relation or ""):
@@ -378,6 +385,8 @@ def write_task_message(
         entry["sender_origin"] = {str(key): str(value) for key, value in dict(sender_origin).items()}
     if provenance == "system" and isinstance(review_feedback, dict):
         entry["review_feedback"] = dict(review_feedback)
+    if provenance == "system" and isinstance(work_attention, dict):
+        entry["work_attention"] = dict(work_attention)
     try:
         return _append_mail(drive_root, task_id, path, entry)
     except StoreForeign:
@@ -496,7 +505,11 @@ def deliver_task_message(
         prefix = f"[Message from peer task {source}{label}]"
     else:
         prefix = f"[Message from ancestor task {source}]"
-    append_message(f"{prefix}\n{entry.get('text') or ''}")
+    from ouroboros.delegate_reply import reply_instruction
+
+    address = entry.get("reply_to")
+    instruction = reply_instruction(address)
+    append_message(f"{prefix}\n{instruction + chr(10) if instruction else ''}{entry.get('text') or ''}")
     if event_queue is not None:
         try:
             event_queue.put_nowait({
@@ -504,6 +517,7 @@ def deliver_task_message(
                 "source_task_id": source, "provenance": provenance,
                 "relayed_from_task_id": relayed,
                 **({"relation": relation} if relation else {}),
+                **({"reply_to": address} if address else {}),
                 # A bounded preview for the receiver's visible timeline row
                 # (owner 5=A); the full text is in the receiver's transcript.
                 "text_preview": str(entry.get("text") or "")[:200],
@@ -788,9 +802,13 @@ def drain_owner_entries(
                 if attempt_key is not None and kind in {KIND_OWNER_TEXT, "relay_entry"}:
                     drained["_owner_attempt_key"] = attempt_key
                 if kind == KIND_TASK_MESSAGE:
+                    if isinstance(entry.get("reply_to"), dict):
+                        drained["reply_to"] = dict(entry["reply_to"])
                     drained["provenance"] = str(entry.get("provenance") or "ancestor_task")
                     if drained["provenance"] == "system" and isinstance(entry.get("review_feedback"), dict):
                         drained["review_feedback"] = dict(entry["review_feedback"])
+                    if drained["provenance"] == "system" and isinstance(entry.get("work_attention"), dict):
+                        drained["work_attention"] = dict(entry["work_attention"])
                     drained["source_task_id"] = str(entry.get("source_task_id") or "")
                     drained["relayed_from_task_id"] = str(entry.get("relayed_from_task_id") or "")
                     # The peer relation is a written fact the renderer reads;
@@ -890,15 +908,15 @@ def mailbox_drain_ended(task_drive: pathlib.Path, task_id: str) -> bool:
     A worker may stay RUNNING to finish paid post-work after its answer settled
     (TZ-2 D15). Its mailbox is then only cleaned up, never read again, so owner
     mail and quiz answers must not be labelled delivered into it — the routing
-    guard and the quiz ingress both ask this one fact. The actor's drive is read,
-    not the canonical row: split-root copyback can lag the settlement. Mail that
-    lands after the drain ended is ``MAIL_RETAINED_UNREAD`` (``mail_write_receipt``):
-    the task's result keeps it as unread mail.
+    guard and the quiz ingress both ask this one fact: the typed status column of
+    the actor's drive, never its body (split-root copyback can lag the settlement
+    in the canonical row). Mail that lands after the drain ended is
+    ``MAIL_RETAINED_UNREAD`` (``mail_write_receipt``): the result keeps it unread.
     """
-    from ouroboros.task_results import load_task_result
     from ouroboros.task_status import SETTLED_STATUSES
+    from ouroboros.task_store import task_drive_status
 
-    return str((load_task_result(task_drive, task_id) or {}).get("status") or "") in SETTLED_STATUSES
+    return task_drive_status(task_drive, [task_id]).get(str(task_id), ("", ""))[0] in SETTLED_STATUSES
 
 
 # Receipt vocabulary for a message written into a task's mailbox. A write proves only

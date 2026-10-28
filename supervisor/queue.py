@@ -275,6 +275,7 @@ def enqueue_task(
     task: Dict[str, Any], front: bool = False, *, restoring_snapshot: bool = False,
     consciousness_window: Optional[Dict[str, Any]] = None, continuation: bool = False,
     project_admission: Optional[Dict[str, Any]] = None, timeout_retry: bool = False,
+    durable: bool = False,
 ) -> Dict[str, Any]:
     """Add task to PENDING (thread-safe: HTTP handlers enqueue concurrently
     with the supervisor main loop, so the mutation must hold the queue lock).
@@ -290,6 +291,7 @@ def enqueue_task(
     ``timeout_retry``: the reaper's own retry admission (``apply_budget_root_admission_fence``)."""
     t = dict(task)
     from ouroboros.consciousness_authority import work_kind
+    from ouroboros.server_restart import agent_restart_pending
     metadata = t.get("metadata") if isinstance(t.get("metadata"), dict) else {}
     metadata["work_kind"] = work_kind({"origin_message_ref": t.get("origin_message_ref"), **metadata})
     t["metadata"] = metadata
@@ -298,6 +300,11 @@ def enqueue_task(
         t.pop("_consciousness_continuation", None)  # never a caller-supplied marker
         if continuation:
             t["_consciousness_continuation"] = True
+    subagents_settings = None
+    if (not restoring_snapshot and not (t.get("parent_task_id") or metadata.get("parent_task_id"))
+            and "subagents_mode" not in metadata):
+        from ouroboros.config import load_settings
+        subagents_settings = load_settings()
     attach_task_contract(apply_consciousness_authority(t))
     from ouroboros.tool_access_roots import freeze_tool_profile
     freeze_tool_profile(t)
@@ -328,6 +335,11 @@ def enqueue_task(
         admission_token = str(t.pop("_admission_token", "") or "")
         task_id = str(t.get("id") or "").strip()
         reserved_token = str(ADMISSION_RESERVATIONS.get(task_id) or "")
+        if agent_restart_pending() and RETURNS_NAMED and not restoring_snapshot:
+            if ADMISSION_RESERVATIONS.get(task_id) == admission_token:
+                ADMISSION_RESERVATIONS.pop(task_id, None)
+            t["_admission_blocked"] = "restart_intake_closed"
+            return t
         if reserved_token and admission_token != reserved_token:
             # A reservation owns this id until its request either enqueues or releases it.
             # Tokenless internal callers and competing ingress must not consume/collide with it.
@@ -414,7 +426,10 @@ def enqueue_task(
         _att = t.get("_attempt")
         t.setdefault("_attempt", int(_att) if _att is not None else 1)
         t["_queue_seq"] = -seq if front else seq
-        t["queued_at"] = utc_now_iso()
+        if restoring_snapshot:  # restored work keeps its saved queue time; a lost one stays unknown (#1805)
+            t.setdefault("queued_at", None)
+        else:
+            t["queued_at"] = utc_now_iso()
         if admission_token:
             t["_admission_owner_token"] = admission_token
         from contextlib import nullcontext
@@ -468,17 +483,18 @@ def enqueue_task(
                 if not allowed:
                     t["_admission_blocked"] = "followup_control_wait"
                     return t
-                if project_id:
-                    with project_admission_guard(DRIVE_ROOT, project_admission):
+                with (project_admission_guard(DRIVE_ROOT, project_admission) if project_id else nullcontext(None)) as project:
+                    if project_id:
                         # Recovery keeps the resource actually admitted, without a
                         # transient derived-selection census or current-folder substitution.
                         t["_project_admission"] = {key: value for key, value in project_admission.items()
                                                    if key != "workspace_claims"}
                         t["_project_admission"]["frozen"] = True
-                        PENDING.append(t)
-                else:
-                    if not restoring_snapshot and not has_project_admission:
+                    elif not restoring_snapshot and not has_project_admission:
                         t["_project_scope_none"] = True
+                    if subagents_settings is not None:
+                        from ouroboros.settings_integrity import record_subagents_admission
+                        record_subagents_admission(t, DRIVE_ROOT, settings=subagents_settings, project=project)
                     PENDING.append(t)
         except (OSError, ValueError, TypeError, RuntimeError) as exc:
             from supervisor.schedule_occurrence import contention
@@ -503,6 +519,13 @@ def enqueue_task(
             ) else "none"
         if ADMISSION_RESERVATIONS.get(task_id) == admission_token:
             ADMISSION_RESERVATIONS.pop(task_id, None)
+        if not restoring_snapshot and (durable or agent_restart_pending()):
+            if persist_queue_snapshot(reason="agent_restart_admission") is not True:
+                # No accepted reply and no dispatch. A partial disk publication
+                # is outside the named return set and boots held for Resume.
+                PENDING[:] = [row for row in PENDING if row is not t]
+                persist_queue_snapshot(reason="agent_restart_admission_unconfirmed")
+                return {**t, "_admission_blocked": "restart_admission_unconfirmed"}
     return t
 
 

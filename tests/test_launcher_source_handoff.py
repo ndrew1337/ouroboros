@@ -601,13 +601,14 @@ def test_a_successor_keeps_an_attached_console_and_is_hidden_only_without_one(mo
     assert asked == ([1] if windows else []), "elsewhere nothing is asked"
 
 
-def test_linux_source_handoff_keeps_native_bundle_environment(hand_over, monkeypatch):
+def test_linux_source_handoff_keeps_native_bundle_environment(hand_over, monkeypatch, tmp_path):
     from ouroboros.desktop_media import LINUX_DESKTOP_KEYS, host_environment
 
     import dataclasses
+    embedded_python = str(tmp_path / 'app dir/_internal/python-standalone/bin/python3')
     original_context = context
     monkeypatch.setattr(sys.modules[__name__], 'context', lambda path: dataclasses.replace(
-        original_context(path), embedded_python=str(path / 'app dir/_internal/python-standalone/bin/python3')))
+        original_context(path), embedded_python=embedded_python))
     monkeypatch.setattr(bootstrap_module.sys, 'executable', '/seed/Ouroboros.bin')
     native = {'LD_LIBRARY_PATH': '/seed/_internal:/seed/_internal/linux-gtk/lib/x86_64-linux-gnu',
               'GI_TYPELIB_PATH': '/seed/_internal/linux-gtk/lib/x86_64-linux-gnu/girepository-1.0',
@@ -626,5 +627,5 @@ def test_linux_source_handoff_keeps_native_bundle_environment(hand_over, monkeyp
     assert host['LD_LIBRARY_PATH'] == '' and host['XDG_DATA_DIRS'] == '/caller/share'
     assert 'GI_TYPELIB_PATH' not in host
     assert '--seed-bundle' in executed[2]
-    assert executed[1].endswith('/_internal/python-standalone/bin/python3')
+    assert executed[1] == executed[2][0] == embedded_python
     assert executed[1] != bootstrap_module.sys.executable

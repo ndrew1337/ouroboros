@@ -17,7 +17,7 @@ import pathlib
 from typing import Any, Dict, Optional, Tuple
 from ouroboros.agent_startup_checks import persist_early_origin_stub as _persist_early_origin_stub_impl
 from ouroboros.config import EFFORT_SCALE, resolve_effort, runtime_setting
-from ouroboros.model_slots import MODEL_ROLE_SETTINGS
+from ouroboros.route_choice import model_role_slot_override  # the role slot a wake follows; resolved per call there
 from ouroboros.subagents import CapabilityDelta, SUBAGENT_RESOLUTION_FIELDS, SubagentDispatch, SubagentExecutorResolution, SubagentLaneResolution, capability_delta_disclosures, resolve_subagent_dispatch
 from ouroboros.task_results import STATUS_RUNNING
 from ouroboros.utils import append_jsonl, utc_now_iso
@@ -40,7 +40,8 @@ def _agent():
 
 
 def dispatch_executor_note(decision: Optional[SubagentExecutorResolution],
-                           lane: Optional["SubagentLaneResolution"] = None) -> str:
+                           lane: Optional["SubagentLaneResolution"] = None,
+                           *, cognitive_route: Optional[Dict[str, Any]] = None) -> str:
     """The child's VISIBLE marker for a substrate decision it did not make ('' = silent).
 
     The rule table's `auto` rows are only honest if the child can see which way they
@@ -65,15 +66,21 @@ def dispatch_executor_note(decision: Optional[SubagentExecutorResolution],
         route = decision.route.route_id if decision.route else ""
         configured_atomic = lane is not None and lane.provenance == "configured_subagent"
         if configured_atomic:
+            from ouroboros.supervisor_route import cognitive_route_provenance
+
+            provenance = cognitive_route_provenance(cognitive_route)
+            cognition = (f" Your cognitive route is {lane.model} ({provenance}); "
+                         "its calls bill as that route bills. You may change it with switch_model. "
+                         if provenance else " ")
             return (
                 f"EXECUTOR: your parent selected the configured agent-session route ({route}). "
-                "You are its Ouroboros NANNY. For fresh work the host starts the exact leaf "
+                "You are its Ouroboros NANNY." + cognition + "For fresh work the host starts the exact leaf "
                 "before your first round. Restored supervision follows its continuation receipt; "
                 "the receipt states custody, and waiting is your own call "
                 "(delegate_wait when you want its facts). Your "
-                "metered rounds are for judgment — verify and integrate what the run "
+                "supervisory rounds are for judgment — verify and integrate what the run "
                 "produces, answer its authorized questions, decide recovery — never for "
-                "rebuilding its work: co-building beside a delegated run is a metered "
+                "rebuilding its work: co-building beside a delegated run is a "
                 "duplicate of already-paid work. After a terminal failure, replace through "
                 "delegate_start(prompt='') only once cancellation and terminal settlement are "
                 "verified; an unknown start outcome is retried with "
@@ -381,37 +388,6 @@ def main_model_named_effort(task_metadata: Dict[str, Any]) -> str:
     override = model_role_slot_override(task_metadata if isinstance(task_metadata, dict) else {})
     model = override[0] if override else str(runtime_setting("OUROBOROS_MODEL", "") or "")
     return api_model_named_effort(model)
-
-
-def model_role_slot_override(task_metadata: Dict[str, Any]) -> Optional[Tuple[str, bool]]:
-    """The ``(model, use_local)`` pinned by a task's ``metadata.model_role``; ``None`` = Main.
-
-    A consciousness wake-up carries ``model_role="consciousness"`` (owner decision
-    В25=B): when the consciousness model slot is set, the turn runs on that model
-    with that slot's local flag; an empty slot means Main — the same model, the
-    same prefix, the same prompt cache. Roles without a single-model slot (Main
-    itself, the fallback chain) and unknown roles resolve to Main here; their
-    effort and account binding still follow the role (``_initial_effort_for``,
-    ``task_model_binding``).
-    """
-    metadata = task_metadata if isinstance(task_metadata, dict) else {}
-    role = str(metadata.get("model_role") or "").strip().lower()
-    key = MODEL_ROLE_SETTINGS.get(role)
-    if not key or role in ("main", "fallback"):
-        return None
-    model = str(runtime_setting(key, "") or "").strip()
-    raw_local = str(runtime_setting(f"USE_LOCAL_{role.upper()}", "") or "").strip().lower()
-    use_local = raw_local in ("true", "1")
-    if not model:
-        # An empty model slot means Main's model — but the role's own local flag, when the
-        # owner set it and it differs from Main's, still decides the route (В25=B honors
-        # every slot; with equal flags nothing changes and the prefix stays Main's).
-        main_local = str(runtime_setting("USE_LOCAL_MAIN", "") or "").strip().lower() in ("true", "1")
-        main_model = str(runtime_setting("OUROBOROS_MODEL", "") or "").strip()
-        if not raw_local or use_local == main_local or not main_model:
-            return None
-        return main_model, use_local
-    return model, use_local
 
 
 def resolve_dispatch_axes(task: Dict[str, Any]) -> Optional[SubagentDispatch]:

@@ -14,6 +14,7 @@ from ouroboros.launcher_window_chrome import DOCUMENT_SCRIPT
 from tests import test_subscription_setup_browser as setup_browser
 from tests.test_design_system_gate_browser import PROJECTS, rest, save_evidence, seed_page, settle, sidebar_metrics
 from tests._work_projection_shared import work_fields
+from tests.ui_motion_samples import SAMPLE_TRANSITION
 
 subscription_ui = setup_browser.subscription_ui
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
@@ -579,6 +580,13 @@ SIDEBAR_FACTS = """() => {
     return {rows: rows.map((e) => e.querySelector('[data-project-id]').dataset.projectId),
             gapToTools: Math.round(files.top - zone.bottom), filesTop: Math.round(files.top),
             sidebarBottom: Math.round(side.getBoundingClientRect().bottom),
+            // The foot: how far the version row's bottom sits above the column's content edge (0 = on the edge), and
+            // whether the column itself scrolls (the short-window fallback, where the foot is pinned over it).
+            footGap: Math.round(side.getBoundingClientRect().bottom - parseFloat(getComputedStyle(side).paddingBottom)
+                - side.querySelector('.sidebar-foot-meta').getBoundingClientRect().bottom),
+            footBelowTools: side.querySelector('.sidebar-foot-meta').getBoundingClientRect().top
+                >= side.querySelector('[data-nav-page="settings"]').getBoundingClientRect().bottom - 0.5,
+            columnScrolls: side.scrollHeight > side.clientHeight + 1,
             showAll: Boolean(document.getElementById('nav-projects-show-all')),
             header: {shape: mark.dataset.shape, hue: mark.dataset.hue, drawn: getComputedStyle(mark).display !== 'none'},
             expanded: document.getElementById('nav-projects-toggle').getAttribute('aria-expanded')};
@@ -613,8 +621,14 @@ def test_collapsed_projects_keep_only_the_pinned_ones_and_the_tools_follow(shell
     assert collapsed['expanded'] == 'false' and collapsed['rows'] == pins, facts
     assert collapsed['showAll'] is False, facts
     assert collapsed['header'] == facts['open']['header'] == {'shape': 'moving', 'hue': 'ink', 'drawn': True}, facts
-    # The tools follow the Projects zone: no empty room between them (the free room is under the last row).
+    # The tools follow the Projects zone: no empty room between them (owner 18.10). The version and the update rest on
+    # the bottom edge in every state (owner 22.10): the free room lies between the tools and the foot.
     assert collapsed['gapToTools'] <= 24 and collapsed['filesTop'] < collapsed['sidebarBottom'] - 200, facts
+    for state in ('open', 'collapsed', 'expanded'):
+        side = facts[state]
+        assert side['footBelowTools'], (state, facts)
+        if not side['columnScrolls']:
+            assert abs(side['footGap']) <= 1, (state, facts)
     assert facts['open']['expanded'] == 'true' and len(facts['open']['rows']) == len(PROJECTS), facts
     assert facts['expanded']['expanded'] == 'true' and len(facts['expanded']['rows']) == len(PROJECTS), facts
 
@@ -798,13 +812,16 @@ def test_the_project_panel_sliding_in_never_widens_the_window(shell_ui, tmp_path
     assert facts['scrollLeft'] == 0 and facts['sidebarLeft'] == 0, facts
 
 
-# Each frame from now on: where the Project panel's left edge stands, whether it is hidden, how many rows its room shows.
-PANEL_FRAMES = """() => { const panel = document.getElementById('project-panel'); const frames = []; window.__panelFrames = frames;
-    const tick = () => { if (window.__panelFrames !== frames) return;
-        frames.push({left: panel.getBoundingClientRect().left, hidden: panel.hidden,
-                     rows: panel.querySelectorAll('.chat-messages .chat-bubble').length});
-        requestAnimationFrame(tick); };
-    requestAnimationFrame(tick); }"""
+# Seek the real slide: a busy runner must not turn missed compositor frames into a missing-motion failure.
+PANEL_FRAMES = """({project, opening, answers}) => { const panel = document.getElementById('project-panel');
+    const sample = """ + SAMPLE_TRANSITION + """;
+    return sample({root: panel, target: () => panel, property: 'transform',
+        ready: () => panel.classList.contains('open') === opening,
+        act: () => { if (opening) window.dispatchEvent(new CustomEvent('ouro:open-project', {detail: {project}}));
+                     else panel.querySelector('#project-panel-close').click(); },
+        measure: () => ({left: panel.getBoundingClientRect().left, hidden: panel.hidden,
+                        rows: answers.filter(answer => [...panel.querySelectorAll('.chat-messages .chat-bubble')]
+                            .some(row => row.textContent.includes(answer))).length})}); }"""
 # A room's read takes 150 ms, as on a real link: a panel that set off at the click would cross the window empty.
 SLOW_HISTORY = """(() => { const real = window.fetch; window.fetch = (input, init) => { const answer = real(input, init);
     return String(input?.url || input).includes('/api/chat/history')
@@ -813,39 +830,40 @@ SLOW_HISTORY = """(() => { const real = window.fetch; window.fetch = (input, ini
 
 def test_docked_the_project_panel_comes_in_with_its_room_and_goes_back_with_it(shell_ui, tmp_path):
     """Owner 20.10 (Q2 A): docked, the panel comes in from the window's right edge once its room has painted and goes
-    back there whole: every frame of both motions shows the room's rows, and each motion is seen over frames."""
+    back there whole: samples along both real transitions show its rows, from the edge to Main and back."""
     page = seed_page(shell_ui, 1143, 790)
+    page.emulate_media(reduced_motion='no-preference')
     rows = [{'role': 'assistant', 'text': f'Answer {i}. ' + 'Ordinary context. ' * 8,
              'content': f'Answer {i}.', 'ts': f'2026-10-14T09:{i:02d}:00Z'} for i in range(6)]
+    answers = [row['content'] for row in rows]  # A startup System bubble is not the room's history.
     page.route('**/api/chat/history*', lambda route: route.fulfill(json={'messages': rows, 'progress': []}))
     page.add_init_script(SLOW_HISTORY)
     facts = {'engine': shell_ui['engine']}
     try:
         boot(page, shell_ui)
         width = page.evaluate('innerWidth')
-        page.evaluate(PANEL_FRAMES)
-        page.evaluate("p => window.dispatchEvent(new CustomEvent('ouro:open-project', {detail: {project: p}}))",
-                      PROJECTS[0])
-        page.wait_for_function("() => document.getElementById('project-panel').classList.contains('open')")
+        facts['opening'] = page.evaluate(PANEL_FRAMES, {'project': PROJECTS[0], 'opening': True, 'answers': answers})
         rest(page)
-        facts['opening'] = page.evaluate('window.__panelFrames.splice(0)')
-        page.evaluate(PANEL_FRAMES)
-        page.locator('#project-panel-close').click()
+        page.locator('#project-panel-close').click(trial=True)
+        facts['closing'] = page.evaluate(PANEL_FRAMES, {'opening': False, 'answers': answers})
         page.wait_for_function("() => document.getElementById('project-panel').hidden")
-        facts['closing'] = page.evaluate('window.__panelFrames.splice(0)')
-        page.evaluate('window.__panelFrames = null')
     finally:
         evidence(tmp_path, f'shell-panel-arrival-{shell_ui["engine"]}', facts)
         page.close()
-    home = facts['opening'][-1]['left']
+    opening, closing = facts['opening']['values'], facts['closing']['values']
+    home = opening[-1]['left']
     assert home < width - 300, ('it ends beside Main', home, width)
+    assert facts['opening']['duration'] > 0 and facts['closing']['duration'] > 0, facts
+    assert abs(opening[1]['left'] - width) <= 1 and abs(closing[-1]['left'] - width) <= 1, facts
 
     def moving(frames):
         return [f for f in frames if not f['hidden'] and home + 1 < f['left'] < width - 1]
-    assert len(moving(facts['opening'])) >= 3, ('the arrival is seen moving', facts['opening'])
-    assert all(f['rows'] > 0 for f in moving(facts['opening'])), ('it sets off with its room painted', facts['opening'])
-    assert len(moving(facts['closing'])) >= 3, ('the way back is seen moving', facts['closing'])
-    assert all(f['rows'] > 0 for f in facts['closing'] if not f['hidden']), ('it goes back with its room', facts['closing'])
+    assert len(moving(opening)) >= 3, ('the arrival is seen moving', opening)
+    arriving = opening + facts['opening']['live']
+    leaving = closing + facts['closing']['live']
+    assert all(f['rows'] == len(answers) for f in moving(arriving)), ('it sets off with its room painted', arriving)
+    assert len(moving(closing)) >= 3, ('the way back is seen moving', closing)
+    assert all(f['rows'] == len(answers) for f in leaving if not f['hidden']), ('it goes back with its room', leaving)
 
 
 def test_a_project_closed_mid_drag_keeps_its_stored_width(shell_ui, tmp_path):

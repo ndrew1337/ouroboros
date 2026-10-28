@@ -101,6 +101,69 @@ export function joinMetaParts(parts) {
     return parts.filter(Boolean).join(META_PART_SEPARATOR);
 }
 
+/** Normalize coordinator route provenance from a recorded snapshot or frame. */
+export function formatCoordinatorProvenance(source) {
+    if (!source) return '';
+    if (typeof source === 'string') {
+        const trimmed = source.trim();
+        if (!trimmed) return '';
+        const lower = trimmed.toLowerCase();
+        if (lower === 'inherited' || lower === 'parent') return 'inherited';
+        if (lower === 'fallback' || lower === 'parent_fallback' || lower === "parent's fallback") {
+            return "parent's fallback";
+        }
+        if (lower.startsWith('chosen by the delegator')) return trimmed;
+        if (lower.startsWith('delegator:')) {
+            const row = trimmed.slice('delegator:'.length).trim();
+            return row ? `chosen by the delegator (${row})` : 'chosen by the delegator';
+        }
+        return trimmed;
+    }
+    if (typeof source !== 'object') return '';
+    const snap = source.parent_cognitive_route && typeof source.parent_cognitive_route === 'object'
+        ? source.parent_cognitive_route
+        : null;
+    const chosenRow = String(
+        snap?.supervisor_row || snap?.supervisor_subagent_id
+        || snap?.selected_supervisor_snapshot?.handle || snap?.selected_supervisor_snapshot?.selected_subagent_id
+        || snap?.row || source.supervisor_row || source.supervisor_subagent_id
+        || source.selected_supervisor_snapshot?.handle || source.selected_supervisor_snapshot?.selected_subagent_id
+        || '',
+    ).trim();
+    const explicit = String(
+        source.coordinatorProvenance || source.coordinator_provenance
+        || snap?.chosen_by || source.chosen_by || '',
+    ).trim();
+    const lower = explicit.toLowerCase();
+    if (lower === 'delegator') {
+        return chosenRow ? `chosen by the delegator (${chosenRow})` : 'chosen by the delegator';
+    }
+    if (lower === 'fallback' || lower === 'parent_fallback' || lower === "parent's fallback") {
+        return "parent's fallback";
+    }
+    if (lower === 'inherited' || lower === 'parent') {
+        return 'inherited';
+    }
+    return explicit ? formatCoordinatorProvenance(explicit) : '';
+}
+
+/** Describe the supervising child's own cognitive route and billing basis for the pre-evidence chip. */
+export function coordinatorRouteClause(evt) {
+    const snap = evt?.parent_cognitive_route && typeof evt.parent_cognitive_route === 'object'
+        ? evt.parent_cognitive_route
+        : null;
+    const rawModel = String(evt?.coordinator_route || evt?.model || snap?.model || '').trim();
+    const local = Boolean(evt?.use_local_model ?? snap?.use_local_model) || rawModel.endsWith(' (local)');
+    const route = local && rawModel && !rawModel.endsWith(' (local)') ? `${rawModel} (local)` : rawModel;
+    const explicitBilling = String(
+        evt?.coordinator_billing || evt?.nanny_billing || evt?.cost_kind || snap?.billing || snap?.cost_kind || '',
+    ).trim();
+    const billing = explicitBilling || 'unknown';
+    return route
+        ? `this subagent itself runs on ${route} (bills as ${billing})`
+        : `this subagent runs on its coordinator route (bills as ${billing})`;
+}
+
 /** Card identity consumes projected facts; it does not infer execution from marks.
  *  The chip's detail sentence is card text too, never a hover-only title: the
  *  `Executor` row of the card's details (chat_activity.renderLiveCardMeta), which

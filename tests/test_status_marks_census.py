@@ -95,7 +95,7 @@ for await (const chunk of process.stdin) raw += chunk;
 process.stdout.write(JSON.stringify(censusTaskPhase(JSON.parse(raw))));
 """
     rendered = subprocess.run([NODE_BIN, "--input-type=module", "-e", script], input=json.dumps(row),
-                              text=True, capture_output=True, cwd=WEB_ROOT, timeout=30)
+                              text=True, encoding="utf-8", capture_output=True, cwd=WEB_ROOT, timeout=30)
     assert rendered.returncode == 0, rendered.stderr
     chip = json.loads(rendered.stdout)
     assert chip["text"] == ("Pausing…" if executing else "Paused")

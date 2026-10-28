@@ -121,6 +121,7 @@ def test_source_companion_does_not_change_release_archive_selection(tmp_path):
     assert 'dist/native-sources-linux-${VERSION}.tar.gz' in (ROOT / 'build_linux.sh').read_text()
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='Linux build scripts require POSIX shell execution')
 @pytest.mark.parametrize('arch,mode,expect_native', [('aarch64', 'auto', False), ('x86_64', '0', False),
                                                    ('aarch64', '1', True)])
 def test_non_target_build_keeps_host_backend_path_before_any_build(tmp_path, arch, mode, expect_native):
@@ -141,6 +142,7 @@ def test_non_target_build_keeps_host_backend_path_before_any_build(tmp_path, arc
         assert 'Host-backend Linux build' in result.stdout and 'python-standalone/ not found' in result.stdout
 
 
+@pytest.mark.skipif(os.name == 'nt', reason='AppImage packaging is POSIX-only')
 def test_explicit_legacy_appdir_packaging_is_preserved(tmp_path):
     dist = tmp_path / 'dist'
     payload = dist / 'Ouroboros'

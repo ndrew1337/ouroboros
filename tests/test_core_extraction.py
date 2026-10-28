@@ -158,8 +158,12 @@ def test_core_catalog_schema_bytes_and_handler_owners_are_stable():
     # description say "running, queued or requested"; nothing else in the catalog changed.
     # Rolled for the start ledger: show_card's description adds one sentence (on most devices an app
     # shares the owner's page thread, so heavy computation belongs in a blob: Worker); nothing else changed.
+    # D3 adds the recorded reply_to address to forward_to_worker and escalate.
+    # Target merge retains the contributor tool affordances and target review/mail contracts.
+    # 2026-10-23: escalate gains request_id for private Main questions; its retry
+    # description also explains that a new wait after timeout needs a new key.
     assert hashlib.sha256(schema_bytes).hexdigest() == (
-        "77bf2ec02eb5a03bcaa415791f4deb864ad402caf966a5054a8defe0cb19091f"
+        "466a6505a29350292d7a4586df88bc04089466f8b95dfce6dc9232d530ab4168"
     )
     assert {
         entry.name: (entry.handler.__module__, entry.handler.__name__)

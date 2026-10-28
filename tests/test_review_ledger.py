@@ -899,8 +899,11 @@ def test_author_continuation_notes_its_decision_on_the_answered_record(candidate
                                    author_disposition={"disposition": "accepted", "rationale": "Known tradeoff."})
     assert len(calls) == 1 and f"review_record_id: {reference['review_record_id']}" in second
     record = rl.load_record(rl.ledger_root(ctx), reference["review_record_id"])
-    assert record["revision"] == 2 and record["verdict"]["aggregate"] == "FAIL"
+    assert record["revision"] == 3 and record["verdict"]["aggregate"] == "FAIL"
     assert record["author_decision"]["disposition"] == "accepted" and record["author_decision"]["rationale"] == "Known tradeoff."
+    assert record["author_decision"]["landing"]["landed"] is True
+    assert "evidence_at_decision" not in record["author_decision"]
+    assert "review_replaced_by_subagents" not in record["author_decision"]
     assert len(rl.recent_records(rl.ledger_root(ctx), ctx.task_id, 5)) == 1, "author continuation buys no record"
     assert _attempt_rows(ctx)[-1].status == "succeeded" and _attempt_rows(ctx)[-1].review_record_id == reference["review_record_id"]
 
@@ -1127,14 +1130,12 @@ def test_naming_the_record_keeps_a_typed_result_paired_with_its_text(tmp_path):
     assert commit_gate.name_review_record(ctx, named) == named, "a text that already names the record is unchanged"
 
 
-def test_the_public_handler_still_refuses_a_call_without_a_commit_message_at_binding():
-    """The registry binds arguments to the handler's signature before running it: a call
-    without ``commit_message`` stays a typed argument refusal, never a handler crash."""
+def test_the_public_handler_accepts_a_reference_without_a_commit_message():
+    """A paid reference supplies its original message; a new call still requires one."""
     import inspect
 
     handler = next(entry.handler for entry in git.get_tools() if entry.name == "commit_reviewed")
-    with pytest.raises(TypeError):
-        inspect.signature(handler).bind(object())
+    inspect.signature(handler).bind(object(), review_reference={"record_id": "original"})
     inspect.signature(handler).bind(object(), commit_message="m", skip_tests=True)
 
 

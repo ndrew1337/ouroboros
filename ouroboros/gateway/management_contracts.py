@@ -1,9 +1,7 @@
-"""Product-management envelopes beside ``contracts.py`` (skills, marketplaces, agent accounts,
-local model, MCP, model catalog, updates, core control): descriptive TypedDicts, the twin of
-``web/modules/management_contract_types.js`` (twins older tests read stay in ``api_types.js``).
-Account routes relay the bundled Claudexor engine's own API v2 objects (protocol major 3, release
-pinned in ``ouroboros/claudexor_runtime_pin.json``, source https://github.com/razzant/claudexor),
-named here by their engine schema type."""
+"""Product-management envelopes beside ``contracts.py`` (skills, marketplaces, agent accounts, local model,
+MCP, model catalog, updates, core control): descriptive TypedDicts, the twin of ``web/modules/management_contract_types.js``
+(twins older tests read stay in ``api_types.js``). Account routes relay the bundled Claudexor engine's own API v2 objects
+(protocol major 3, release pinned in ``ouroboros/claudexor_runtime_pin.json``, source https://github.com/razzant/claudexor), named by their engine schema type."""
 
 from __future__ import annotations
 
@@ -65,13 +63,11 @@ class InstalledSkill(TypedDict, total=False):
     presence_runtime: Dict[str, Any]  # a reviewed presence profile's runtime choice
     provenance: Dict[str, Any]  # a ClawHub install record
     identity_collision: bool
-    # The install record joined with the cached catalog of its source (skill_source_catalog.install_listing):
-    # source {id, name, kind, part}, official (exact endorsed bytes), release, basis, base_known, modified (null: base unknown),
-    # update_available {version, digest} | null, withdrawn ({reason, version} for a withdrawn release), left_source, turn_on_when_ready, installed_by,
-    # installed_at, and reason and task_id when the record has them (an install Ouroboros made says why and in
-    # which task); check {by, notes, at}, pending_update {version, digest}, and
-    # update_rejected {version, digest, reason: review_blockers|review_unfinished|preflight_failed, at}.
-    # null: not installed from a source (made here, a local folder, a built-in seed).
+    # The install record joined with the cached catalog of its source (skill_source_catalog.install_listing): source {id, name, kind, part}, official (exact endorsed bytes),
+    # release, basis, base_known, modified (null: base unknown), update_available {version, digest} | null, withdrawn ({reason, version} for a withdrawn release), left_source,
+    # turn_on_when_ready, installed_by, installed_at, and reason and task_id when the record has them (an install Ouroboros made says why and in which task); check {by, notes,
+    # at}, pending_update {version, digest}, and update_rejected {version, digest, reason: review_blockers|review_unfinished|preflight_failed, at}. null: not installed from a
+    # source (made here, a local folder, a built-in seed).
     install: Optional[Dict[str, Any]]
     category: List[str]  # the source's category ids for this skill, [] when it has none
 
@@ -616,11 +612,14 @@ class ReviewPoolResponse(TypedDict):
 
 class ModelCatalogItem(TypedDict, total=False):
     """One selectable model. ``value`` is what a model setting stores: the raw id for OpenRouter,
-    ``<provider_id>::<id>`` for another API provider, ``claudexor::<source>=<model>`` for an agent
-    account's model, which adds that account's facts."""
+    ``<provider_id>::<id>`` for another API provider, ``<kind>@<name>::<id>`` for a named API
+    connection (its ``provider``/``provider_id`` = ``<kind>@<name>``, ``provider_label`` its
+    picker label), ``claudexor::<source>=<model>`` for an agent account's model, which adds
+    that account's facts."""
 
     provider_id: Required[str]
     provider: Required[str]
+    provider_label: str
     source: str
     id: Required[str]
     name: str
@@ -744,6 +743,10 @@ class McpServerStatus(TypedDict, total=False):
     cwd: str
     env_from_settings: Any
     configuration_warnings: List[str]
+    schemas_at_start: bool  # the owner's pin: call schemas in every request from task start
+    instructions: str  # the server's own usage text from initialize, untrusted
+    map_tokens: int  # this server's part of the connections map (Main, Low/Max)
+    schema_tokens: int  # all its call schemas, loaded or not
     tool_count: Required[int]
     tools: List[Dict[str, Any]]  # {name, prefixed_name, description}
     tool_name_collisions: List[Dict[str, Any]]
@@ -765,6 +768,7 @@ class McpStatusResponse(TypedDict):
     sdk_error: Any
     tool_timeout_sec: Any
     servers: List[McpServerStatus]
+    weights: Dict[str, int]  # {tools, map_tokens, schema_tokens_from_task_start}: catalog potential
 
 
 class McpRefreshRequest(TypedDict, total=False):
@@ -847,6 +851,7 @@ class UpdateProgress(TypedDict, total=False):
     stash_note: str
 
     retention_unconfirmed: bool  # live only: saving this observation failed, not the update itself
+    generation_facts: Optional[Dict[str, Any]]
 
 
 class UpdateLetter(TypedDict):
@@ -866,6 +871,7 @@ class UpdateLetter(TypedDict):
     description_current: bool
     failed_at: str
     latest_failed_key: Optional[Dict[str, Any]]
+    qualification: NotRequired[Optional[Dict[str, Any]]]
 
 
 class UpdateTransactionState(TypedDict, total=False):
@@ -893,6 +899,7 @@ class UpdateStatusResponse(TypedDict, total=False):
     update_tx: Required[UpdateTransactionState]
     update_progress: Required[UpdateProgress]
     letter: Optional[UpdateLetter]
+    after_update: Optional[Dict[str, Any]]
     managed: bool
     remote: str
     remote_branch: str

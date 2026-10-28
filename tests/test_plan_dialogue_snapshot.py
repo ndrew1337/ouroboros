@@ -125,7 +125,7 @@ def test_mixed_delivery_keeps_full_file_and_exact_overflow_range(harness, monkey
     delegated = delivery["slot_session_tasks"]["delegated"]
     # The delegated session gets the same inline conversation (no invented window) plus the pointer.
     assert "OLDER " in delegated and "LATEST CHOICE" in delegated and "MANDATORY FULL READ" not in delegated
-    assert coverage["delegated"] == {**coverage["large"], "delivery": "delegated_session", "window": "unasserted", "file": own["file"]}
+    assert coverage["delegated"] == {**coverage["large"], "delivery": "delegated_session", "window": "unknown", "file": own["file"]}
     assert delivery["request_policy"]["observed_sources"] == [{
         "root": "artifact_store", "path": own["source_ref"]["path"], "file": own["file"],
         **source_text_identity(own["text"].encode("utf-8"))}]
@@ -145,12 +145,10 @@ def test_mixed_delivery_keeps_full_file_and_exact_overflow_range(harness, monkey
     assert not (harness.workspace / ".ouroboros-review").exists()
 
 
-def test_a_session_with_an_asserted_window_is_fitted_and_without_one_is_whole(harness, monkeypatch):
-    """A delegated session's inline conversation is fitted only to an owner-asserted
-    `reviewer:<slot>` context window; with none asserted the host invents no window and
-    sends the whole conversation with the pointer."""
+def test_a_session_with_a_resolved_window_is_fitted_and_without_one_is_whole(harness, monkeypatch):
+    """A session uses the shared route acknowledgement; unknown capacity keeps the whole dialogue."""
     from types import SimpleNamespace
-    from ouroboros import model_slots
+    from ouroboros import capability_evidence as ce, config
     from ouroboros.review_execution import ReviewRouteKind
     from ouroboros.tools.plan_dialogue import attach_own_dialogue, dialogue_slot_inputs, render_dialogue
 
@@ -162,18 +160,19 @@ def test_a_session_with_an_asserted_window_is_fitted_and_without_one_is_whole(ha
     packet = render_dialogue(manifest)
     session = SimpleNamespace(slot_id="delegated", model="cursor=grok", role_hint="plan reviewer", use_local=False,
                               session_profile="", route=ReviewRouteKind.AGENT_SESSION, retrieves=True, native_retrieval=False)
-    monkeypatch.setattr(model_slots, "model_role_option", lambda key, role: 40_000 if role == "reviewer:delegated" else 0)
+    monkeypatch.setattr(config, "DATA_DIR", harness.drive)
+    ack = ce.record_owner_ack(harness.drive, provider="agent_session", model=session.model, window_tokens=40_000)
     fitted = dialogue_slot_inputs([session], system_prompt="g", user_content=packet, session_task=packet, manifest=manifest,
                                   slot_messages={}, native_mandatory_chars=len(packet), session_root=str(harness.workspace), task_id=ctx.task_id,
                                   output_contract=PLAN_REPLY_CONTRACT)
     task = fitted["slot_session_tasks"]["delegated"]
     assert "LATEST CHOICE" in task and "OLDER " not in task and "1 earlier conversation rows before line 3" in task
-    assert fitted["dialogue_delivery"]["delegated"]["window"] == "asserted"
-    monkeypatch.setattr(model_slots, "model_role_option", lambda key, role: 0)
+    assert fitted["dialogue_delivery"]["delegated"]["window"] == "owner_ack"
+    ce.revoke_owner_ack(harness.drive, ack["route_fp"])
     whole = dialogue_slot_inputs([session], system_prompt="g", user_content=packet, session_task=packet, manifest=manifest,
                                  slot_messages={}, native_mandatory_chars=len(packet), session_root=str(harness.workspace), task_id=ctx.task_id,
                                  output_contract=PLAN_REPLY_CONTRACT)
-    assert "OLDER " in whole["slot_session_tasks"]["delegated"] and whole["dialogue_delivery"]["delegated"]["window"] == "unasserted"
+    assert "OLDER " in whole["slot_session_tasks"]["delegated"] and whole["dialogue_delivery"]["delegated"]["window"] == "unknown"
 
 
 def test_a_session_reviewers_room_read_rides_its_plan_row():

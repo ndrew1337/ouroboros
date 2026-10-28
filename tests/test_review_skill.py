@@ -235,7 +235,7 @@ def test_an_oversized_payload_is_not_delivered_to_a_packet_seat_and_is_said_so(b
     """J: no chunking. A packet seat that cannot hold the payload receives the file index and a plain
     "NOT delivered" statement; a retrieving seat still reads the frozen copy."""
     h = briefing
-    (h.skill_dir / "big.txt").write_text("x" * 20_000 + "\n", encoding="utf-8")
+    (h.skill_dir / "big.txt").write_bytes(b"x" * 20_000 + b"\n")
     h.monkeypatch.setattr("ouroboros.tools.review_helpers.REVIEW_PROMPT_TOKEN_BUDGET", 2_000)
     outcome = _review(h, reviewers=["t1"], reason="small payload")
     assert outcome.status == "clean", outcome.error
@@ -685,7 +685,7 @@ def test_a_left_wave_finalizes_nothing_and_the_reissue_collects_it_at_zero(leavi
     record = _until(lambda: _settled_record(h, reference["record_id"]))
     assert record["verdict"]["aggregate"] == {"clean": "PASS", "blockers": "FAIL"}[status]
     [notice] = _until(lambda: _settled_notices(L))
-    assert "[Review settled]" in notice["text"] and "skill_review(skill='weather')" in notice["text"]
+    assert "[Review settled]" in notice["text"] and "review_change(review_reference=the original reference)" in notice["text"]
     assert _state(h).status == "pending", "the settled record reaches review.json on the next call (D6)"
     _read_mail(L)
     thread, box = L.call()
@@ -930,7 +930,7 @@ def test_the_tool_author_hears_mail_while_the_wave_runs_and_a_left_wave_is_reiss
     assert binding and binding["task_id"] == "task-skill" and binding["drive_root"] == h.drive
     [kwargs] = watched
     assert kwargs["surface"] == "skill" and kwargs["record_id"] == reference["record_id"]
-    assert kwargs["reissue"] == "the same unchanged skill_review(skill='weather') call"
+    assert kwargs["reissue"] == "review_change(review_reference=the original reference)"
     assert review_pause._LEFT_TOOLS["skill"] == "review_skill" and review_pause._LEFT_SURFACES["skill"] == "skill"
     assert review_pause.receptive_binding(SimpleNamespace(drive_root=h.drive, task_id="task-skill")) is None
 

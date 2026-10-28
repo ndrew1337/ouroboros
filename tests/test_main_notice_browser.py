@@ -36,6 +36,7 @@ from tests.system_e2e.harness import (
 from tests.test_owner_wait_integration import wait_clone as clone_fixture
 from tests.ui_chat_viewport_smoke import _CAPTURE_TEST_SOCKET
 from tests.ci_evidence import output_dir
+from tests.ui_console_errors import PageErrors
 from tests.ui_failure_evidence import FailureEvidence
 
 wait_clone = clone_fixture
@@ -112,9 +113,11 @@ def _open_drawer(page):
     close = page.locator("#project-panel-close")
     if close.is_visible():
         close.click()
-    if not page.evaluate("() => document.body.classList.contains('nav-drawer-open')"):
-        page.locator(".page.active [data-mobile-nav-toggle]").click()
-        page.wait_for_function("() => document.body.classList.contains('nav-drawer-open')")
+    toggle = page.locator(".page.active [data-mobile-nav-toggle]")
+    # The handover keeps the drawer painted after its logical close.
+    if toggle.get_attribute("aria-expanded") != "true":
+        toggle.click()
+    page.wait_for_function("() => !document.querySelector('#primary-sidebar').inert")
 
 
 def _nav(page, name):
@@ -128,6 +131,12 @@ def _open_project(page, project):
     page.locator(f'.nav-project-row[data-project-id="{project["id"]}"]').click()
     feed = f'[id="pchat-{project["id"]}-messages"]'
     page.locator(feed).wait_for(state="visible", timeout=30_000)
+    # The drawer handover paints the room before it releases inert. WebKit's fill can
+    # otherwise return with an empty field, since the room cannot take focus yet.
+    page.wait_for_function("""selector => {
+        const room = document.querySelector(selector);
+        return room && !room.closest('[inert]');
+    }""", arg=feed)
     return feed
 
 
@@ -237,8 +246,7 @@ def test_project_root_main_notice_reaches_main_only_and_keeps_the_project_answer
                 browser = getattr(pw, engine).launch()
                 page = browser.new_page(viewport={"width": width, "height": 900}, has_touch=width < 980,
                                         color_scheme=theme)
-                errors, state_reads = [], []
-                page.on("pageerror", lambda error: errors.append(str(error)))
+                errors, state_reads = PageErrors(page, engine), []
                 page.on("request", lambda request: state_reads.append(time.monotonic())
                         if request.url.split("?")[0].endswith("/api/state") else None)
                 page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
@@ -251,8 +259,10 @@ def test_project_root_main_notice_reaches_main_only_and_keeps_the_project_answer
 
                     # ---- the owner speaks in the Project room ----
                     project_feed = _open_project(page, project)
-                    page.locator(f'[id="pchat-{project["id"]}-input"]').fill(
-                        f"{marker} Audit this Project, and tell me in Main if something needs my action.")
+                    composer = page.locator(f'[id="pchat-{project["id"]}-input"]')
+                    prompt = f"{marker} Audit this Project, and tell me in Main if something needs my action."
+                    composer.fill(prompt)
+                    assert composer.input_value() == prompt
                     page.locator(f'[id="pchat-{project["id"]}-send"]').click()
                     task = wait_until(lambda: next((row["task"] for row in oracle.events("task_received")
                         if marker in str(row.get("task", {}).get("text") or "")), None), 90)
@@ -394,7 +404,7 @@ def test_project_root_main_notice_reaches_main_only_and_keeps_the_project_answer
                     _panel_cover(page)
                     capture.checkpoint("7-reloaded-project")
                     assert not strangers, strangers
-                    assert not errors, errors
+                    assert not errors.unexpected(), errors
         finally:
             before_notice.release.set()
             before_answer.release.set()

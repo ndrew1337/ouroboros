@@ -357,6 +357,13 @@ def server_stop_source() -> str:
     return _stop_source
 
 
+def server_stop_cause(restart_requested: bool | None = None) -> str:
+    """The cause a shutdown records: ``restart_requested``, else the stop ingress; diagnostic only.
+    Doors read the live restart flag; the late row passes the one its custody write used."""
+    restart = _restart_requested.is_set() if restart_requested is None else restart_requested
+    return "restart_requested" if restart else _stop_source
+
+
 class _SignalStopServer(uvicorn.Server):
     """uvicorn.Server whose SIGTERM/SIGINT handler stops the supervisor loop AT THE SIGNAL.
 
@@ -376,6 +383,10 @@ class _SignalStopServer(uvicorn.Server):
         _exit_signalled.set()
         _supervisor_stop.set()
         self.should_exit = True
+
+    async def on_tick(self, counter: int) -> bool:
+        """Observe a stop latched before Uvicorn installed its signal handler."""
+        return _exit_signalled.is_set() or await super().on_tick(counter)
 
     def handle_exit(self, sig: int, frame) -> None:
         # Let uvicorn see the previous should_exit value (repeated SIGINT forces exit).

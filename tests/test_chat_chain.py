@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import itertools
 import json
 import pathlib
 import shutil
@@ -463,6 +464,35 @@ def test_room_rows_are_the_room_evidence_rows_by_room_task_and_period(tmp_path):
     assert list(cc.iter_room_rows(tmp_path, "1", task_ids=[])) == []
 
 
+def test_a_projects_task_reach_reaches_python_in_one_step_whatever_its_size():
+    """The tasks under a project's bound tasks, by parent or by root, as the recursive query names them row by row,
+    handed to Python in one step (each ``sqlite3_step`` releases the GIL)."""
+    import sqlite3
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE tasks (task_id TEXT PRIMARY KEY, parent_task_id TEXT, root_task_id TEXT)")
+    tree = [(f"c{i}", f"c{i - 1}" if i else "bound", "bound" if i % 3 else None) for i in range(300)]
+    conn.executemany("INSERT INTO tasks VALUES (?,?,?)", tree + [("x1", "elsewhere", "elsewhere"), ("x2", None, None)])
+    rows_by_row = {str(row[0]) for row in conn.execute(cc._REACH.replace("json_group_array(id)", "id"), ('["bound"]',))}
+    stepped = []
+
+    class Rows(list):
+        def fetchone(self):
+            return self[0] if self else None
+
+        def fetchall(self):
+            return list(self)
+
+    class Stepped:  # counts the result rows each statement hands to Python: one ``sqlite3_step`` each
+        def execute(self, *args):
+            rows = Rows(conn.execute(*args).fetchall())
+            stepped.append(len(rows))
+            return rows
+
+    assert cc._reached(Stepped(), {"bound"}) == rows_by_row == {"bound", *(f"c{i}" for i in range(300))}
+    assert stepped == [1]
+
+
 def test_room_rows_between_two_addresses_keep_stream_positions(tmp_path):
     _room_fixture(tmp_path)
     room = list(cc.iter_room_rows(tmp_path, "1"))
@@ -485,124 +515,105 @@ def test_a_redelivered_message_stays_two_addressable_rows(tmp_path):
     assert [row["text"] for row in read_room_source(tmp_path, 1)["rows"]] == ["same words"]
 
 
-# --- rows addressed in chunks ------------------------------------------------------------------
+def _paged_chain(tmp_path: pathlib.Path) -> pathlib.Path:
+    """1,300 chat rows of three kinds (an archive and the live file imported with their legacy
+    hints, rows appended to the store after the import) and the A2A rows the stream skips."""
+    live, archive = _layout(tmp_path)
+    lines = [json.dumps({"chat_id": 1 if i % 3 else 1001, "direction": "in", "text": f"old-{i}"}) + "\n"
+             for i in range(700)]
+    lines[350:350] = [json.dumps({"chat_id": -1, "text": "a2a"}) + "\n"]
+    (archive / "chat_20260901T000000.jsonl").write_text("".join(lines), encoding="utf-8")
+    live.write_text(_rows("live", 300), encoding="utf-8")
+    import_all(tmp_path)
+    _append(live, *(_msg(f"2026-09-02T00:{i // 60:02d}:{i % 60:02d}+00:00", f"new-{i}") for i in range(300)))
+    return live
 
-def _per_row(root, entries):
-    """The reader before chunking, as the oracle: a position read and a legacy-address read per row."""
+
+def _one_by_one(root: pathlib.Path) -> list:
     from ouroboros import dialogue_positions as dp
     from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
 
-    for entry in entries:
-        if is_a2a_chat_id(entry.row.get("chat_id", 1)):
-            continue
-        with ds.transaction(root, write=False) as conn:
-            record = conn.execute("SELECT gen, line FROM legacy_addresses INDEXED BY legacy_seq WHERE seq=? LIMIT 1",
-                                  (entry.seq,)).fetchone()
-        address = cc.row_address(entry.row, gen=record[0], line=record[1]) if record else cc.row_address(entry.row)
-        if record is None:
-            address["hint"]["seq"] = entry.seq
-        yield address, entry.row, dp.ordinal_at(root, "chat", entry.seq).pos
+    return [(cc.stored_address(root, entry), entry.row, dp.ordinal_at(root, "chat", entry.seq).pos)
+            for entry in ds.iter_rows(root, "chat") if not is_a2a_chat_id(entry.row.get("chat_id", 1))]
 
 
-def _stream(root):
-    return ds.iter_rows(root, "chat", upper=ds.stream_end(root, "chat"))
-
-
-def _long_chain(tmp_path, rows=450):
-    """An imported archive and live file longer than two chunks, A2A rows among them, then rows appended here."""
-    live, archive = _layout(tmp_path)
-    _append(archive / "chat_20260901T000000.jsonl", *[
-        _msg(f"2026-08-31T10:{i // 60:02d}:{i % 60:02d}+00:00", f"old-{i}", chat_id=-3 if i % 7 == 0 else 1)
-        for i in range(rows)])
-    _append(live, *[_msg(f"2026-09-02T10:00:{i:02d}+00:00", f"live-{i}") for i in range(30)])
-    import_all(tmp_path)
-    _append(live, *[_msg(f"2026-09-03T10:00:{i:02d}+00:00", f"here-{i}") for i in range(5)])
-
-
-def test_rows_are_addressed_in_chunks_exactly_as_row_by_row(tmp_path, monkeypatch):
-    _long_chain(tmp_path)
-    expected = list(_per_row(tmp_path, _stream(tmp_path)))
-    room = list(_per_row(tmp_path, cc.room_rows(tmp_path, 1)))
-    reads = {"n": 0}
-    real = ds.transaction
+def test_addressed_reads_look_rows_up_a_page_at_a_time(tmp_path, monkeypatch):
+    """The stream and a room answer each row's address (its legacy hint or its SQL coordinate) and
+    position exactly as the one-row lookups do, from a few reads per page of rows: on 24.10 two read
+    transactions per open row of 241 rooms kept a server core busy for a quarter hour."""
+    _paged_chain(tmp_path)
+    expected = _one_by_one(tmp_path)
+    kinds = {"legacy" if address["hint"].get("gen") else "sql" for address, _row, _pos in expected}
+    assert len(expected) == 1_300 and kinds == {"legacy", "sql"}
+    opened, real = [], ds.transaction
 
     def counted(*args, **kwargs):
-        reads["n"] += 1
+        opened.append(args)
         return real(*args, **kwargs)
 
     monkeypatch.setattr(ds, "transaction", counted)
-    streamed = list(cc.iter_rows(tmp_path))
-    assert streamed == expected and len(streamed) > 2 * cc._ADDRESS_CHUNK
-    assert {"gen", "line"} <= set(streamed[0][0]["hint"]) and "seq" in streamed[-1][0]["hint"]
-    # Two reads per chunk and the stream's own pages, where row by row would be two per row.
-    assert reads["n"] <= 2 * -(-len(streamed) // cc._ADDRESS_CHUNK) + 10, reads
-    assert list(cc.iter_room_rows(tmp_path, "1")) == room
+    assert list(cc.iter_rows(tmp_path)) == expected
+    pages = -(-len(expected) // cc._ADDRESS_PAGE)
+    assert len(opened) <= 3 * pages + 3, len(opened)  # the reader's pages, two lookups a page, the stream's end and import check
+    opened.clear()
+    room = list(cc.iter_room_rows(tmp_path, "1001"))
+    assert room == [entry for entry in expected if entry[1].get("chat_id") == 1001] and len(room) == 234
+    assert len(opened) <= 3 * pages + 3, len(opened)
+    opened.clear()  # the rows behind the addresses: the coordinates in one read, the legacy hints in another
+    assert cc.rows_by_address(tmp_path, [entry[0] for entry in expected]) == {a["row_sha256"]: r for a, r, _p in expected}
+    assert len(opened) == 2, len(opened)
 
 
-def test_an_unreadable_row_mid_chunk_keeps_the_rows_before_it_and_its_typed_outcome(tmp_path, monkeypatch):
+def test_an_unsettled_unit_still_answers_the_rows_before_it_and_a_busy_store_stops_the_page(tmp_path, monkeypatch):
     from ouroboros import dialogue_positions as dp
-    from ouroboros.store import StoreMigrating
+    from ouroboros.store import StoreBusy, StoreMigrating
 
-    _long_chain(tmp_path, rows=60)
-    expected = list(_per_row(tmp_path, _stream(tmp_path)))
-    bad = [entry.seq for entry in _stream(tmp_path) if entry.row.get("chat_id") != -3][25]
-    real = dp.ordinals_of
+    _chain(tmp_path)
+    streamed = list(cc.iter_rows(tmp_path))
+    real, unsettled = dp.ordinals_of, [entry.seq for entry in ds.iter_rows(tmp_path, "chat")][4]
 
-    def unsettled(root, stream, seqs):
+    def counts(root, stream, seqs):
         seqs = list(seqs)
-        if bad in seqs:
-            raise StoreMigrating("the segment holding this row is still importing")
+        if len(seqs) > 1 or unsettled in seqs:
+            raise StoreMigrating("Dialogue history is still importing")
         return real(root, stream, seqs)
 
-    monkeypatch.setattr(dp, "ordinals_of", unsettled)
-    got = []
+    monkeypatch.setattr(dp, "ordinals_of", counts)
+    answered = []
     with pytest.raises(StoreMigrating):
         for item in cc.iter_rows(tmp_path):
-            got.append(item)
-    assert got == expected[:25]
+            answered.append(item)
+    assert answered == streamed[:3]  # the A2A row before the unsettled one is no stream row
+
+    asked = []
+    monkeypatch.setattr(dp, "ordinals_of", lambda *_a, **_k: (_ for _ in ()).throw(StoreBusy("held")))
+    monkeypatch.setattr(dp, "ordinal_at", lambda *args: asked.append(args))
+    with pytest.raises(StoreBusy):
+        list(cc.iter_rows(tmp_path))
+    assert asked == []  # contention never turns a page into one wait per row
 
 
-def test_the_batched_legacy_reader_keeps_each_rows_first_alias(tmp_path):
-    _chain(tmp_path)
-    seqs = [entry.seq for entry in _stream(tmp_path)]
-    target = next(seq for seq in seqs if ds.legacy_address(tmp_path, seq))
-    with ds.transaction(tmp_path, write=True) as conn:
-        conn.execute("INSERT INTO legacy_addresses (gen, line, seq) VALUES (?, ?, ?)", ("0" * 64, 1, target))
-        conn.execute("INSERT INTO legacy_addresses (gen, line, seq) VALUES (?, ?, ?)", ("f" * 64, 99, target))
-    with ds.transaction(tmp_path, write=False) as conn:
-        oracle = {seq: tuple(record) for seq in seqs if (record := conn.execute(
-            "SELECT gen, line FROM legacy_addresses INDEXED BY legacy_seq WHERE seq=? LIMIT 1", (seq,)).fetchone())}
-    assert oracle[target] == ("0" * 64, 1)
-    assert ds.legacy_addresses(tmp_path, seqs) == oracle
-    assert all(ds.legacy_address(tmp_path, seq) == oracle.get(seq) for seq in seqs)
+def test_a_source_that_fails_mid_page_still_answers_the_rows_it_read_first(tmp_path, monkeypatch):
+    """A busy store between the source's own pages ends the reader where the one-row lookups ended it:
+    after every row read before the failure, with the same failure. A room's candidate union pages
+    unaligned with the reader's pages, so the failure can land inside one."""
+    from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
+    from ouroboros.store import StoreBusy
 
+    _paged_chain(tmp_path)
+    expected, real = _one_by_one(tmp_path), ds.iter_rows
+    read_first = sum(1 for entry in itertools.islice(real(tmp_path, "chat"), 620)
+                     if not is_a2a_chat_id(entry.row.get("chat_id", 1)))
 
-
-def test_a_failing_row_source_still_yields_the_rows_read_before_it(tmp_path):
-    _long_chain(tmp_path, rows=60)
-    entries = list(_stream(tmp_path))
-    expected = list(_per_row(tmp_path, entries[:30]))
-
-    def failing():
-        yield from entries[:30]
-        raise RuntimeError("the page after these rows could not be read")
-
-    got = []
-    with pytest.raises(RuntimeError, match="could not be read"):
-        for item in cc._addressed(tmp_path, failing()):
-            got.append(item)
-    assert got == expected and len(got) > 20
-
-
-def test_the_first_row_reads_one_chunk_ahead_not_the_whole_stream(tmp_path):
-    _long_chain(tmp_path)
-    pulled = {"n": 0}
-
-    def counted():
-        for entry in _stream(tmp_path):
-            pulled["n"] += 1
+    def failing(*args, **kwargs):
+        for count, entry in enumerate(real(*args, **kwargs)):
+            if count == 620:  # inside the reader's second page
+                raise StoreBusy("held")
             yield entry
 
-    first = next(cc._addressed(tmp_path, counted()))
-    assert first == next(_per_row(tmp_path, _stream(tmp_path)))
-    assert pulled["n"] <= 2 * cc._ADDRESS_CHUNK < len(list(_stream(tmp_path)))
+    monkeypatch.setattr(ds, "iter_rows", failing)
+    answered = []
+    with pytest.raises(StoreBusy):
+        for item in cc.iter_rows(tmp_path):
+            answered.append(item)
+    assert answered == expected[:read_first] and read_first > cc._ADDRESS_PAGE

@@ -26,7 +26,7 @@ direct_server_with_data = _direct_server_with_data
 def test_installed_repair_reloads_tool_route_widget_and_companion(direct_server_with_data, monkeypatch, tmp_path):
     import time
     import urllib.request
-    from ouroboros import extension_loader, skill_review
+    from ouroboros import extension_loader
     from ouroboros.contracts.task_constraint import TaskConstraint
     from ouroboros.platform_layer import pid_is_alive
     from ouroboros.skill_loader import compute_content_hash, load_review_state
@@ -73,7 +73,6 @@ def test_installed_repair_reloads_tool_route_widget_and_companion(direct_server_
     monkeypatch.setenv("OUROBOROS_AUTO_GRANT_REVIEWED_SKILLS", "true")
     monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(tmp_path / "unused"))
     monkeypatch.setattr("ouroboros.safety.check_safety", lambda *a, **k: (True, ""))
-    monkeypatch.setattr(skill_review, "_review_wave_budget_block", lambda *a, **k: None)
     registry = ToolRegistry(repo_dir=Path(__file__).resolve().parents[1], drive_root=drive)
     registry._ctx.task_id = "live-repair"
     registry._ctx.current_chat_id = 42

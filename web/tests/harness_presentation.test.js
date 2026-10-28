@@ -11,6 +11,7 @@ import {
     HARNESS_MARKS,
     META_PART_SEPARATOR,
     executorIdentityMarkup,
+    formatCoordinatorProvenance,
     executorModelText,
     harnessAccountIdentityMarkup,
     harnessIdentityMarkup,
@@ -343,6 +344,18 @@ test('#516 the card meta line separates its parts with real text, not a CSS gap'
     const css = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
     const chipRule = css.slice(css.indexOf('.chat-live-executor-chip {'), css.indexOf('.chat-live-executor-chip {') + 400);
     assert.doesNotMatch(chipRule, /margin-right/);
+
+    // S2: Coordinator provenance comes from the recorded snapshot only (inherited / chosen by the
+    // delegator (<row>) / parent's fallback); a bare role or model records nothing. The chip line
+    // never carries it: it is the Coordinator row of the card details (chat_activity.renderLiveCardMeta).
+    assert.equal(formatCoordinatorProvenance('inherited'), 'inherited');
+    assert.equal(formatCoordinatorProvenance({ parent_cognitive_route: {
+        model: 'sonnet', chosen_by: 'delegator', supervisor_subagent_id: 'claude=sonnet' } }),
+    'chosen by the delegator (claude=sonnet)');
+    assert.equal(formatCoordinatorProvenance({ parent_cognitive_route: {
+        model: 'sonnet', source_role: 'fallback', chosen_by: 'parent_fallback' } }), "parent's fallback");
+    assert.equal(formatCoordinatorProvenance({ parent_cognitive_route: { model: 'sonnet', source_role: 'fallback' } }), '');
+    assert.doesNotMatch(executorIdentityMarkup(chip, { model: 'sonnet' }), /Coordinator|inherited|fallback/);
 });
 
 // Requested, observed and unknown executor models never collapse (refined A, 21.10): settled observed models are

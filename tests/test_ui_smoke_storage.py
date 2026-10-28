@@ -67,8 +67,8 @@ def test_storage_dashboard_real_server_consumer(direct_server_with_data, request
         page.wait_for_selector("#page-dashboard")
         with page.expect_response(storage_get, timeout=10_000) as first_read:
             page.locator('[data-dashboard-tab="storage"]').click()
-        expect(page.locator(".storage-summary")).to_contain_text("Not counted yet", timeout=10_000)
-        expect(page.locator(".storage-summary")).to_contain_text("on the disk the data folder is on")
+        expect(page.get_by_role("region", name="Storage summary", exact=True)).to_contain_text("Not counted yet", timeout=10_000)
+        expect(page.get_by_role("region", name="Storage summary", exact=True)).to_contain_text("on the disk the data folder is on")
         assert posts == [], "opening the tab must not start a count"
         first = first_read.value.json()
         assert first["count"] is None and first["counting"] is None and first["error"] is None
@@ -103,8 +103,8 @@ def test_storage_dashboard_real_server_consumer(direct_server_with_data, request
         # Every group with a present place, a bar of their shares, the places with their words.
         for group in ("records", "work", "temporary", "other"):
             expect(page.locator(f'[data-storage-group="{group}"]')).to_be_visible()
-        expect(page.locator(".storage-summary")).to_contain_text("Ouroboros uses")
-        expect(page.locator(".storage-summary")).to_contain_text("Last count:")
+        expect(page.get_by_role("region", name="Storage summary", exact=True)).to_contain_text("Ouroboros uses")
+        expect(page.get_by_role("region", name="Storage summary", exact=True)).to_contain_text("Last count:")
         expect(page.locator('[data-storage-place="model_calls"]')).to_contain_text("Model call records")
         expect(page.locator('[data-storage-place="data_other"]')).to_contain_text("Everything else in the data folder")
         expect(page.locator('[data-storage-place="program"]')).to_contain_text("Ouroboros program")
@@ -124,7 +124,7 @@ def test_storage_dashboard_real_server_consumer(direct_server_with_data, request
         protected = [path for path, _size in markers.values()] + [data_dir / "state" / "storage_measurement.json"]
         before = _file_snapshots(protected)
         tray = page.locator("[data-storage-tray]")
-        expect(tray).to_contain_text("Copies the app already removes on its own")
+        expect(tray).to_contain_text("Copies and leftovers of finished work")
         assert page.locator("[data-storage-tray] .btn-danger").count() == 0
         with page.expect_response(lambda response: response.url.endswith("/api/storage/free/preview"), timeout=10_000) as previewed:
             page.locator("[data-free-preview]").click()
@@ -152,7 +152,7 @@ def test_storage_dashboard_real_server_consumer(direct_server_with_data, request
         page.locator('[data-dashboard-tab="logs"]').click()
         page.locator('[data-dashboard-tab="storage"]').click()
         expect(page.locator(".storage-status")).to_contain_text("could not be read", timeout=10_000)
-        expect(page.locator(".storage-summary")).to_contain_text("Last count:")
+        expect(page.get_by_role("region", name="Storage summary", exact=True)).to_contain_text("Last count:")
         expect(page.locator('[data-storage-group="records"]')).to_be_visible()
         page.unroute("**/api/storage*", fail_one_read)
         page.screenshot(path=str(evidence / "storage-desktop.png"), full_page=True)

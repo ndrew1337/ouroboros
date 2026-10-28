@@ -168,19 +168,22 @@ def test_launcher_keeps_display_probe_alias_and_origin_bound_hook():
 def test_linux_bundle_restores_resource_paths_after_frozen_hooks(tmp_path, monkeypatch):
     import os
 
-    native = tmp_path / 'linux-gtk'
+    # XDG uses ':' separators: keep the fixture free of Windows drive letters.
+    monkeypatch.chdir(tmp_path)
+    bundle = Path('.')
+    native = bundle / 'linux-gtk'
     native.mkdir()
     (native / 'manifest.json').write_text('{}')
-    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(os, 'environ', {'GI_TYPELIB_PATH': '/frozen/gi_typelibs',
                                       'PYWEBVIEW_GUI': 'qt', 'XDG_DATA_DIRS': '/session/share'})
-    media.prepare_linux_bundle(tmp_path)
-    assert Path.cwd() == native
+    media.prepare_linux_bundle(bundle)
+    assert Path.cwd() == tmp_path / native
     assert os.environ['PYWEBVIEW_GUI'] == 'gtk'
     assert os.environ['GI_TYPELIB_PATH'] == str(native / 'lib/x86_64-linux-gnu/girepository-1.0')
     assert os.environ['GIO_MODULE_DIR'].startswith(str(native))
-    media.prepare_linux_bundle(tmp_path)
-    assert os.environ['XDG_DATA_DIRS'] == f'{native}/share:/session/share'
+    monkeypatch.chdir(tmp_path)
+    media.prepare_linux_bundle(bundle)
+    assert os.environ['XDG_DATA_DIRS'] == f'{native / "share"}:/session/share'
 
 
 def test_source_install_without_bundle_keeps_backend_environment(tmp_path, monkeypatch):
