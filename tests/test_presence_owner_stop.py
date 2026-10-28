@@ -10,8 +10,9 @@ passes the production pre-dispatch window (``llm_attempt.require_physical_dispat
 the gate each physical send crosses, so a call refused there generated nothing. A call
 already sent can still return the final answer; the answer's closing admission reads the
 same open intent, so that answer is retained, never sent, and a Stop after it lets it stand.
-A forced final call (the round limit's, a Wrap up's) and an authored stop that a hard rail
-publishes without a call are admitted the same way.
+A forced final call (the round limit's, a Wrap up's), an authored stop that a hard rail
+publishes without a call and every other no-call exit (a real budget refusal's retained
+answer) are admitted the same way.
 
 Wrap up (``stop_policy=finalize_then_cancel``) reaches the same turn: the existing owner-stop
 episode arms its ``finalize_now`` control, its loop drains it, and its one tool-less final turn
@@ -25,6 +26,7 @@ from __future__ import annotations
 
 import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from starlette.applications import Starlette
@@ -34,6 +36,7 @@ from starlette.testclient import TestClient
 from ouroboros import cancel_intents as ci
 from ouroboros.presence_runner import PresenceTurnError
 from ouroboros.task_results import load_task_result
+from tests.test_presence_continuation import review
 from tests.test_presence_continuation_bootstrap import finish, install_bootstrap_harness, tool_call
 from tests.test_presence_contact_wait import start
 from tests.test_presence_owner_contact import contact_runtime as _contact_runtime, focus  # noqa: F401
@@ -46,6 +49,7 @@ SUMMARY = "Where it stands: the report is drafted; its numbers are not checked y
 LATE_ANSWER = "The complete answer, from the call sent before Stop now."
 FORCED_ANSWER = "The round limit's best answer: the report is drafted, its numbers are unchecked."
 AUTHORED_STOP = "Stopping here: the report is drafted; checking its numbers remains."
+HELD_ANSWER = "The complete report is ready, with the backup window still unchecked."
 
 
 @pytest.fixture
@@ -333,6 +337,132 @@ def test_public_stop_during_an_authored_stops_batch_at_a_hard_rail_keeps_it_unse
     assert generated == [1] and h.calls == 1
     [stop] = stops
     _kept_unsent(r, h, stopped, stop, AUTHORED_STOP)
+
+
+def _budget_refused(monkeypatch, r, press, stop_at):
+    """A held answer meets a real budget refusal: its result review FAILs, so the turn keeps the answer
+    and asks once more, and that call's reservation (``usage_accounting.reserve_attempt`` on a zero global
+    limit) is refused before a byte is sent; the budget rail ends the turn on that answer without a call.
+    Stop now is pressed while the real transaction decides the refusal (``stop_at="refusal"``), at the
+    budget answer's reply check (``"reply"``) or never (``""``)."""
+    from ouroboros import place_reply
+    from ouroboros.usage_accounting import AttemptRequest, BudgetExceeded, reserve_attempt
+    from ouroboros.usage_store import Txn
+
+    h = install_bootstrap_harness(monkeypatch, r.root, review_mode="required")
+    h.release.set()
+    h.addressed, h.verdict = "", "FAIL"
+    seen = SimpleNamespace(stops=[], refusals=[], admission_open=[])
+    exceeds_limit, prepare = Txn.exceeds_limit, place_reply.prepare_focus_reply
+
+    def deciding_the_refusal(txn, limit, **kwargs):
+        if limit == 0 and stop_at == "refusal" and not seen.stops:  # the refused reservation's own predicate
+            seen.admission_open.append(h.agents[0]._accepting_owner_messages)
+            seen.stops.append(press(h.agents[0].tools._ctx.task_id, cascade=True))
+        return exceeds_limit(txn, limit, **kwargs)
+
+    def at_the_reply_check(tool_ctx, *args, **kwargs):
+        if stop_at == "reply" and seen.refusals and not seen.stops:  # the budget answer's, after the refusal
+            seen.stops.append(press(tool_ctx.task_id, cascade=False))
+        return prepare(tool_ctx, *args, **kwargs)
+
+    monkeypatch.setattr(Txn, "exceeds_limit", deciding_the_refusal)
+    monkeypatch.setattr(place_reply, "prepare_focus_reply", at_the_reply_check)
+
+    def model(_messages):
+        if h.calls == 1:
+            return review(answer=HELD_ANSWER)
+        if h.calls == 2:
+            return {"content": HELD_ANSWER, "tool_calls": []}
+        try:
+            reserve_attempt(AttemptRequest(model="budget-refusal", provider="local", reservation_usd=0,
+                                           global_limit_usd=0, allow_live_fetch=False))
+        except BudgetExceeded as refused:
+            seen.refusals.append(refused.limit_scope)
+            raise
+        raise AssertionError("a zero global limit refuses this reservation")
+
+    h.script = model
+    return h, seen
+
+
+@pytest.mark.parametrize("stop_at", ["", "refusal", "reply"], ids=["no-stop", "stop-at-refusal", "stop-after-admission"])
+def test_public_stop_during_a_real_budget_refusal_keeps_the_held_answer_unsent(owner_stop, monkeypatch, stop_at):
+    """The budget rail ends the turn on its held answer without a model call, so that answer is admitted
+    where every no-call exit is: Stop now accepted while the real reservation is refused keeps it on the
+    cancelled row, unsent. Without a Stop, or with one after that admission, the budget's answer stands."""
+    from supervisor.task_lifecycle import sweep_cancel_intents
+
+    r, press = owner_stop
+    h, seen = _budget_refused(monkeypatch, r, press, stop_at)
+    ended = start(r, h).result.exception(timeout=90)
+    # The review's call, the held answer's, then one refused before any byte: no further call is bought.
+    assert seen.refusals == ["global"] and h.calls == 3
+    tid = h.agents[0].tools._ctx.task_id
+    if stop_at == "refusal":
+        assert seen.admission_open == [True]  # the held answer had not closed its admission
+        [stop] = seen.stops
+        _kept_unsent(r, h, ended, stop, HELD_ANSWER)
+    else:
+        row = load_task_result(r.root, tid)
+        assert ended is None and "cancel_origin" not in row
+        assert (row["status"], row["reason_code"], [out["text"] for out in _outbound(r.root, tid)]) == (
+            "completed", "budget_exhausted", [HELD_ANSWER])
+    if stop_at == "reply":
+        assert [stop.status_code for stop in seen.stops] == [202], [stop.text for stop in seen.stops]
+        assert sweep_cancel_intents(now=time.time() + 3600) == {tid: "already_settled"}
+        assert ci.active_intents(r.root) == {} and load_task_result(r.root, tid)["status"] == "completed"
+    elif not stop_at:
+        assert not seen.stops
+    # Whichever terminal stands, the refusal's own resource fact stays on the row; the Stop erases no money fact.
+    limit = load_task_result(r.root, tid)["outcome_axes"]["execution"]["resource_limit"]
+    assert (limit["scope"], limit["status"], limit["auto_resume"]) == ("global", "resource_limited", False)
+
+
+@pytest.mark.parametrize("rail", ["retry_wall", "context_overflow", "output_exhaustion"])
+@pytest.mark.parametrize("stopping", [False, True], ids=["no-stop", "stop-now"])
+def test_a_no_call_rail_stamps_its_reason_before_stop_now_can_end_it(tmp_path, monkeypatch, rail, stopping):
+    """The no-call rails that stamp their own reason do it before the shared composer, which ends any of
+    them on Stop now, so no stamp overwrites that terminal afterwards; without a Stop each keeps its own.
+    Rail level (the live turn is the budget case above): the composer, hard stop, durable intent, its
+    reader and the retained candidate are production's; the wall's stamps are the real transport's."""
+    from ouroboros import loop_output_exhaustion
+    from ouroboros.loop_llm_call import RETRY_WALL_EXHAUSTED_KEY, call_llm_with_retry
+    from tests.test_delivery_forced_finalization import _forced_test_context
+    from tests.test_provider_wall_rail_contract import _TransientFailingLLM
+
+    loop, registry, limit_ctx, trace = _forced_test_context(tmp_path)
+    loop._replace_delivery_candidate(registry, limit_ctx, trace, HELD_ANSWER, control="replace")
+    monkeypatch.setattr(loop, "_call_forced_model_once", lambda *_a, **_k: pytest.fail("no model call"))
+    # An inline Presence turn: no worker slot of its own, so Stop now is its open immediate intent.
+    registry._ctx.model_wait_context = SimpleNamespace(
+        worker_slot_held=False, task={"_presence_turn": True}, canonical_root=tmp_path, task_id="parent1")
+    if stopping:
+        ci.request_cancel(tmp_path, "parent1", source="http_single", requested_stop_policy="immediate")
+        assert ci.stop_policy(ci.active_intent(tmp_path, "parent1")) == ci.STOP_POLICY_IMMEDIATE
+    usage = limit_ctx.accumulated_usage
+    if rail == "retry_wall":
+        monkeypatch.setattr(time, "sleep", lambda _s: None)
+        assert call_llm_with_retry(_TransientFailingLLM(), [{"role": "user", "content": "hi"}], "openai/gpt-5.5",
+                                   None, "medium", 2, tmp_path, "parent1", 1, None, usage, "task", False)[0] is None
+        assert usage[RETRY_WALL_EXHAUSTED_KEY] is True
+        own = "provider_unavailable"
+        text, usage, trace = loop._handle_provider_unavailable(limit_ctx)
+    elif rail == "context_overflow":
+        usage.update(reason_code="context_overflow", _last_llm_error_kind="context_overflow")
+        own = "context_overflow"
+        text, usage, trace = loop._handle_provider_unavailable(limit_ctx, error_kind="context_overflow")
+    else:
+        own = loop_output_exhaustion.REASON
+        text, usage, trace = loop_output_exhaustion.finish(limit_ctx)
+    assert (text, usage["terminal_origin"]) == (HELD_ANSWER, "model_final")
+    if stopping:  # the hard stop's own terminal, which the live turn above settles cancelled and unsent
+        assert (usage["execution_status"], usage["reason_code"]) == ("failed", "owner_requested_finalization")
+        assert trace["forced_finalization"]["source"] == "owner_stop_retained_candidate"
+        assert registry._ctx._skip_post_task_synthesis is True
+    else:
+        assert (usage["execution_status"], usage["reason_code"]) == ("infra_failed", own)
+        assert trace["forced_finalization"]["source"] == "retained_candidate"
 
 
 def _wrap_up(monkeypatch, r, press, *, during="tool", harden=""):

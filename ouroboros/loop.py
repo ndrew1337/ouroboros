@@ -255,14 +255,15 @@ def _provider_unavailable_result(
         )
     if is_context_overflow:
         reason = "context_overflow" if ctx.accumulated_usage.get("reason_code") == "context_overflow" else "llm_api_error"
-        text, usage, llm_trace = _forced_fallback_result(
-            ctx, llm_trace, fallback, "context_overflow",
-            source="context_overflow_local_salvage", host_words=not salvaged,
-        )
-        usage.update(
+        # Stamped before composing, as every rail is: the composer may end it on the owner's Stop now.
+        ctx.accumulated_usage.update(
             execution_status=RESULT_INFRA_FAILED,
             reason_code=reason,
             _last_llm_error_kind="context_overflow",
+        )
+        text, usage, llm_trace = _forced_fallback_result(
+            ctx, llm_trace, fallback, "context_overflow",
+            source="context_overflow_local_salvage", host_words=not salvaged,
         )
         return with_terminal_notice(text, usage, llm_trace)
     if is_transport_wait:
@@ -282,12 +283,12 @@ def _provider_unavailable_result(
         if wall:
             _finalize_forced_services(ctx, llm_trace)
             _drain_forced_owner_directives(ctx, llm_trace)
+        if ctx.accumulated_usage.get("execution_status") is not None:  # stamped before composing, as above
+            ctx.accumulated_usage.update(execution_status=RESULT_INFRA_FAILED, reason_code=terminal_reason)
         text, usage, llm_trace = _forced_fallback_result(
             ctx, llm_trace, fallback, reason_code=terminal_reason,
             source=no_call, provider_terminal=wall, host_words=not salvaged,
         )
-        if usage.get("execution_status") is not None:
-            usage.update(execution_status=RESULT_INFRA_FAILED, reason_code=terminal_reason)
         return with_terminal_notice(text, usage, llm_trace)
     prompt = (
         "[DEADLINE] Primary model work reached the owner deadline. Produce the best final answer now from verified work and state what remains undone."
