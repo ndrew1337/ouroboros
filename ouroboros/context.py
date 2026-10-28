@@ -220,11 +220,20 @@ def _build_attachment_image_blocks(task: Dict[str, Any]) -> List[Dict[str, Any]]
     return blocks
 
 
-def _scheduled_tasks_digest(env: Any, *, limit: int = 8) -> Optional[Dict[str, Any]]:
+def _scheduled_tasks_digest(env: Any, task: Optional[Dict[str, Any]] = None, *, limit: int = 8) -> Optional[Dict[str, Any]]:
+    """The schedule digest; a Presence caller's (the tool's own caller rule) holds only its own follow-ups (#1589)."""
     from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from ouroboros.dialogue_provenance import presence_caller_binding
+    from supervisor.queue_schedules import presence_promise_store
     from supervisor.schedule_view import digest
     data = schedule_store_fact(env)
-    return data if "unavailable" in data else digest(data["tasks"], datetime.now(timezone.utc), limit=limit)
+    if "unavailable" in data:
+        return data
+    binding = presence_caller_binding(SimpleNamespace(task_metadata=(task or {}).get("metadata"),
+                                                      task_contract=(task or {}).get("task_contract")))
+    return digest((data if binding is None else presence_promise_store(data, binding))["tasks"],
+                  datetime.now(timezone.utc), limit=limit)
 
 
 # The owner-surface note is shared by the runtime-section builder.
@@ -489,7 +498,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
         log.debug("Failed to build queue digest for context", exc_info=True)
     if budget_info:
         runtime_data["budget"] = budget_info
-    schedule_digest = None if declared else _scheduled_tasks_digest(env)
+    schedule_digest = None if declared else _scheduled_tasks_digest(env, task)
     if schedule_digest:
         runtime_data["scheduled_tasks"] = schedule_digest
         if scheduled_tasks_digest_out is not None:
@@ -1226,6 +1235,7 @@ def _capture_context_core(
             task_metadata.get("presence"),
             str(task.get("id") or ""),
             status_root=canonical_root,  # a forked promoted root finds its binding's work canonically
+            scheduled=bool(task_metadata.get("schedule_occurrence")) and not task.get("_presence_turn"),
         )
         if presence_section:
             dynamic_parts.append(presence_section)
