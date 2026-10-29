@@ -33,7 +33,8 @@ def _running(tmp_path, monkeypatch, *argv):
     command = subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(argv)  # ps keeps no quotes
     monkeypatch.setattr(platform_layer, "process_command", lambda pid: command if pid == 4242 else "")
     monkeypatch.setattr(lb.urllib.request, "urlopen", lambda url, timeout: contextlib.nullcontext(io.BytesIO(HEALTH)))
-    monkeypatch.delenv("APPIMAGE", raising=False)
+    for name in ("APPIMAGE", "APPDIR"):
+        monkeypatch.delenv(name, raising=False)
     return lock, port
 
 
@@ -44,8 +45,9 @@ def _handed_off(bundle):
 
 
 def test_the_second_copy_line_names_the_running_instance_by_its_own_report(tmp_path, monkeypatch):
-    """Its process names its copy and its server its version; the same copy, an unreadable lock or an AppImage
-    (whose per-launch mount names no copy) say nothing."""
+    """Its process names its copy and its server its version; the same copy, an unreadable lock or this app's
+    own AppImage (whose per-launch mount names no copy) say nothing; another AppImage app's inherited pair does
+    not count."""
     old, new = _copy(tmp_path / "Desktop", "Ouroboros.app"), _copy(tmp_path / "Applications", "Ouroboros.app")
     lock, port = _running(tmp_path, monkeypatch, *_handed_off(old))
     assert lb.other_copy_line(lock, port, new) == (
@@ -55,7 +57,10 @@ def test_the_second_copy_line_names_the_running_instance_by_its_own_report(tmp_p
     assert lb.other_copy_line(lock, port, new) == ""
     lock.write_text("4242", encoding="utf-8")
     monkeypatch.setenv("APPIMAGE", str(tmp_path / "Ouroboros.AppImage"))
+    monkeypatch.setenv("APPDIR", str(new.parents[1]))  # this copy's own AppImage mount
     assert lb.other_copy_line(lock, port, new) == ""
+    monkeypatch.setenv("APPDIR", str(tmp_path / ".mount_Editor"))  # another AppImage app's, from its terminal
+    assert lb.other_copy_line(lock, port, new).startswith(f"Ouroboros 7.9.0 is already running from {old.parents[1]}.")
 
 
 def test_copies_whose_paths_hold_spaces_are_told_apart_by_their_whole_paths(tmp_path, monkeypatch):

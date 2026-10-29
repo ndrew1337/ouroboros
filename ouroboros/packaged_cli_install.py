@@ -79,7 +79,9 @@ def plan_posix_install(
     target_dir: pathlib.Path | None = None,
     force: bool = False,
 ) -> InstallPlan:
-    appimage = os.environ.get("APPIMAGE", "").strip()
+    from ouroboros.desktop_autostart import own_appimage
+
+    appimage = own_appimage(bundle_root)  # one inherited from another AppImage app's terminal is not this app's
     if appimage:  # its files live in a mount that goes away when the app quits: a link into it would die
         raise PackagedCLIError(f'an AppImage runs from a temporary mount; use "{appimage}" --cli instead of an installed command')
     source = _packaged_wrapper_source(bundle_root, windows=False)

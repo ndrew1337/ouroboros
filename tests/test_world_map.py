@@ -325,7 +325,7 @@ def test_the_measured_block_names_the_app_copy_and_the_body_it_runs(tmp_path, mo
     def host(block):
         return next(line for line in block.splitlines() if line.startswith("- **Host**: "))
 
-    for name in ("OUROBOROS_BUNDLE_DIR", "APPIMAGE"):
+    for name in ("OUROBOROS_BUNDLE_DIR", "APPIMAGE", "APPDIR"):
         monkeypatch.delenv(name, raising=False)
     assert host(wprof.measured_block(str(repo), "/d")) == f"- **Host**: source runtime (Python {python} at {sys.executable}); {body}"
     import os
@@ -346,6 +346,12 @@ def test_the_measured_block_names_the_app_copy_and_the_body_it_runs(tmp_path, mo
         expected = label if real_statvfs or not read_only else ""  # an unmeasured mount gets no label
         assert host(wprof.measured_block(str(repo), "/d")) == (
             f"- **Host**: App 7.10.0 at {app}{expected} (bundled Python {python}); {body}")
+    appimage = tmp_path / "Ouroboros.AppImage"
+    monkeypatch.setenv("APPIMAGE", str(appimage))
+    monkeypatch.setenv("APPDIR", str(tmp_path / ".mount_Editor"))  # another AppImage app's, from its terminal
+    assert host(wprof.measured_block(str(repo), "/d")).startswith(f"- **Host**: App 7.10.0 at {app}")
+    monkeypatch.setenv("APPDIR", str(app))  # this app's own mount
+    assert host(wprof.measured_block(str(repo), "/d")).startswith(f"- **Host**: App 7.10.0 at {appimage}")
 
 def test_startup_verification_refreshes_the_measured_block_in_place(tmp_path, monkeypatch):
     from ouroboros import agent_startup_checks as checks_module

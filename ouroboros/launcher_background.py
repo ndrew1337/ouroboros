@@ -159,13 +159,13 @@ def other_copy_line(lock_path, port_file, bundle_dir) -> str:
     copy, from that instance's own report: its command line names its copy (the text after its last
     ``--seed-bundle``, which the source handoff appends, else its executable) and its ``/api/health`` its
     ``app_version``. ``""`` when this copy's path occurs in that command line (the same copy), for an
-    unreadable instance, a source run (no bundle manifest here), or an AppImage, whose per-launch mount names
-    no copy. ``ps`` joins argv without quoting, so the command line is never split into arguments."""
-    from ouroboros.desktop_autostart import app_copy
+    unreadable instance, a source run (no bundle manifest here), or this app's own AppImage, whose per-launch
+    mount names no copy. ``ps`` joins argv without quoting, so the command line is never split into arguments."""
+    from ouroboros.desktop_autostart import app_copy, own_appimage
     from ouroboros.platform_layer import process_command
 
     bundle = pathlib.Path(bundle_dir)
-    if os.environ.get("APPIMAGE") or not (bundle / "repo_bundle_manifest.json").is_file():
+    if own_appimage(bundle) or not (bundle / "repo_bundle_manifest.json").is_file():
         return ""
     try:
         command = process_command(int(pathlib.Path(lock_path).read_text(encoding="utf-8").strip()))

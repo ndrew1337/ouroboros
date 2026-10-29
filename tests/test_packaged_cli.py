@@ -525,14 +525,20 @@ def test_installer_replaces_its_own_cmd_whose_app_is_gone(tmp_path):
 
 
 def test_installer_under_an_appimage_points_at_its_cli_instead_of_linking_into_the_mount(tmp_path, monkeypatch):
+    """Only this app's own AppImage: its runtime exports APPIMAGE/APPDIR to every descendant, so a tar.gz or deb
+    install run from another AppImage app's terminal inherits that app's pair and installs as without it."""
     from ouroboros.packaged_cli import PackagedCLIError
     from ouroboros.packaged_cli_install import plan_posix_install
 
     root = _make_bundle_root(tmp_path)
     (tmp_path / "bin").mkdir()
     monkeypatch.setenv("APPIMAGE", "/home/me/Ouroboros.AppImage")
+    monkeypatch.setenv("APPDIR", str(root))  # the bundle lies in this AppImage's mount
     with pytest.raises(PackagedCLIError, match='use "/home/me/Ouroboros.AppImage" --cli'):
         plan_posix_install(root, target_dir=tmp_path / "bin")
+    monkeypatch.setenv("APPIMAGE", "/home/me/Editor.AppImage")
+    monkeypatch.setenv("APPDIR", str(tmp_path / ".mount_Editor"))  # another app's, inherited from its terminal
+    assert plan_posix_install(root, target_dir=tmp_path / "bin").action == "create"
     monkeypatch.delenv("APPIMAGE")
     assert plan_posix_install(root, target_dir=tmp_path / "bin").action == "create"
 

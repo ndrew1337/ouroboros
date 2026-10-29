@@ -185,6 +185,17 @@ def test_appimage_entry_starts_a_fresh_sign_in_session_in_the_same_mode(host, tm
     assert startup.autostart_status()["state"] == "on"  # read back as this copy's own entry
 
 
+def test_a_copy_started_from_another_appimage_apps_terminal_registers_itself(host, tmp_path, monkeypatch):
+    """The AppImage runtime exports APPIMAGE/APPDIR to every descendant: a pair whose AppDir does not hold this
+    bundle belongs to another app and names nothing here."""
+    package, _ = host
+    exe = package("linux")
+    (tmp_path / "Editor.AppImage").touch()
+    monkeypatch.setenv("APPIMAGE", str(tmp_path / "Editor.AppImage"))
+    monkeypatch.setenv("APPDIR", str(tmp_path / ".mount_Editor"))
+    assert startup.launcher_target() == (exe, "")
+
+
 def test_linux_native_uses_shipped_unit_and_replaces_xdg_registration(host, tmp_path):
     package, os_state = host
     package("linux", native=True)
