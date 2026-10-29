@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional
 from ouroboros.config import get_finalization_grace_sec
 from ouroboros.deadline_utils import caller_deadline_arguments, owner_deadline_exhausted, review_transport_timeout
 from ouroboros.event_usage import event_token_counts
-from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_review_paid_stamp
+from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_late_review_paid_stamp
 from ouroboros.review_verdict_extraction import canonicalize_session_verdict
 from ouroboros.review_native_images import NativeReviewImages, staged_image_registry
 from ouroboros.triad_review import request_output_shape
@@ -779,6 +779,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                         capture = getattr(exc, "physical_attempt_capture", None)
                         sent = self._images.sent_messages
                         transcript_chars = _wire_size(sent, schemas)
+                        stamp_failed = False  # a strict stamp that failed after this send ends the episode here
                         if str(getattr(capture, "state", "") or "") in POSITIVE_PHYSICAL_ATTEMPT_STATES:
                             # A send that was physically dispatched IS a round
                             # of this episode, even when its response never
@@ -786,9 +787,9 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                             # read as a zero-send refusal.
                             self._rounds_used, last_send_chars = round_idx, transcript_chars  # a dispatched send IS the last one
                             self._observe_sent_view(messages, schemas, confirmed=False)
-                            invoke_review_paid_stamp(self.assignment.dispatch_stamp)
+                            stamp_failed = invoke_late_review_paid_stamp(self.assignment.dispatch_stamp)
                         observe_failed_review_send(self.usage_observer, exc)
-                        if self._images.refuse_send(exc, self.assignment.slot, round_idx, transcript_chars):
+                        if not stamp_failed and self._images.refuse_send(exc, self.assignment.slot, round_idx, transcript_chars):
                             end_reason = "running"
                             continue  # Same episode, explicit gap; no estimate suppresses an image send.
                         if isinstance(exc, (BudgetExceeded, BillingAuthorityUnavailable, ControlAuthorityUnavailable)) and shape == "report" and last_content:

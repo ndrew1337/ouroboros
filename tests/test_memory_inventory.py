@@ -481,3 +481,26 @@ def test_the_inventory_imports_no_model_client_and_reads_projects_lazily():
     assert {"ouroboros.project_dialogue", "ouroboros.projects_registry"} <= nested
     assert not {"ouroboros.project_dialogue", "ouroboros.projects_registry"} & top
     assert mi.VIEW_TRACE_KEY == "memory_view"
+
+
+def test_private_main_contact_stays_in_mains_inventory_like_canonical_history(tmp_path):
+    """F5: a Presence root's private question is Main's however its work is bound, in canonical membership and
+    in the memory inventory alike; an ordinary question of the same bound work is its Project's."""
+    from ouroboros import memory_inventory as mi
+    from ouroboros.project_dialogue import room_membership
+    from ouroboros.projects_registry import RoomResolver, bind_task_to_project, create_project
+    from ouroboros.task_results import write_task_result
+
+    alpha = create_project(tmp_path, "alpha", name="Alpha")
+    write_task_result(tmp_path, "teller", "running", chat_id=1, title="teller")
+    bind_task_to_project(tmp_path, "teller", alpha["id"], alpha["chat_id"], origin={"absent": "system"})
+    contact = {"task_id": "teller", "binding_id": "place-binding", "source_event_id": "external-1"}
+    private = {"chat_id": 1, "direction": "out", "type": "quiz", "task_id": "teller", "ts": "2026-10-01T00:03:00Z",
+               "text": "Private owner question", "quiz": {"quiz_id": "private-q", "presence_contact": contact}}
+    ordinary = {**private, "quiz": {"quiz_id": "plain-q"}, "text": "Ordinary question"}
+    facts = mi.membership_facts(tmp_path)
+    for row, expected in ((private, [1]), (ordinary, [alpha["chat_id"]])):
+        canonical = [chat for chat in (1, alpha["chat_id"]) if room_membership(
+            chat, {alpha["chat_id"]}, [], RoomResolver(tmp_path))(1, row)]
+        assert canonical == expected
+        assert mi.rooms_of_row(mi.row_meta(row), facts) == {str(chat) for chat in expected}

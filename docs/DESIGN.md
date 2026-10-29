@@ -193,8 +193,10 @@ another width (from 75 % up to the size that still leaves 320 CSS px); a browser
 on a computer keeps its own zoom, which no page can set, and the control names
 its keys; where neither exists (a Mini App in Telegram for Android, Telegram
 Desktop) the size stays 100 % and the control says so. A size applies when the
-slider is let go; a size the device cannot keep lasts until the page closes. Ouroboros
-sees the size in the owner's surface fact and can say where to change it, never changes it.
+slider is let go; a size the device cannot keep lasts until the page closes, and one the
+desktop window has not taken (on its way, refused or unanswered) stays the owner's choice on
+the slider, which says so and can be chosen again. Ouroboros sees the size in the owner's
+surface fact (the desktop window's once it took it) and can say where to change it, never changes it.
 
 Appearance belongs to one installation in one browser profile or desktop client on
 one host name, never an account or server, and stays when the server moves to another
@@ -258,7 +260,7 @@ Rules:
   document in the reader (§5 "Document reading"). Nothing else changes
   size: controls, labels, cards and page chrome keep the four sizes, and so
   do the compact surfaces (a Skill Review report, a task timeline) and the
-  other rich-content cards (the question card, the update letter).
+  other rich-content cards (the question card, the update description).
 
 ## 2. Hierarchy rule
 
@@ -275,7 +277,7 @@ steps down. Concretely:
   browser default is a defect: it lands at bold 16px full white and ties with,
   or beats, the content it introduces.
 - A Markdown heading is a subsection heading too — a `--type-body` semibold
-  label in a Skill Review report, the question card and the update letter,
+  label in a Skill Review report, the question card and the update description,
   and its row's own size in a task timeline — except inside a full rich chat
   answer, which is reading text and follows the §1 ladder instead.
 
@@ -945,6 +947,12 @@ revision, so this counter guarantees no delivery durability.
 - **Several clients** share one read cursor that only moves forward: a room read
   on one client stops showing the crimson mark on the others at their next state
   refresh, and nothing read is shown unread again.
+- **One message in two rooms** counts in each until read, then is read in both
+  (owner 28.10, A): shown whole in either room, every part on screen at some moment
+  (a long one by scrolling, a wide block by panning it; a folded or hidden part, or
+  rows under a notice, a menu or the Project sheet, do not count). Only it: no
+  cursor moves, so the other room's unseen messages stay unread and its opening
+  lands on its newest unread message instead. Read is not an answer or done.
 
 ### References and actions
 
@@ -1138,7 +1146,7 @@ preference when it opens and on every reconnect; there is no file watcher.
   label, and in a task card's timeline a heading renders inline, without
   block margins, at its row's own size, with a copyable line break before
   the following paragraph. Other rich-content cards (the question card, the
-  update letter) keep `--type-body` semibold labels. Bold text in chat
+  update description) keep `--type-body` semibold labels. Bold text in chat
   Markdown and rich-content cards is semibold, so a bold lead sentence never
   outweighs a heading. The page-size `md-h1` belongs to non-chat surfaces
   only.
@@ -1604,6 +1612,8 @@ A confirmed answer/closure shows its result for five seconds, then retires only 
 
 Unavailable canonical refresh retains text, references and drafts but disables affected controls. Missing, failed or wrong-Project reads say `Status unavailable`; absent form text says `Open the original question for its text.` The chip opens the original; owned refresh retries.
 
+**One message in two rooms.** A Project room is the whole conversation of its work. What its work says to the owner in Main, or answers in the room a note came from, also stands in the Project at its time: the same words, address, Reply and Copy, never a copy or a link, and one notification. Presence's private contact, host refusals and move receipts stay where they were issued; ordinary Project speech stays in the Project.
+
 **Work portal.** A work living in a Project room keeps its one Main card at the
 request's place, whoever moved it (Turn into project, the mind's move, a
 binding); a Project start or transfer row only says where it went, never a
@@ -1737,7 +1747,9 @@ file (owner choice 1C/2A/3A/4A/5A/6A with mobile first-class).
 
 ### Replies
 
-A reply names the row meant; Ouroboros decides what to do, routing nothing by it. Saved rows offer Reply beside
+A reply names the row meant; Ouroboros decides what to do, routing nothing by it. A direct Reply in Main to a
+Project's message also stands in that Project at its time, the one Main message (owner 28.10, A): it tells,
+wakes and resumes nothing there, and a Reply to it, like other Main talk, stays in Main. Saved rows offer Reply beside
 Copy on bubbles and in row menus, a work card in its row menu only; never on hover only. Reply stages one
 strip, the composer field's first line (`Replying to`, quoted author, one line, ×; Esc cancels). Send
 carries only the address; the host makes the snippet. Answerable questions use their own field.
@@ -2575,9 +2587,9 @@ the desktop runs one. Not yet allowed, denied, unavailable or failed is a typed
 answer, never silence (an error the system returns instead of asking is that
 error, not a denial): that alert falls back to the browser banner or the in-app
 toast. One the system took without answering in time may still appear, so
-nothing else is shown; its click opens the newest accepted source on that icon. In-app
-updates do not replace the desktop app, so an app built before this capability
-falls back and Settings says that system notifications need the current app.
+nothing else is shown; its click opens the newest accepted source on that icon.
+A window without the system-notification method falls back; Settings names that
+missing method, without inferring the app's age or an update remedy.
 Android's host keeps its own channel for its own service; its page has no system
 notifications and says so.
 
@@ -2647,8 +2659,8 @@ notification, including a denied permission, and in the desktop app it is the
 gesture that lets the system ask. The status line names the surface this client
 is using — the system's notifications, a browser banner or the in-app toast —
 keeps the system's permission apart from what became of the last alert (taken,
-unconfirmed or fallen back), and, in an older desktop app, says that system
-notifications need the current app.
+unconfirmed or fallen back), and names a missing desktop method without
+prescribing an update or reinstall.
 
 **Known limits of this version**, stated rather than discovered later:
 

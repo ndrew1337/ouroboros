@@ -222,6 +222,7 @@ def test_timeout_before_receipt_survives_session_storage_loss_and_recovers_same_
     original = ui["reset_calls"][0]
     # Closing an embedded client loses session storage; durable references must survive.
     page.evaluate("sessionStorage.clear()")
+    ui["errors"].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload()
     page.locator('[data-settings-tab="providers"]').click()
     row.locator("[data-resources]").click()
@@ -273,6 +274,7 @@ def test_non_loopback_reset_keeps_original_request_after_reload(resources_ui, sc
     assert len(ui["reset_calls"]) == 1
     original = ui["reset_calls"][0]
     assert original[0] and original[1]["offer_id"] == offer_id and original[1]["target"] == TARGET
+    ui["errors"].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload()
     page.locator('[data-settings-tab="providers"]').click()
     row.locator("[data-resources]").click()

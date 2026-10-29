@@ -504,7 +504,12 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
     try:
         from ouroboros.delegate_custody import undisposed_patches
         from ouroboros.config import get_subagent_projects_root
+        from ouroboros.launch_roots import WorkRootUnavailable
 
+        try:
+            projects_root = pathlib.Path(get_subagent_projects_root()).expanduser().resolve()
+        except WorkRootUnavailable:  # undecided: no folder is "yours" through it; every warning still shows
+            projects_root = None
         for run in undisposed_patches(custody_root, custody_state) if not custody_gap else ():
             # C1: a settled mutating run's work lives in its private snapshot (and its
             # captured patch, once one exists) until someone explicitly applies or
@@ -536,8 +541,8 @@ def build_health_invariants(env: Any, task_id: str = "", active_root: str = "",
                 if active_root and str(run.target_root or "").strip():
                     target = pathlib.Path(run.target_root).expanduser().resolve()
                     active = pathlib.Path(active_root).expanduser().resolve()
-                    if target == active or (target.is_relative_to(active) and active.is_relative_to(
-                            pathlib.Path(get_subagent_projects_root()).expanduser().resolve())):
+                    if target == active or (target.is_relative_to(active) and projects_root is not None
+                                            and active.is_relative_to(projects_root)):
                         foreign_work(owner)["yours"].append(str(run.run_id))
                 continue
             decide_clause = (

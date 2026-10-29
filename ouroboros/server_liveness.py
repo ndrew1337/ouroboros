@@ -13,6 +13,7 @@ evaluates both outside the loop it watches.
 from __future__ import annotations
 
 import contextlib
+import os
 import posixpath
 import queue
 import re
@@ -325,7 +326,8 @@ def _published_loop_facts(liveness: list) -> dict:
 def _loop_thread_stack(ident: Optional[int], *, limit: int = _STALL_STACK_FRAMES,
                        facts: Optional[dict] = None) -> list[str]:
     """The loop thread's CURRENT stack, outermost first, at most ``limit`` innermost
-    ``path:line in func`` frames (repository files relative, others absolute). Walk code
+    ``path:line in func`` frames (repository files relative, other files absolute, a pseudo-filename
+    such as ``<string>`` as the interpreter names it). Walk code
     objects instead of traceback.extract_stack: linecache could read a stalled filesystem on
     this watchdog thread; no locals, no message bodies. A cut walk sets
     ``facts["loop_stack_truncated"]`` when ``facts`` is given, so a bounded stack is never
@@ -368,22 +370,39 @@ _ABSOLUTE_PATH = re.compile(r"^([A-Za-z]:)?[/\\]")
 _STACK_ROW = re.compile(r"^(?P<path>.*):(?P<line>\d+) in (?P<func>.*)$")
 
 
+def _runtime_roots() -> tuple[str, ...]:
+    """Where the Python runtime lives: ``sys.prefix`` and ``sys.base_prefix``, each as reported
+    and as resolved, lexically normalized and ending in one ``/``. A relocatable interpreter may
+    report its prefix through ``bin/..`` while loading modules from the normalized path, and
+    Homebrew reports its ``opt`` symlink while loading the standard library from the Cellar it
+    resolves to; the closing ``/`` keeps a sibling ``<prefix>-other`` outside."""
+    roots = set()
+    for prefix in filter(None, (sys.prefix, sys.base_prefix)):
+        spellings = [prefix]
+        with contextlib.suppress(OSError, ValueError):  # unresolvable: compared as reported; the watchdog lives on
+            spellings.append(os.path.realpath(prefix))
+        roots.update(posixpath.normpath(path.replace("\\", "/")).rstrip("/") + "/" for path in spellings)
+    return tuple(roots)
+
+
 def _innermost_repo_frame(stack: list[str]) -> str:
     """``path:function`` of the innermost frame inside the repository - a relative path, else
-    the innermost frame outside the Python runtime ('' when none) - without the line number,
-    so the samples of one stalled function fold into one row. A relocatable interpreter may
-    report its prefix through ``bin/..`` while loading modules from the normalized path, so
-    both sides are compared lexically normalized."""
-    runtime = tuple({posixpath.normpath(prefix.replace("\\", "/"))
-                     for prefix in (sys.prefix, sys.base_prefix) if prefix})
+    the innermost frame outside the Python runtime (``_runtime_roots``; '' when none) - without
+    the line number, so the samples of one stalled function fold into one row. A pseudo-filename
+    (``<frozen importlib._bootstrap>``, ``<string>``) names no file and is neither, so an import-lock
+    wait or exec'd code names its real caller. The path keeps the row's own spelling; only the
+    comparison is normalized."""
+    runtime = _runtime_roots()
     outside = ""
     for row in reversed(stack):
         parsed = _STACK_ROW.match(row)
         path, func = (parsed.group("path"), parsed.group("func")) if parsed else ("", "")
+        if not path or (path.startswith("<") and path.endswith(">") and "/" not in path and "\\" not in path):
+            continue
         key = f"{path}:{func}"
-        if path and not _ABSOLUTE_PATH.match(path):
+        if not _ABSOLUTE_PATH.match(path):
             return key
-        if path and not outside and not posixpath.normpath(path.replace("\\", "/")).startswith(runtime):
+        if not outside and not (posixpath.normpath(path.replace("\\", "/")) + "/").startswith(runtime):
             outside = key
     return outside
 

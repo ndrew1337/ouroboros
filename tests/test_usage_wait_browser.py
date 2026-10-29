@@ -150,6 +150,7 @@ def test_accounting_waits_fold_into_one_receipt_row_while_logs_keep_each_phase(s
         capture(page, "chat-two-complete")
         logs_phases({"Waiting for accounting access": 2, "Accounting wait ended": 2})
         capture(page, "logs-two-complete")
+        ui["errors"].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
         page.reload()
         page.click('[data-nav-page="chat"]')
         page.locator('#chat-messages .chat-live-card').first.locator('.chat-live-summary-button [data-live-disclosure]').click()

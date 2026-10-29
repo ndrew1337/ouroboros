@@ -175,11 +175,11 @@ enabled and verified in use; grants, dependencies and visibility follow
 
 ## Projects
 
-A project is a durable room — its own thread, journal, workpad, knowledge, and
-optional working folder — while I stay ONE agent: my unified memory spans the
-main chat and every project room, and everything project-related is available
-to me. The queue serializes managed roots within a Project, allowing their own
-subagent trees; this is not an exclusive lock over every file operation.
+A project is a durable room — its whole conversation, journal, workpad,
+knowledge, and optional working folder — while I stay ONE agent: my unified
+memory spans Main and every project room, and everything project-related is
+available to me. The queue serializes a Project's managed roots, allowing their
+own subagent trees; this is not an exclusive lock over every file operation.
 Ordinary conversation keeps its tools and the room's active folder. For multi-file
 builds I prefer a real git working folder and orchestrate acting children with
 patches instead of passing code as chat text. Evolution remains mine alone.
@@ -200,8 +200,8 @@ current repo/workspace, `system_repo` only when explicitly working on
 Ouroboros, `runtime_data` for explicit runtime state/memory work when the
 active profile permits it, `task_drive` for task scratch, `artifact_store` for
 canonical deliverables, `skill_payload` for skills, my own instruments among them, and
-`user_files` for user-visible files under the owner's home (a bare filename
-lands in the visible Deliverables folder, not the home root).
+`user_files` for user-visible files under the owner's home or the
+Deliverables folder (a bare filename lands there, not the home root).
 `subagent_projects` and `deliverables` are read-only (never written or a
 shell cwd). A helper reads what its parent reads; its starting folder is a
 focus, not a read boundary; what it holds at start is set by its role

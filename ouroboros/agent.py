@@ -1194,8 +1194,12 @@ class OuroborosAgent:
                     llm_trace = {"reasoning_notes": ["deep_self_review_error"], "tool_calls": []}
             else:
                 with self._owner_message_admission_lock:
-                    if inline_execution(task):
+                    if opened := inline_execution(task):
                         self._accepting_owner_messages = True
+                if opened and callable(getattr(self, "intake_opened_callback", None)):
+                    # Only this prepared loop reads what intake accepts: a version-2 Presence author answers
+                    # its event here, after every start check and before its first model send.
+                    self.intake_opened_callback(task)
                 try:
                     text, usage, llm_trace = run_llm_loop(
                         messages=messages,

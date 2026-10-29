@@ -1,7 +1,7 @@
 /** Web UI orchestrator: shared state, navigation, page init, WS startup. */
 
 import { createWS } from './modules/ws.js';
-import { apiFetch, fetchJson } from './modules/api_client.js';
+import { apiClient, apiFetch, fetchJson } from './modules/api_client.js';
 import { loadVersion } from './modules/utils.js';
 import { bindScrollFade } from './modules/scroll_fade.js';
 import { initChat, createChatInstance } from './modules/chat.js';
@@ -17,7 +17,7 @@ import { getHolds, reportFoundHolds } from './modules/holds.js';
 import { startVoice } from './modules/voice_controls.js';
 import { createNotificationActivation, getNotifier } from './modules/notifications.js';
 import { showToast } from './modules/toast.js';
-import { apiClient } from './modules/api_client.js';
+import { noteReadAhead, onReadAheadChange, readAheadFor, unreadCount } from './modules/read_ahead.js';
 import { openNewProjectDialog, openProjectRowMenu, repositionProjectRowMenu } from './modules/project_create.js';
 
 import { initLogs } from './modules/logs.js';
@@ -204,7 +204,7 @@ async function openDashboardTab(tabName) {
 // Main's unread standalone messages, the count a Project's revision gives; unknown counts none.
 function mainUnreadCount() {
     const { mainVisibleRevision: revision, mainSeenRevision: seen } = state;
-    return Number.isSafeInteger(revision) && Number.isSafeInteger(seen) ? Math.max(0, revision - seen) : 0;
+    return Number.isSafeInteger(revision) && Number.isSafeInteger(seen) ? unreadCount(revision, seen, readAheadFor(1)) : 0;
 }
 
 function updateUnreadBadge() {
@@ -243,6 +243,7 @@ function observeMainRevision(revision) {
 // carries the key knows it: a failed read leaves it unknown, and an unknown cursor is never initialized.
 function mergeMainSeenRevision(prefs) {
     if (!prefs || typeof prefs !== 'object' || !('main_seen_revision' in prefs)) return false;
+    noteReadAhead(prefs);  // what the owner read in full in another room (read_ahead.js)
     state.mainSeenLoaded = true;
     const value = prefs.main_seen_revision;
     const advanced = Number.isSafeInteger(value) && value > (state.mainSeenRevision ?? -1);
@@ -697,8 +698,8 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
             }
         }
         // Once visible, an unread room lands on its newest message (DESIGN "Unread").
-        const unread = Math.max(0, Number(freshProjectRow(project).visible_revision) || 0)
-            > Math.max(0, Number(state.projectSeenRevision?.[project.id]) || 0);
+        const unread = unreadCount(freshProjectRow(project).visible_revision, state.projectSeenRevision?.[project.id],
+            readAheadFor(project.chat_id)) > 0;
         if (!(taskId && quizId)) void inst.showLatest?.({ arrive: unread });
         // ACK the exact painted revision; chat.js owns the receipt and skips redundant reads.
         if (taskId && quizId) await revealProjectQuestion(project, inst, taskId, quizId);
@@ -873,8 +874,7 @@ function renderProjectsNav(projects, projectChatIds, activityIndex = projectActi
     // is a monotonic revision comparison, never a timestamp race.
     const seenRevision = state.projectSeenRevision || {};
     const recency = (p) => String(p.last_active_at || p.updated_at || p.created_at || '');
-    const isUnread = (p) => Math.max(0, Number(p.visible_revision) || 0)
-        > Math.max(0, Number(seenRevision[p.id]) || 0);
+    const isUnread = (p) => unreadCount(p.visible_revision, seenRevision[p.id], readAheadFor(p.chat_id)) > 0;
     const rows = all
         .filter(p => p && p.id && ['active', 'deleting'].includes(String(p.lifecycle || 'active')))
         .map(p => ({
@@ -1022,11 +1022,10 @@ function mergeProjectSeenRevisions(cursors) {
         state.projectSeenRevision[projectId] = seen;
         advanced = true;
     }
-    if (!advanced || !Array.isArray(lastProjectRows)) return advanced;
+    if (!Array.isArray(lastProjectRows)) return advanced;  // a read-ahead answer reaches here with no cursor moved
     let changed = false;
     for (const row of lastProjectRows) {
-        const unread = row._unread && (Number(row.visible_revision) || 0)
-            > (Number(state.projectSeenRevision[row.id]) || 0);
+        const unread = row._unread && unreadCount(row.visible_revision, state.projectSeenRevision[row.id], readAheadFor(row.chat_id)) > 0;
         if (row._unread !== unread) { row._unread = unread; changed = true; }
     }
     if (changed) paintProjectsNav();
@@ -1049,7 +1048,7 @@ function paintProjectsCount() {
     if (!navProjectsCount) return;
     const seen = state.projectSeenRevision || {};
     const count = lastProjectRows.reduce((sum, row) => sum + (row._unread
-        ? Math.max(0, (Number(row.visible_revision) || 0) - (Number(seen[row.id]) || 0)) : 0), 0);
+        ? unreadCount(row.visible_revision, seen[row.id], readAheadFor(row.chat_id)) : 0), 0);
     navProjectsCount.textContent = count ? (count > 99 ? '99+' : String(count)) : '';
     navProjectsCount.title = count ? `${count} unread message${count === 1 ? '' : 's'} in Projects` : '';
     if (count) navProjectsCount.setAttribute('aria-label', navProjectsCount.title);
@@ -1325,6 +1324,7 @@ function setupResizablePanels(prefs) {
     makeHandle(document.getElementById('project-panel'), '--project-panel-width', 'left', 'project_panel_width', 320, 1100);
 }
 
+onReadAheadChange(() => { updateUnreadBadge(); mergeProjectSeenRevisions(); });  // a message read in full elsewhere
 apiFetch('/api/ui/preferences', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((prefs) => {

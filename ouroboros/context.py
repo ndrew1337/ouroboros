@@ -698,9 +698,7 @@ def knowledge_navigation_sections(root: Any, project_id: str = "", *, overview: 
                           "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
                           "knowledge index")]
     if pid:
-        from ouroboros.project_facts import project_knowledge_dir
-
-        project_address = resolve_knowledge_address(project_knowledge_dir(pid).parents[2], "topic", f"project:{pid}")
+        project_address = resolve_knowledge_address(root, "topic", f"project:{pid}")
         knowledge_indexes.append((project_address,
                                   f"## Project knowledge ({pid})", "project knowledge index"))
     sections: List[str] = []
