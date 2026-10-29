@@ -5,8 +5,8 @@
 import { escapeHtmlAttr as escape, formatMsgTime } from './utils.js';
 import { taskReviewSourceUrl, taskSkillReviewSourceUrl } from './api_client.js';
 import {
-    actorAnswered, panelPoolLines, panelPoolRecorded, reviewStateWords, seatAdviser, seatCauseText, seatCostText, seatLimitText, seatOwed,
-    seatStateView,
+    actorAnswered, landingWords, panelPoolLines, panelPoolRecorded, reviewStateWords, seatAdviser, seatCauseText, seatCostText, seatLimitText,
+    seatOwed, seatStateView,
 } from './review_record_card.js';
 import { statusMarkHtml } from './status_mark.js';
 
@@ -45,12 +45,18 @@ const subjectOf = (panel) => {
 };
 
 export function reviewViews(groups) {
-    return groups.flatMap(group => (group.surface === 'review_record' && group.attempts.length ? group.attempts.map(attempt => ({
-        ...group, id: `${group.id}:${attempt.id}`, attempts: [attempt], verdict: attempt.verdict, tone: attempt.tone,
-        progress: attempt.progress || '', state: attempt.state,
-        label: attempt.gap ? 'Review record unavailable' : SURFACE_LABELS[attempt.panel?.surface] || 'Review',
-        subject: attempt.gap ? '' : subjectOf(attempt.panel),
-    })) : [group]));
+    return groups.flatMap(group => (group.surface === 'review_record' && group.attempts.length ? group.attempts.map((attempt) => {
+        // The record's relation to the code that landed (owner 29.10, A): its head names an earlier version, its
+        // opened row says the rest. An unreadable record says nothing about any commit.
+        const landed = attempt.gap ? landingWords(null) : landingWords(attempt.panel, group.adoptions);
+        return {
+            ...group, id: `${group.id}:${attempt.id}`, attempts: [attempt], verdict: attempt.verdict, tone: attempt.tone,
+            progress: attempt.progress || '', state: attempt.state,
+            label: attempt.gap ? 'Review record unavailable'
+                : `${SURFACE_LABELS[attempt.panel?.surface] || 'Review'}${landed.earlier ? ' · earlier version' : ''}`,
+            subject: attempt.gap ? '' : subjectOf(attempt.panel), landingLine: landed.line, authorReason: landed.reason,
+        };
+    }) : [group]));
 }
 
 const ledgerTally = (panel) => {
@@ -102,9 +108,10 @@ function readButtons(sources, { owner, recordId, seatId, name, domain }) {
     }).join('');
 }
 
-function line({ sev = '', sevTone = 'neutral', by = '', words = '', wrap = false, quiet = false }) {
+// `wrap` gives a line two lines before it is cut; a `whole` line is never cut, at any width.
+function line({ sev = '', sevTone = 'neutral', by = '', words = '', wrap = false, whole = false, quiet = false }) {
     if (!words) return '';
-    return `<p class="review-line${wrap ? ' review-line-wrap' : ''}${quiet ? ' review-line-quiet' : ''}">`
+    return `<p class="review-line${wrap ? ' review-line-wrap' : ''}${whole ? ' review-line-whole' : ''}${quiet ? ' review-line-quiet' : ''}">`
         + `${sev ? `<span class="review-sev" data-tone="${escape(sevTone)}">${escape(sev)}</span>` : ''}`
         + `${by ? `<span class="review-line-by">${escape(by)}: </span>` : ''}<span class="review-line-text">${escape(words)}</span></p>`;
 }
@@ -260,6 +267,21 @@ function ledgerFacts(attempt) {
     const rows = [['Record', `${text(panel.record_id)}${panel.revision != null && panel.revision !== '' ? ` · revision ${panel.revision}` : ''}`],
         ['Wave', text(panel.review_wave_id)], ['Reviewed', [text(panel.goal), describe(panel.subject)].filter(Boolean).join(' · ')],
         ['Saved', formatMsgTime(text(panel.ts))?.full || text(panel.ts)], ['Verdict', [text(panel.aggregate_signal), text(panel.reason)].filter(Boolean).join(' · ')]];
+    // What landed under this record, each with the decision that governed it and its whole reason (the opened
+    // row's reason may be cut); older landings past the panel's bound stay in the record it names.
+    for (const landing of list(panel.commit_landings)) {
+        rows.push(['Committed', describe({ commit: landing.commit_sha, tree: landing.tree_sha, parent: landing.parent_sha,
+            reviewed_subject: landing.reviewed_subject, author_subject: landing.author_subject,
+            author_disposition: landing.author_disposition, recorded_at: landing.recorded_at })], ['Author reason', text(landing.author_reason)]);
+    }
+    const omitted = Number(panel.commit_landings_omitted) || 0;
+    if (omitted > 0) rows.push(['Earlier landings', `${omitted} not shown · ${text(panel.source_ref?.path) || 'in the record'}`]);
+    const decided = panel.author_decision && typeof panel.author_decision === 'object' ? panel.author_decision : null;
+    if (decided) {
+        rows.push(['Author decision', describe({ disposition: decided.disposition, reviewer_signal: decided.reviewer_signal,
+            enforcement: decided.enforcement, subject: decided.subject_hash, recorded_at: decided.recorded_at })],
+        ['Author reason', text(decided.rationale)]);
+    }
     rows.push(...factRows(attempt.detailText));
     // A pool-era record prints each seat's cost in its reviewer line; an earlier one says it here.
     const pooled = text(panel.surface) !== 'preflight' && panelPoolRecorded(panel.panel_facts);
@@ -349,7 +371,11 @@ function checkBody(view, format) {
         view.authorDecisionText ? `<p class="review-line review-line-quiet" data-review-author-decision><span class="review-line-text">${escape(view.authorDecisionText.split(' · ')[0])}</span></p>` : '',
     ].join('');
     const lead = panelLine(view);
-    return `${notes}<div class="review-seats">${rows}</div><div class="review-check-foot">${lead ? `<span class="review-check-line">${escape(lead)}</span>` : ''}${recordFacts(view)}</div>`;
+    // The record's relation to the landed code leads the seats in body ink and is never cut; then the author's
+    // own reason, quiet and attributed, at most two lines, Record facts keeping the whole reason.
+    const landed = view.landingLine ? `<div class="review-landing" data-review-landing>${line({ words: view.landingLine, whole: true })}`
+        + `${line({ by: 'Reason', words: view.authorReason, wrap: true, quiet: true })}</div>` : '';
+    return `${notes}<div class="review-seats">${landed}${rows}</div><div class="review-check-foot">${lead ? `<span class="review-check-line">${escape(lead)}</span>` : ''}${recordFacts(view)}</div>`;
 }
 
 export function renderOpinionReviews(groups, disclosure, format = {}) {
