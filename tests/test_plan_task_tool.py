@@ -529,22 +529,21 @@ def test_a_typed_lane_refusal_reaches_the_participant_record_and_an_untyped_fail
     assert rows["s3"]["error"] == "transport died"
 
 
-def test_a_session_participant_reads_the_same_redacted_evidence_inline_never_raw_locators(harness):
-    """A retrieving session seat sees the SAME redacted evidence bytes a packet seat sees and is
-    told not to re-read the raw locators (4e133c8a); a secret in the attached file reaches nobody."""
-    (harness.workspace / "notes.md").write_text(
-        "plan notes\nANTHROPIC_API_KEY=sk-ant-FAKEFIXTURE-not-a-real-key-ABCDEFGHIJKLMNOP\n", encoding="utf-8")
+def test_a_session_participant_reads_the_same_exact_evidence_inline_as_a_packet_seat(harness):
+    """A retrieving session seat sees the SAME evidence bytes a packet seat sees, and those are the
+    file's own bytes: a secret-shaped line in an attached file is not rewritten for either."""
+    line = "ANTHROPIC_API_KEY=sk-ant-FAKEFIXTURE-not-a-real-key-ABCDEFGHIJKLMNOP"
+    (harness.workspace / "notes.md").write_text(f"plan notes\n{line}\n", encoding="utf-8")
     harness.state["slots"] = _slots(("api1", "m/a"), ("sess1", "cursor=grok", "session"))
     sub = harness.install({})
     _write(harness.make_ctx(), ask="council", attach=["notes.md"])
     request = sub.calls[0]["request"]
     session = str(request.slot_session_tasks["sess1"])
     assert request.session_root == str(harness.workspace)
-    assert "RETRIEVING REVIEWER" in session and "REDACTED snapshot" in session
-    assert "do NOT re-read the raw evidence locators" in session and "plan notes" in session
+    assert "RETRIEVING REVIEWER" in session and "the same bytes every reviewer sees" in session
+    assert "REDACTED" not in session and f"plan notes\n{line}\n" in session
     packet = _user_text(request.slot_messages["api1"][-1]["content"])
-    assert "plan notes" in packet and "secrets_redacted=true" in packet
-    assert "sk-ant-FAKEFIXTURE" not in session + packet
+    assert f"plan notes\n{line}\n" in packet and "secrets_redacted" not in packet
     assert request.policy["output_contract"].startswith("Return ONE JSON object")
 
 

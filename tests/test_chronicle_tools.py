@@ -359,8 +359,9 @@ def test_part_correction_and_decision_go_through_the_store_rules(tmp_path):
                  expected_sequence=head)
     assert part["ok"] and part["room_id"] == "5"
     # The receipt measures what the fold did and names what it did not: this view and the Max room stay as they were.
-    assert part["effect"] == ("folded 1 record: 11 -> 30 characters. This task's view is not refreshed; the next start "
-                              "re-measures its Max room.")
+    assert part["effect"] == ("folded 1 record: 11 -> 30 characters. Originals remain readable by address. "
+                              "This task's view is not refreshed; the next start re-measures its Max room "
+                              "and rewrites the cached story from the first changed retelling.")
     refused = json.loads(_chronicle_write(ctx, kind="part", text="again", member_ids=["legacy-b00-r5"],
                                           expected_sequence=part["room_head"]))
     assert refused["reason"] == "already_folded" and "effect" not in refused
@@ -738,11 +739,11 @@ def test_mark_view_and_release_including_an_imported_nomination(tmp_path):
     listed = _memory_read(ctx)
     assert "visibility meaning" in listed and "quote: verbatim words" not in listed
     assert "legacy-nomination-0123456789abcdef" in listed  # a global mark is in every room
-    released = json.loads(_memory_mark(ctx, release_id="legacy-nomination-0123456789abcdef",
+    released = json.loads(_memory_mark(ctx, release_ids=["legacy-nomination-0123456789abcdef"],
                                        reason="published the note myself"))
     assert released["ok"] and released["operation"] == "mark_release"
     assert [m["id"] for m in store.active_marks("1")] == [mark["mark_id"]]
-    assert json.loads(_memory_mark(ctx, release_id=mark["mark_id"]))["reason"] == "invalid"  # a reason is required
+    assert json.loads(_memory_mark(ctx, release_ids=[mark["mark_id"]]))["reason"] == "invalid"  # a reason is required
 
 
 # --- host facts helpers and boundaries ------------------------------------------------------------
@@ -790,7 +791,8 @@ def test_the_write_and_read_schemas_carry_account_selection_and_revision():
     assert {"sources", "replaces", "shown"} <= set(schemas["chronicle_write"])
     assert schemas["chronicle_write"]["sources"]["type"] == "array" and schemas["chronicle_write"]["shown"]["type"] == "boolean"
     assert schemas["memory_read"]["revision"]["type"] == "string"
-    assert all(reader in schemas["memory_read"]["room_id"]["description"] for reader in ("'*'", "'candidates'"))
+    assert "'*'" in schemas["memory_read"]["room_id"]["description"]
+    assert "candidates" not in schemas["memory_read"]["room_id"]["description"]
     assert not any(reader in schemas[name]["room_id"]["description"]
                    for name in ("chronicle_write", "memory_mark") for reader in ("'*'", "'candidates'"))
     assert "author" not in schemas["chronicle_write"] and "told_by" not in schemas["chronicle_write"]

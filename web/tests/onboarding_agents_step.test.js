@@ -310,6 +310,7 @@ test('preview and completion can share one open provider/local/model draft', () 
             openaiKey: ' key ', totalBudget: '25', reviewEnforcement: 'blocking',
             localSource: '', localRoutingMode: 'cloud', mainModel: 'openai/gpt-5.6-sol',
             runtimeMode: 'advanced',
+            connections: [{ kind: 'openai-compatible', name: 'local', base_url: 'http://127.0.0.1:41001/v1' }],
         },
         providerFields: [{ settingKey: 'OPENAI_API_KEY', stateKey: 'openaiKey' }],
         budgetFields: [{ settingKey: 'OUROBOROS_TOTAL_BUDGET_USD', stateKey: 'totalBudget' }],
@@ -317,6 +318,7 @@ test('preview and completion can share one open provider/local/model draft', () 
         trim: (value) => String(value || '').trim(),
     });
     assert.equal(draft.OPENAI_API_KEY, 'key');
+    assert.deepEqual(draft.OUROBOROS_CONNECTIONS, [{ kind: 'openai-compatible', name: 'local', base_url: 'http://127.0.0.1:41001/v1' }]);
     assert.equal(draft.OUROBOROS_TOTAL_BUDGET_USD, 25);
     assert.equal(draft.OUROBOROS_MODEL, 'openai/gpt-5.6-sol');
     assert.equal(draft.OUROBOROS_REVIEW_ENFORCEMENT, 'blocking');

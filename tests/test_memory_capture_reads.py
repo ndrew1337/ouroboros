@@ -60,7 +60,7 @@ def test_a_view_enters_the_chronicle_index_for_its_activation_and_its_one_captur
                                   covers={"rows": [f"sealed-{chat}"], "stream_span": [chat, chat]}).ok
     entered = _counted(monkeypatch, ChronicleStore, "_index")
     view = mv.capture_memory_view(tmp_path, made["task"], made["spec"])
-    assert view.active and len(view.live_rooms) == 23 and view.room["facts"]["pages"] == 1
+    assert view.active and len(view.live_rooms) == 17 and len(view.other_rooms) == 6 and view.room["facts"]["pages"] == 1
     assert entered == ["_reading", "capture"]  # the activation receipt, then one read for every reader of the view
 
 

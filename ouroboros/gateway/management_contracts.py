@@ -663,6 +663,7 @@ class OpenAICompatibleModelsRequest(TypedDict):
 
     baseUrl: str
     apiKey: NotRequired[str]
+    connection: NotRequired[str]  # named compatible row; omitted = the built-in pair
 
 
 class LocalModelStartRequest(TypedDict):
