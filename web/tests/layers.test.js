@@ -185,6 +185,35 @@ test('a modal layer makes everything outside it inert; a non-modal one leaves th
     assert.equal(w.content.inert, false, 'destroy releases what it inerted');
 });
 
+test('a page layer opened while the drawer is open lies under it: Escape closes the drawer, then the file', () => {
+    // Files' file shown alone on a phone (files.js) is pushed when its read lands, which may be after the drawer opened.
+    const w = world();
+    const file = w.node('section', w.content);
+    const closed = [];
+    const drawer = { id: 'drawer', el: w.sidebar, modal: true, onClose: () => { closed.push('drawer'); w.layers.remove('drawer'); } };
+    const page = { id: 'files-file', el: file, page: true, modal: false, focus: false, opener: null,
+        onClose: () => { closed.push('file'); w.layers.remove('files-file'); } };
+    w.layers.push(drawer);
+    w.layers.push(page);
+    assert.deepEqual(w.layers.ids(), ['files-file', 'drawer']);
+    assert.equal(w.layers.top(), 'drawer');
+    assert.equal(w.content.inert, true, 'the file under the modal drawer stays in the inert room');
+    w.layers.push(page);  // a re-sync keeps its place
+    assert.deepEqual(w.layers.ids(), ['files-file', 'drawer']);
+    w.win.fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.deepEqual(closed, ['drawer']);
+    assert.deepEqual(w.layers.ids(), ['files-file']);
+    assert.equal(w.content.inert, false);
+    w.win.fire('keydown', { key: 'Escape', preventDefault() {} });
+    assert.deepEqual(closed, ['drawer', 'file']);
+    // Opened first, the file stays under a drawer opened over it; a layer without `page` still goes on top.
+    w.layers.push(page);
+    w.layers.push(drawer);
+    w.layers.push({ id: 'menu', el: w.panel, modal: false, onClose() {} });
+    assert.deepEqual(w.layers.ids(), ['files-file', 'drawer', 'menu']);
+    w.layers.destroy();
+});
+
 // Every write of `inert` restyles the node's whole subtree (the room: ≈130 ms on a long feed in WebKit, owner 20.10 3A).
 function countInertWrites(n) {
     let value = n.inert;

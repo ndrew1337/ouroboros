@@ -51,7 +51,7 @@ owner | web/room_work.css | .rw-trigger[data-tone="wait"] | color
 owner | web/room_work.css | :root[data-theme] .rw-row .rw-pill-question | background, color
 owner | web/room_work.css | :root[data-theme] .rw-row .rw-pill-question:not(:disabled):hover | background
 # A warning worth reading: warn sentences and chips, toasts, notes, warnings inside timelines, reviews, delegated
-# work, Logs events, widget tones, account quota and spent windows, unsaved settings.
+# work, Logs events, widget tones, account quota and spent windows, unsaved settings and file drafts.
 warning | web/ui.css | .settings-inline-status[data-tone="warn"] | color
 warning | web/ui.css | .settings-test-result[data-tone="warn"] | color
 warning | web/ui.css | .ui-chip[data-tone="warn"] | background, border-color, color
@@ -63,6 +63,7 @@ warning | web/style.css | .chat-delegated-problem | color
 warning | web/style.css | .chat-live-line.warn .chat-live-line-title | color
 warning | web/style.css | .chat-quiz-storage-note | color
 warning | web/style.css | .document-reader-notice | background, border-bottom, color
+warning | web/style.css | @container files (max-width: 700px) » .files-entry:is(.is-draft, [data-unsaved]) .files-entry-unsaved | color
 warning | web/style.css | .harness-exhausted | background
 warning | web/style.css | .harness-exhausted .harness-account-meta | color
 warning | web/style.css | .harness-maintenance-notice[data-tone="warn"] | color

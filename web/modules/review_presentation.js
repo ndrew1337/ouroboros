@@ -1392,9 +1392,11 @@ export function createReviewPresentationController({
             || (state.hydrateStatus === 'loading' && state.hadHydrateError === true)
         );
         summary.hidden = groupCount === 0 && !failedEmpty;
-        summary.textContent = groupCount
-            ? `Reviews ${groupCount}${activeCount ? ` · ${activeCount} active` : ''}`
-            : (failedEmpty ? 'Reviews' : '');
+        // The door's words are its one text node, before the chevron its card draws (chat.js), as a status chip's are.
+        let words = summary.firstChild;
+        if (words?.nodeType !== 3) words = summary.insertBefore(summary.ownerDocument.createTextNode(''), words || null);
+        const said = groupCount ? `Reviews ${groupCount}${activeCount ? ` · ${activeCount} active` : ''}` : (failedEmpty ? 'Reviews' : '');
+        if (words.data !== said) words.data = said;
         summary.setAttribute?.('aria-expanded', state.sectionExpanded ? 'true' : 'false');
         const history = [...groups.values()].find(group => group.historyTask);
         if (history) {

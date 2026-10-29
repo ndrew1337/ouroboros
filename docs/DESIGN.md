@@ -287,6 +287,15 @@ it dozens of times the labels collectively out-shout the values they describe.
 Authored label strings should read as sentence case; CSS must not manufacture
 caps with `text-transform`.
 
+**A secondary page orders by meaning, not paint** (audit №9, owner
+2026-10-28T22:09Z). Costs leads with the known spend and, in the same card,
+whether it is final, its unresolved upper bound and what is unknown; the
+composition, the hold and technical counts follow, quieter. Activity names a
+work whole in primary ink above its facts; a duration reads in seconds below a
+minute, then in minutes or hours, and one the row lacks is absent, never `0s`. A narrow temporary-space tray puts
+a qualified size under its group's name. A widget card's ⋮ menu and move handle
+are one quiet pair at its head's end; its lifecycle controls wrap below them.
+
 ## 3. Foreground and state colour
 
 | Token | Meaning |
@@ -1121,7 +1130,10 @@ preference when it opens and on every reconnect; there is no file watcher.
   control may stay in meta ink. Overriding `display` on a summary drops the
   native marker, so draw it. What opens has one coherent boundary tied to its
   trigger: what a bar discloses hangs under its capsules as the work list,
-  and opening moves no neighbouring target. **Floating chrome stays readable:** over scrolling
+  a task card's Details opens its facts and notes under the card's own lines
+  and Reviews, before its children (earlier episodes after them), short and
+  scrolling inside while it holds children, none folded (audit №3, owner
+  2026-10-28T22:09Z), and opening moves no neighbouring target. **Floating chrome stays readable:** over scrolling
   content, closed or open, content never shows through its text, and state tints
   sit on that backing. Text controls in one floating group share height and
   baseline; width, tone and icon shape follow their role. The group reflows by
@@ -1195,8 +1207,12 @@ preference when it opens and on every reconnect; there is no file watcher.
   Owner 2026-10-25 17:22:09, quiz `3766b0a01ce14dec9a17adee2488bdcf`:
   “A — короткий факт сразу, файлы в Details”.
 - **A nested child card is subordinate to its root.** Its compact identity row
-  shows status, role and `Details`; a short task id disambiguates siblings. Its
-  compact line names the executor with only its own model evidence (observed;
+  shows status, role and `Details`; a short task id disambiguates siblings. On a
+  narrow card a long status wraps inside its chip, never narrower than its
+  longest word, and the role takes a second line before either is cut; only a
+  card too narrow for those beside `Details` and its chevron (a 320px phone)
+  moves the two controls under the role, never past its edge (audit №2, owner
+  2026-10-28T22:09Z). Its compact line names the executor with only its own model evidence (observed;
   `requested …`; unconfirmed absent), else the agent model. Coordinator and
   provenance stay in details; effort stays visible as the leaf's dispatch choice,
   not a provider echo. Its chip uses the child's own frames: the applied level (`Effort High`),
@@ -1253,7 +1269,11 @@ reader; composer files stay.
   images offer Retry even for 404; failed inline images offer Download.
 - The header adds no message. Name/photo caption, type and size stay untranslated;
   controls translate. Titles preserve line breaks and wrap whole in a bounded
-  keyboard scroller; actions wrap before squeezing the name.
+  keyboard scroller; actions wrap before squeezing the name. On a phone sheet
+  the name keeps its row beside Close and every action stays in sight under it
+  in two groups, the view (`Formatted`/`Source`, `Fit`/`Actual size`), then the
+  file's (Copy, Open, Download): one row when both fit, else a row each; nothing
+  goes under a menu (audit №5, owner 2026-10-28T22:09Z).
 - Images open at `Fit` (whole, never enlarged); `Actual size` scrolls their pixels.
 - Markdown follows the reading size and heading ladder of a rich answer (§1).
   Single newlines inside a paragraph are soft; explicit hard breaks stay.
@@ -1743,7 +1763,11 @@ file (owner choice 1C/2A/3A/4A/5A/6A with mobile first-class).
   hands that row over once. A kept message whose saved row a host process before
   a restart took says "Saved; delivery not confirmed." with Send as new, which
   only puts the words back in the composer as a new message: nothing is
-  replayed. Rows nobody kept stay plain history ("Input saved").
+  replayed. Rows nobody kept stay plain history ("Input saved"). That plain
+  saved fact is one quiet tick before the message's time, its words its
+  accessible text and a pointer's title: saved, never read or started, so no
+  second tick, and a row the host never said is saved shows none; a doubt, an
+  action or a destination stays words (audit №6, owner 2026-10-28T22:09Z).
 
 ### Replies
 
@@ -2817,8 +2841,9 @@ action does not go through (its error toast: the error notification; a notice he
 not cause stays silent). Sending, copying and other toggles stay silent, as in
 Telegram, and nothing depends on a haptic (`web/modules/haptics.js`).
 
-**Layers and dismissal.** The drawer and the Project panel are layers in one
-stack (`web/modules/layers.js`); dialogs, menus and the work list keep their own
+**Layers and dismissal.** The drawer, the Project panel and a file Files shows
+alone on a narrow page are layers in one stack (`web/modules/layers.js`); the file is part of the page, so it lies
+under every overlay, also when its read lands after the drawer opened. Dialogs, menus and the work list keep their own
 Escape and outside-press dismissal. Escape, ×, a press on the scrim close the
 topmost layer and only it; the system or browser Back and Telegram's Back close
 what is on top: a dialog over a layer first, then the layer. While a layer is
@@ -2841,10 +2866,19 @@ crisp edges (owner 20.10), as a room's feed does (owner 21.10), while a plain pr
 layout the row is at most 56 px: ☰, the place's name, its status, then a room's
 consciousness chip and Panic, with the page's tabs, or Files' location and its actions, under it
 (`bindPageHeader` moves those nodes); the name wins over the status word, which a short row
-drops whole after its start step, keeping its mark, and a room's title ellipsizes before its chip or Panic yields.
+drops whole after its start step, keeping its mark, and Main's title ellipsizes before its chip or Panic yields.
+A Project's name then takes a second line inside its capsule (on a desk only that capsule grows the bar); only a
+name still cut there leaves the consciousness chip its brain and mark, its accessible name keeping the whole state,
+before the name ellipsizes; Panic and × never yield (audit №2, owner 2026-10-28T22:09Z; sidebar names wait for
+the navigation decision).
 Navigation sharing a toolbar also returns below the bar when the
 content column is too narrow, including while the sidebar is resized; the toolbar wraps in its
 own row. Files' location and actions return above the list, folder names fit and actions wrap.
+Files shows the folder's list and the chosen file side by side while its own width holds both (the `files`
+container, 700 px); narrower, the list comes first and a chosen file replaces it under `Back to folder`, which
+keeps an unsaved draft: the file's row says `unsaved` (a new file's draft has its own row at the top) and reopens
+it, while another file, folder or page still asks. The folder's status stands over the list (audit №7, owner
+2026-10-28T22:09Z).
 
 **A room's bar is the law of places** (owner 24.10): it holds what has a state and the emergency exit, and a
 command lives under the capsule of the state it changes; there is no ⋯ and no More. Main's bar holds its status,
@@ -2877,7 +2911,11 @@ applies only where a pointer can hover (`@media (hover: hover)`).
 **Touch and containment.** Under a coarse pointer every target is at least 44 px
 (`--touch-target-min`); a control whose look is smaller keeps its look and gains
 the invisible hit area of the one `.ui-hit-area` recipe in `web/ui.css`, which a
-link inside a sentence takes too so the sentence keeps its lines. Inside a strip
+link inside a sentence takes too so the sentence keeps its lines. A chevron is an
+element (the Reviews door's), so a control's `::after` stays the recipe's; a row
+that wraps on a phone (a question's recovery) gives its buttons the minimum as
+their own height, so no reach covers a neighbour (audit №4, owner
+2026-10-28T22:09Z). Inside a strip
 that scrolls (a capsule's open levels on a narrow phone) a value keeps only its drawn
 height, since the strip clips that reach. Nothing that acts is hidden until hover
 there (a Project row's menu is reached by its long press).
