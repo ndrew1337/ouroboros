@@ -151,7 +151,7 @@ Nobody tells an unmarked page to reload. A new choice reaches it when someone ne
 - **`modelDefaults`** per provider profile, `modelSuggestions` and `localPresets`.
 - **`freshInstall`**, for display only. The server checks it again when setup completes.
 
-Setup can also check what it is about to save: `POST /api/providers/test` probes one provider (a failed probe is `200` with `ok: false`), `POST /api/openai-compatible/models` lists the models of an OpenAI-compatible endpoint, `GET /api/model-catalog` lists selectable models (§14), and the local-model routes start and test a local model (§14). None of them saves anything.
+Setup can also check what it is about to save: `POST /api/providers/test` probes one provider (a failed probe is `200` with `ok: false`; a kept key for a changed address or weakened TLS check is `400` `masked_key_endpoint_changed`), `POST /api/openai-compatible/models` lists the models of an OpenAI-compatible endpoint, `GET /api/model-catalog` lists selectable models (§14), and the local-model routes start and test a local model (§14). None of them saves anything.
 
 To finish setup, send `POST /api/onboarding/complete`:
 - **The body:** the settings to save, keyed by each row's `settingKey`. Add `subscriptionsConnected` and `skipSubscriptionPresets` as needed, and optionally `OUROBOROS_SUBAGENTS` and `allow_empty_review_pool`. A credential field left as `secretPlaceholder` keeps the stored value. Give each save its own `attempt_id` (16–128 letters, digits, `-` or `_`), made before you send it: it is how you can ask about this save later.
