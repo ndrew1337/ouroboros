@@ -68,6 +68,39 @@ def test_only_a_clean_managed_dev_smoke_moves_it(managed, monkeypatch, case):
     assert git_ops.advance_recovery_point(True) == "" and _stable(repo) == first
 
 
+def test_a_commit_landing_during_the_smoke_is_never_promoted(managed, monkeypatch):
+    repo, _drive, _calls, first = managed
+    run = subprocess.run
+
+    def smoke_then_commit(cmd, **kwargs):
+        if len(cmd) == 3 and cmd[1] == "-c" and cmd[2].startswith("import ouroboros,"):
+            (repo / "value.txt").write_text("a commit nobody smoked\n", encoding="utf-8")
+            _git(repo, "commit", "-qam", "landed while the smoke ran")
+        return run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", smoke_then_commit)
+    assert git_ops.import_test()["ok"]
+    assert git_ops.advance_recovery_point(True) == "" and _stable(repo) == first, "the later, unsmoked SHA moved it"
+
+
+@pytest.mark.parametrize("case", ["dev", "other_branch", "unmanaged"])
+def test_a_ready_boot_whose_receipt_skips_the_smoke_still_advances_a_lagging_point(managed, monkeypatch, case):
+    """An earlier boot passed this exact snapshot's smoke and died before it was ready: the receipt now skips the
+    smoke, and the recovery point still follows on a clean managed dev checkout (owner 1A: after every start)."""
+    repo, _drive, calls, first = managed
+    if case == "other_branch":
+        _git(repo, "checkout", "-q", "-b", "experiment")
+    assert git_ops.import_test()["ok"] and calls == ["smoke"]
+    monkeypatch.setattr(git_ops_reset, "_SMOKED", {})  # the next process
+    if case == "unmanaged":
+        monkeypatch.delenv("OUROBOROS_MANAGED_BY_LAUNCHER")
+        monkeypatch.setattr(git_ops, "_read_managed_repo_meta", lambda: {})
+    assert git_ops.import_test()["skipped"] == "unchanged_bootstrap" and calls == ["smoke"]
+    head = _git(repo, "rev-parse", "HEAD")
+    expected = (head, head) if case == "dev" else ("", first)
+    assert (git_ops.advance_recovery_point(True), _stable(repo)) == expected
+
+
 def _failing_dev_smoke(monkeypatch, repo, dev_head):
     run = subprocess.run
 

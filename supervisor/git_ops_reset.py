@@ -661,16 +661,18 @@ def import_test() -> Dict[str, Any]:
 
     before = _bootstrap_snapshot()
     if before and before == _bootstrap_receipt():
+        _SMOKED["head"] = _clean_dev_head()  # this exact snapshot passed its smoke at an earlier, interrupted boot
         return {"ok": True, "skipped": "unchanged_bootstrap"}
     _forget_bootstrap_receipt()
     _SMOKED.clear()
+    head = _clean_dev_head()  # read before the smoke: a commit landing during it is not what passed
     r = subprocess.run(
         [sys.executable, "-c", "import ouroboros, ouroboros.agent; print('import_ok')"],
         cwd=str(_go().REPO_DIR),
         capture_output=True, text=True,
     )
-    if r.returncode == 0:
-        _note_smoked_head()
+    if r.returncode == 0 and head == _clean_dev_head():
+        _SMOKED["head"] = head
     if r.returncode != 0:
         _forget_dependency_fingerprint()  # a broken environment is re-synced next time, never skipped
     elif before and before == _bootstrap_snapshot():
@@ -686,14 +688,13 @@ def import_test() -> Dict[str, Any]:
 _SMOKED: Dict[str, str] = {}  # this process's passing smoke of a clean, launcher-managed dev checkout
 
 
-def _note_smoked_head() -> None:
-    """Keep the commit this smoke proved for ``advance_recovery_point`` when the checkout is a clean,
-    launcher-managed dev branch (at smoke time: an update being finalized, its receipt kept off, counts)."""
+def _clean_dev_head() -> str:
+    """HEAD of a clean, launcher-managed dev checkout, else ``""``: what a passing smoke proves for
+    ``advance_recovery_point`` (an update being finalized, its receipt kept off, counts)."""
     out = [_go().git_capture(["git", *args]) for args in (["rev-parse", "--abbrev-ref", "HEAD"], ["status", "--porcelain"],
                                                          ["rev-parse", "HEAD"])]
-    if not any(rc for rc, _o, _e in out) and out[0][1].strip() == _go().BRANCH_DEV and not out[1][1].strip() \
-            and _go()._is_launcher_managed_repo():
-        _SMOKED["head"] = out[2][1].strip()
+    clean = not any(rc for rc, _o, _e in out) and out[0][1].strip() == _go().BRANCH_DEV and not out[1][1].strip()
+    return out[2][1].strip() if clean and _go()._is_launcher_managed_repo() else ""
 
 
 def advance_recovery_point(ready: bool) -> str:
