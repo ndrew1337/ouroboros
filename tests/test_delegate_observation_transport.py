@@ -391,6 +391,81 @@ def test_a_refusal_that_never_reached_the_daemon_closes_no_outage(tmp_path, monk
     assert not any("reachable again" in text for text, _ in notes)
 
 
+@pytest.mark.parametrize("raw", ["<html>proxy error</html>", '"a json string"', "[1, 2]", None])
+def test_an_unreadable_tick_is_a_typed_host_failure_never_an_answer(tmp_path, monkeypatch, raw):
+    """#947: a tick the host cannot read as an object is its own read failure. It publishes the
+    family's refusal envelope (kept ``fault`` for the hold) with the whole text, keeps the last
+    answered time, and closes no outage; its pending wake replays with the same class."""
+    ctx = _delegating_ctx(tmp_path, acting=False)
+    notes = []
+    ctx.emit_progress_fn = lambda text, *, incident=None: notes.append(text)
+    monkeypatch.setattr(delegate_supervision.time, "sleep", lambda _sec: None)
+    answered, ticks = {}, iter([("no_progress", None), ("observation_pending", "daemon_unreachable"), None])
+
+    def wait_once(_ctx, run_id, _window, _seq):
+        step = next(ticks)
+        if step is None:
+            answered.update(delegate_supervision._load_state(ctx, run_id))
+            return raw
+        return _scripted_wait_once([step])(_ctx, run_id, _window, _seq)
+
+    result = delegate_supervision.supervised_wait(ctx, "run-existing", wait_once=wait_once)
+    payload = json.loads(result.text)
+    assert (result.status, result.code) == ("error", "TOOL_REPORTED_FAILURE")
+    assert {key: payload[key] for key in ("status", "ok", "host_code", "reason", "run_id", "detail")} == {
+        "status": "fault", "ok": False, "host_code": "TOOL_REPORTED_FAILURE", "reason": "observation_malformed",
+        "run_id": "run-existing", "detail": raw if isinstance(raw, str) else repr(raw)}
+    state = delegate_supervision._load_state(ctx, "run-existing")
+    assert state["last_answered_observation_at"] == answered["last_answered_observation_at"]
+    assert (state["observation"]["answered"], state["observation_failure"]) == (False, "observation_malformed")
+    assert [text.startswith("Delegation daemon unreachable") for text in notes] == [True], notes
+    replay = delegate_supervision.supervised_wait(ctx, "run-existing", wait_once=lambda *_a, **_k: pytest.fail("replayed"))
+    assert replay.code == "TOOL_REPORTED_FAILURE" and json.loads(replay.text) == payload
+
+
+def test_an_observed_failed_leaf_stays_an_answered_observation(tmp_path, monkeypatch):
+    """The negative control: a daemon answer that the run FAILED is a successful read of a failed
+    leaf, so it stays OK and closes an open outage (#947 changes only the host's unreadable tick)."""
+    ctx = _delegating_ctx(tmp_path, acting=False)
+    notes = []
+    ctx.emit_progress_fn = lambda text, *, incident=None: notes.append(text)
+    monkeypatch.setattr(delegate_supervision.time, "sleep", lambda _sec: None)
+    steps = iter([json.dumps({"status": "observation_pending", "run_id": "run-existing",
+                              "reason": "daemon_unreachable", "waited_sec": 0.1}),
+                  json.dumps({"status": "terminal", "run_id": "run-existing", "state": "failed"})])
+    result = delegate_supervision.supervised_wait(ctx, "run-existing", wait_once=lambda *_a, **_k: next(steps))
+    assert result.code == "OK" and json.loads(result.text)["state"] == "failed"
+    assert any(text.startswith("Delegation daemon reachable again") for text in notes), notes
+
+
+def test_an_oversized_unreadable_tick_spills_whole_and_keeps_its_class(tmp_path, monkeypatch):
+    """The whole tick text survives an oversized wake through the existing exact source, while the
+    fitted envelope still carries the refusal class and its reason."""
+    from ouroboros.artifacts import read_actor_source_bytes
+    from ouroboros.tool_capabilities import tool_result_limit
+
+    ctx = _delegating_ctx(tmp_path, acting=False)
+    raw = "<html>" + "proxy page " * (tool_result_limit("delegate_wait") // 5) + "</html>"
+    result = delegate_supervision.supervised_wait(ctx, "run-existing", wait_once=lambda *_a, **_k: raw)
+    shown = json.loads(result.text)
+    assert result.code == "TOOL_REPORTED_FAILURE" and len(result.text) <= tool_result_limit("delegate_wait")
+    assert (shown["status"], shown["ok"], shown["reason"]) == ("fault", False, "observation_malformed")
+    assert shown["wake_delivery"]["complete"] is False and "detail" not in shown
+    full = json.loads(read_actor_source_bytes(tmp_path, ctx.task_id, shown["wake_delivery"]["source"]))
+    assert full["detail"] == raw and full["ok"] is False
+
+
+def test_a_recorded_legacy_fault_wake_replays_as_it_was_recorded(tmp_path):
+    """Schema-1 pending wakes keep their recorded bytes and class: only ``refused`` was ever derived."""
+    ctx = _delegating_ctx(tmp_path, acting=False)
+    state = delegate_supervision._load_state(ctx, "run-existing")
+    legacy = {"status": "fault", "detail": "not json", "supervision_wake_id": "wake-legacy"}
+    state["pending_wake"] = {"wake_id": "wake-legacy", "attempt_key": "1", "payload": legacy}
+    delegate_supervision._save_state(ctx, state)
+    replay = delegate_supervision.supervised_wait(ctx, "run-existing", wait_once=lambda *_a, **_k: pytest.fail("replayed"))
+    assert replay.code == "OK" and json.loads(replay.text) == legacy
+
+
 @pytest.mark.parametrize("control", ["deadline", "cancellation_intent"])
 def test_outer_controls_still_cut_a_long_unobserved_stretch(tmp_path, monkeypatch, control):
     """Quiet renewal on a dead socket never outlives the outer bounds: the deadline and a

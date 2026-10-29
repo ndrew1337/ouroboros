@@ -37,7 +37,7 @@ from ouroboros.review_slot_cancel import (  # noqa: F401 — re-exported seam su
     _natural_success_terminal,
     _slot_cancel_outcome,
 )
-from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_review_paid_stamp
+from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_late_review_paid_stamp, invoke_review_paid_stamp
 from ouroboros.usage_accounting import POSITIVE_PHYSICAL_ATTEMPT_STATES, BillingAuthorityUnavailable
 from ouroboros.delegate_custody_usage import (
     observe_failed_review_send, observe_review_usage, observe_session_usage, run_names,
@@ -448,7 +448,7 @@ class ApiChatReviewExecutor(ReviewSlotExecutor):
                 # cannot double-charge a route that already marked dispatch.
                 capture = getattr(exc, "physical_attempt_capture", None)
                 if str(getattr(capture, "state", "") or "") in POSITIVE_PHYSICAL_ATTEMPT_STATES:
-                    invoke_review_paid_stamp(self.assignment.dispatch_stamp)
+                    invoke_late_review_paid_stamp(self.assignment.dispatch_stamp)
                 observe_failed_review_send(self.usage_observer, exc)
                 raise
         # Null/non-object provider messages follow the caller's empty-response rail.
