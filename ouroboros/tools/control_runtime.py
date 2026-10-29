@@ -403,6 +403,8 @@ def _update_scratchpad(ctx: ToolContext, content: str, replaces: list | None = N
 def _fold_refusal(ctx: ToolContext, error: RuntimeError) -> str:
     """No block changed (``ScratchpadFoldFailed``): a conflict names what is active now, a failure its cause."""
     from ouroboros.memory import scratchpad_block_sha256 as sha256
+    from ouroboros.tool_access import canonical_data_root
+    from ouroboros.tool_access_reads import canonical_runtime_reader
 
     if error.kind not in ("not_active", "ambiguous"):
         return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_REPORTED_FAILURE", text=(
@@ -410,10 +412,12 @@ def _fold_refusal(ctx: ToolContext, error: RuntimeError) -> str:
             "(a preserved source row without blocks_folded in memory/scratchpad_journal.jsonl is preparation only).")))
     active = "\n".join(f"- [{str(block.get('ts', ''))[:16]} — {block.get('source', '?')}] sha256 {sha256(block)}: "
                        f"{' '.join(str(block.get('content', '')).split())[:80]}" for block in reversed(error.active))
+    reader = canonical_runtime_reader(ctx, canonical_data_root(ctx), "memory/scratchpad_blocks.json")
     return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_REPORTED_FAILURE", text=(
         f"⚠️ SCRATCHPAD_FOLD_CONFLICT ({error.kind}): {error}; no block changed. Another focus may have folded "
-        "them, or the view is older. Active blocks now, newest first (previews; the full text is in your "
-        f"Scratchpad section):\n{active}")))
+        "them, or the view is older. Your earlier Scratchpad section may be stale. "
+        f"Read the complete current blocks with {reader}. "
+        f"Active blocks observed at this refusal, newest first (previews):\n{active}")))
 
 
 def owner_contact_refusal(ctx: ToolContext, chat_id: object) -> str:

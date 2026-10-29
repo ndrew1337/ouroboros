@@ -393,7 +393,7 @@ class Memory:
             if not append_jsonl(self.journal_path(), {
                     "ts": utc_now_iso(), "type": "fold_sources_preserved", "entry_id": entry_id,
                     "source_blocks": sources, "source_sha256": state["sha256"], "fold_block": fold,
-                    "source_ref": fold["metadata"]["source_ref"]}):
+                    "source_ref": fold["metadata"]["source_ref"]}, ensure_record_boundary=True):
                 raise ScratchpadFoldFailed("journal_unavailable", "the exact source blocks could not be journaled")
             state["preserved"] = True
             return updated

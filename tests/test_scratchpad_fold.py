@@ -547,6 +547,33 @@ def test_a_historical_relative_reference_keeps_its_bytes_and_is_shown_a_qualifie
     assert _opened(_run(forked_ctx, _reader_beside(section, entry_id)), entry_id) == [source]
 
 
+@pytest.mark.parametrize("reading", ["canonical", "forked"])
+def test_a_conflict_points_the_stale_focus_to_current_complete_blocks(roots, reading):
+    """A second focus's accepted fold is newer than this caller's already-built context."""
+    from tests.test_authored_memory import _run
+
+    env, memory, fork = roots
+    ctx, registry = _rooted(env, env.drive_root if reading == "canonical" else fork)
+    assert _tool(registry, content=_note(0)).status == "ok"
+    old_context = _context_section(env, ctx)
+    old_hashes = _DIGEST.findall(old_context)
+    newer = "NEW accepted understanding " + "detail " * 40 + "COMPLETE-TAIL"
+    other = _rooted(env, fork if reading == "canonical" else env.drive_root)[1]
+    assert _tool(other, content=newer, replaces=old_hashes).status == "ok"
+    before = memory.scratchpad_blocks_path().read_bytes()
+
+    refused = _tool(registry, content="Fold from the now outdated first context.", replaces=old_hashes)
+
+    assert refused.status != "ok" and "SCRATCHPAD_FOLD_CONFLICT" in refused.text
+    assert newer not in old_context and newer not in refused.text  # previews are not source bodies
+    assert memory.scratchpad_blocks_path().read_bytes() == before
+    [reader] = _CALL.findall(refused.text)
+    opened = _run(ctx, reader)
+    body = "\n".join(line.split("\t", 1)[1] for line in opened.splitlines() if "\t" in line)
+    assert json.loads(body) == json.loads(before)
+    assert "COMPLETE-TAIL" in opened
+
+
 # --- failure and crash points ------------------------------------------------------------
 
 
@@ -570,6 +597,45 @@ def test_a_failed_preservation_write_leaves_every_active_block(install, monkeypa
     assert memory.scratchpad_path().read_bytes() == before_md
     section = _scratchpad_section(_next_request(env, memory))
     assert all(_note(index) in section for index in range(3))
+
+
+def test_a_retry_after_a_torn_preservation_record_keeps_parseable_originals(install, monkeypatch):
+    """A partial write stays visible, but must not swallow the next preservation record."""
+    from ouroboros import memory as memory_module
+    from ouroboros.memory_reader import read_memory
+
+    _env, memory, registry = install
+    assert _tool(registry, content=_note(0)).status == "ok"
+    originals = _blocks(memory)
+    chosen = [scratchpad_block_sha256(block) for block in originals]
+    before = memory.scratchpad_blocks_path().read_bytes()
+    real, failed = memory_module.append_jsonl, False
+    torn = b'{"type":"fold_sources_preserved","source_blocks":['
+
+    def partial_once(path, row, *args, **kwargs):
+        nonlocal failed
+        if row.get("type") == "fold_sources_preserved" and not failed:
+            failed = True
+            with path.open("ab") as stream:
+                stream.write(torn)
+            raise OSError("disk full after partial preservation")
+        return real(path, row, *args, **kwargs)
+
+    monkeypatch.setattr(memory_module, "append_jsonl", partial_once)
+    refused = _tool(registry, content="Fold interrupted before preserving its sources.", replaces=chosen)
+    assert refused.status != "ok" and memory.scratchpad_blocks_path().read_bytes() == before
+    prefix = memory.journal_path().read_bytes()
+    assert prefix.endswith(torn)
+    retried = _tool(registry, content="Accepted fold after storage recovered.", replaces=chosen)
+    assert retried.status == "ok", retried.text
+    entry = _blocks(memory)[0]["metadata"]["source_ref"]
+    assert memory.journal_path().read_bytes().startswith(prefix)
+    assert _opened(_follow(registry, entry["read"]), entry["entry_id"]) == originals
+    history = read_memory(memory.drive_root, "catalog", {
+        "area": "history", "address": {"kind": "journal", "journal": "scratchpad"}})
+    assert history["complete"] and history["unterminated_tail_bytes"] == 0
+    assert sum(bool(row.get("unreadable")) for row in history["entries"]) == 1
+    assert len(history["entries"]) == 4  # append, torn row, preserved originals, completed fold
 
 
 def test_a_failed_canonical_write_after_preservation_keeps_the_active_blocks_and_says_so(install, monkeypatch):
