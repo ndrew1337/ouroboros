@@ -818,17 +818,23 @@ def test_macos_quit_requests_are_marked_before_pywebviews_closing_runs(monkeypat
     assert window.localization == {"global.ok": "OK", "global.cancel": "Cancel"}, "labels restored"
 
 
-@pytest.mark.parametrize("intent,answered,expected", [
-    ("automatic", True, []),  # a sign-in start of a second copy stays quiet
-    ("owner", True, ["activate"]),  # a manual one shows the running window
-    ("owner", False, ["activate", "notice window"]),  # nobody answered: the old notice
+OTHER = "Ouroboros 7.9.0 is already running from /Users/me/Desktop/Ouroboros.app. Quit it, then open this copy."
+
+
+@pytest.mark.parametrize("intent,answered,other,expected", [
+    ("automatic", True, OTHER, []),  # a sign-in start of a second copy stays quiet, another copy too
+    ("owner", True, "", ["activate"]),  # a manual one shows the running window
+    ("owner", False, "", ["activate", "notice window"]),  # nobody answered: the old notice
+    ("owner", True, OTHER, ["notice window: " + OTHER, "activate"]),  # another copy: its line, then the running one
+    ("owner", False, OTHER, ["notice window: " + OTHER, "activate"]),  # never a second notice window
 ])
-def test_second_launch_shows_the_running_window_only_when_manual(monkeypatch, caplog, intent, answered, expected):
+def test_second_launch_shows_the_running_window_only_when_manual(monkeypatch, caplog, intent, answered, other, expected):
     import launcher
 
     calls = []
     fake_webview = types.ModuleType("webview")
-    fake_webview.create_window = lambda *args, **kwargs: calls.append("notice window")
+    fake_webview.create_window = lambda *args, **kwargs: calls.append(
+        "notice window" + (f": {OTHER}" if OTHER in kwargs.get("html", "") else ""))
     fake_webview.start = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "webview", fake_webview)
     monkeypatch.setattr(launcher, "IS_WINDOWS", False)
@@ -838,9 +844,42 @@ def test_second_launch_shows_the_running_window_only_when_manual(monkeypatch, ca
     monkeypatch.setattr(launcher, "acquire_pid_lock", lambda: False)
     monkeypatch.setattr(launcher, "activate_running_instance",
                         lambda lock: calls.append("activate") or answered)
+    monkeypatch.setattr(launcher, "other_copy_line", lambda *_args: other)
     launcher.main(["--launch-intent", intent])
     assert calls == expected
     assert "Another instance already running." in caplog.text
+
+
+def test_the_second_copy_line_names_the_running_instance_by_its_own_report(tmp_path, monkeypatch):
+    """Its process names its copy and its server its version; the same copy, an unreadable lock or an AppImage
+    (whose per-launch mount names no copy) say nothing."""
+    lock, port = tmp_path / "ouroboros.pid", tmp_path / "port"
+    lock.write_text("4242", encoding="utf-8")
+    port.write_text("8765", encoding="utf-8")
+    old_app, new_app = tmp_path / "Desktop" / "Ouroboros.app", tmp_path / "Applications" / "Ouroboros.app"
+    command = f"{old_app}/Contents/MacOS/ouroboros-shell /repo/launcher.py --seed-bundle {old_app}/Contents/Frameworks"
+    monkeypatch.setattr(platform_layer, "process_command", lambda pid: command if pid == 4242 else "")
+    monkeypatch.delenv("APPIMAGE", raising=False)
+
+    class Health:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return json.dumps({"status": "ok", "app_version": "7.9.0"}).encode()
+
+    monkeypatch.setattr(lb.urllib.request, "urlopen", lambda url, timeout: Health())
+    line = lb.other_copy_line(lock, port, new_app / "Contents" / "Frameworks")
+    assert line == f"Ouroboros 7.9.0 is already running from {old_app}. Quit it, then open this copy."
+    assert lb.other_copy_line(lock, port, old_app / "Contents" / "Frameworks") == "", "the same copy: unchanged"
+    lock.write_text("not a pid", encoding="utf-8")
+    assert lb.other_copy_line(lock, port, new_app / "Contents" / "Frameworks") == ""
+    lock.write_text("4242", encoding="utf-8")
+    monkeypatch.setenv("APPIMAGE", str(tmp_path / "Ouroboros.AppImage"))
+    assert lb.other_copy_line(lock, port, new_app / "Contents" / "Frameworks") == ""
 
 
 def test_a_losing_launcher_leaves_the_holders_pid_readable(tmp_path):

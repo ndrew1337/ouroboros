@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import pathlib
+import shlex
 import signal
 import sys
 import threading
@@ -149,6 +150,34 @@ def activate_running_instance(lock_path) -> bool:
         return False
     # SIGURG is ignored by default, so an older launcher without a handler survives it.
     return pid > 0 and pid != os.getpid() and signal_pid(pid, signal.SIGURG)
+
+
+def other_copy_line(lock_path, port_file, bundle_dir) -> str:
+    """The one line a manual second launch shows first when the running instance is another copy of the
+    app, from that instance's own report: its process's ``--seed-bundle`` (else its executable) and the
+    ``app_version`` its ``/api/health`` answers. ``""`` for this same copy, an unreadable instance, or an
+    AppImage, whose per-launch mount names no copy."""
+    from ouroboros.desktop_autostart import app_copy
+    from ouroboros.platform_layer import process_command
+
+    try:
+        argv = shlex.split(process_command(int(pathlib.Path(lock_path).read_text(encoding="utf-8").strip())),
+                           posix=os.name != "nt")
+    except (OSError, ValueError):
+        return ""
+    seeds = [argv[index + 1] for index, arg in enumerate(argv[:-1]) if arg == "--seed-bundle"]
+    if not argv or os.environ.get("APPIMAGE"):
+        return ""
+    theirs, mine = app_copy(pathlib.Path((seeds or argv)[0].strip('"'))), app_copy(pathlib.Path(bundle_dir))
+    if os.path.normcase(os.path.realpath(theirs)) == os.path.normcase(os.path.realpath(mine)):
+        return ""
+    try:
+        port = int(pathlib.Path(port_file).read_text(encoding="utf-8").strip())
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response:
+            version = str(json.loads(response.read().decode("utf-8")).get("app_version") or "") + " "
+    except Exception:
+        version = ""
+    return f"Ouroboros {version}is already running from {theirs}. Quit it, then open this copy."
 
 
 def request_tray_cleanup() -> None:

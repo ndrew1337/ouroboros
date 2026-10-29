@@ -126,8 +126,9 @@ def _host_line(repo_dir: str) -> str:
     bundle = Path(bundle_text)
     if not (bundle_text and app and (bundle / "repo_bundle_manifest.json").is_file()):
         return f"source runtime (Python {platform.python_version()} at {sys.executable}); {body}"
-    where = Path(os.environ.get("APPIMAGE") or next((p for p in (bundle, *bundle.parents) if p.suffix == ".app"),
-                                                    bundle.parent if bundle.name == "_internal" else bundle))
+    from ouroboros.desktop_autostart import app_copy
+
+    where = Path(os.environ.get("APPIMAGE") or app_copy(bundle))
     measured = ", ".join(app_location_labels(where))  # facts, never a guess from the folder's name
     return f"App {app} at {where}{f' ({measured})' if measured else ''} (bundled Python {platform.python_version()}); {body}"
 

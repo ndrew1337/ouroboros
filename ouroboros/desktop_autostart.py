@@ -43,6 +43,13 @@ KEEP_RUNNING = "OUROBOROS_DESKTOP_KEEP_RUNNING"
 BACKGROUND_ENV = "OUROBOROS_DESKTOP_BACKGROUND"  # "1": this launcher can keep running with its window hidden
 
 
+def app_copy(path: Path) -> Path:
+    """The app copy a bundle directory or launcher executable belongs to: its ``.app``, the folder beside
+    ``_internal`` or holding the executable, else the path itself."""
+    app = next((parent for parent in (path, *path.parents) if parent.suffix == ".app"), None)
+    return app or (path.parent if path.name == "_internal" or path.is_file() else path)
+
+
 def launcher_target() -> tuple[Path | None, str]:
     """The launcher's immutable build facts, not the managed repo's version."""
     presentation = os.environ.get("OUROBOROS_PRESENTATION")

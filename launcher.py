@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import logging
 import os
@@ -77,7 +78,7 @@ from ouroboros.launcher_onboarding import (
     present_first_run_onboarding as _present_first_run_onboarding,
     setup_recovery_menu,
 )
-from ouroboros.launcher_background import (Background, DesktopApi, activate_running_instance, background_env,
+from ouroboros.launcher_background import (Background, DesktopApi, activate_running_instance, background_env, other_copy_line,
                                            request_tray_cleanup, restore_tray_after_handoff, stop_tray_before_exit)
 from ouroboros.launcher_server_reaper import (
     reap_same_install_strays as _reap_same_install_strays_impl,
@@ -213,6 +214,14 @@ def _window_page(title: str, body: str) -> str:
     in the web/ shipped with this launcher's own code (the app's when frozen, the checkout's otherwise)."""
     code_dir = pathlib.Path(sys._MEIPASS) if getattr(sys, "frozen", False) else pathlib.Path(__file__).parent
     return themed_page(code_dir / "web", title, f'<div class="window">{body}</div>', _WINDOW_CSS)
+
+
+def _already_running_window(line: str) -> None:
+    """A second launch's pre-server notice (``webview`` is imported by then)."""
+    import webview
+    paint_room(webview.create_window("Ouroboros", html=_window_page(
+        "Ouroboros", f"<h2>Ouroboros is already running</h2><p>{html.escape(line)}</p>"), width=440, height=200))
+    webview.start(private_mode=False)
 
 
 def _exec_source_launcher() -> None:
@@ -1153,7 +1162,9 @@ def main(argv=()):
 
     if not acquire_pid_lock():
         log.error("Another instance already running.")
-        if options.launch_intent == "automatic" or (not _headless and activate_running_instance(PID_FILE)):
+        if other_copy := ("" if options.launch_intent == "automatic" or _headless else other_copy_line(PID_FILE, PORT_FILE, _bundle_dir())):
+            _already_running_window(other_copy)  # then the running window comes forward, as before
+        if options.launch_intent == "automatic" or (not _headless and activate_running_instance(PID_FILE)) or other_copy:
             return  # a sign-in start stays quiet; a manual launch showed the running window
         if _headless:
             # A second Open may race bootstrap's absent/stale port. Re-read
@@ -1178,14 +1189,7 @@ def main(argv=()):
             if not _external_ui:
                 _open_browser_detached(existing_url).join(timeout=5.0)
             return
-        paint_room(webview.create_window(
-            "Ouroboros",
-            html=_window_page("Ouroboros", "<h2>Ouroboros is already running</h2>"
-                                           "<p>Only one instance can run at a time.</p>"),
-            width=420,
-            height=200,
-        ))
-        webview.start(private_mode=False)
+        _already_running_window("Only one instance can run at a time.")
         return
 
     import atexit
