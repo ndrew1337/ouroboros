@@ -2,6 +2,7 @@
 import asyncio
 import threading
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -286,4 +287,69 @@ def test_heard_but_interrupted_answers_prove_continuation(host_world, monkeypatc
                 await run.quiet()
             count = len(run.provider.connections)
         assert count == 5, (count, run.result)
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('engine,thinking', [('gemini', False), ('gemini', True), ('openai', False), ('grok', False)])
+@pytest.mark.parametrize('break_offer', [False, True])
+def test_handoff_mail_offer_keeps_custody_until_its_write_succeeds(host_world, monkeypatch, engine, thinking, break_offer):
+    from ouroboros.contracts.live_conversation import ContextUpdate
+    from tests.test_live_stack_preparation import request
+    async def scenario():
+        async with stack(host_world, monkeypatch, engine, thinking=thinking) as run:
+            old = run.wire
+            original = type(run.call.session).send
+            broken = []
+            async def send(session, command):
+                if (break_offer and not broken and run.host.connection_number == 2
+                        and isinstance(command, ContextUpdate) and command.respond
+                        and any('New room context is in the fitted history' in str(row) for row in command.messages)):
+                    broken.append(True)
+                    await session.ws.close(code=1012, reason='Synthetic loss while sending the pending-mail offer')
+                return await original(session, command)
+            monkeypatch.setattr(type(run.call.session), 'send', send)
+            old.input_start('owner-holds-mail-switch')
+            await run.wait(lambda: run.call.input_open)
+            await request(run)
+            await run.wait(lambda: run.call.preparing.done())
+            text = 'Synthetic room request whose post-handoff offer meets a closed socket.'
+            run.mail.put({'text': text, 'msg_id': 'review-mail-offer-loss'})
+            await run.wait(lambda: any('New room context is in the fitted history' in str(row) for row in run.call.pending_offers))
+            run.provider.script.append(('say', 'Old connection answered the spoken owner turn.'))
+            old.input_end('owner-holds-mail-switch', 'Synthetic spoken turn before the handoff.')
+            await run.wait(lambda: run.host.connection_number == (3 if break_offer else 2))
+            await run.quiet()
+            # Allow the normal offer worker to process an event-loop turn after quiet.
+            await asyncio.sleep(.1)
+            assert any(text in str(row) for row in run.host.messages)
+            assert len(run.wire.spoken) == 1, dict(
+                broken=broken, spoken=run.wire.spoken, pending=run.call.pending_offers,
+                mail_marker=getattr(run.host, '_pending_mail_answer', False),
+                connections=len(run.provider.connections))
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+def test_failed_offer_restored_before_newer_arrivals(cancel):
+    from skills.live_conversation.driver import _Call
+    async def scenario():
+        older, newer = {'content':'already owned'}, {'content':'arrived during write'}
+        class Attention:
+            async def deliver(self, session, **kwargs): return []
+            def include_images(self, rows): pass
+        class Socket:
+            async def send(self, command):
+                call.pending_offers.append(newer)
+                if cancel:
+                    raise asyncio.CancelledError()
+                raise OSError('lost write')
+        call = object.__new__(_Call)
+        call.pending_offers, call.session, call.attention = [older], Socket(), Attention()
+        call.host = SimpleNamespace(renewal_due=lambda: False, state={})
+        call.connected = asyncio.Event()
+        call.connected.set()
+        call.quiet = lambda: True
+        with pytest.raises(asyncio.CancelledError if cancel else OSError):
+            await call.offer_pending()
+        assert call.pending_offers == [older, newer]
     asyncio.run(scenario())

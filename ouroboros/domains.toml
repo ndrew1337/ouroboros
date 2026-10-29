@@ -86,7 +86,6 @@ D20 = "Presence"
 "ouroboros/realtime_credentials.py" = "D01"
 "ouroboros/realtime_item_echo.py" = "D02"
 "ouroboros/realtime_session.py" = "D02"
-"ouroboros/live_upload.py" = "D02"
 "ouroboros/realtime_setup.py" = "D01"
 "ouroboros/realtime_turn.py" = "D01"
 "ouroboros/section_floor.py" = "D03"
@@ -1043,7 +1042,6 @@ allowed = [
   "D02->D03",
   "D02->D07",
   "D02->D09",
-  "D02->D11",
   "D02->D12",
   "D02->D16",
   "D02->D18",
@@ -1225,6 +1223,7 @@ lazy_only = [
   "D01->D10",
   "D01->D11",
   "D02->D05",
+  "D02->D11",
   "D03->D05",
   "D03->D06",
   "D03->D07",

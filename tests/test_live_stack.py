@@ -75,8 +75,8 @@ def test_full_stack_languages_barge_in_mail_sharing_attention_and_real_tool(host
                 if engine == 'grok':
                     assert 'input_image' not in str(run.wire.sent) and 'vlm_query' in str(result)
                 else:
-                    await run.wait(lambda: any(('video' in v.get('realtimeInput', {}) or any(p.get('type') == 'input_image'
-                        for p in v.get('item', {}).get('content', []))) for v in run.wire.sent))
+                    assert any(('video' in v.get('realtimeInput', {}) or any(p.get('type') == 'input_image'
+                        for p in v.get('item', {}).get('content', []))) for v in run.wire.sent)
                 before = run.wire.responses
                 run.wire.tool('silent-' + kind, 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
                 await run.wait(lambda: 'silent-' + kind in run.wire.outputs)

@@ -57,7 +57,3 @@ at the captured route tariff. Current options and account scope are checked at
 the switch. Only transport failure or a stale fit falls back; typed refusals end
 without another attempt. Committed room mail keeps its answer opportunity across
 a handoff, and an interrupted answer proves the connection just as a completed one does.
-
-On a weak upload the microphone goes first. Provider frames wait for available upload room; newer frames replace waiting ones per source. The shared transport uses native kernel unsent/ACK counts where available. Elsewhere the asyncio write buffer is backpressure only; throughput comes from a WebSocket pong over a fixed write boundary. That receipt is from the connected WebSocket peer, not every proxy's upstream queue. Measured throughput prices delivery copies against half the microphone buffer and paces them with spare microphone capacity; it is not a guarantee of TCP occupancy through unobservable queues. Exact original files remain readers. The mind gets one slow-upload fact and one recovery fact; a queued frame is not sight. Requested looks obey the same limit.
-
-Requested looks and streamed frames share one upload owner. Recovery follows a successful full write for every constrained source; a small camera cannot clear a reduced screen. Muting the last microphone releases its reservation, restored before resumed audio. A fresh socket replays requested looks as exact readers until it has measured upload credit. Failed or cancelled offers retain their place ahead of newer facts.

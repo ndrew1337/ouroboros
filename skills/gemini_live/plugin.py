@@ -553,10 +553,6 @@ class GeminiSession(JsonSession):
             result.append(LiveEvent('caption', {**event.data, 'incomplete': True}))
         return result
 
-    def video_payload(self, command):
-        return {'realtimeInput': {'video': {'mimeType': command.mime,
-            'data': base64.b64encode(command.data).decode()}}}
-
     async def send(self, command):
         if isinstance(command, Audio):
             if command.rate != 16000 or len(command.pcm) % 2:
@@ -564,11 +560,12 @@ class GeminiSession(JsonSession):
             # Continuous PCM includes silence. Only native VAD/transcription
             # can open an input boundary; sending a frame says nothing about it.
             self.input_modalities.add('audio')
-            await self.write_audio({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
-                'data': base64.b64encode(command.pcm).decode()}}}, command)
+            await self.write({'realtimeInput': {'audio': {'mimeType': 'audio/pcm;rate=16000',
+                'data': base64.b64encode(command.pcm).decode()}}})
         elif isinstance(command, Video):
             self.input_modalities.update(('image', 'video'))
-            await self.write(self.video_payload(command), image=True)
+            await self.write({'realtimeInput': {'video': {'mimeType': command.mime,
+                'data': base64.b64encode(command.data).decode()}}})
         elif isinstance(command, Interrupt):
             pass  # Gemini's VAD owns interruption.
         elif isinstance(command, ToolOutputs):
@@ -591,15 +588,9 @@ class GeminiSession(JsonSession):
                         if part.get('type') == 'image_url':
                             inline = image_part(part)['inlineData']
                             self.input_modalities.update(('image', 'video'))
-                            await self.write({'realtimeInput': {'video': inline}}, image=True)
+                            await self.write({'realtimeInput': {'video': inline}})
                 elif not message.get('tool_calls'):
                     other.append(message)
-            for message in command.messages:
-                if message.get('_deferred_frame'):
-                    response = next((r for r in responses if r['id'] == message.get('_call_tool_id')), None)
-                    if response is not None:
-                        response['response'].setdefault('frame_delivery', []).extend(
-                            p['text'] for p in message.get('content', []) if p.get('type') == 'text')
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
                 # Committed once written: a write that met a closed socket leaves the call

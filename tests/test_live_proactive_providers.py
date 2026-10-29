@@ -13,13 +13,6 @@ from tests.test_live_conversation_driver import Host, Batch, until
 
 
 class SilentWire(VoiceWire):
-    async def ping(self):
-        # All preceding synthetic sends have completed. Supply the socket's
-        # physical fence, just as the native loopback tests supply TCP drainage.
-        pong = asyncio.get_running_loop().create_future()
-        pong.set_result(None)
-        return pong
-
     async def send(self, raw):
         event = json.loads(raw)
         if 'toolResponse' in event:
