@@ -98,7 +98,7 @@ def accounts_line(status: Mapping[str, Any]) -> str:
 def account_entries(store: ChronicleStore, label: Callable[..., str], units: Mapping[str, memory_inventory.LegacyUnit],
                     fixes: Mapping[str, List[Dict[str, Any]]],
                     period_text: Callable[[memory_inventory.Period], str]) -> List[Dict[str, Any]]:
-    """Every account shown by its acting selection, as a story entry placed like a page (``first``, sequence).
+    """Every account shown by its acting selection, as a story entry placed like a part (``first``, sequence).
 
     ``fixes`` is the story's map of corrections and rejections by target (``memory_view._story_pages``);
     a source's later corrections are read from it by id, so the words shown are the correction's.

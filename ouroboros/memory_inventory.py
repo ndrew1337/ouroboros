@@ -68,12 +68,12 @@ _META_FIELDS = ("chat_id", "ts", "type", "direction", "task_id", "parent_task_id
                 "client_message_id", "subagent_task_id", "delegation_role", "subagent_role", "initiator",
                 "summary_kind", "sender_label", "username", "author", "source", "transport",
                 "status", "outcome", "outcome_phase", "reason_code", "outcome_final", "outcome_authority",
-                "result_ref", "presence", "presence_provenance", "historical_import", "source_order")
+                "result_ref", "presence", "presence_provenance", "historical_import", "source_order", "terminal_origin")
 _MEMBERSHIP_FIELDS = ("chat_id", "ts", "type", "task_id", "parent_task_id", "root_task_id", "source_keys")
 _REPLY_FIELDS = ("address", "chat_id", "task_id", "role", "target_home", "unresolved")
 # Bumped when ``row_meta`` gains a fact membership reads: a stored prefix of another version is
 # another source, read live until the maintenance job ``memory_tail`` refills it.
-_META_VERSION = 3
+_META_VERSION = 4
 
 Entry = Tuple[Dict[str, Any], Dict[str, Any], int]
 
@@ -89,6 +89,11 @@ def row_meta(row: Mapping[str, Any]) -> Dict[str, Any]:
     """
     meta = {key: row[key] for key in _META_FIELDS if key in row}
     meta["text_chars"] = len(str(row.get("text") or ""))
+    if row.get("wake_silent") is True:
+        from ouroboros.task_finalization import quiet_finish
+
+        # Canonical terminal projections already carry the verdict before they drop delivery fields.
+        meta["quiet_finish"] = (row["quiet_effective"] is True if "quiet_effective" in row else quiet_finish(dict(row)))
     quiz = row.get("quiz") if isinstance(row.get("quiz"), dict) else {}
     if isinstance(contact := row.get("presence_contact") or quiz.get("presence_contact"), dict):
         meta["presence_contact"] = dict(contact)  # ``presence_owner_contact.private_main_row`` reads it
@@ -329,11 +334,13 @@ def rows_after_frontier(root: Any) -> List[Entry]:
     return [] if frontier is None else _projection_rows(root, frontier)
 
 
-def open_rows_by_room(root: Any, gaps: Optional[Dict[str, set]] = None) -> Dict[str, List[Entry]]:
+def open_rows_by_room(root: Any, gaps: Optional[Dict[str, set]] = None,
+                      quiet: Optional[Dict[str, List[Entry]]] = None) -> Dict[str, List[Entry]]:
     """The open rows of every room that has one: after the frontier, outside the room's sealed set, in
     reading order (``open_room_rows``). ``gaps`` collects, by room, what its rows may lack: a Reply whose
     saved target cannot be read is Main's here and a gap of each Project it could join
-    (``room_membership.unknown_target_rooms``)."""
+    (``room_membership.unknown_target_rooms``). ``quiet`` collects typed quiet finishes, including sealed ones,
+    from the same tail; they can consider earlier human words for liveness, never seal them."""
     store = ChronicleStore(root)
     with capture(root):  # one state of the chronicle: its frontier and every room's sealed set
         frontier = _active_frontier(store)
@@ -351,6 +358,8 @@ def open_rows_by_room(root: Any, gaps: Optional[Dict[str, set]] = None) -> Dict[
         for entry in projected:
             for room in rooms_of_row(entry[1], facts):
                 grouped.setdefault(room, []).append(entry)
+                if quiet is not None and entry[1].get("quiet_finish") is True:
+                    quiet.setdefault(room, []).append(entry)
             if gaps is not None and isinstance(entry[1].get("reply_to"), dict):
                 for room in unknown_target_rooms(entry[1], facts.project_chat_ids, facts.rooms):
                     gaps.setdefault(str(room), set()).add(REPLY_TARGET_UNREADABLE)

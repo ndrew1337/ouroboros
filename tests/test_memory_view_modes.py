@@ -103,6 +103,9 @@ def test_smaller_route_addresses_memory_only_when_the_compact_request_exceeds_it
     whole_memory = mf.view_tokens(mv.render_story(snapshot)) + mf.view_tokens(mv.render_room(snapshot))
     assert whole_memory > floor["physical_allowance_tokens"]
     assert narrow.initial_mode == "nano" and floor["steps"]["F5"] == 1
+    # The start's Max room outlives the narrowing, in the view fact and in what a task trace keeps of it.
+    assert shown.memory_facts["max_room"] == plan.max_projection.memory_facts["max_room"]
+    assert mf.trace_facts(shown.memory_facts)["max_room"]["cause"] == "held"
     reserve = cb.context_mode_limits(narrow.initial_mode, narrow.preferred_mode, narrow.output_reserve_tokens)[1]
     assert shown.calibrated_tokens + reserve <= narrow.window_tokens
     enlarged = _on_route(narrow, 1_000_000)
