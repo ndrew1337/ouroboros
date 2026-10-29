@@ -1,6 +1,10 @@
 /** One stack of layers over the room (docs/DESIGN.md "Shell", plan P2).
  *
  * A layer is anything that lies over the page and is dismissed as one thing: the phone drawer and the Project panel.
+ * One page part is a layer too: Files' file shown alone on a narrow page (files.js), so Escape and Back leave it the way
+ * Back to folder does. It is pushed with `page: true` and lies in the page, under every overlay: opened while the
+ * drawer is open (a slow read finishing), it takes its place beneath the drawer, which Escape and Back close first. It
+ * is not modal and its focus is the owner's (`focus: false`, no opener): the stack neither moves focus in nor back.
  * Dialogs, menus and the work list keep their own focus traps and Escape. Every way of leaving ends in the same place:
  * Escape, the scrim, × call `pop()`, which closes exactly one layer, the top one, through the layer's own `onClose`;
  * the browser's or Android's Back and Telegram's Back call `back()`, which first gives an open dialog over the layer
@@ -200,8 +204,9 @@ export function createLayerStack({ win = globalThis.window, doc = globalThis.doc
         }
     }
 
-    /** Open: `{ id, el, modal = true, onClose(reason), opener = activeElement, focus, live }` (`live`: elements
-     * beside the layer that stay usable under a modal one, its scrim). A known id keeps its
+    /** Open: `{ id, el, modal = true, onClose(reason), opener = activeElement, focus, live, page }` (`live`: elements
+     * beside the layer that stay usable under a modal one, its scrim; `page`: a part of the page, placed under every
+     * overlay already open). A known id keeps its
      * place in the stack and takes the new facts (an owner that syncs its state calls push on every sync). */
     function push(layer) {
         if (disposed || !layer || !layer.id) return false;
@@ -221,7 +226,9 @@ export function createLayerStack({ win = globalThis.window, doc = globalThis.doc
                 opener = gone.opener;
             }
             const entry = { modal: true, opener, ...layer };
-            stack.push(entry);
+            const under = entry.page ? stack.findIndex((open) => !open.page) : -1;
+            if (under < 0) stack.push(entry);
+            else stack.splice(under, 0, entry);
             change.pushed.add(entry.id);
             return true;
         });

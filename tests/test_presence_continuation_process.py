@@ -295,7 +295,8 @@ def test_direct_exec_restart_interrupts_same_pid_author_without_replaying_effect
         host.restart()
         successor = host.info["controller"]
         assert successor["pid"] == original["pid"] == host.proc.pid
-        assert successor["birth"] == original["birth"]
+        # Both births survive exec (they name the process, not its program): the session decides.
+        assert successor["birth"] == original["birth"] and successor["kernel_birth"] == original["kernel_birth"]
         assert successor["session"] and successor["session"] != original["session"]
         assert host.client.get("/fixture/live").json() == [] and len(host.inputs()) == 2
         # Only the successor can prove replacement of its own local controller;

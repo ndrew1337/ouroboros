@@ -54,6 +54,12 @@ html[data-layout="docked"] .chat-page-header .app-page-title-row > .rw-trigger {
 :is(.chat-page-header, .project-panel-bar) .app-page-title-row > .app-page-title {
     flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* A Project's name too long for its row takes a second line before it is cut, so similar names stay apart; then the
+   consciousness chip yields (room_work.js). One line keeps the capsule's height: only a second line grows it. */
+.project-panel-bar .app-page-title-row > .app-page-title {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+    margin-block: 2px; white-space: normal; overflow-wrap: anywhere; line-height: 1.2;
+}
 :is(.chat-page-header, .project-panel-bar) > .app-page-title-block { flex: 0 1 auto; min-width: 0; max-width: 100%; }
 /* The consciousness chip follows the title block and keeps its width (consciousness.css); the commands take the bar's
    far end, so the title yields first. */
@@ -66,6 +72,7 @@ html[data-layout="docked"] .chat-page-header .app-page-title-row > .rw-trigger {
     background: var(--chip-float); box-shadow: var(--elev-rest);
     -webkit-backdrop-filter: var(--glass); backdrop-filter: var(--glass);
 }
+.project-panel-bar .app-page-title-row { height: auto; min-height: var(--chrome-control-h); }
 html[data-layout="docked"] .chat-page-header .app-page-title-row {
     padding-inline: 2px;
 }

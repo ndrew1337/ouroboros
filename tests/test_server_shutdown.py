@@ -16,12 +16,14 @@ def _stop_restart_watcher(server):
 
 
 def test_owned_stop_runs_every_in_memory_owner_and_reads_records_from_the_set(monkeypatch, tmp_path):
-    """One failing owner does not skip the others; durable records come from the set, never a walk."""
+    """One failing owner does not skip the others, and its failure keeps the outcome unconfirmed
+    beside the durable records (none here); those come from the set, never a walk."""
     from ouroboros import owned_shutdown
 
     order = []
-    def shell_failure():
+    def shell_failure(*, deadline):
         order.append("shell")
+        assert deadline == owned_shutdown._GENERATION_STOP.deadline  # the first door's one grace
         raise OSError("shell custody unavailable")
     monkeypatch.setattr("ouroboros.tools.shell.kill_all_tracked_subprocesses", shell_failure)
     monkeypatch.setattr("ouroboros.workspace_executor.kill_all_foreground",
@@ -30,7 +32,8 @@ def test_owned_stop_runs_every_in_memory_owner_and_reads_records_from_the_set(mo
                         lambda root, **kw: order.append(("services", root, kw)))
     monkeypatch.setattr(os, "walk", lambda *_a, **_kw: pytest.fail("the exit never walks data/state"))
     outcome = owned_shutdown.stop_owned_work(tmp_path)
-    assert outcome["state"] == "completed" and outcome["targets"] == 0
+    assert outcome["state"] == "unconfirmed" and outcome["targets"] == 0 and outcome["unconfirmed"] == []
+    assert outcome["memory_unconfirmed"] == {"commands": {"state": "failed"}}
     assert sorted(order, key=str) == sorted(["shell", ("services", tmp_path.resolve(),
                                                        {"wait": True, "durable": False})], key=str)
 

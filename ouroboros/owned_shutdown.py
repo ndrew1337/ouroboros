@@ -27,7 +27,13 @@ joins it until completion or the shared deadline and never starts a second one. 
 the existing typed kill helpers, forgets what the existing liveness predicates confirm, stamps the
 rest ``unconfirmed_since`` without waiting for a lock once the deadline passed, and returns: the
 exit owner exits. A target recorded after the stop began (the owner Restart stops before the
-server exits) is born stamped. The next start's ``finish_unconfirmed_stops`` retries every
+server exits) is born stamped; the begun door also closes tracked-command admission
+(``stop_begun``, read by ``tools/shell_process.tracked_start``) to all but the restart exit's
+own finalization after the stop (the store switch's door owner, ``exit_finalization``), and
+starters stop their late publications. What an in-memory owner leaves unconfirmed (a live handle,
+a start still in flight, an owner unfinished or failed at the deadline) is reported as
+``memory_unconfirmed`` beside the durable ids and keeps the outcome unconfirmed: no record names
+it, so no next start retries it. The next start's ``finish_unconfirmed_stops`` retries every
 stamped record under the same bound before admission and before any extension or replacement
 process starts; what it cannot confirm stays recorded and counted. Records an older release left
 on disk are indexed once by ``start_inherited_import`` on a background thread, so no start waits
@@ -219,9 +225,14 @@ def _update(root: Any, change: Callable[[Dict[str, Any]], bool], *, timeout_sec:
         release_exclusive_file_lock(lock_path, lock_fd)
 
 
+def stop_begun() -> bool:
+    """This generation entered a shutdown door: its one grace deadline is running (``begin_owned_stop``)."""
+    return _GENERATION_STOP.deadline is not None
+
+
 def _born_stamped(entry: Dict[str, Any]) -> Dict[str, Any]:
     """A target recorded after this generation's shutdown began: the next start finishes it."""
-    if _GENERATION_STOP.deadline is not None and _is_stop_target(entry):
+    if stop_begun() and _is_stop_target(entry):
         return {**entry, "stop_requested_at": entry.get("stop_requested_at") or utc_now_iso()}
     return entry
 
@@ -488,12 +499,17 @@ def _stop_entry(root: Any, entry: Dict[str, Any], deadline: float, retained: set
     return _stop_ledgered(root, entry, deadline, retained)
 
 
-def _start(name: str, fn: Callable[[], Any]) -> threading.Thread:
+def _start(name: str, fn: Callable[[], Any], results: Optional[Dict[str, Any]] = None) -> threading.Thread:
+    """Run ``fn`` on a daemon thread; ``results[name]`` receives its value, or ``failed`` when it raised."""
     def run() -> None:
         try:
-            fn()
+            value = fn()
+            if results is not None:
+                results[name] = value
         except Exception:
             log.warning("Owned-work step %s failed; its records stay", name, exc_info=True)
+            if results is not None:
+                results[name] = {"state": "failed"}
 
     thread = threading.Thread(target=run, name=name, daemon=True)
     thread.start()
@@ -501,19 +517,30 @@ def _start(name: str, fn: Callable[[], Any]) -> threading.Thread:
 
 
 def _stop_records(root: Any, entries: List[Dict[str, Any]], deadline: float, *,
-                  owners: Iterable[tuple] = (), skip_paths: frozenset = frozenset()) -> List[str]:
-    """Run every owner and record stop in parallel until ``deadline``; return the ids still named."""
+                  owners: Iterable[tuple] = (), skip_paths: frozenset = frozenset(),
+                  memory: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Run every owner and record stop in parallel until ``deadline``; return the ids still named.
+
+    ``memory`` receives what each in-memory owner left unconfirmed: its own report, ``failed``, or
+    ``unfinished`` when it was still running at the deadline. No record names those handles."""
     retained: set = set()
     if any(entry.get("kind") not in _EXECUTOR_KINDS for entry in entries):
         from ouroboros.process_custody import live_daemon_root_pids
 
         retained = live_daemon_root_pids(root)
-    threads = [_start(f"owned-stop-{name}", fn) for name, fn in owners]
+    results: Dict[str, Any] = {}
+    owner_threads = [(name, _start(f"owned-stop-{name}", fn, results)) for name, fn in owners]
+    threads = [thread for _name, thread in owner_threads]
     threads += [_start(f"owned-stop-{entry['record_id']}",
                        lambda entry=entry: _stop_entry(root, entry, deadline, retained, skip_paths))
                 for entry in entries]
     for thread in threads:
         thread.join(max(0.0, deadline - time.monotonic()))
+    if memory is not None:
+        for name, thread in owner_threads:
+            report = {"state": "unfinished"} if thread.is_alive() else results.get(thread.name)
+            if report:
+                memory[name] = report
     named = _read_document(root)["records"]
     remaining = sorted(entry["record_id"] for entry in entries if entry["record_id"] in named)
     if remaining:
@@ -531,12 +558,13 @@ def _stop_budget_sec() -> float:
     return LAUNCHER_STOP_GRACE_SEC - SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_SEC
 
 
-def _memory_owners(root: pathlib.Path) -> List[tuple]:
-    """This process's in-memory owners: Popen handles and service logs no record carries."""
-    def commands() -> None:
+def _memory_owners(root: pathlib.Path, deadline: float) -> List[tuple]:
+    """This process's in-memory owners: Popen handles and service logs no record carries. Each returns
+    what it left unconfirmed, or None."""
+    def commands() -> Optional[Dict[str, Any]]:
         from ouroboros.tools.shell import kill_all_tracked_subprocesses
 
-        kill_all_tracked_subprocesses()
+        return kill_all_tracked_subprocesses(deadline=deadline)
 
     def services() -> None:
         from ouroboros.tools.services import kill_all_services
@@ -554,18 +582,20 @@ def _run_stop(root: pathlib.Path, deadline: float) -> Dict[str, Any]:
 
     held = frozenset(str(record.durable_record_path) for record in _services_snapshot()
                      if record.durable_record_path is not None)
-    remaining = _stop_records(root, targets, deadline, owners=_memory_owners(root), skip_paths=held)
-    if remaining:
-        log.critical("Owned-work stop left %d record(s) unconfirmed at the deadline; the next start "
-                     "retries them", len(remaining))
+    memory: Dict[str, Any] = {}
+    remaining = _stop_records(root, targets, deadline, owners=_memory_owners(root, deadline), skip_paths=held,
+                              memory=memory)
+    if remaining or memory:
+        log.critical("Owned-work stop left %d record(s) unconfirmed at the deadline (the next start retries "
+                     "them) and in-memory owners %s unconfirmed (no record names them)", len(remaining), memory)
         try:
             append_jsonl(root / "logs" / "supervisor.jsonl", {
-                "ts": utc_now_iso(), "type": "owned_stop_unconfirmed", "records": remaining},
+                "ts": utc_now_iso(), "type": "owned_stop_unconfirmed", "records": remaining, "memory": memory},
                 lock_timeout_sec=max(0.0, min(2.0, deadline - time.monotonic())))
         except Exception:
             log.debug("Failed to record the unconfirmed owned stop", exc_info=True)
-    return {"state": "unconfirmed" if remaining else "completed", "targets": len(targets),
-            "confirmed": len(targets) - len(remaining), "unconfirmed": remaining,
+    return {"state": "unconfirmed" if remaining or memory else "completed", "targets": len(targets),
+            "confirmed": len(targets) - len(remaining), "unconfirmed": remaining, "memory_unconfirmed": memory,
             "elapsed_sec": round(time.monotonic() - started, 3)}
 
 
@@ -693,7 +723,8 @@ def stop_owned_work(drive_root: Any = None) -> Dict[str, Any]:
 
 
 def _current_stop_outcome(root: Any, outcome: Dict[str, Any]) -> Dict[str, Any]:
-    """Late targets keep their next-start recovery; no second stop or wait is added."""
+    """Late targets keep their next-start recovery and late in-memory children are disclosed (their
+    starters stop them); no second stop or wait is added."""
     result = dict(outcome)
     if result.get("state") == "completed":
         try:
@@ -702,6 +733,16 @@ def _current_stop_outcome(root: Any, outcome: Dict[str, Any]) -> Dict[str, Any]:
             remaining = ["ownership_set_unreadable"]
         if remaining:
             result.update(state="unconfirmed", unconfirmed=remaining)
+    if result.get("state") in ("completed", "unconfirmed"):
+        try:
+            from ouroboros.tools.shell_process import unsettled_tracked_children
+
+            late = unsettled_tracked_children()
+        except Exception:
+            late = {"state": "unknown"}
+        if late:  # the stop's own report on its commands, when it has one, stays the more specific fact
+            result.update(state="unconfirmed", memory_unconfirmed={"commands": late,
+                                                                   **result.get("memory_unconfirmed", {})})
     return result
 
 

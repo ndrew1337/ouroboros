@@ -18,7 +18,7 @@ import {
     effectiveStartMode,
     isFramedWidget,
     isRetainedWidget,
-    renderWidgetCardControls,
+    renderWidgetCardParts,
     renderWidgetFacade,
     setWidgetCardNote,
     syncWidgetCardControls,
@@ -70,6 +70,7 @@ function renderCardHtml(tab) {
         : '';
     const span = Number(tab.span || tab.grid_span || 1);
     const spanClass = span >= 2 ? ' widgets-card-span-2' : '';
+    const { run, menu } = renderWidgetCardParts(tab);
     return `
         <article class="widgets-card${spanClass}" data-widget-key="${escapeHtml(widgetKey(tab))}">
             <div class="widgets-card-head">
@@ -78,8 +79,11 @@ function renderCardHtml(tab) {
                     ${subtitle}
                 </div>
                 <div class="widgets-card-controls">
-                    ${renderWidgetCardControls(tab)}
-                    <button class="widgets-card-drag" type="button" data-widget-reorder-handle title="Move widget: drag or use arrow keys" aria-label="Move widget: drag or use arrow keys">↕</button>
+                    ${run ? `<div class="widgets-card-run">${run}</div>` : ''}
+                    <div class="widgets-card-tools">
+                        ${menu}
+                        <button class="widgets-card-drag" type="button" data-widget-reorder-handle title="Move widget: drag or use arrow keys" aria-label="Move widget: drag or use arrow keys">↕</button>
+                    </div>
                 </div>
             </div>
             <div class="widgets-card-body" data-widget-mount></div>
