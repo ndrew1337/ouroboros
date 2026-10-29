@@ -335,7 +335,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         '_append_or_merge_user_message', '_arm_delivery_control', '_begin_task_acceptance_fence',
         '_child_disposition_state', '_compute_subagent_handoff', '_current_delivery_candidate',
         '_delivery_evidence_state', '_disclose_service_finalization',
-        '_drain_incoming_messages',
+        '_drain_incoming_messages', '_emit_checkpoint_event',  # a held completion's diagnostic row
         '_end_task_acceptance_fence', '_enforce_plan_gate', '_extract_plain_text_from_content',
         '_finalize_forced_services', '_finalize_task_services', '_plan_gate_disclosure',
         '_forced_fallback_result', '_forced_orphan_note', '_handle_text_response',
