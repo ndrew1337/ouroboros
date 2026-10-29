@@ -115,6 +115,7 @@ def test_a_phone_lays_the_page_out_at_another_width(subscription_ui, monkeypatch
         page.wait_for_function("document.documentElement.clientWidth === 488")
         _expect_room_fills_screen(page)
         assert page.evaluate(FACTS)['meta'].startswith('width=488, initial-scale=0.79918'), page.evaluate(FACTS)
+        subscription_ui['errors'].watch(page)  # the reload may cut off this page's own reads; other pages stay strict
         page.reload()
         page.wait_for_function("document.documentElement.clientWidth === 488")  # the stored size is the first layout
         _expect_room_fills_screen(page)

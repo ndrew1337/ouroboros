@@ -118,11 +118,12 @@ def test_saved_work_download_and_receipt_survive_real_chat_reload(subscription_u
         return data
 
     first = check("live")
+    ui["errors"].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload(wait_until="domcontentloaded")
     page.wait_for_function("() => window.__ouroWs?.ws?.readyState === WebSocket.OPEN")
     second = check("replay")
     assert first == second, "replay opens the same saved sources, not a truncated preview"
-    assert ui["errors"] == []
+    assert not ui["errors"].unexpected(), ui["errors"].report()
     (out / f"wrap-up-{theme}-checks.json").write_text(json.dumps({
         "bytes": len(first), "lines": 110_000, "tail": tail, "replay_equal": first == second,
         "theme": theme, "viewport": "1100x750"}), encoding="utf-8")
