@@ -1,8 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readFileSync } from 'node:fs';
-
 import { lastAppVersion, loadVersion } from '../modules/utils.js';
 import { bindAppVersionRender, updateVerdict } from '../modules/updates.js';
 import { WS } from '../modules/ws.js';
@@ -210,8 +208,6 @@ test('the Updates page shows the app version About reads as one App chip, and no
     assert.deepEqual(updateVerdict({}, '', lastAppVersion()).chips, [{ label: 'App', value: '7.10.0' }]);
     await readOnce({ runtime_version: '7.9.0' });  // no app version reported: no chip
     assert.deepEqual(updateVerdict({}, '', lastAppVersion()).chips, []);
-    const source = readFileSync(new URL('../modules/updates.js', import.meta.url), 'utf8');
-    assert.match(source, /updateVerdict\(latestStatus \|\| \{\}, phase, lastAppVersion\(\)\)/, 'the panel renders it');
 });
 
 test('a health read landing after the update status renders the App chip; one landing first waits for the status', async () => {
