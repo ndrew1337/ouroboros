@@ -1278,22 +1278,22 @@ def test_restore_does_not_label_a_repaired_retry_as_an_unchanged_refusal(restore
     from supervisor import workers
 
     scene = restore_door
-    real_run = subprocess.run
+    real_runner = git_ops._run_git_process_bounded  # where Restore's reset and an index rebuild start
     hard_attempts = []
     repairs = []
 
-    def concurrent_index_changes(cmd, *args, **kwargs):
+    def concurrent_index_changes(cmd, **kwargs):
         if cmd[:3] == ["git", "reset", "--hard"]:
             hard_attempts.append(list(cmd))
             if len(hard_attempts) == 1:
                 (scene.repo / ".git" / "index").write_bytes(b"broken")
-        result = real_run(cmd, *args, **kwargs)
-        if cmd[:3] == ["git", "reset", "--mixed"] and result.returncode == 0:
+        result = real_runner(cmd, **kwargs)
+        if cmd[:3] == ["git", "reset", "--mixed"] and result[0] == 0:
             repairs.append(list(cmd))
             _orphan_lock(scene.repo)
         return result
 
-    monkeypatch.setattr(git_ops.subprocess, "run", concurrent_index_changes)
+    monkeypatch.setattr(git_ops, "_run_git_process_bounded", concurrent_index_changes)
     status, body = scene.restore(scene.old)
 
     assert status == 500 and body["restart_required"], body

@@ -473,6 +473,66 @@ def test_panic_during_the_restart_exit_restore_never_waits_and_moves_nothing(reg
     assert shell_process._spawning_subprocesses == 0 and shell_process.unsettled_tracked_children() is None
 
 
+def test_panic_after_the_restart_exit_rescue_refuses_the_final_reset(registry, switch_root, target_repo, monkeypatch):
+    """Panic lands after Restore's rescue completed and before its final reset, whose ``git_capture`` waits
+    without a bound: that reset is refused before its Popen and the checkout stays (the R4 change-coupling
+    reviewer's reproduction, rebuilt from its description)."""
+    from ouroboros import store_switch
+
+    root, (repo, old, new) = switch_root, target_repo
+    census = _deferred_restore(monkeypatch, root, repo, old)
+    rescue, argvs = git_ops._create_rescue_snapshot, []
+
+    def rescue_then_panic(*args, **kwargs):
+        rescued = rescue(*args, **kwargs)
+        shell_process.kill_all_tracked_subprocesses(request_only=True)
+        return rescued
+
+    init = subprocess.Popen.__init__
+
+    def recorded(popen, *args, **kwargs):
+        argvs.append(list(args[0] if args else kwargs.get("args")))
+        init(popen, *args, **kwargs)
+
+    monkeypatch.setattr(git_ops, "_create_rescue_snapshot", rescue_then_panic)
+    monkeypatch.setattr(subprocess.Popen, "__init__", recorded)
+    outcome = store_switch.switch_at_restart(root, repo, census)
+    [snapshot] = (root / "archive" / "rescue").iterdir()
+    assert "+# owner edit" in (snapshot / "changes.diff").read_text(encoding="utf-8"), "Panic came after the rescue"
+    assert outcome["status"] == "switch_failed" and "Emergency Stop" in outcome["message"], outcome
+    assert not [argv for argv in argvs if argv[:3] == ["git", "reset", "--hard"]], "no reset started after Panic"
+    assert git(repo, "rev-parse", "HEAD") == new, "Panic is never bypassed: the checkout stays"
+    assert shell_process._spawning_subprocesses == 0 and shell_process.unsettled_tracked_children() is None
+
+
+def test_panic_never_waits_for_an_unbounded_git_start_and_its_starter_ends_it(registry, monkeypatch, tmp_path):
+    """``git_capture`` without a timeout still starts through ``tracked_start``: Panic while that Git is
+    admitted but inside its Popen takes no lock or wait, and the late publication hands the tree to the kill."""
+    marker = "ob-late-panic-git"
+    hold, seen, results = threading.Event(), [], []
+    _held_popen(monkeypatch, marker, hold, seen)
+    monkeypatch.setattr(git_ops, "REPO_DIR", tmp_path)
+    capture = threading.Thread(target=lambda: results.append(git_ops.git_capture(
+        ["git", "-c", f"alias.{marker}=!sleep 60", marker])), name="unbounded-git", daemon=True)
+    capture.start()
+    try:
+        _wait(lambda: seen)
+        child = seen[0]
+        registry.started.append(child)
+        assert shell_process._spawning_subprocesses == 1, "the unbounded Git start is admitted and counted"
+        with shell_process._subprocess_lock, shell_process._start_settled:
+            started = time.monotonic()
+            receipts = shell_process.kill_all_tracked_subprocesses(request_only=True)
+            assert time.monotonic() - started < 0.5, "Panic never waits for an unbounded Git start"
+        assert receipts == [] and child.poll() is None, "not yet published: Panic had nothing of it to name"
+    finally:
+        hold.set()
+    capture.join(30)
+    assert not capture.is_alive() and results[0][0] != 0, "the published Git tree was ended, not waited out"
+    assert _stopped(child) and child not in shell_process._active_subprocesses
+    assert shell_process._spawning_subprocesses == 0
+
+
 def _git_version(cwd):
     return git_ops._run_git_process_bounded(["git", "--version"], timeout=30, cwd=cwd)
 
