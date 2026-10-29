@@ -326,8 +326,9 @@ def _reached(conn: Any, tasks: Iterable[str]) -> set:
 
 
 def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
-              upper: Optional[int] = None) -> Iterator[ds.Row]:
-    """Indexed candidate union for the canonical room rule, including late task bindings."""
+              upper: Optional[int] = None, gaps: Optional[set] = None) -> Iterator[ds.Row]:
+    """Indexed candidate union for the canonical room rule, including late task bindings. ``gaps`` collects
+    what a Project's chat rows read so may lack (``room_appearances.read_gaps``) once the read starts."""
     from ouroboros.project_dialogue import room_membership, source_refs_for_project
     from ouroboros.projects_registry import list_reserved_projects, RoomResolver
     from ouroboros.store import open_store, store_path
@@ -351,6 +352,13 @@ def room_rows(root: Any, room_id: Any, *, stream: str = "chat", lower: int = 0,
             with open_store(root, write=False) as txn:
                 tasks.update(_reached(txn.conn, tasks))
         keys.extend((field, tid) for tid in sorted(tasks) for field in _LINEAGE_FIELDS)
+        if stream == "chat":  # rows written elsewhere this room also shows (``room_membership.appearance_keys``)
+            shown = [f"room:{chat}", *(f"task:{tid}" for tid in sorted(tasks))]
+            keys.extend(("appearance", key) for key in shown)
+            if gaps is not None:
+                from ouroboros.room_appearances import read_gaps
+
+                gaps.update(read_gaps(root, chat, shown, lower, upper))
         for ref in refs:
             if ref.get("client_message_id"):
                 keys.append(("client_message_id", ref["client_message_id"]))
@@ -392,9 +400,9 @@ def _period_bounds(period: Any) -> Tuple[Optional[_dt.datetime], Optional[_dt.da
 
 def iter_room_rows(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: Any = None,
                    task_ids: Optional[Iterable[str]] = None, period: Any = None,
-                   lower: int = 0, upper: Optional[int] = None,
+                   lower: int = 0, upper: Optional[int] = None, gaps: Optional[set] = None,
                    ) -> Iterator[Tuple[Dict[str, Any], Dict[str, Any], int]]:
-    """One room's rows with inclusive content-address bounds and original stream positions."""
+    """One room's rows with inclusive content-address bounds and original stream positions (``gaps``: ``room_rows``)."""
     first, last = _bound(root, from_addr), _bound(root, to_addr)
     lower = lower if first is None else first
     upper = (ds.stream_end(root, "chat") if upper is None else upper) if last is None else last + 1
@@ -412,4 +420,4 @@ def iter_room_rows(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: A
                 return False
         return True
     filtered = tasks is not None or after is not None or before is not None
-    return _addressed(root, room_rows(root, room_id, lower=lower, upper=upper), selected if filtered else None)
+    return _addressed(root, room_rows(root, room_id, lower=lower, upper=upper, gaps=gaps), selected if filtered else None)

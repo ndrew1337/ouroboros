@@ -588,8 +588,9 @@ class Memory:
 
         upper = ds.stream_end(self.drive_root, "chat")
         imported = ds.range_coverage(self.drive_root, "chat", upper=upper)
+        shown: set = set()  # what a Project read through the appearance index may lack (``room_appearances.read_gaps``)
         source = (ds.iter_rows(self.drive_root, "chat", upper=upper) if room_id is None else
-                  chat_chain.room_rows(self.drive_root, room_id, upper=upper))
+                  chat_chain.room_rows(self.drive_root, room_id, upper=upper, gaps=shown))
         entries = [entry.row for entry in source
                    if not (exclude_a2a and is_a2a_chat_id(entry.row.get("chat_id")))
                    and (predicate is None or predicate(entry.row))]
@@ -600,6 +601,10 @@ class Memory:
             gaps.append({"kind": "history_importing", "detail": "Dialogue history is still importing"})
         if imported["mismatch"]:
             gaps.append({"kind": "history_import_failed", "detail": "A segment could not be imported"})
+        if shown:
+            from ouroboros.room_appearances import GAP_DETAILS
+
+            gaps.extend({"kind": kind, "detail": GAP_DETAILS[kind]} for kind in sorted(shown))
         coverage = {
             "generations": ([{"path": str(ds.path(self.drive_root)), "first_line_sha256": "dialogue:chat",
                               "size": upper, "rows": len(entries)}] if upper else []),

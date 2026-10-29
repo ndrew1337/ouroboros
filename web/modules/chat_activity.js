@@ -1047,7 +1047,8 @@ export function mainLogFrameAccepts(msg, projectChatIds) {
 /** Route one ordinary Chat frame to the current Main or Project instance. */
 export function chatThreadAccepts(msg, isMain, chatId, projectChatIds) {
     if (isMain) return mainThreadAccepts(msg, projectChatIds);
-    return Number(msg?.chat_id ?? 1) === chatId;
+    // One row a Project also shows (its work's notice to Main, the owner's Reply to it): `also_rooms`.
+    return Number(msg?.chat_id ?? 1) === chatId || (Array.isArray(msg?.also_rooms) && msg.also_rooms.map(Number).includes(chatId));
 }
 
 /**

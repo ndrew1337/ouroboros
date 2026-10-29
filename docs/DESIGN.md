@@ -945,6 +945,12 @@ revision, so this counter guarantees no delivery durability.
 - **Several clients** share one read cursor that only moves forward: a room read
   on one client stops showing the crimson mark on the others at their next state
   refresh, and nothing read is shown unread again.
+- **One message in two rooms** counts in each until read, then is read in both
+  (owner 28.10, A): shown whole in either room, every part on screen at some moment
+  (a long one by scrolling, a wide block by panning it; a folded or hidden part, or
+  rows under a notice, a menu or the Project sheet, do not count). Only it: no
+  cursor moves, so the other room's unseen messages stay unread and its opening
+  lands on its newest unread message instead. Read is not an answer or done.
 
 ### References and actions
 
@@ -1604,6 +1610,8 @@ A confirmed answer/closure shows its result for five seconds, then retires only 
 
 Unavailable canonical refresh retains text, references and drafts but disables affected controls. Missing, failed or wrong-Project reads say `Status unavailable`; absent form text says `Open the original question for its text.` The chip opens the original; owned refresh retries.
 
+**One message in two rooms.** A Project room is the whole conversation of its work. What its work says to the owner in Main, or answers in the room a note came from, also stands in the Project at its time: the same words, address, Reply and Copy, never a copy or a link, and one notification. Presence's private contact, host refusals and move receipts stay where they were issued; ordinary Project speech stays in the Project.
+
 **Work portal.** A work living in a Project room keeps its one Main card at the
 request's place, whoever moved it (Turn into project, the mind's move, a
 binding); a Project start or transfer row only says where it went, never a
@@ -1737,7 +1745,9 @@ file (owner choice 1C/2A/3A/4A/5A/6A with mobile first-class).
 
 ### Replies
 
-A reply names the row meant; Ouroboros decides what to do, routing nothing by it. Saved rows offer Reply beside
+A reply names the row meant; Ouroboros decides what to do, routing nothing by it. A direct Reply in Main to a
+Project's message also stands in that Project at its time, the one Main message (owner 28.10, A): it tells,
+wakes and resumes nothing there, and a Reply to it, like other Main talk, stays in Main. Saved rows offer Reply beside
 Copy on bubbles and in row menus, a work card in its row menu only; never on hover only. Reply stages one
 strip, the composer field's first line (`Replying to`, quoted author, one line, ×; Esc cancels). Send
 carries only the address; the host makes the snippet. Answerable questions use their own field.

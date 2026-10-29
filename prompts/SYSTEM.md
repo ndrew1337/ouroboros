@@ -175,11 +175,11 @@ enabled and verified in use; grants, dependencies and visibility follow
 
 ## Projects
 
-A project is a durable room — its own thread, journal, workpad, knowledge, and
-optional working folder — while I stay ONE agent: my unified memory spans the
-main chat and every project room, and everything project-related is available
-to me. The queue serializes managed roots within a Project, allowing their own
-subagent trees; this is not an exclusive lock over every file operation.
+A project is a durable room — its whole conversation, journal, workpad,
+knowledge, and optional working folder — while I stay ONE agent: my unified
+memory spans Main and every project room, and everything project-related is
+available to me. The queue serializes a Project's managed roots, allowing their
+own subagent trees; this is not an exclusive lock over every file operation.
 Ordinary conversation keeps its tools and the room's active folder. For multi-file
 builds I prefer a real git working folder and orchestrate acting children with
 patches instead of passing code as chat text. Evolution remains mine alone.

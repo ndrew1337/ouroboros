@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from ouroboros.cost_projection import CostPresentation
 from ouroboros.delegate_custody_usage import CostCustody
-from ouroboros.gateway.reference_contracts import ChatReferenceFields
+from ouroboros.gateway.reference_contracts import ChatReferenceFields, SharedRowFrame
 from ouroboros.storage import (  # noqa: F401 -- public re-exports
     StorageCount, StorageCounting, StorageError, StoragePart, StoragePlace, StorageResponse, StorageRest,
     StorageVolume, StorageRemover,
@@ -119,7 +119,7 @@ class TransportMetadata(TypedDict, total=False):
     sender_label: str
 
 
-class ChatOutbound(ChatReferenceFields):
+class ChatOutbound(ChatReferenceFields, SharedRowFrame):
     """Outbound WS chat frame."""
 
     presence_contact: NotRequired[PresenceContact]

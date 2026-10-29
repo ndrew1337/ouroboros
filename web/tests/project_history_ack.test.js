@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
+import * as readAhead from '../modules/read_ahead.js';
 import { createRoomRetirement } from '../modules/room_retire.js';
 
 // The span below is delimited by line breaks; normalize CRLF so a Windows
@@ -22,6 +23,7 @@ function harness({ refreshHistory, page = {} }) {
         cancelHistoryPaint() {}, refreshHistory,
     };
     const context = vm.createContext({
+        ...readAhead,  // app.js imports these (DESIGN "Unread": a message read in another room)
         navState: { activeProjectId: 'p1' },
         projectInstances: new Map([['p1', inst]]),
         projectPaintRequests: new Map(),
@@ -117,6 +119,7 @@ function lift(name) {
 function cursorHarness({ seen = {}, rows = [], answer = () => ({}) } = {}) {
     const posts = [], paints = [];
     const context = vm.createContext({
+        ...readAhead,  // app.js imports these (DESIGN "Unread": a message read in another room)
         state: { projectSeenRevision: { ...seen } },
         lastProjectRows: rows,
         paintProjectsNav: () => paints.push(rows.map((row) => [row.id, row._unread])),
@@ -193,6 +196,7 @@ function revealHarness() {
     };
     const project = { id: 'p1', visible_revision: 5 };
     const context = vm.createContext({
+        ...readAhead,  // app.js imports these (DESIGN "Unread": a message read in another room)
         navState: { activeProjectId: 'p1' },
         projectInstances: new Map([['p1', inst]]),
         projectPaintRequests: new Map(), projectReveals: new Map(),
@@ -289,6 +293,7 @@ function pollHarness({ read = true, hidden = false, failures = 1 } = {}) {
         refreshHistory: async ({ revision }) => { refreshes.push(revision); return { painted: true, read, revision }; },
     };
     const context = vm.createContext({
+        ...readAhead,  // app.js imports these (DESIGN "Unread": a message read in another room)
         state: { projectSeenRevision: {} }, navState: { activeProjectId: 'p1' },
         projectInstances: new Map([['p1', inst]]), projectPaintRequests: new Map(), projectReveals: new Map(),
         projectActivityIndex: null, knownProjectsJson: '', lastProjectRows: [],
@@ -364,6 +369,7 @@ function navigationHarness({ pendingWork, exitAtOnce = true }) {
     };
     const project = { id: 'p1', name: 'P', chat_id: 9, lifecycle: 'active', visible_revision: 5 };
     const context = vm.createContext({
+        ...readAhead,  // app.js imports these (DESIGN "Unread": a message read in another room)
         navState: { activeProjectId: null, mobileDrawerOpen: false },
         projectInstances: new Map(), projectPaintRequests: new Map(), projectReveals: new Map(),
         lastProjectRows: [project], state: { projectSeenRevision: {} }, mainChat: null,

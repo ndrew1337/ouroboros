@@ -491,10 +491,12 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name (a relay's); client_message_id here names the owner's submission
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions  // a row shown in several rooms: the revision it took in each room it counted in
+ * @property {number[]=} also_rooms  // the other Projects that show this row: the frame is theirs too, one message
  */
 /** @typedef {Object} TypingOutbound
  * @property {"typing"} type
@@ -527,10 +529,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 /** @typedef {Object} VideoOutbound
  * @property {"video"} type
@@ -552,10 +555,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 /** @typedef {Object} LinkAction
  * @property {string} label
@@ -574,10 +578,11 @@
  * @property {Object=} transport
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /** @typedef {Object} QuizOption
@@ -615,10 +620,11 @@
  * @property {Object=} transport
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /**
@@ -671,10 +677,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /** @typedef {Object} LogOutbound
@@ -1461,6 +1468,7 @@
  * @property {number} project_panel_width  // px; 0 = CSS default
  * @property {Object.<string,number>} project_seen_revision  // monotonic paint ACK
  * @property {?number} main_seen_revision  // Main's monotonic paint ACK; null until a client first reads Main
+ * @property {Object.<string,number[][]>} read_ahead_revisions  // per chat id: revisions read in full in another room (host-owned)
  * @property {{mode:'default'|'hidden'|'custom',text:string}} welcome  // install-wide empty-Main UI copy, not chat history
  * @property {boolean=} ok
  */

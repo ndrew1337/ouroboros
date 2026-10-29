@@ -617,7 +617,8 @@ def _origins(root: pathlib.Path, room: str, lane_rows: List[Entry]) -> List[Dict
 
 def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label: Callable[..., str],
                   entries: List[Entry], notes: Mapping[str, List[Dict[str, Any]]],
-                  lineage: Mapping[str, Any], story: List[Dict[str, Any]] = ()) -> Dict[str, Any]:
+                  lineage: Mapping[str, Any], story: List[Dict[str, Any]] = (),
+                  gaps: Optional[Mapping[str, set]] = None) -> Dict[str, Any]:
     """The current room: its head and standing facts, page (retold records, pages under parts, notes), origin words, lanes.
 
     Retold records already whole in my story are not repeated. A selected account carries its records, a part
@@ -635,7 +636,8 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     sample = next((meta for _address, meta, _pos in reversed(entries)
                    if meta.get("transport") or meta.get("presence_provenance")), None)
     facts: Dict[str, Any] = {"room_id": room, "label": label(room, sample), "head": store.room_head(room),
-                             "facts": memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ()))),
+                             "facts": _with_gaps(memory_inventory.room_facts(store, room, entries, lineage,
+                                                                             len(notes.get(room, ()))), gaps, room),
                              "legacy": [], "under_parts": [], "notes": [], "origins": [], "since": "",
                              "lane1": [], "lane2": []}
     if spec.room_page:
@@ -700,14 +702,16 @@ def _room_focus(root, by_room, notes):
 
 def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label: Callable[..., str],
                 by_room: Mapping[str, List[Entry]], notes: Mapping[str, List[Dict[str, Any]]],
-                lineage: Mapping[str, Any]) -> List[Dict[str, Any]]:
-    """Every other room with open rows or notes not yet sealed, oldest last activity first, with its standing facts."""
+                lineage: Mapping[str, Any], gaps: Optional[Mapping[str, set]] = None) -> List[Dict[str, Any]]:
+    """Every other room with open rows, notes not yet sealed or a gap in its open rows, oldest last activity first,
+    with its standing facts."""
     from ouroboros.dialogue_provenance import row_provenance
 
     rooms = []
     focus = _room_focus(root, by_room, notes) if spec.live_rooms == "directory" else {}
     shown = {entry[0]["row_sha256"] for entry in by_room.get(spec.room_id, [])} if spec.room_lanes else set()
-    for room in sorted((set(by_room) | set(notes)) - {spec.room_id}):
+    for room in sorted((set(by_room) | set(notes) | {room for room, kinds in (gaps or {}).items() if kinds})
+                       - {spec.room_id}):
         entries = by_room.get(room, [])
         words = []
         if spec.live_rooms == "lines_with_words":
@@ -720,7 +724,7 @@ def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label
             shown.update(entry[0]["row_sha256"] for entry, _cls in people)
         sample = next((meta for _address, meta, _pos in reversed(entries)
                        if meta.get("transport") or meta.get("presence_provenance")), None)
-        facts = memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ())))
+        facts = _with_gaps(memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ()))), gaps, room)
         # A room can have only notes left after its rows are sealed. Its writer's
         # typed origin still keeps those place notes out of the integrating view.
         if not facts.get("place"):
@@ -805,17 +809,18 @@ def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     """``(this room, live rooms, marks)`` of one capture, from one read of the open rows."""
     lineage = row_lineage(root)
     notes = _notes_by_room(store) if spec.room_id is not None or spec.live_rooms != "none" else {}
+    gaps: Dict[str, set] = {}  # by room, what its open rows may lack (``room_appearances.GAP_DETAILS``)
     if spec.live_rooms != "none":
-        by_room = memory_inventory.open_rows_by_room(root)
+        by_room = memory_inventory.open_rows_by_room(root, gaps=gaps)
     elif spec.room_id is not None:  # the room's facts are counted from its open rows whatever the view prints of them
-        by_room = {spec.room_id: memory_inventory.open_room_rows(root, spec.room_id)}
+        by_room = {spec.room_id: memory_inventory.open_room_rows(root, spec.room_id, gaps=gaps.setdefault(spec.room_id, set()))}
     else:
         by_room = {}
     # The authors of rows written before the lineage epoch, read at once for every room (not one task at a time).
     warm_lineage(lineage, ((meta, pos) for entries in by_room.values() for _address, meta, pos in entries))
-    room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story)
+    room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story, gaps)
             if spec.room_id is not None else None)
-    live = _live_rooms(store, root, spec, label, by_room, notes, lineage) if spec.live_rooms != "none" else []
+    live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps) if spec.live_rooms != "none" else []
     return room, live, _capture_marks(store, spec, label)
 
 
@@ -959,6 +964,17 @@ def _facts_line(room: Mapping[str, Any], items: List[Dict[str, Any]]) -> str:
             f"from='{items[0]['first']}', to='{last['last']}')")
 
 
+def _with_gaps(facts: Dict[str, Any], gaps: Optional[Mapping[str, set]], room: str) -> Dict[str, Any]:
+    """A room's standing facts with what its open rows may lack, when anything (``_facts_text`` names it)."""
+    kinds = sorted((gaps or {}).get(room) or ())
+    return {**facts, "gaps": kinds} if kinds else facts
+
+
+# What a room's open rows may lack, as its standing facts say it (``room_appearances.read_gaps`` kinds).
+_GAP_WORDS = {"appearances_deriving": "rows it shows from other rooms are still being indexed",
+              "reply_target_unreadable": "a Reply whose target cannot be read may belong here"}
+
+
 def _facts_text(facts: Mapping[str, Any], of: str = "this room") -> str:
     """A room's standing facts (``memory_inventory.room_facts``) as one phrase; the same words wherever a room is named.
 
@@ -968,6 +984,7 @@ def _facts_text(facts: Mapping[str, Any], of: str = "this room") -> str:
     rows = (f"open {_minute(facts['earliest'])} → {_minute(facts['latest'])}; people {facts['people']}, "
             f"mine {facts['mine']}, task facts {facts['task_facts']}, ~{facts['chars']} chars" if facts["rows"]
             else "no open rows")
+    rows += "".join(f"; incomplete: {_GAP_WORDS.get(kind, kind)}" for kind in facts.get("gaps") or ())
     notes = f"; my notes not yet sealed: {facts['notes']}" if of == "this room" else ""
     pages = (f"pages of {of}: {facts['pages']}, last covered row {_minute(facts['last_covered'])}" if facts["pages"]
              else f"no page of {of} yet")
