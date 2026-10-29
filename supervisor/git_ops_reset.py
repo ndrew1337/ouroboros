@@ -15,6 +15,7 @@ saw at import time.
 from __future__ import annotations
 
 import datetime
+import functools
 import logging
 import os
 import pathlib
@@ -822,56 +823,67 @@ def _dependency_fingerprint(req_path, cmd):
     """Actual requirement bytes, install target/environment and interpreter.
 
     A packaged host (``OUROBOROS_BUNDLE_DIR`` holding its bundle manifest) counts by content, not
-    location: paths under the bundle root are relative to it, and the app version, ``sys.version``,
-    cache tag, machine, manifest identity and bundled distributions are hashed, so the same app
-    moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs. Paths
-    outside that root (a container's venv) stay absolute; a run without a manifest hashes as before."""
+    location: a path inside the bundle counts relative to it in every field, and the app version,
+    ``sys.version``, cache tag, machine, manifest identity and bundled distributions are hashed, so the
+    same app moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs.
+    Paths outside it (the userbase, a container's venv), flags and the requirements digest stay as they
+    are; a run without a manifest hashes as before."""
     import hashlib
     import json
-    import platform
     import site
     import sysconfig
-    from ouroboros.utils import read_json_dict
     source = req_path.read_bytes() if req_path.exists() else b"openai>=1.0.0\nrequests"
     purelib = sysconfig.get_path("purelib")
     bundle = os.environ.get("OUROBOROS_BUNDLE_DIR", "").strip()
-    manifest = (read_json_dict(pathlib.Path(bundle) / "repo_bundle_manifest.json") or {}) if bundle else {}
+    host = _packaged_host(bundle, purelib) if bundle else {}
 
-    def at(path):
-        """``path`` relative to the bundle root when it lies under it (lexically or resolved)."""
-        if not manifest:
-            return path  # a source run keys on absolute paths, exactly as before
-        for root, text in ((bundle, path), (os.path.realpath(bundle), os.path.realpath(path))):
-            try:
-                relative = os.path.relpath(os.path.abspath(text), os.path.abspath(root))
-            except ValueError:  # another Windows drive
-                continue
-            if relative != os.pardir and not relative.startswith(os.pardir + os.sep):
-                return "<bundle>/" + relative.replace(os.sep, "/")
-        return path
+    def at(value):
+        relative = _inside_bundle(value, bundle) if host else None
+        return value if relative is None else "<bundle>/" + relative
 
-    facts = {"requirements_sha256": hashlib.sha256(source).hexdigest(), "command": [at(cmd[0]), *cmd[1:]],
+    facts = {"requirements_sha256": hashlib.sha256(source).hexdigest(), "command": [at(part) for part in cmd],
              "interpreter": [at(sys.executable), sys.version, at(sys.prefix), at(sys.base_prefix)],
-             "target": [site.getuserbase(), at(purelib)],
-             "environment": {key: os.environ.get(key, "") for key in
+             "target": [at(site.getuserbase()), at(purelib)],
+             "environment": {key: at(os.environ.get(key, "")) for key in
                              ("PYTHONUSERBASE", "PIP_TARGET", "PIP_PREFIX", "PIP_USER", "PIP_CONFIG_FILE", "VIRTUAL_ENV")}}
-
-    def distributions():
-        """``name==version`` of the bundle's own packages, from their metadata folder names: no file is
-        parsed, and a venv the sync itself writes (outside the bundle) is never listed."""
-        if at(purelib) == purelib:
-            return []
-        try:
-            names = [entry.rsplit(".", 1)[0] for entry in os.listdir(purelib) if entry.endswith((".dist-info", ".egg-info"))]
-        except OSError:
-            return []
-        return sorted("==".join(name.rsplit("-", 1)) for name in names)
-
-    if manifest:
-        facts["host"] = {"app_version": os.environ.get("OUROBOROS_APP_VERSION", ""), "cache_tag": sys.implementation.cache_tag,
-                         "machine": platform.machine(), "source_sha": manifest.get("source_sha", ""),
-                         "bundle_sha256": manifest.get("bundle_sha256", ""), "distributions": distributions()}
+    if host:
+        facts["host"] = {**host, "app_version": os.environ.get("OUROBOROS_APP_VERSION", "")}
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _inside_bundle(value, bundle):
+    """``value``'s path relative to the bundle root when it is an absolute path inside it (lexically or
+    resolved), else ``None``: flags, external destinations and other volumes stay as they are."""
+    if not isinstance(value, str) or not os.path.isabs(value):
+        return None
+    for root, text in ((bundle, value), (os.path.realpath(bundle), os.path.realpath(value))):
+        try:
+            relative = os.path.relpath(os.path.abspath(text), os.path.abspath(root))
+        except ValueError:  # another Windows drive
+            continue
+        if relative != os.pardir and not relative.startswith(os.pardir + os.sep):
+            return relative.replace(os.sep, "/")
+    return None
+
+
+@functools.lru_cache(maxsize=None)
+def _packaged_host(bundle, purelib):
+    """The packaged host's content identity, read once per process (the host never changes under one):
+    ``{}`` without a bundle manifest. Distributions come from the bundle's own purelib folder names
+    (``name-version.dist-info``), no file parsed; a venv the sync itself writes is never listed."""
+    import platform
+    from ouroboros.utils import read_json_dict
+    manifest = read_json_dict(pathlib.Path(bundle) / "repo_bundle_manifest.json") or {}
+    if not manifest:
+        return {}
+    try:
+        names = ([entry.rsplit(".", 1)[0] for entry in os.listdir(purelib) if entry.endswith((".dist-info", ".egg-info"))]
+                 if _inside_bundle(purelib, bundle) is not None else [])
+    except OSError:
+        names = []
+    return {"cache_tag": sys.implementation.cache_tag, "machine": platform.machine(),
+            "source_sha": manifest.get("source_sha", ""), "bundle_sha256": manifest.get("bundle_sha256", ""),
+            "distributions": sorted("==".join(name.rsplit("-", 1)) for name in names)}
 
 
 def _bootstrap_receipt_path() -> pathlib.Path:

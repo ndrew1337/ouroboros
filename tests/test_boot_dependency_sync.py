@@ -145,16 +145,20 @@ def test_a_packaged_fingerprint_follows_the_app_content_not_its_path(tmp_path, m
         (root / "repo_bundle_manifest.json").write_text(json.dumps({"source_sha": "a" * 40, "bundle_sha256": sha}))
         return root, purelib, pathlib.Path(python) if python else root / "python-standalone" / "bin" / "python3"
 
-    def fingerprint(root, purelib, python):
+    def fingerprint(root, purelib, python, userbase=tmp_path / "data" / "state" / "python-userbase"):
         monkeypatch.setenv("OUROBOROS_BUNDLE_DIR", str(root))
+        monkeypatch.setenv("PYTHONUSERBASE", str(userbase))  # an external destination: never relative
+        monkeypatch.setenv("VIRTUAL_ENV", str(root / "env"))  # inside the bundle, like any field's path
         monkeypatch.setattr(sys, "executable", str(python))
         for name in ("prefix", "base_prefix"):
             monkeypatch.setattr(sys, name, str(python.parent.parent))
         monkeypatch.setattr(sysconfig, "get_path", lambda key, *a, **k: str(purelib))
-        return git_ops_reset._dependency_fingerprint(req, [str(python), "-m", "pip", "install", "-q", "--user", "-r", str(req)])
+        return git_ops_reset._dependency_fingerprint(
+            req, [str(python), "-m", "pip", "install", "-q", "--target", str(root / "site"), "-r", str(req)])
 
     here = fingerprint(*bundle("Desktop"))
     assert fingerprint(*bundle("Applications")) == here, "a moved copy: the old receipt keyed on its path"
+    assert fingerprint(*bundle("Volume"), userbase=tmp_path / "other-userbase") != here, "an external target re-syncs"
     assert fingerprint(*bundle("other-build", sha="c" * 64)) != here
     assert fingerprint(*bundle("other-packages", dist="2.0")) != here
     monkeypatch.setattr(platform, "machine", lambda: "x86_64-other")
