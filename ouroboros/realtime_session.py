@@ -123,6 +123,22 @@ class JsonSession:
             raise RealtimeSetupError("provider_error", "provider refused a live event; see the task evidence")
         return value
 
+    async def timed_read(self, timeout):
+        """A metered read owns its child even when completion races cancellation.
+
+        Python 3.10 wait_for can return a completed child's value after its
+        caller was cancelled. A connection reader must instead finish teardown.
+        """
+        pending = asyncio.create_task(self.read())
+        try:
+            done, _ = await asyncio.wait({pending}, timeout=timeout)
+            if not done:
+                raise asyncio.TimeoutError
+            return pending.result()
+        finally:
+            pending.cancel()
+            await joined(asyncio.gather(pending, return_exceptions=True))
+
     def is_benign_error(self, event):
         """Only a provider can recognize an expected error for its own request."""
         return False

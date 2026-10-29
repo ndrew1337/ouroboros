@@ -1,7 +1,7 @@
 ---
 name: grok_realtime
 description: xAI Grok Voice provider for Live Conversation.
-version: 0.1.9
+version: 0.1.10
 type: extension
 runtime: python3
 entry: plugin.py
@@ -40,3 +40,5 @@ This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
 
 Host-only bookkeeping is absent from the structured wire projection; content strings stay exact. Delivered setup and update rows become exposure evidence only at a usable response, before queued updates are released. Host fitting owns the shared remedies and exact physical-cut checkpoints; the provider does not choose a memory horizon.
+
+A metered read preserves cancellation when its native result arrives at teardown; the connection reader always joins its pending read.

@@ -248,7 +248,7 @@ class GrokSession(JsonSession):
             result, self.pending = self.pending, []
             return result
         try:
-            incoming = await asyncio.wait_for(self.read(), 1.0)
+            incoming = await self.timed_read(1.0)
         except asyncio.TimeoutError:
             # Connected time keeps growing without a response or incoming audio.
             self.report_connection_usage()
