@@ -742,9 +742,9 @@ def test_triad_fit_sizes_against_the_local_route(monkeypatch, tmp_path):
     )
 
 
-def test_update_letter_max_tokens_pinned():
-    """The update letter is ONE short paragraph (owner decision 2026-09-03): its LIGHT
-    one-shot budget stays 1024 and matches the ARCHITECTURE 'LLM output token budgets' row."""
-    from ouroboros.update_letter import UPDATE_LETTER_MAX_TOKENS
+def test_the_update_description_has_no_host_output_budget():
+    """The description is the mind's ordinary work (Ouroboros#2389, owner 28.10): no host one-shot,
+    so no host output budget, length or paragraph limit remains on it."""
+    from ouroboros import update_letter
 
-    assert UPDATE_LETTER_MAX_TOKENS == 1024
+    assert not hasattr(update_letter, "UPDATE_LETTER_MAX_TOKENS")

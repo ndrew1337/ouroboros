@@ -50,7 +50,6 @@ import hashlib
 import json
 import os
 import pathlib
-import re
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -58,15 +57,15 @@ from contextvars import ContextVar
 from typing import Any, Callable, Dict, Iterable, List, Mapping, NamedTuple, Optional, Tuple
 
 from ouroboros import store, store_timing
+from ouroboros.chronicle_quotes import QuoteResolver, quote_refusal
 from ouroboros.platform_layer import (acquire_exclusive_file_lock, kernel_file_locks_enforced,
                                       release_exclusive_file_lock)
 from ouroboros.utils import append_jsonl, assert_test_data_path, utc_now_iso
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 KINDS = frozenset({"page", "part", "note", "correction", "decision", "mark", "mark_view", "mark_release",
                    "legacy", "gap", "activation", "account", "selection"})
 AUTHOR_KINDS = frozenset({"mind", "helper", "host", "legacy_helper"})
-SPEAKERS = frozenset({"human", "ouroboros", "child", "host", "helper", "unattributed"})
 STORY_KINDS = ("page", "part", "note", "legacy", "gap", "account")
 # An account or its selection changes the common view, not what one room's story says: neither moves a room head.
 HEAD_KINDS = ("page", "part", "note", "correction", "decision", "legacy", "gap")
@@ -99,12 +98,13 @@ _SCHEMA = """
     CREATE INDEX IF NOT EXISTS folded_part ON folded(part_id);
     CREATE TABLE IF NOT EXISTS tail_rows (pos INTEGER PRIMARY KEY, seq INTEGER NOT NULL, row_sha256 TEXT NOT NULL,
                                           legacy TEXT, meta TEXT NOT NULL, terminal TEXT);
+    CREATE TABLE IF NOT EXISTS told (record TEXT NOT NULL, account TEXT NOT NULL, sequence INTEGER NOT NULL,
+                                     PRIMARY KEY (record, account));
+    CREATE INDEX IF NOT EXISTS told_account ON told(account);
 """
 _RESET = ("DELETE FROM records; DELETE FROM state; DELETE FROM active_marks; DELETE FROM page_rows; "
-          "DELETE FROM folded; DELETE FROM tail_rows; DELETE FROM sqlite_sequence WHERE name='records'; "
+          "DELETE FROM folded; DELETE FROM tail_rows; DELETE FROM told; DELETE FROM sqlite_sequence WHERE name='records'; "
           f"PRAGMA user_version={SCHEMA_VERSION};")
-
-QuoteResolver = Callable[[Any], Optional[Tuple[str, str]]]
 
 
 class PublishResult(NamedTuple):
@@ -209,52 +209,11 @@ def correction_line(fix: Mapping[str, Any]) -> str:
     return f"[correction {fix.get('id')} by mind ({draft_signer(fix.get('author'))}), {str(fix.get('ts') or '')[:10] or 'date not recorded'}]"
 
 
-# A markdown emphasis marker: a run of up to three ``*``/``_`` that opens before a word (nothing
-# word-like or ``*`` before it, a non-space after it) or closes after one. ``memory_read``,
-# ``2*3`` and a ``* `` bullet carry no marker; ``**but not**`` and ``_this_`` do.
-_EMPHASIS = re.compile(r"(?<![\w*])[*_]{1,3}(?![*_\s])|(?<=[^*_\s])[*_]{1,3}(?![\w*])")
-
-
-def quote_in(quote: str, source: str) -> bool:
-    """Whether ``quote`` is ``source``'s words, exact up to markdown emphasis markers on either side.
-
-    Words, punctuation, spacing and order stay exact: only ``**``, ``__`` and a single
-    ``*``/``_`` around words are set aside, so a helper that copied a row's words without
-    its bold is not refused, while a changed word still is.
-    """
-    if quote in source:
-        return True
-    plain = _EMPHASIS.sub("", quote)
-    return bool(plain.strip()) and plain in _EMPHASIS.sub("", source)
-
-
 def verify_quotes(quotes: Any, resolver: Optional[QuoteResolver]) -> Optional[PublishResult]:
-    """Each quote is the words of the row at its address (``quote_in``), spoken by the named class.
-
-    ``resolver(address)`` returns ``(rendered row text, author kind)`` or ``None``;
-    it reads chat rows, so it runs before the publication lock is taken.
-    """
-    if not quotes:
-        return None
-    if not isinstance(quotes, (list, tuple)):
-        return _refuse("invalid", "quotes is a list of {address, text, speaker}")
-    for index, quote in enumerate(quotes):
-        where = f"quotes[{index}]"
-        if (not isinstance(quote, dict) or not _nonblank(quote.get("text")) or not quote.get("address")
-                or quote.get("speaker") not in SPEAKERS):
-            return _refuse("quote_mismatch", f"{where} needs an address, non-empty text and a speaker in "
-                           + ", ".join(sorted(SPEAKERS)))
-        if resolver is None:
-            return _refuse("quote_mismatch", f"{where}: no row resolver was supplied to verify it")
-        resolved = resolver(quote["address"])
-        if resolved is None:
-            return _refuse("quote_mismatch", f"{where}: the address resolves to no chat row")
-        rendered, speaker = resolved
-        if not quote_in(str(quote["text"]), str(rendered)):
-            return _refuse("quote_mismatch", f"{where}: the text is not an exact substring of that row")
-        if speaker != quote["speaker"]:
-            return _refuse("quote_mismatch", f"{where}: that row is spoken by {speaker}, not {quote['speaker']}")
-    return None
+    """Each quote is the words of the row at its address, spoken by the named class (``chronicle_quotes``): a
+    typed refusal, or None. ``resolver`` reads chat rows, so it runs before the publication lock is taken."""
+    refusal = quote_refusal(quotes, resolver)
+    return None if refusal is None else _refuse(*refusal)
 
 
 class _IndexLookups:
@@ -269,27 +228,31 @@ class _IndexLookups:
         row = self.db.execute("SELECT sequence,body FROM records WHERE id=?", (str(record_id),)).fetchone()
         return {**json.loads(row[1]), "sequence": row[0]} if row else None
 
-    def targeting(self, record_id, kinds):
-        """``(sequence, body)`` of the records of ``kinds`` aimed at a record, in publication order."""
+    def targeting(self, record_id, kinds, after=0, limit=-1):
+        """``(sequence, body)`` of the records of ``kinds`` aimed at a record after ``after`` (at most ``limit``), in order."""
         return [(seq, json.loads(body)) for seq, body in self.db.execute(
-            "SELECT sequence,body FROM records WHERE target=? AND kind IN (%s) ORDER BY sequence"
-            % ",".join("?" * len(kinds)), (str(record_id), *kinds))]
+            "SELECT sequence,body FROM records WHERE target=? AND kind IN (%s) AND sequence>? ORDER BY sequence LIMIT ?"
+            % ",".join("?" * len(kinds)), (str(record_id), *kinds, int(after), int(limit)))]
 
     def part_of(self, record_id):
         row = self.db.execute("SELECT part_id FROM folded WHERE member_id=?", (str(record_id),)).fetchone()
         return row[0] if row else None
 
-    def rows(self, room=None, kinds=(), after=0):
-        """``(sequence, stored body)`` of the records after ``after`` (one room's, of ``kinds``), in order."""
+    def rows(self, room=None, kinds=(), after=0, limit=-1, author_kind=None, unfolded=False):
+        """``(sequence, stored body)`` of at most ``limit`` records after ``after`` (one room's, of ``kinds``, of one
+        author kind, none a part folds), in order."""
         where, args = ["sequence > ?"], [int(after)]
-        if room is not None:
-            where.append("room=?")
-            args.append(str(room))
+        for clause, value in (("room=?", room), ("json_extract(body,'$.author.kind')=?", author_kind)):
+            if value is not None:
+                where.append(clause)
+                args.append(str(value))
         if kinds:
             where.append("kind IN (%s)" % ",".join("?" * len(kinds)))
             args.extend(kinds)
-        return self.db.execute("SELECT sequence,body FROM records WHERE " + " AND ".join(where) + " ORDER BY sequence",
-                               args).fetchall()
+        if unfolded:
+            where.append("id NOT IN (SELECT member_id FROM folded)")
+        return self.db.execute("SELECT sequence,body FROM records WHERE " + " AND ".join(where)
+                               + " ORDER BY sequence LIMIT ?", [*args, int(limit)]).fetchall()
 
     def sealed(self, room):
         return {ref for (ref,) in self.db.execute("SELECT row_ref FROM page_rows WHERE room=?", (str(room),))}
@@ -387,9 +350,11 @@ class _Snapshot:
     def part_of(self, record_id):
         return self.folded.get(str(record_id))
 
-    def rows(self, room=None, kinds=(), after=0):
+    def rows(self, room=None, kinds=(), after=0, limit=-1, author_kind=None, unfolded=False):
         rows = self.records if room is None else self.by_room.get(str(room), ())
-        return [(row[0], row[5]) for row in rows if row[0] > int(after) and (not kinds or row[2] in kinds)]
+        return [(row[0], row[5]) for row in rows if row[0] > int(after) and (not kinds or row[2] in kinds) and not (
+            unfolded and row[1] in self.folded) and (author_kind is None or _mapping(json.loads(row[5]).get("author")).get(
+                "kind") == author_kind)][:None if limit < 0 else limit]
 
     def sealed(self, room):
         return set(self.page_rows.get(str(room), ()))
@@ -652,6 +617,10 @@ class ChronicleStore:
                 # A rejected draft stops acting: its rows are open and its members unfolded again.
                 db.execute("DELETE FROM page_rows WHERE page_id=?", (record["target_id"],))
                 db.execute("DELETE FROM folded WHERE part_id=?", (record["target_id"],))
+            elif kind == "selection":  # an account's latest selection is its only acting claim on what it tells
+                db.execute("DELETE FROM told WHERE account=?", (record["target_id"],))
+                db.executemany("INSERT OR REPLACE INTO told VALUES (?,?,?)",
+                               [(str(ref), record["target_id"], seq) for ref in record["replaces"] if record["shown"]])
             elif kind == "decision" and record.get("accepted"):
                 target = self._get(db, record["target_id"])
                 if target.get("metadata", {}).get("candidate"):
@@ -1184,16 +1153,23 @@ class ChronicleStore:
                                              incomplete=any(not t or t.get("incomplete") for t in stamps))
         return covers
 
-    def _interpret(self, db, record) -> Dict[str, Any]:
+    def _interpret(self, db, record, *, revision: Optional[str] = None, sources: bool = True) -> Dict[str, Any]:
         """The record as it acts: its own words, then every correction of the mind under them, each signed.
 
         ``current_text`` keeps the original and adds each correction in publication order under
         ``correction_line``; the author stays the record's. ``revision`` is the last correction's id
         (what ``expected_revision`` names) and ``corrections`` lists them all. A correction never
         replaces a record's words: to say a record anew the mind folds it into a part over it.
+        As of a ``revision`` (its own id or a correction's; else ValueError) only corrections up to it, the rest named in
+        ``later_corrections``; without ``sources`` an account keeps frozen references; a mark gets ``view``/``released``.
         """
         record, look = dict(record), _lookups(db)
         fixes = [fix for _seq, fix in look.targeting(record["id"], ("correction",))]
+        if revision is not None:
+            revisions = [record["id"], *(fix["id"] for fix in fixes)]
+            if revision not in revisions:
+                raise ValueError(f"{revision} is not a revision of {record['id']}; its revisions: " + ", ".join(revisions))
+            fixes, record["later_corrections"] = fixes[:revisions.index(revision)], revisions[revisions.index(revision) + 1:]
         record["current_text"] = "\n\n".join([str(record.get("text", "")),
                                               *(f"{correction_line(fix)}\n{fix.get('text', '')}" for fix in fixes)])
         record["revision"] = fixes[-1]["id"] if fixes else record["id"]
@@ -1203,8 +1179,12 @@ class ChronicleStore:
             record["status"] = status
         record["folded_into"] = look.part_of(record["id"])
         if record.get("kind") == "account":
-            record["sources"] = [self._source_state(look, ref) for ref in record.get("sources") or ()]
+            if sources:
+                record["sources"] = [self._source_state(look, ref) for ref in record.get("sources") or ()]
             record["selection"] = self._selection_of(look, record["id"])
+        elif record.get("kind") == "mark":
+            decided = look.targeting(record["id"], ("mark_view", "mark_release"))[::-1]
+            record["view"], record["released"] = (next((e for _s, e in decided if e["kind"] == k), None) for k in ("mark_view", "mark_release"))
         return record
 
     def _source_state(self, db, ref) -> Dict[str, Any]:
@@ -1349,12 +1329,55 @@ class ChronicleStore:
                     return True
         return False
 
-    def records(self, room_id: Any = None, *, kinds: Optional[Iterable[str]] = None,
-                after_seq: int = 0) -> List[Dict[str, Any]]:
-        """Records in publication order; the caller bounds a page."""
+    def records(self, room_id: Any = None, *, kinds: Optional[Iterable[str]] = None, after_seq: int = 0,
+                limit: Optional[int] = None, author_kind: Optional[str] = None, unfolded: bool = False) -> List[Dict[str, Any]]:
+        """Stored records in order, filtered by the index (room, ``kinds``, author kind, unfolded); ``limit`` bounds the statement."""
         with self._reading() as look:
-            return [{**json.loads(body), "sequence": seq}
-                    for seq, body in look.rows(room_id, tuple(kinds or ()), after_seq)]
+            return [{**json.loads(body), "sequence": seq} for seq, body in look.rows(
+                room_id, tuple(kinds or ()), after_seq, -1 if limit is None else int(limit), author_kind, unfolded)]
+
+    def interpret(self, records: Iterable[Mapping[str, Any]], *, revision: Optional[str] = None,
+                  sources: bool = True) -> List[Dict[str, Any]]:
+        """Records as read interpreted in one read (``_interpret``, as of ``revision``): ``memory_read`` and
+        ``memory_reader`` share it, so one rule composes a record's words at every revision."""
+        with self._reading() as look:
+            return [self._interpret(look, record, revision=revision, sources=sources) for record in records]
+
+    def interpreted(self, room_id: Any = None, *, kinds: Iterable[str] = (), after_seq: int = 0,
+                    limit: Optional[int] = None, author_kind: Optional[str] = None, unfolded: bool = False,
+                    sources: bool = True) -> List[Dict[str, Any]]:
+        """``records`` interpreted in the same one read: a listing costs one index open, never one per record."""
+        with self._reading() as look:
+            return [self._interpret(look, {**json.loads(body), "sequence": seq}, sources=sources) for seq, body in look.rows(
+                room_id, tuple(kinds), after_seq, -1 if limit is None else int(limit), author_kind, unfolded)]
+
+    def targeting(self, record_id: Any, kinds: Iterable[str], *, after_seq: int = 0,
+                  limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """At most ``limit`` records of ``kinds`` aimed at one record after ``after_seq``: addressed, never its room's."""
+        with self._index() as db:  # an extension's read, outside any capture
+            return [{**body, "sequence": seq} for seq, body in
+                    _IndexLookups(db).targeting(record_id, tuple(kinds), after_seq, -1 if limit is None else int(limit))]
+
+    def rooms(self, *, after_room: Optional[str] = None, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Rooms holding records in room-id order (the host's room ``""`` first), after ``after_room`` when named."""
+        with self._index() as db:
+            return [{"room_id": room, "records": count, "newest_sequence": newest, "head": _IndexLookups(db).head(room)}
+                    for room, count, newest in db.execute("SELECT room,COUNT(*),MAX(sequence) FROM records WHERE ? IS NULL "
+                                                          "OR room>? GROUP BY room ORDER BY room LIMIT ?",
+                                                          (after_room, after_room, -1 if limit is None else int(limit)))]
+
+    def telling_selections(self, record_ids: Iterable[Any]) -> Dict[str, List[Dict[str, Any]]]:
+        """Per record, the ``told_map`` entries that decide whether an account tells it in the common view: the acting
+        shown selections naming it (the ``told`` projection) and, for an account, its own; indexed, never every one."""
+        out: Dict[str, List[Dict[str, Any]]] = {str(ident): [] for ident in record_ids}
+        with self._index() as db:
+            for record, account, seq in db.execute("SELECT record,account,sequence FROM told WHERE record IN "
+                                                   "(SELECT value FROM json_each(?))", (_json(sorted(out)),)):
+                out[record].append({"id": account, "selection_sequence": seq, "replaces": [record]})
+            for ident, entries in out.items():
+                own = self._selection_of(db, ident)
+                entries += [{"id": ident, "selection_sequence": own["sequence"], "replaces": []}] if own and own["shown"] else []
+        return out
 
     def room_records(self, room_id: Any, *, after_seq: int = 0,
                      kinds: Iterable[str] = STORY_KINDS) -> List[Dict[str, Any]]:
@@ -1364,9 +1387,8 @@ class ChronicleStore:
         Each is interpreted (``_interpret``): ``current_text`` with the mind's corrections under
         the original, ``revision``, ``corrections``, ``status`` for pages and parts and ``folded_into``.
         """
-        with self._reading() as look:
-            rows = [{**json.loads(body), "sequence": seq} for seq, body in look.rows(room_id, tuple(kinds), after_seq)]
-            return [r for r in (self._interpret(look, row) for row in rows) if r.get("status") not in ("rejected", "candidate")]
+        return [r for r in self.interpreted(room_id, kinds=kinds, after_seq=after_seq)
+                if r.get("status") not in ("rejected", "candidate")]
 
     def pages_of_room(self, room_id: Any) -> List[Dict[str, Any]]:
         """Effective pages and parts of a room, interpreted, in story order."""
@@ -1379,9 +1401,8 @@ class ChronicleStore:
     def pending_candidates(self, room_id: Any = None) -> List[Dict[str, Any]]:
         """Signed drafts visible to a wake for decision (one room's when named), without acting
         coverage or story residency."""
-        with self._reading() as look:
-            rows = [{**json.loads(body), "sequence": seq} for seq, body in look.rows(room_id, ("page",))]
-            return [self._interpret(look, row) for row in rows if self._status(look, row) == "candidate"]
+        return [r for r in self.interpreted(room_id, kinds=("page",), author_kind="helper")
+                if r.get("status") == "candidate"]
 
     def mind_page_authors(self, task_ids: Iterable[str]) -> set:
         """Which of these tasks published a page as the mind: an addressed lookup on the page
@@ -1394,9 +1415,7 @@ class ChronicleStore:
 
     def accounts(self) -> List[Dict[str, Any]]:
         """Every account, interpreted (sources with their later changes, the acting selection), in publication order."""
-        with self._reading() as look:
-            return [self._interpret(look, {**json.loads(body), "sequence": seq})
-                    for seq, body in look.rows(None, ("account",))]
+        return self.interpreted(kinds=("account",))
 
     def folded_members(self, part_id: Any) -> List[str]:
         """Every record under a part through nested parts: its own members first, then theirs (no member read whole)."""
@@ -1429,11 +1448,8 @@ class ChronicleStore:
 
     def legacy_pointer_rows(self) -> List[Dict[str, Any]]:
         """One compact row per legacy section or gap: room, label, period and how to open it."""
-        with self._reading() as look:
-            rows = [self._interpret(look, {**json.loads(body), "sequence": seq})
-                    for seq, body in look.rows(None, ("legacy", "gap"))]
         pointers = []
-        for row in rows:
+        for row in self.interpreted(kinds=("legacy", "gap")):
             meta = row.get("metadata") or {}
             pointers.append({"node_id": row["id"], "kind": row["kind"], "room_id": row["room_id"],
                              "label": meta.get("label"), "legacy_type": meta.get("legacy_type"),
@@ -1449,8 +1465,8 @@ class ChronicleStore:
         with self._reading() as look:
             return [json.loads(body) for body in look.marks(room_id, include_global)]
 
-    def observation_snapshot(self, boundary: Optional[Dict[str, Any]] = None):
-        """New immutable records plus their exact accepted position, under one read lock.
+    def observation_snapshot(self, boundary: Optional[Dict[str, Any]] = None, *, limit: Optional[int] = None):
+        """New immutable records (the first ``limit`` of them) plus the newest position, under one read lock.
 
         Without a previous position, establish a baseline using only the index;
         the caller discloses that earlier changes were not inventoried.
@@ -1466,7 +1482,7 @@ class ChronicleStore:
             anchor = db.execute("SELECT id FROM records WHERE sequence=?", (sequence,)).fetchone()
             if sequence and (not anchor or anchor[0] != boundary.get("record_id")):
                 raise ValueError("accepted memory boundary no longer matches source")
-            rows = db.execute("SELECT sequence,body FROM records WHERE sequence>? ORDER BY sequence", (sequence,))
+            rows = db.execute("SELECT sequence,body FROM records WHERE sequence>? ORDER BY sequence LIMIT ?", (sequence, -1 if limit is None else int(limit)))
             return [{**json.loads(body), "sequence": seq} for seq, body in rows], current
 
     def scan_state(self) -> Dict[str, Any]:

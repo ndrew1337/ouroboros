@@ -81,7 +81,7 @@ def _read_json_file(path: pathlib.Path) -> Tuple[str, Optional[Dict[str, Any]], 
     ENOTDIR — a file where ``state/`` belongs is not absence, on Windows too),
     ``invalid`` for bytes that are not a non-empty JSON object. No ``exists()``
     pre-check: it can fail the same way."""
-    from supervisor.state_initialization import confirm_absent
+    from ouroboros.installation_stop import confirm_absent
 
     try:
         try:
@@ -590,6 +590,11 @@ def init_state(*, origin: str = "first_boot") -> StateRead:
         read = read_state()
         return StateRead("unavailable" if read.quality in CURRENT_QUALITIES else read.quality,
                          read.source, read.values, CONTROL_KEYS, str(exc))
+    # The completed witness is this boot's work-root basis: the admission pin read the facts
+    # before recovery or adoption, and every worker and child inherits this one (#1239).
+    from ouroboros.launch_roots import pin_basis
+
+    pin_basis(DRIVE_ROOT, evidence=witness.supervisor_evidence)
     diagnostic.start(st)
     return read_state()
 
