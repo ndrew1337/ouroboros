@@ -57,9 +57,13 @@ def test_delivery_copy_obeys_bytes_and_preserves_original(metadata):
 
 
 @pytest.mark.parametrize('engine,rate', [('gemini', 50_000), ('openai', 80_000)])
-@pytest.mark.parametrize('measurement', ['visible', 'hidden', 'opaque'])
+@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only'])
 def test_minute_sharing_keeps_microphone_and_reports_recovery(host_world, monkeypatch, engine, rate, measurement):
-    measurement_arm(monkeypatch, measurement)
+    if measurement != 'native':
+        from ouroboros.live_upload import WireMeter
+        monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
+        if measurement == 'no_kernel':
+            monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
     asyncio.run(sharing(host_world, monkeypatch, engine, rate))
 
 
@@ -107,7 +111,7 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
         assert not run.running.done(), run.result if hasattr(run, 'result') else run.page.closed
         gaps = [b-a for a,b in zip(audio_times[first_audio:], audio_times[first_audio+1:])]
         assert gaps and max(gaps) < 1, (engine, max(gaps), sizes)
-        assert 0 < len(sizes) < seconds and max(sizes) < len(original), (sizes, run.call.session.upload.rate, run.call.session.upload.audio_rate, run.call.session.upload.capacity())
+        assert 0 < len(sizes) < seconds and max(sizes) < len(original), (sizes, run.call.session.upload.rate, run.call.session.upload.audio_rate, run.call.session.upload.budget())
         facts = [r.get('content','') for r in run.host.messages]
         assert sum(SLOW in str(r) for r in facts) == 1, facts
         before = len(sizes)
@@ -122,7 +126,7 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
             await asyncio.sleep(1)
             if len(sizes) > before and sizes[-1] == len(recovery):
                 break
-        print('RECOVERY', engine, dict(rate=run.call.session.upload.rate, audio_rate=run.call.session.upload.audio_rate, busy=run.call.session.upload.busy(), sizes=sizes))
+        print('RECOVERY', engine, dict(rate=run.call.session.upload.rate, audio_rate=run.call.session.upload.audio_rate, backlog=run.call.session.upload.backlog(), sizes=sizes))
         await run.wait(lambda: len(sizes) > before and sizes[-1] == len(recovery))
         await run.wait(lambda: sum(RECOVERED in str(r) for r in run.host.messages) == 1)
         assert sum(SLOW in str(r) for r in run.host.messages) == 1
@@ -133,16 +137,19 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
 
 
 @pytest.mark.parametrize('engine', ['gemini', 'openai'])
-@pytest.mark.parametrize('measurement', ['visible', 'hidden', 'opaque'])
+@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only'])
 def test_fast_upload_keeps_full_frame_and_stays_quiet(host_world, monkeypatch, engine, measurement):
-    measurement_arm(monkeypatch, measurement)
+    if measurement != 'native':
+        from ouroboros.live_upload import WireMeter
+        monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
+        if measurement == 'no_kernel':
+            monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
     async def scenario():
         limit_connector(monkeypatch, 10_000_000)
         original = screen()
         async with stack(host_world, monkeypatch, engine) as run:
             run.call.attention.mode = 'stream'
-            await warm_upload(run)
-            assert run.call.session.upload.capacity() > len(original) * 4 / 3 + 1024
+            await run.wait(lambda: run.call.session.upload.capacity() > len(original) * 4 / 3 + 1024)
             run.page.video(original)
             await run.wait(lambda: any(video_bytes(v) == original for v in run.wire.sent))
             assert not any(SLOW in str(r) or RECOVERED in str(r) for r in run.host.messages)
@@ -211,24 +218,3 @@ def test_recorded_1da43d33_frame_order_does_not_stall_microphone(host_world, mon
             assert any(video_bytes(v) for v in run.wire.sent)
             print('REPLAY_1da43d33 max_audio_gap', max(gaps))
     asyncio.run(scenario())
-
-
-def measurement_arm(monkeypatch, mode):
-    from tests._live_upload_wire import LimitedTransport
-    if mode == 'hidden':
-        monkeypatch.setattr(LimitedTransport, 'get_write_buffer_size',
-                            lambda self: max(0, self.queued - 256 * 1024))
-    elif mode == 'opaque':
-        def unavailable(self):
-            raise NotImplementedError('opaque transport')
-        monkeypatch.setattr(LimitedTransport, 'get_write_buffer_size', unavailable)
-
-
-async def warm_upload(run):
-    """Exercise the conservative first image, then learn from actual image pongs."""
-    from tests._live_stack_page import jpeg
-    old = run.call.attention.mode
-    run.call.attention.mode = 'stream'
-    run.page.video(jpeg('first connection image'))
-    await run.wait(lambda: run.call.session.upload.rate is not None and not run.call.session.upload.busy())
-    run.call.attention.mode = old

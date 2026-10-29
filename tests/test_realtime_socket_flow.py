@@ -106,7 +106,6 @@ async def connected(provider, monkeypatch, *, interval=.01):
     session = factory(selected(), LiveOptions(), observe=lambda *_: None)
     try:
         await session.connect_wire()
-        await transports[0].frame(Opcode.PING)  # completed setup RTT, distinct from native keepalive
         await asyncio.sleep(0)  # let the native keepalive begin its first interval
         transport, = transports
         header = 'x-goog-api-key' if name == 'gemini' else 'Authorization'

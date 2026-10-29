@@ -8,20 +8,25 @@ from tests._live_stack import stack
 from tests._live_stack_page import jpeg
 from tests._live_upload_wire import limit_connector
 from tests.test_live_conversation import host_world as host_world
-from tests.test_live_upload import video_bytes, warm_upload, measurement_arm
+from tests.test_live_upload import video_bytes
 
 
 @pytest.mark.parametrize('engine,thinking', [('gemini', False), ('gemini', True), ('openai', False)])
-@pytest.mark.parametrize('opaque', ['visible', 'hidden', 'opaque'])
+@pytest.mark.parametrize('opaque', [False, True, 'no_unsent_only'])
 def test_fast_transport_keeps_delivering_after_continuous_audio(host_world, monkeypatch, engine, thinking, opaque):
     async def scenario():
         limit_connector(monkeypatch, 10_000_000)
-        measurement_arm(monkeypatch, opaque)
+        if opaque:
+            # Exactly the Windows/unsupported-socket path: a transport and write
+            # counter exist, but neither native queue measurement is available.
+            from ouroboros.live_upload import WireMeter
+            monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
+            if opaque is True:
+                monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
         async with stack(host_world, monkeypatch, engine, thinking=thinking) as run:
             run.call.attention.mode = 'stream'
             upload = run.call.session.upload
-            await warm_upload(run)
-            await run.wait(lambda: len(run.wire.audio) >= 9600)
+            await run.wait(lambda: upload.rate is not None and len(run.wire.audio) >= 9600)
             original = jpeg('synthetic fast frame')
             before = len(run.wire.audio)
             run.page.video(original)
@@ -29,7 +34,9 @@ def test_fast_transport_keeps_delivering_after_continuous_audio(host_world, monk
             await run.wait(lambda: len(run.wire.audio) >= before + 48000)
             facts = dict(
                 opaque=opaque, pending=list(upload.pending), rate=upload.rate,
-                audio_rate=upload.audio_rate, busy=upload.busy())
+                audio_rate=upload.audio_rate, ack_bytes=upload.ack_bytes,
+                total_bytes=upload.total_bytes, backlog=upload.backlog(),
+                meter_done=upload.meter.done())
             print('OPAQUE_TRANSPORT', facts)
             assert any(video_bytes(v) == original for v in run.wire.sent), facts
     asyncio.run(scenario())
@@ -42,6 +49,7 @@ def test_a_small_source_does_not_clear_another_sources_slow_episode(monkeypatch)
     from ouroboros.realtime_session import JsonSession
     from tests.test_live_upload import screen
     async def scenario():
+        monkeypatch.setattr('ouroboros.live_upload.socket_backlog', lambda ws: 0)
         class Session(JsonSession):
             def video_payload(self, frame):
                 return {'image': base64.b64encode(frame.data).decode()}
@@ -85,11 +93,10 @@ def test_requested_full_look_reports_recovery(host_world, monkeypatch, engine, t
         async with stack(host_world, monkeypatch, engine, thinking=thinking) as run:
             run.call.attention.mode = 'asked'
             upload = run.call.session.upload
-            await warm_upload(run)
-            bootstrap_worker = upload.worker
+            await run.wait(lambda: upload.rate is not None)
             run.page.send({'type': 'mute', 'muted': True})
             await run.wait(lambda: all(peer.muted for peer in run.host.hub._peers.values()))
-            await run.wait(lambda: not upload.audio_waiters and not upload.busy())
+            await run.wait(lambda: not upload.audio_waiters and upload.backlog() == 0)
             first = screen()
             run.page.video(first)
             await run.wait(lambda: any(f.data == first for f in run.call.attention.frames.values()))
@@ -109,7 +116,7 @@ def test_requested_full_look_reports_recovery(host_world, monkeypatch, engine, t
             await run.wait(lambda: 'full-look' in run.wire.outputs)
             await run.wait(lambda: any(video_bytes(v) == second for v in run.wire.sent[start:]))
             await run.quiet()
-            assert upload.worker is bootstrap_worker, 'this probe qualifies direct requested looks, not a deferred worker'
+            assert upload.worker is None, 'this probe qualifies direct requested looks, not a deferred worker'
             assert sum(RECOVERED in str(row) for row in run.host.messages) == 1, dict(
                 slow=upload.slow, notices=upload.notices, slow_state=run.host.state.get('upload_slow'))
     asyncio.run(scenario())
@@ -142,7 +149,7 @@ def test_muting_releases_the_microphone_reservation(host_world, monkeypatch, rel
             await run.wait(lambda: bool(run.call.attention.frames))
             await asyncio.sleep(.5)
             assert any(video_bytes(v) == original for v in run.wire.sent), dict(
-                audio_rate=upload.audio_rate, rate=upload.rate, capacity=upload.capacity(), busy=upload.busy())
+                audio_rate=upload.audio_rate, rate=upload.rate, budget=upload.budget(), backlog=upload.backlog())
     asyncio.run(scenario())
 
 
@@ -209,12 +216,11 @@ def test_gemini_attend_delivers_pixels_or_explicit_deferred_words(host_world, mo
         async with stack(host_world, monkeypatch, 'gemini', thinking=thinking) as run:
             run.call.attention.mode = 'asked'
             upload = run.call.session.upload
-            await warm_upload(run)
+            await run.wait(lambda: upload.rate is not None)
             if deferred:
                 monkeypatch.setattr(upload, 'capacity', lambda: 0)
-            requested = jpeg('synthetic requested look')
-            run.page.video(requested)
-            await run.wait(lambda: any(f.data == requested for f in run.call.attention.frames.values()))
+            run.page.video(jpeg('synthetic requested look'))
+            await run.wait(lambda: bool(run.call.attention.frames))
             start = len(run.wire.sent)
             await run.tool('review-look', 'attend', {'look': True})
             await run.wait(lambda: 'review-look' in run.wire.outputs)

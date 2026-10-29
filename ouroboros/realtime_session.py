@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import string
-import time
 
 from ouroboros.contracts.realtime import RealtimeSetupError, canonical_json
 
@@ -76,7 +75,6 @@ class JsonSession:
         self.connect, self.observe = connect, observe
         self.ws = self.connection = None
         self._send_lock = asyncio.Lock()
-        self._image_lock = asyncio.Lock()
         from ouroboros.live_upload import Upload
         self.upload = Upload(self)
 
@@ -84,7 +82,7 @@ class JsonSession:
         self.connection = self.connect(self.selected.model)
         try:
             self.ws = await self.connection.__aenter__()
-            await self.upload.setup()
+            self.upload.bind()
         except Exception as exc:  # noqa: BLE001 - only the handshake status is read; anything else keeps its type
             status = getattr(exc, "status_code", None) or getattr(getattr(exc, "response", None), "status_code", None)
             code = _HANDSHAKE_REFUSALS.get(status) or ("engine_unavailable" if type(status) is int and status >= 500 else None)
@@ -97,56 +95,46 @@ class JsonSession:
         if self.upload.error is not None:
             raise self.upload.error
         async def send():
-            self.observe("send", raw)
-            claims = {key: tuple(values) for key, values in self.upload.deliveries.items()}
-            started = time.monotonic()
-            await self.ws.send(raw)
             if image:
-                self.upload.fence(self.wire_bytes(raw), started)
+                from ouroboros.live_upload import socket_backlog
+                while socket_backlog(self.ws) or self.upload.audio_waiters:
+                    await self.upload.wait_room()
+            self.observe("send", raw)
+            # Setup establishes the line; images refresh that observation. Small
+            # control/PCM messages are application-limited, not bandwidth probes.
+            self.upload.note(self.wire_bytes(raw), calibrate=not audio and (image or self.upload.rate is None))
+            await self.ws.send(raw)
             if asyncio.current_task() is not self.upload.frame_task:
-                self.upload.written(payload, claims)
-        if image:
-            # Only images serialize with images, through the remote pong. The
-            # microphone never acquires this lock or awaits a frame/fence task.
-            async with self._image_lock:
-                if self.upload.meter is not None:
-                    await asyncio.shield(self.upload.meter)
-                # The same portable receipt clears any earlier PCM queue before
-                # timing the image. Otherwise tiny probes measure old audio too.
-                ping = getattr(self.ws, 'ping', None)
-                if ping is not None:
-                    while True:
-                        started = time.monotonic()
-                        await (await ping())
-                        # A fixed prefix receipt, not a local buffer estimate.
-                        # Reserve one capture packet of queue room for live PCM;
-                        # muted audio needs no reservation. No bandwidth credit
-                        # can get stranded by an application-limited tiny sample.
-                        if not self.upload.audio_rate or time.monotonic() - started <= self.upload.rtt + self.upload.audio_packet_s:
-                            break
-                        await self.upload.wait_room()
-                await send()
-        elif asyncio.current_task() is self.upload.frame_task:
+                self.upload.written(payload)
+        if image or asyncio.current_task() is self.upload.frame_task:
+            # Native asyncio websockets supports concurrent unfragmented sends.
+            # A bounded image must never own the microphone's application lock.
             await send()
         else:
             async with self._send_lock:
                 await send()
 
     def wire_bytes(self, raw):
-        # JSON/base64 plus the WebSocket client frame header. Compression only
-        # saves bytes; no platform socket or private TLS state is inspected.
+        # Conservative pre-encoding envelope price; negotiated compression can
+        # save bytes. The socket meter observes actual transport bytes separately.
+        transport = getattr(self.ws, 'transport', None)
+        tls = transport and transport.get_extra_info('ssl_object')
         size = len(raw.encode('utf-8'))
-        return size + (6 if size < 126 else 8 if size < 65536 else 14)
+        size += 6 if size < 126 else 8 if size < 65536 else 14
+        return size + (((size + 16383) // 16384) * (22 if tls.version() == 'TLSv1.3' else 37) if tls else 0)
 
     async def write_audio(self, payload, command):
         seconds = len(command.pcm) / (command.rate * 2)
         if seconds:
             self.upload.audio_packet_s = seconds
             self.upload.audio_rate = self.wire_bytes(canonical_json(payload)) / seconds
+        from ouroboros.live_upload import AUDIO_WRITE
+        token = AUDIO_WRITE.set({'upload': self.upload, 'seconds': seconds, 'bytes': 0} if seconds else None)
         self.upload.audio_waiters += 1
         try:
             await self.write(payload, audio=True)
         finally:
+            AUDIO_WRITE.reset(token)
             self.upload.audio_waiters -= 1
             self.upload.ready.set()
         await asyncio.sleep(0)  # let a ready, bounded image use the just-drained slot

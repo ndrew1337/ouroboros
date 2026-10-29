@@ -47,11 +47,12 @@ def test_draining_image_never_owns_microphone_lock(cancel):
 
 def test_pending_frames_are_latest_per_source_and_stop_cancels_them(monkeypatch):
     async def scenario():
-        sent, delivered = [], []
+        backlog, sent, delivered = [1], [], []
+        monkeypatch.setattr('ouroboros.live_upload.socket_backlog', lambda ws: backlog[0])
         session = Session(None, None, connect=None, observe=lambda *a: None)
         session.ws = object()
         session.upload.rate, session.upload.audio_rate = 100_000, 47_000
-        session.upload.slot = Video(b'earlier', 'image/jpeg', 'other')
+        session.upload.credit = 50_000
         async def send(frame):
             sent.append(frame)
         session.send = send
@@ -61,9 +62,9 @@ def test_pending_frames_are_latest_per_source_and_stop_cancels_them(monkeypatch)
             session.offer_video(frame, lambda frame=frame: delivered.append(frame), lambda source=source: source in live)
         live.remove('stopped')
         await asyncio.sleep(.01)
-        assert not sent, 'no second frame before the first finishes'
+        assert not sent, 'no frame enters a socket with unsent backlog'
         assert len(session.upload.pending) == 3
-        session.upload.slot = None
+        backlog[0] = 0
         await asyncio.wait_for(session.upload.worker, 1)
         assert [(f.source, f.data) for f in sent] == [('a',b'latest'), ('b',b'independent')]
         assert delivered == sent
@@ -72,9 +73,14 @@ def test_pending_frames_are_latest_per_source_and_stop_cancels_them(monkeypatch)
     asyncio.run(scenario())
 
 
-def test_upload_episode_notices_have_no_content_gate():
+def test_audio_capacity_and_episode_notices_have_no_content_gate():
     session = SimpleNamespace()
     upload = Upload(session)
+    upload.rate, upload.audio_rate = 50_000, 47_150
+    upload.credit = 25_000
+    assert upload.budget() == 25_000
+    upload.audio_rate = 66_750
+    assert upload.budget() == 0, '50 KB/s cannot carry the 24 kHz JSON microphone, even without video'
     for slow in (True, True, True, False, False):
         upload.notice(slow)
     assert upload.notices == [SLOW, RECOVERED]
@@ -82,9 +88,10 @@ def test_upload_episode_notices_have_no_content_gate():
 
 def test_background_frame_failure_keeps_its_typed_reason(monkeypatch):
     async def scenario():
+        monkeypatch.setattr('ouroboros.live_upload.socket_backlog', lambda ws: 0)
         session = Session(None, None, connect=None, observe=lambda *a: None)
         session.ws = object()
-        session.upload.rate, session.upload.audio_rate = 100_000, 47_000
+        session.upload.rate, session.upload.audio_rate, session.upload.credit = 100_000, 47_000, 50_000
         async def send(frame):
             raise RealtimeSetupError('provider_error', 'synthetic refusal')
         session.send = send
@@ -97,6 +104,22 @@ def test_background_frame_failure_keeps_its_typed_reason(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_opaque_socket_requires_a_completed_fence_before_a_frame():
+    async def scenario():
+        pong = asyncio.get_running_loop().create_future()
+        class Socket:
+            async def ping(self):
+                return pong
+        session = SimpleNamespace(ws=Socket())
+        upload = Upload(session)
+        upload.note(4000)
+        await asyncio.sleep(0)
+        assert upload.backlog() is None
+        pong.set_result(None)
+        await upload.meter
+        assert upload.backlog() == 0 and upload.rate > 0
+        await upload.close()
+    asyncio.run(scenario())
 
 
 def test_old_adapter_without_upload_envelope_keeps_its_send_contract():
@@ -120,6 +143,7 @@ def test_old_adapter_without_upload_envelope_keeps_its_send_contract():
 @pytest.mark.parametrize('latest', [b'first', b'newest'])
 def test_frame_in_flight_deduplicates_overlapping_looks_but_keeps_new_source_data(monkeypatch, latest):
     async def scenario():
+        monkeypatch.setattr('ouroboros.live_upload.socket_backlog', lambda ws: 0)
         entered, release = asyncio.Event(), asyncio.Event()
         sent = []
         session = Session(None, None, connect=None, observe=lambda *a: None)
@@ -144,12 +168,80 @@ def test_frame_in_flight_deduplicates_overlapping_looks_but_keeps_new_source_dat
     asyncio.run(scenario())
 
 
+def test_unacknowledged_audio_is_not_an_unsent_frame_backlog(monkeypatch):
+    import struct
+    from ouroboros.live_upload import WireMeter
+    writable = [True]
+    class Socket:
+        def setsockopt(self, level, option, value):
+            assert (option, value) == (0x201, 1)
+        def getsockopt(self, *args):
+            info = bytearray(104)
+            struct.pack_into('=I', info, 32, 4800)  # 100ms of continuous audio still in flight
+            return bytes(info)
+    sock = Socket()
+    monkeypatch.setattr('ouroboros.live_upload.sys.platform', 'darwin')
+    monkeypatch.setattr('ouroboros.live_upload.select.select', lambda *a: ([], [sock] if writable[0] else [], []))
+    native = SimpleNamespace(get_extra_info=lambda key: sock, get_write_buffer_size=lambda: 0)
+    meter = WireMeter(native)
+    meter.written = 10000
+    assert meter.acknowledged() == 5200
+    assert meter.unsent() == 0, 'in-flight audio cannot starve video on a higher-RTT connection'
+    writable[0] = False
+    assert meter.unsent() > 0, 'actually unsent data must still prevent an image write'
 
 
+def test_tls_counter_sits_below_encryption_and_keeps_public_transport(monkeypatch):
+    from ouroboros.live_upload import bind_meter
+    written = []
+    native = SimpleNamespace(get_extra_info=lambda key: None, write=written.append)
+    protocol = SimpleNamespace(_transport=native)
+    tls = SimpleNamespace(_ssl_protocol=protocol)
+    ws = SimpleNamespace(transport=tls)
+    meter = bind_meter(ws)
+    protocol._transport.write(b'encrypted record including framing')
+    assert ws.transport is tls and meter.written == len(written[0])
 
 
+def test_audio_reservation_measures_encoded_bytes_including_compression():
+    from ouroboros.live_upload import AUDIO_WRITE, WireMeter
+    upload = SimpleNamespace(audio_rate=0)
+    native = SimpleNamespace(get_extra_info=lambda key: None, write=lambda data: None)
+    meter = WireMeter(native, upload)
+    token = AUDIO_WRITE.set({'upload':upload, 'seconds':.02, 'bytes':0})
+    try:
+        meter.write(b'x' * 300)
+        meter.write(b'x' * 22)
+    finally:
+        AUDIO_WRITE.reset(token)
+    assert upload.audio_rate == 322 / .02
+    meter.write(b'not microphone')
+    assert upload.audio_rate == 322 / .02
 
 
+def test_microphone_and_small_controls_cannot_replace_a_drain_measurement():
+    async def scenario():
+        wire = SimpleNamespace(written=0, acknowledged=lambda: wire.written, rtt=lambda: 0)
+        upload = Upload(SimpleNamespace())
+        upload.socket_meter = wire
+        upload.rate, upload.audio_rate = 80_000, 66_750
+        upload.note(1335, calibrate=False)
+        upload.note(200, calibrate=True)
+        assert upload.rate == 80_000 and upload.meter is None
+        upload.note(40_000, calibrate=True)
+        wire.written += 40_000
+        await upload.meter
+        assert upload.rate > 0 and upload.meter.done(), 'a real image batch must refresh the drain measurement'
+        await upload.close()
+    asyncio.run(scenario())
+
+
+def test_muted_microphone_does_not_prevent_a_frame_using_measured_capacity():
+    upload = Upload(SimpleNamespace())
+    upload.rate = 100_000
+    assert upload.budget() == 50_000
+    upload.audio_rate = 100_001
+    assert upload.budget() == 0
 
 
 def test_page_audio_backlog_counts_pcm_even_when_a_video_is_queued():
@@ -168,9 +260,9 @@ def test_a_deferred_look_cannot_replace_a_newer_waiting_live_frame(monkeypatch):
     from skills.live_conversation.attention import Attention
     from tests._live_stack_page import jpeg
     async def scenario():
+        monkeypatch.setattr('ouroboros.live_upload.socket_backlog', lambda ws: 1)
         session = Session(None, None, connect=None, observe=lambda *a: None)
         session.ws = object()
-        session.upload.slot = Video(b'earlier', 'image/jpeg', 'other')
         session.upload.rate, session.upload.audio_rate = 100_000, 47_000
         attention = Attention(SimpleNamespace())
         old, latest = Video(jpeg('old'), 'image/jpeg', 'screen'), Video(jpeg('new'), 'image/jpeg', 'screen')
