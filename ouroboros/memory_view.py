@@ -101,7 +101,7 @@ def _period(span: Any, note: str = "") -> str:
     return (text + " (incomplete)" if span.get("incomplete") else text) + note
 
 
-def _labeler(root: pathlib.Path) -> Callable[..., str]:
+def room_labeler(root: pathlib.Path) -> Callable[..., str]:
     """``label(room, sample=None)``: one registry snapshot per capture (``RoomLabelResolver``)."""
     resolver = RoomLabelResolver(root)
 
@@ -406,7 +406,7 @@ def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mappin
             for _key, entry in sorted(keyed, key=lambda pair: pair[0])]
 
 
-def _capture_story(store: ChronicleStore, root: pathlib.Path, label: Callable[..., str],
+def capture_story(store: ChronicleStore, root: pathlib.Path, label: Callable[..., str],
                    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any], List[Dict[str, Any]]]:
     """``(story entries, story status, helper refusals)``; folded or not is ``memory_inventory``'s verdict.
 
@@ -834,7 +834,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
     root = pathlib.Path(drive_root)
     owner_words = _owner_words_block(task) if spec.owner_words else ""
     status = _activation(ChronicleStore(root))
-    label = _labeler(root)
+    label = room_labeler(root)
     bare = {"room_id": spec.room_id, "label": label(spec.room_id)} if spec.room_id is not None else None
     if status["state"] != "active":
         return MemoryViewSnapshot(spec=spec, store_status=status, frontier={}, room=bare, owner_words=owner_words)
@@ -846,7 +846,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
                 "terminal" if spec.story or spec.room_id is not None and spec.room_page else "none")
         with capture(root, tail=tail) as derived:
             frontier = legacy_frontier(store)
-            story, story_status, refusals = _capture_story(store, root, label) if spec.story else ([], {}, [])
+            story, story_status, refusals = capture_story(store, root, label) if spec.story else ([], {}, [])
             room, live, marks = _capture_live(store, root, spec, label, story)
             candidates = tuple({"id": row["id"], "room_id": row["room_id"]} for row in store.pending_candidates()
                                ) if spec.role == "consciousness" else ()

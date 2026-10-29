@@ -258,6 +258,57 @@ def test_a_deferred_full_escalation_runs_the_floor_and_says_so(run_tests, monkey
         assert not summary.exists()
 
 
+def test_a_deferred_full_escalation_keeps_what_the_other_changes_select(run_tests, monkeypatch, tmp_path):
+    """A shared test helper escalates to full; the changed test and the importers of a changed module
+    that arrived in the same window still run on the leg that defers the rest to the landed matrix."""
+    import dataclasses
+
+    from ouroboros import test_selection
+
+    changed = ("ouroboros/utils.py", "tests/_store_journal_shared.py", "tests/test_jsonl_lock_budget.py")
+    chosen = test_selection.TestSelection(
+        "full", "b" * 40, ("tests/test_everything.py",), (("tests/_store_journal_shared.py", "verification apparatus changed"),
+                                                          ("tests/test_jsonl_lock_budget.py", "changed test module")),
+        changed, "policy", 3)
+    asked = []
+
+    def select_from_paths(repo, paths, *, base, extra_tests=(), test_reason=""):
+        asked.append((list(paths), base))
+        return dataclasses.replace(chosen, tier="selected", files=("tests/test_importer.py", "tests/test_jsonl_lock_budget.py"))
+
+    monkeypatch.setattr(test_selection, "select_tests", lambda *a, **k: chosen)
+    monkeypatch.setattr(test_selection, "select_from_paths", select_from_paths)
+    monkeypatch.setattr(run_tests, "_node_lane", lambda: 0)
+    monkeypatch.setattr(run_tests, "_run", lambda label, argv, cwd: 0)
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    run_tests.main(["--selected", "--defer-full", "--evidence-dir", str(tmp_path / "kept")])
+    record = json.loads((tmp_path / "kept" / "selection.json").read_text(encoding="utf-8"))
+    # The escalating helper is left to the matrix; the other two changes are selected as if alone.
+    assert asked == [(["ouroboros/utils.py", "tests/test_jsonl_lock_budget.py"], "b" * 40)]
+    assert record["deferred_full"] is True and record["files"] == sorted(
+        {*test_selection.FLOOR_TESTS, "tests/test_importer.py", "tests/test_jsonl_lock_budget.py"})
+    assert "2 module(s) the other changes select" in summary.read_text(encoding="utf-8")
+
+    def unavailable(*args, **kwargs):
+        raise ValueError("import scan unavailable for tests/test_broken.py")
+
+    monkeypatch.setattr(test_selection, "select_from_paths", unavailable)
+    run_tests.main(["--selected", "--defer-full", "--evidence-dir", str(tmp_path / "floor")])
+    record = json.loads((tmp_path / "floor" / "selection.json").read_text(encoding="utf-8"))
+    assert record["files"] == sorted(test_selection.FLOOR_TESTS)  # the floor still runs, and the note says why
+    assert "the other changes could not be selected: import scan unavailable" in summary.read_text(encoding="utf-8")
+
+    # The other changes escalate too (a reason this leg does not name): the floor alone, never the whole suite.
+    monkeypatch.setattr(test_selection, "select_from_paths", lambda *a, **k: dataclasses.replace(
+        chosen, reasons=(("ouroboros/utils.py", "a renamed escalation"),)))
+    run_tests.main(["--selected", "--defer-full", "--evidence-dir", str(tmp_path / "again")])
+    record = json.loads((tmp_path / "again" / "selection.json").read_text(encoding="utf-8"))
+    assert record["files"] == sorted(test_selection.FLOOR_TESTS)
+    assert "the other changes escalate too (a renamed escalation)" in summary.read_text(encoding="utf-8")
+
+
 def test_sequential_with_pytest_arguments_is_refused(run_tests, monkeypatch):
     monkeypatch.setattr(run_tests, "_run", lambda label, argv, cwd: pytest.fail("nothing must run"))
     with pytest.raises(SystemExit) as exit_info:

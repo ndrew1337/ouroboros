@@ -33,7 +33,8 @@ from ouroboros.gateway.widgets import (
 from ouroboros.gateway.decision_contracts import DecisionRequest, DecisionResponse  # noqa: F401 -- public re-exports
 from ouroboros.gateway.card_contracts import CardOutbound, CardStateOutbound  # noqa: F401 -- public re-exports
 from ouroboros.gateway.update_contracts import (  # noqa: F401 -- public re-exports
-    UpdateApplyErrorResponse, UpdateApplyRequest, UpdateApplySuccessResponse, UpdateMergePlan,
+    UpdateApplyErrorResponse, UpdateApplyRequest, UpdateApplySuccessResponse, UpdateDescriptionErrorResponse,
+    UpdateDescriptionRequest, UpdateDescriptionResponse, UpdateMergePlan,
     UpdatePreflightRequest, UpdatePreflightResponse, UpdateProgressChangedOutbound, UpdateStatusReadyOutbound,
 )
 from ouroboros.gateway.management_contracts import (  # noqa: F401 -- public re-exports
@@ -1520,18 +1521,12 @@ __all__ = [
     "QuizOption", "QuizOutbound", "QuizStateOutbound",
     "CardOutbound", "CardStateOutbound",
     "DecisionRequest", "DecisionResponse",
-    "TypingOutbound",
-    "LogOutbound",
-    "HeartbeatOutbound",
-    "ExtensionLifecycleOutbound",
-    "ProjectsChangedOutbound",
-    "MessageAnnotationOutbound",
-    "UpdateMergePlan",
-    "UpdatePreflightRequest", "UpdatePreflightResponse",
-    "UpdateApplyRequest",
+    "TypingOutbound", "LogOutbound", "HeartbeatOutbound", "ExtensionLifecycleOutbound",
+    "ProjectsChangedOutbound", "MessageAnnotationOutbound",
+    "UpdateMergePlan", "UpdatePreflightRequest", "UpdatePreflightResponse", "UpdateApplyRequest",
     "UpdateApplySuccessResponse", "UpdateApplyErrorResponse",
-    "UpdateStatusReadyOutbound",
-    "UpdateProgressChangedOutbound",
+    "UpdateDescriptionRequest", "UpdateDescriptionResponse", "UpdateDescriptionErrorResponse",
+    "UpdateStatusReadyOutbound", "UpdateProgressChangedOutbound",
     "ProjectCreateRequest", "ProjectEntry", "ProjectDeleteResponse", "ProjectCognition",
     "FsDirsEntry", "FsDirsResponse",
     "TaskNamedOutbound",

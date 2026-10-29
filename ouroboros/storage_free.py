@@ -617,10 +617,13 @@ class FreeSpace:
             with self._lock:
                 self._state, self._plan = "idle", None
         except Exception as exc:
+            from ouroboros.launch_roots import WorkRootUnavailable  # its sentence names the setting that decides
+
             log.warning("Storage free preview failed", exc_info=True)
             with self._lock:
                 self._state, self._plan = "failed", None
-                self._error = str(exc) if isinstance(exc, RuntimeError) else f"{type(exc).__name__}"
+                authored = isinstance(exc, (RuntimeError, WorkRootUnavailable))
+                self._error = str(exc) if authored else f"{type(exc).__name__}"
 
     # ---- the run ----------------------------------------------------------------------------
 

@@ -146,8 +146,7 @@ SETTINGS_DEFAULTS = {**UPDATE_SETTINGS_DEFAULTS,
     # POST /api/ui/i18n/language, read live by the SPA and the Telegram skill, by the mind at its
     # next attempt (ouroboros/ui_language.py, ouroboros/i18n_memory.py). Never an enumeration.
     "OUROBOROS_UI_LANGUAGE": "",
-    # LIGHT one-shot ceilings (naming, its gateway wait, the update letter): SSOT here, never consumer magic numbers.
-    "OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC": 120,
+    # LIGHT one-shot ceilings (naming, its gateway wait): SSOT here, never consumer magic numbers.
     # One translation-generator batch call (ui_translation.py): slot wait and provider call together.
     "OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC": 120,
     "OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC": 60,
@@ -410,6 +409,7 @@ RETIRED_SETTING_KEYS: tuple[str, ...] = (
     # budget profile's reserve_finalization_pct still applies; a review is bounded by the deadline less the grace).
     "OUROBOROS_ACCEPTANCE_REVIEW_EST_SEC",
     "OUROBOROS_ACCEPTANCE_RESERVE_PCT",
+    "OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC",  # #2389: the description is ordinary Main work; no host one-shot to bound
 )
 
 

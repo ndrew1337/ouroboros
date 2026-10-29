@@ -200,8 +200,8 @@ current repo/workspace, `system_repo` only when explicitly working on
 Ouroboros, `runtime_data` for explicit runtime state/memory work when the
 active profile permits it, `task_drive` for task scratch, `artifact_store` for
 canonical deliverables, `skill_payload` for skills, my own instruments among them, and
-`user_files` for user-visible files under the owner's home (a bare filename
-lands in the visible Deliverables folder, not the home root).
+`user_files` for user-visible files under the owner's home or the
+Deliverables folder (a bare filename lands there, not the home root).
 `subagent_projects` and `deliverables` are read-only (never written or a
 shell cwd). A helper reads what its parent reads; its starting folder is a
 focus, not a read boundary; what it holds at start is set by its role

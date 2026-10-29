@@ -154,9 +154,10 @@ Files routes: `gateway/files.py::file_browser_routes()` (envelopes/parity: §11)
 | GET | `/api/git/log` | |
 | POST | `/api/git/rollback` | |
 | POST | `/api/git/promote` | |
-| GET | `/api/update/status` | passive: no network, no update letter |
+| GET | `/api/update/status` | passive, no network or prose |
 | POST | `/api/update/check` | |
 | POST | `/api/update/preflight` | |
+| POST | `/api/update/description` | |
 | POST | `/api/update/apply` | |
 | GET | `/api/cost-breakdown` | |
 | GET | `/api/storage` | passive; `?count=` omits a held count |

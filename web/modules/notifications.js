@@ -398,9 +398,10 @@ export function nativeStatusText({ enabled = true, shell = null, native = false,
     const app = `this desktop app${shell.version ? ` (${shell.version})` : ''}`;
     const fallback = banner ? 'a browser banner or the app' : 'the app';
     if (!native) {
-        // Owner decision 3A: an app without the native method falls back, and says why.
-        return `System notifications need the current Ouroboros desktop app; ${app} predates them, so alerts `
-            + `fall back to ${fallback}. Updates inside Ouroboros do not replace the app itself.`;
+        // Owner decision 3A: an app without the native method falls back, and says why. Only the observed fact:
+        // a missing method proves neither an old app nor a remedy; Dashboard > Updates owns update actions.
+        return `${app.charAt(0).toUpperCase()}${app.slice(1)} has no system-notification method here, so alerts `
+            + `fall back to ${fallback}.`;
     }
     const status = text(capability?.status);
     const why = (fact) => (text(fact?.reason) ? ` (${text(fact.reason)})` : '');

@@ -586,6 +586,14 @@ export const apiClient = {
     updateCheck: () => jsonPost('/api/update/check', {}),
     /** @returns {Promise<import('./api_types.js').UpdatePreflightResponse>} */
     updatePreflight: () => jsonPost('/api/update/preflight', {}),
+    /**
+     * The owner's Write/Rewrite: one ordinary Main task describes this exact range.
+     * @param {'write'|'rewrite'} mode
+     * @returns {Promise<import('./api_types.js').UpdateDescriptionResponse>}
+     */
+    updateDescription: (mode, key = {}) => jsonPost('/api/update/description', {
+        mode, base_sha: String(key.base_sha || ''), target_sha: String(key.target_sha || ''),
+    }),
     /** @returns {Promise<import('./api_types.js').UpdateApplySuccessResponse>} */
     updateApply: (strategy, plan = {}, { confirmRecovery = false } = {}) => jsonPost('/api/update/apply', {
         strategy,
