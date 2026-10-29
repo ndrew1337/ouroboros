@@ -118,6 +118,36 @@ def test_giveback_restores_small_earlier_elements_but_never_kept_choices():
     assert mf.kept_level(snapshot, facts) == level  # counts alone cannot reconstruct a give-back choice
 
 
+def test_story_cuts_old_pages_before_fresh_retellings_without_changing_display(tmp_path):
+    from ouroboros.chronicle_store import ChronicleStore
+    from tests.test_chronicle_tools import addr, chat, ctx_for, ts, write
+
+    store, ctx = ChronicleStore(tmp_path), ctx_for(tmp_path)
+    store.ensure_activated()
+    ids = []
+    for n in range(3):
+        row = chat(tmp_path, [{"chat_id": 1, "direction": "in", "ts": ts(n), "text": f"Words {n}"}])[0]
+        ids.append(write(ctx, kind="page", text=f"Page {n}. " + "p" * 8_000,
+                         covers={"from": addr(row), "to": addr(row)})["node_id"])
+    part = write(ctx, kind="part", text="Fresh retelling. " + "r" * 8_000, member_ids=ids[1:],
+                 expected_sequence=store.room_head("1"))["node_id"]
+    snapshot = mv.capture_memory_view(tmp_path, {"id": "next0001", "chat_id": 1}, mv.ROLE_DEFAULTS["integrator"])
+    assert [entry["id"] for entry in snapshot.story] == [part, ids[0]]  # cache-friendly display
+    level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 100))
+    assert dict(level.addressed)["F5"] == (ids[0],)
+    story = mv.render_story(snapshot, level)
+    assert "Fresh retelling." in story and "Page 0." not in story
+
+
+def test_story_giveback_does_not_restore_an_old_small_page_over_a_newer_retelling():
+    old = {**syn.pages(1, 1_000)[0], "floor_order": [0, 1]}
+    part = {**syn.pages(1, 20_000)[0], "id": "fresh-part", "kind": "part", "floor_order": [1, 4]}
+    snapshot = syn.snapshot(story=[part, old])
+    level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 2_000))
+    assert dict(level.addressed)["F5"] == (old["id"], part["id"])
+    assert mf.fit_memory_view(snapshot, frame(tokens(snapshot))) == mv.FULL_VIEW
+
+
 def test_capture_protects_governing_words_and_does_not_recapture_for_fitting(tmp_path):
     shared.world(tmp_path)
     task = {"id": "turn0001", "chat_id": 1, "type": "task", "_is_direct_chat": True,

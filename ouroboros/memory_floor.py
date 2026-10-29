@@ -35,12 +35,13 @@ def view_tokens(text: str) -> int:
 
 
 def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str, str]]:
-    """Ordered addressable forms, oldest first; F5 in the story's order (the settled retellings, then the pages
-    as they were sealed, ``memory_view._story_pages``). Core and governing words have no rung."""
+    """Ordered addressable forms, oldest first; F5 by covered-period start then sequence, across kinds.
+    Display order is independent. Core and governing words have no rung."""
     if not snapshot.active:
         return []
     room = snapshot.room or {}
     lane1, lane2 = room.get("lane1") or [], room.get("lane2") or []
+    # F1b remains for saved snapshots captured before quiet rooms left the live-room list.
     quiet = [r for r in snapshot.live_rooms if not r.get("live") and not r["notes"] and not r["words"] and (
         not r.get("directory") or not (r["facts"].get("people") or r["facts"].get("mine") or r.get("focus")))]
     others = [r for r in snapshot.live_rooms if r not in quiet]
@@ -62,7 +63,8 @@ def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str,
         "F7": [(i["address"], i["line"], mv._row_pointer(i, "words")) for i in lane1
                if i.get("owner_side", i["kind"] == "human") and not i.get("immune")],
         "F5": [(e["id"], "\n".join(mv._page_lines(e)), mv._page_pointer(e))
-               for e in snapshot.story if e.get("kind") != "legacy" and not e.get("told_by")],
+               for e in sorted(snapshot.story, key=lambda e: tuple(e.get("floor_order", (0, 0))))
+               if e.get("kind") != "legacy" and not e.get("told_by")],
     }
     return [(step, ident, whole, short) for step in LADDER for ident, whole, short in steps[step]
             if step in _COLLAPSING or len(short) < len(whole)]
@@ -240,12 +242,17 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
         current -= delta
     current = measure(level(taken))
     # A coarse final cut can leave space for an earlier element; give it back without unfolding kept choices.
+    story_blocked = False  # F5 keeps the oldest prefix addressed; never restore an older page over a newer retelling.
     for step, ident, delta in reversed(added):
+        if step == "F5" and story_blocked:
+            continue
         if target is not None and current + delta <= target:
             trial = taken - {(step, ident)}
             actual = measure(level(trial))
             if actual <= target:
                 taken, current = trial, actual
+        if step == "F5" and (step, ident) in taken:
+            story_blocked = True
     # People's words last: uncovered owner rows become addresses, oldest first, only while the view does not fit.
     physical = allowances.get("physical")
     for step, ident, whole, short in uncovered:
