@@ -360,9 +360,10 @@ def _capture_declared_context_core(
             catalog_text = "## Available subagents\n\n" + json.dumps(catalog, ensure_ascii=False, indent=1)
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
-    review_text = ""
+    review_text, review_activity = "", []
     try:
-        review_text = review_facts_block()
+        review_text = review_facts_block(activity_out=review_activity)
+        parts.extend(review_activity)  # each seat's price and last review change: never the cached prefix
         parts.extend(filter(None, (
             review_records_block(drive_root=canonical_root, task_id=str(task["id"])),
             subagent_supervision_fact_line(task, ctx=ctx, catalog=catalog),

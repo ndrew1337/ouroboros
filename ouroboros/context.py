@@ -1135,10 +1135,11 @@ def _capture_context_core(
             )
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
+    review_activity: List[str] = []  # each seat's price and last review: the changing part's, never B's
     try:
         from ouroboros.subagent_runtime import review_facts_block
 
-        semi_stable_parts.append(review_facts_block())
+        semi_stable_parts.append(review_facts_block(activity_out=review_activity))
     except Exception:
         log.warning("Failed to build the Review block", exc_info=True)
     semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable", ctx=ctx))
@@ -1169,6 +1170,7 @@ def _capture_context_core(
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
                                              active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
     dynamic_parts = [health_section] if health_section else []
+    dynamic_parts.extend(review_activity)
     try:
         from ouroboros.subagent_runtime import review_records_block, subagent_supervision_fact_line
         from ouroboros.subagent_metrics import fact_line
