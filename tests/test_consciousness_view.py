@@ -19,7 +19,8 @@ NOW = dt.datetime(2026, 10, 24, 8, tzinfo=dt.timezone.utc).timestamp()
 
 def _call(root, monkeypatch, task_id, *, at=NOW - 60, category="consciousness", **fields):
     stamp = dt.datetime.fromtimestamp(at, dt.timezone.utc).isoformat()
-    with monkeypatch.context() as clock:
+    cause = fields.pop("consciousness_cause", "")
+    with ua.usage_scope(ua.UsageScope(drive_root=root, root_task_id=task_id, consciousness_cause=cause)), monkeypatch.context() as clock:
         clock.setattr(usage_store, "utc_now_iso", lambda: stamp)
         return _settle(root, cost=0, cost_final=True, task_id=task_id, root_task_id=task_id,
                        category=category, **fields)
@@ -312,7 +313,7 @@ def test_selection_uses_the_category_time_index(tmp_path, monkeypatch, wake):
                 txn.conn.set_trace_callback(None)
     monkeypatch.setattr(usage_store, "read", traced)
     assert [row["task_id"] for row in view.recent_wakes(tmp_path, [])] == [wake["task_id"]]
-    query, = [sql for sql in queries if sql.startswith("SELECT root_task_id FROM attempts")]
+    query, = [sql for sql in queries if sql.startswith("SELECT root_task_id, place FROM")]
     with real_read(tmp_path, allow_stale=True) as txn:
         plan = [row[3] for row in txn.conn.execute("EXPLAIN QUERY PLAN " + query)]
     assert any("SEARCH attempts USING INDEX attempts_category_time (category=? AND ts_last_epoch>?)" in step
@@ -329,6 +330,40 @@ def test_selection_is_distinct_bounded_and_ordered_by_ledger_time(tmp_path, monk
     for _ in range(55):
         _call(tmp_path, monkeypatch, ids[0], at=NOW)
     assert [r["task_id"] for r in view.recent_wakes(tmp_path, [])] == ids[:50]
+
+
+@pytest.mark.parametrize("own,places", [(50, 0), (0, 50), (49, 1), (25, 25), (75, 75), (75, 1), (1, 75)])
+def test_wake_selection_reserves_each_source_and_tops_up_unused_share(tmp_path, monkeypatch, own, places):
+    ids = {}
+    for cause, count in (("own", own), ("place:mail", places)):
+        ids[cause] = [f"{cause.replace(':', '-')}-{n:02}" for n in range(count)]
+        for n, task_id in enumerate(ids[cause]):
+            _call(tmp_path, monkeypatch, task_id, at=NOW - n - (100 if cause == "own" else 0),
+                  consciousness_cause=cause)
+    selected = view.wake_ids(tmp_path, NOW)
+    assert len(selected) == min(50, own + places)
+    for cause, other in (("own", places), ("place:mail", own)):
+        assert [task_id for task_id in selected if task_id.startswith(cause.replace(':', '-'))] == ids[cause][:max(25, 50 - other)]
+    assert selected == sorted(selected, key=lambda task_id: (
+        int(task_id.rsplit("-", 1)[1]) + (100 if task_id.startswith("own") else 0), task_id))
+
+
+@pytest.mark.parametrize("cause,child_cause", [("own", "place:mail"), ("place:mail", "own")])
+def test_child_call_cannot_reclassify_its_root_in_selection(tmp_path, monkeypatch, cause, child_cause):
+    from ouroboros.usage_origin import root_cause
+
+    _call(tmp_path, monkeypatch, "root", consciousness_cause=cause)
+    for n in range(50):
+        _call(tmp_path, monkeypatch, f"flood-{n:02}", at=NOW - n, consciousness_cause=child_cause)
+    monkeypatch.setattr(usage_store, "utc_now_iso", lambda: dt.datetime.fromtimestamp(NOW - 60, dt.timezone.utc).isoformat())
+    with ua.usage_scope(ua.UsageScope(drive_root=tmp_path, root_task_id="root", consciousness_cause=child_cause)):
+        _settle(tmp_path, cost=0, cost_final=True, task_id="child", root_task_id="root", category="consciousness")
+    with usage_store.read(tmp_path, allow_stale=True) as txn:
+        assert root_cause(txn, "root") == cause
+        assert {row[0] for row in txn.conn.execute(
+            "SELECT json_extract(extra, '$.consciousness_cause') FROM attempts WHERE root_task_id = 'root'")} == {cause}
+    assert "root" in view.wake_ids(tmp_path, NOW)
+    assert "child" not in view.wake_ids(tmp_path, NOW)
 
 
 def test_ledger_child_attempt_selects_its_root_not_the_child(tmp_path, wake):

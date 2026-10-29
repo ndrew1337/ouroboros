@@ -19,6 +19,7 @@ NOW = dt.datetime(2027, 1, 15, 12, tzinfo=dt.timezone.utc).timestamp()
 @pytest.mark.parametrize("facts,status", [
     ({}, "sleeping"),
     ({"live_wake_task_id": "own-1"}, "thinking"),
+    ({"live_wake_task_id": "own-1", "live_wake_held": True}, "wake_paused"),
     ({"last_wake_outcome": "skipped:waiting_for_first_conversation"}, "waiting_for_first_conversation"),
     ({"last_wake_outcome": "skipped:allowance_exhausted"}, "allowance_exhausted"),
     ({"last_wake_outcome": "skipped:allowance_unknown"}, "allowance_unknown"),
@@ -27,7 +28,7 @@ NOW = dt.datetime(2027, 1, 15, 12, tzinfo=dt.timezone.utc).timestamp()
     ({"last_wake_outcome": "pausing"}, "wake_paused"),
     ({"last_wake_outcome": "unknown"}, "wake_outcome_unknown"),
     ({"last_wake_outcome": "failed"}, "wake_failed"),
-    ({"next_wake_at": "2027-01-15T11:59:59+00:00", "owner_turn_live": True}, "due"),
+    ({"next_wake_at": "2027-01-15T11:59:59+00:00"}, "due"),
     ({"next_wake_at": "2027-01-15T11:59:59+00:00", "live_wake_task_id": "own-1"}, "thinking"),
 ])
 def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path, facts, status):
@@ -58,44 +59,53 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert {key: panel[key] for key in fallback} == fallback
     assert clock.details_snapshot(True) == panel
     assert "places" not in panel and panel["recent_wakes"] == [{"task_id": "wake"}]
-    assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
+    assert panel["recent_wakes_coverage"] == "wakes with a recorded model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 
 
-@pytest.mark.parametrize("wake,owner", [("", False), ("", True), ("wake", False), ("wake", True)])
+@pytest.mark.parametrize("wake,held", [("", False), ("wake", False), ("wake", True)])
+@pytest.mark.parametrize("appointment", ["", "2027-01-15T11:30:00Z"])
 @pytest.mark.parametrize("deadline", ["2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z",
                                      "2027-01-15T12:00:01Z", "", "invalid"])
-def test_due_headline_needs_a_due_clock_and_current_work(monkeypatch, wake, owner, deadline):
+def test_due_headline_requires_a_past_attempt_without_a_live_wake(monkeypatch, wake, held, appointment, deadline):
     monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
-    facts = {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
+    monkeypatch.setattr(view, "_DISPLAY_ZONE", dt.timezone.utc)
+    facts = {"next_wake_at": deadline, "live_wake_task_id": wake,
+             "live_wake_held": held, "appointment_at": appointment}
     result = view.describe_consciousness_state(facts, True)
     due = deadline in {"2027-01-15T11:59:59Z", "2027-01-15T12:00:00Z"}
-    if due and owner and not wake:
+    if wake:
+        assert result["status"] == ("wake_paused" if held else "thinking")
+        assert ":" not in result["detail"]
+        if not held:
+            assert result["detail"] == "Wake-up wake is running."
+    elif due:
         assert result["status"] == "due"
-        assert result["detail"] == "Due; waiting for current work."
+        assert result["detail"] == f"Due{' since 11:30' if appointment else ''}; the wake-up has not started yet."
     else:
-        assert result["status"] == ("thinking" if wake else "sleeping")
-        assert "waiting for current work" not in result["detail"]
-    assert result["next_wake_at"] == deadline  # projection never moves the alarm
-    assert facts == {"next_wake_at": deadline, "live_wake_task_id": wake, "owner_turn_live": owner}
+        assert result["status"] == "sleeping"
+    assert {key: result[key] for key in facts} == facts
 
 
 @pytest.mark.parametrize("enabled,status", [(None, "unknown"), (False, "disabled")])
-def test_due_work_never_overrides_unknown_or_disabled_control(monkeypatch, enabled, status):
+@pytest.mark.parametrize("held", [False, True])
+def test_due_work_never_overrides_unknown_or_disabled_control(monkeypatch, enabled, status, held):
     monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
     result = view.describe_consciousness_state({"next_wake_at": "2027-01-15T11:59:59Z",
-                                              "live_wake_task_id": "wake", "owner_turn_live": True}, enabled)
-    assert result["status"] == status and "waiting for current work" not in result["detail"]
+                                              "live_wake_task_id": "wake", "live_wake_held": held}, enabled)
+    assert result["status"] == status
 
 
-@pytest.mark.parametrize("owner_live", [False, True])
-def test_snapshot_keeps_the_owner_activity_fact(monkeypatch, tmp_path, owner_live):
-    monkeypatch.setattr(BackgroundConsciousness, "_read_state", staticmethod(lambda: {"bg_consciousness_enabled": True}))
-    clock = BackgroundConsciousness(tmp_path, tmp_path, lambda: 1, now=NOW)
-    monkeypatch.setattr(clock, "live_turns", lambda: ("", owner_live))
-    monkeypatch.setattr(clock, "_allowance_view", lambda now: {})
-    monkeypatch.setattr(clock, "_context_facts", lambda window: {"places": [], "counted_roots": []})
-    assert clock.status_snapshot()["owner_turn_live"] is owner_live
+@pytest.mark.parametrize("outcome", ["skipped:allowance_unknown", "skipped:allowance_exhausted",
+    "rejected:budget_exhausted", "paused", "pausing", "unknown", "failed"])
+@pytest.mark.parametrize("hour,words", [(11, "due since 11:00"), (13, "at 13:00")])
+def test_explained_outcomes_label_future_and_overdue_attempts(monkeypatch, outcome, hour, words):
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
+    monkeypatch.setattr(view, "_DISPLAY_ZONE", dt.timezone.utc)
+    result = view.describe_consciousness_state({"last_wake_outcome": outcome,
+        "next_wake_at": f"2027-01-15T{hour}:00:00Z", "appointment_at": "2027-01-15T10:00:00Z"}, True)
+    assert words in result["detail"] and "10:00" not in result["detail"]
+    assert result["status"] not in {"due", "sleeping"}
 
 
 @pytest.mark.parametrize("constructed", [False, True])
@@ -134,4 +144,5 @@ def test_recent_wake_coverage_names_the_selection_cap_even_with_pruned_documents
     panel = clock.details_snapshot(True)
     assert len(reads) == 1 and len(panel["recent_wakes"]) == bool(selected_count)
     prefix = "the latest 50 " if selected_count == 50 else ""
-    assert panel["recent_wakes_coverage"] == prefix + "wakes that reached a model call in the last 48 h"
+    suffix = "; own wakes and wakes in places have separate shares" if selected_count == 50 else ""
+    assert panel["recent_wakes_coverage"] == prefix + "wakes with a recorded model call in the last 48 h" + suffix

@@ -33,24 +33,35 @@ def _clock_of(iso_value: Any) -> str:
     return parsed.astimezone(_DISPLAY_ZONE).strftime("%H:%M") if parsed is not None else "?"
 
 
+def _when(iso_value: Any) -> str:
+    """«at HH:MM» for a coming instant, «due since HH:MM» for a passed one: no line names a past time as next."""
+    from ouroboros.deadline_utils import parse_deadline_ts
+
+    parsed = parse_deadline_ts(str(iso_value or ""))
+    return ("due since " if parsed is not None and parsed.timestamp() <= time.time() else "at ") + _clock_of(iso_value)
+
+
 def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None) -> dict:
     """Project the alarm clock's snapshot into one honest status + detail line
-    for the client headline (``None``: stored control is unknown, never off — #1307)."""
+    for the client headline (``None``: stored control is unknown, never off — #1307).
+    The appointment is the scheduled time; the next attempt is where skips and refusals moved it."""
     from ouroboros.deadline_utils import parse_deadline_ts
 
     outcome = str(snapshot.get("last_wake_outcome") or "")
-    next_at = _clock_of(snapshot.get("next_wake_at"))
+    next_at = _when(snapshot.get("next_wake_at"))
     deadline = parse_deadline_ts(str(snapshot.get("next_wake_at") or ""))
+    wake = snapshot.get("live_wake_task_id")
     if requested_enabled is None:
         status, detail = "unknown", "The stored consciousness control is unknown: runtime state is unavailable or recovering."
     elif not requested_enabled:
         status, detail = "disabled", "Background consciousness is off."
     elif not snapshot:
         status, detail = "stopped", "Enabled in state, but the alarm clock was not constructed (supervisor init failed)."
-    elif snapshot.get("live_wake_task_id"):
-        status, detail = "thinking", f"Wake-up {snapshot['live_wake_task_id']} is running as a Main turn."
-    elif snapshot.get("owner_turn_live") and deadline is not None and deadline.timestamp() <= time.time():
-        status, detail = "due", "Due; waiting for current work."
+    elif wake and snapshot.get("live_wake_held"):
+        status, detail = "wake_paused", (f"Wake-up {wake} is paused or waiting in the queue; its card shows why. "
+                                         "The next wake-up follows it.")
+    elif wake:
+        status, detail = "thinking", f"Wake-up {wake} is running."
     elif outcome == "skipped:waiting_for_first_conversation":
         status, detail = "waiting_for_first_conversation", "No owner chat is bound yet; the first conversation binds it."
     elif outcome == "skipped:allowance_exhausted":
@@ -59,21 +70,25 @@ def describe_consciousness_state(snapshot: dict, requested_enabled: bool | None)
         at_least = "at least " if int(snapshot.get("unknown_unmetered") or 0) > 0 else ""
         degraded = "; ledger integrity degraded" if snapshot.get("integrity_degraded") else ""
         detail = (f"Daily allowance spent ({at_least}${float(spent or 0):.2f} of ${float(daily or 0):.2f} in the last 24 h{degraded}); "
-                  f"next check at {_clock_of(snapshot.get('allowance_resets_at')) if snapshot.get('allowance_resets_at') else next_at}.")
+                  f"next check {_when(snapshot.get('allowance_resets_at')) if snapshot.get('allowance_resets_at') else next_at}.")
     elif outcome == "skipped:allowance_unknown":
-        status, detail = "allowance_unknown", f"The usage ledger could not be read ({snapshot.get('last_error') or 'unknown error'}); retry at {next_at}."
+        status, detail = "allowance_unknown", f"The usage ledger could not be read ({snapshot.get('last_error') or 'unknown error'}); retry {next_at}."
     elif outcome.startswith("rejected:"):
-        status, detail = "wake_rejected", f"The last wake-up was refused ({outcome.split(':', 1)[1]}); next attempt at {next_at}."
+        status, detail = "wake_rejected", f"The last wake-up was refused ({outcome.split(':', 1)[1]}); next attempt {next_at}."
     elif outcome in {"paused", "pausing"}:
         status = "wake_paused"
         detail = (f"The last wake-up returned while {outcome}; its task card shows the current state. "
-                  f"Next wake check at {next_at}.")
+                  f"Next wake check {next_at}.")
     elif outcome == "unknown":
-        status, detail = "wake_outcome_unknown", f"The last wake-up's outcome is unconfirmed; next check at {next_at}."
+        status, detail = "wake_outcome_unknown", f"The last wake-up's outcome is unconfirmed; next check {next_at}."
     elif outcome == "failed":
-        status, detail = "wake_failed", f"The last wake-up failed ({snapshot.get('last_error') or 'runner error'}); next attempt at {next_at}, backing off."
+        status, detail = "wake_failed", f"The last wake-up failed ({snapshot.get('last_error') or 'runner error'}); next attempt {next_at}, backing off."
+    elif deadline is not None and deadline.timestamp() <= time.time():
+        # Only the scheduled time says since when; a legacy state's retry time cannot.
+        since = f" since {_clock_of(snapshot['appointment_at'])}" if snapshot.get("appointment_at") else ""
+        status, detail = "due", f"Due{since}; the wake-up has not started yet."
     else:
-        status, detail = "sleeping", f"Sleeping until {next_at}."
+        status, detail = "sleeping", f"Sleeping until {_clock_of(snapshot.get('next_wake_at'))}."
     return {**snapshot, "enabled": requested_enabled, "status": status, "detail": detail}
 
 
@@ -175,18 +190,30 @@ def first_reply_at(drive_root, task_id: str) -> str | None:
 
 
 def wake_ids(drive_root, now: float) -> list[str]:
-    """The allowance's category/time index, newest distinct wake roots first."""
+    """Newest distinct wake roots off the allowance's category/time index.
+
+    Its own wakes and the places' each keep half of the page; the half one side leaves unused goes
+    to the other, so a flood of place wakes never hides its own (a cut always fills the page). The
+    stamped cause decides the side; an unstamped legacy root is its own, as in the allowance.
+    """
     from ouroboros import usage_store
     from ouroboros.consciousness_allowance import ROOT_HORIZON_SEC, _MONEY_KIND
 
     with usage_store.read(drive_root, allow_stale=True) as txn:
-        return [record[0] for record in txn.conn.execute(
-            "SELECT root_task_id FROM attempts INDEXED BY attempts_category_time "
+        rows = txn.conn.execute(
+            "SELECT root_task_id, place FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY place "
+            "ORDER BY last DESC, root_task_id DESC) AS n FROM (SELECT root_task_id, MAX(ts_last_epoch) AS last, "
+            "COALESCE(MAX(json_extract(extra, '$.consciousness_cause')), '') LIKE 'place:%' AS place "
+            "FROM attempts INDEXED BY attempts_category_time "
             "WHERE category = 'consciousness' AND ts_last_epoch >= ? AND root_task_id != '' "
             f"AND {_MONEY_KIND} AND state != 'released' AND (ts_dispatched IS NOT NULL "
-            "OR kind IN ('subscription_session', 'external_unmetered')) "
-            f"GROUP BY root_task_id ORDER BY MAX(ts_last_epoch) DESC, root_task_id DESC LIMIT {RECENT_WAKE_LIMIT}",
-            (now - ROOT_HORIZON_SEC,))]
+            "OR kind IN ('subscription_session', 'external_unmetered')) GROUP BY root_task_id)) "
+            f"WHERE n <= {RECENT_WAKE_LIMIT} ORDER BY last DESC, root_task_id DESC",
+            (now - ROOT_HORIZON_SEC,)).fetchall()
+    sides = [[root for root, place in rows if place == side] for side in (0, 1)]
+    keep = [max(RECENT_WAKE_LIMIT // 2, RECENT_WAKE_LIMIT - len(other)) for other in reversed(sides)]
+    kept = {root for side, room in zip(sides, keep) for root in side[:room]}
+    return [root for root, _place in rows if root in kept]
 
 
 def _wake_notes(drive_root, ids: list[str]) -> dict:

@@ -1897,18 +1897,20 @@ owns the item.
 
 ### Dashboard › Consciousness
 
-The headline reports server state apart from wakes. “Due; waiting for
-current work” promises no turn yet. Coverage: “wakes that reached a model call
-in the last 48 h”; empty: “No wakes in the last 48 h.” Unavailable reads retain
-rows with an authored warning. Neither means Off.
+The headline reports server state apart from wakes. A past next attempt says
+“Due since” the known appointment, or “Due” without one. A live/held own wake
+shows no deadline. “Its own wakes” precedes “Wakes in places”, sharing 50 ledger
+roots over 48 h, with unused share reassigned. Each list has its own empty line:
+“No own wakes with a recorded model call in the last 48 h.” / “No wakes in places
+in the last 48 h.” Unavailable reads retain rows with a warning; neither means Off.
 
 Rows: time, Own time/house mark or place, phase, duration, edge cost in card words.
 Account: “as {label}”/“as you” by the place; absent adds nothing.
 Summaries wrap whole; else the note's first words lead one CSS-ellipsized meta line,
 else counts.
-The owner chose this fallback on 25 Oct 2026. Native “more” opens “Its own note”
+Native “more” opens “Its own note”
 via chat Markdown renderer/enhancer, counts, checks and task door;
-stored words are never clipped, repaired or replaced with a preview.
+stored words stay whole.
 Notes wrap on phones; wide Markdown owns its scroller.
 
 Working, Waiting, Queued, Paused and State unknown stay distinct. “Done · no message”
@@ -1919,8 +1921,7 @@ state; never claim every call was checked.
 
 Money keeps card scope: confirmed zero is `$0.00`, an unavailable amount is
 “spend unknown”; known parts retain “Tracked:” and “up to”.
-Open accounting keeps “so far”; it is no final total.
-The allowance's “Some calls have no price” and “next check at” promise no admission.
+Open accounting keeps “so far”. Unpriced calls and a next check promise no admission.
 Visible and accessible words agree.
 
 “Open in Main ↗” locates the card by task/chat through around-history; a focus door
@@ -2886,12 +2887,15 @@ the consciousness chip, Restart, Panic and the budget; whenever the bar itself i
 narrow window, Restart and the budget are the work list's last rows `Restart` and `Budget` — the same controls,
 placed by the bar's width. A Project's bar holds its name and status, the same chip and Panic
 (`web/modules/chat_header.js`); the chip leads the end group, so a status word never moves it. The chip is
-the brain and the next wake's time; `Evolving` while an evolution campaign runs, even with consciousness off;
-grey with `Off` while it is off. Awake it shows the moving dots,
-never a breathing glyph; an unconfirmed state shows a ring, a failed wake the outcome's red dot, and amber only
-the owner's move (§4). A press opens its own sheet of the work list's material, hung under the capsules, and
-switches nothing: the host's state sentence, Start or Stop, `$X of $Y in the
-last 24 hours`, the three last wakes, `Dashboard ›`, and `Evolution ›` while a campaign runs
+the brain and next wake's time, or `since HH:MM` for a passed attempt (appointment,
+viewer zone, date when not today; `due` if unknown), with the `still` mark.
+`Evolving` replaces the word during a campaign, even when off; Off is grey.
+Running shows moving dots; held shows pause bars without time; unknown a ring,
+failure a red dot, amber only the owner's move (§4). Its accessible name keeps
+state and time when narrow bars hide the word. A press opens the Shade under the
+capsules: state, Start/Stop, `$X of $Y in the last 24 hours`, “Its own wakes” then
+“Wakes in places” (three rows each, Dashboard's empty sentences), `Dashboard ›`
+and, during a campaign, `Evolution ›`
 (`web/modules/consciousness_status.js`). Evolve and Review live in Dashboard › Evolution (`Run review…` opens
 `/review`'s picker). In Main and Project, the bar has no continuous backing strip:
 the title and status share one floating capsule (`--chip-float`, non-shrinking

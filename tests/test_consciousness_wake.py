@@ -127,6 +127,7 @@ def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(cl
     assert clock.clock.tick(T0 + clock_tests.FLOOR) == "launched"
     accepted_a = clock.store[OBSERVATION_STATE_KEY]
     seed_wake(clock.root, task_id="wake0001", result="A's whole note.", wake_summary="A's line.")
+    clock.clock._wake_finished("wake0001", True)
     clock.receipt["task_id"] = "wake0002"
     clock.clock._next_wake_at = T0 + 2 * clock_tests.FLOOR
     with monkeypatch.context() as fault:
@@ -144,6 +145,7 @@ def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(cl
     seed_wake(clock.root, task_id="wake0002", status="interrupted", outcome_axes={}, terminal_time=None,
               result="B's whole note.\n\nStill unfinished.", wake_summary="B's line.")
     seed_wake(clock.root, task_id="newer-foreign", result="Never use the newest task's note.")
+    clock.clock._wake_finished("wake0002", True)
     if restart:
         clock.clock = BackgroundConsciousness(clock.root, clock.root / "repo", lambda: 7,
                                               now=T0 + 2 * clock_tests.FLOOR)
@@ -650,7 +652,7 @@ def test_render_substitutes_every_placeholder_and_keeps_every_event(tmp_path, mo
     assert text.startswith("You are Ouroboros. No one has asked for a task")
     assert "1 h 30 min ago" in text and "autonomy: Acts — Also acts on its own:" in text
     assert "toggle_evolution, request_restart" in text
-    assert "allowance known spend (last 24 h): 4.00 / 20.00 USD" in text and "tasks running: 1/2" in text
+    assert "allowance known spend (last 24 h): 4.00 / 20.00 USD" in text and "own tasks: 1/2" in text
     assert "next interval: 3300 s" in text
     assert "previous_wake" in wake.PLACEHOLDERS and "- previous wake: none" in text
     assert "- wake cause: the scheduled wake time; events never move it, they are listed as observed" in text

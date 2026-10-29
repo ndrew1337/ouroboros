@@ -59,7 +59,9 @@
           "state": "silent",
           "unanswered": 0
         }
-      ]
+      ],
+      "appointment_at": "2026-10-24T09:30:00+00:00",
+      "live_wake_held": false
     }
   },
   "places": {
@@ -330,6 +332,8 @@
         "unanswered": 0
       }
     ],
+    "appointment_at": "2026-10-24T09:30:00+00:00",
+    "live_wake_held": false,
     "recent_wakes": [
       {
         "task_id": "w-unknown",
@@ -736,7 +740,7 @@
         "ledger_integrity_degraded": false
       }
     ],
-    "recent_wakes_coverage": "wakes that reached a model call in the last 48 h"
+    "recent_wakes_coverage": "wakes with a recorded model call in the last 48 h"
   },
   "history": {
     "messages": [

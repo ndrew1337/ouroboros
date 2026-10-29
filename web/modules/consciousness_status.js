@@ -1,30 +1,32 @@
 /**
  * Consciousness in a room's bar (docs/DESIGN.md "Page header"): one compact chip at the head of the bar's end group,
- * and its Shade. The chip says the state at a glance — the house brain and the next wake (`14:20`), `Off`, or `Evolving`
+ * and its Shade. The chip says the state at a glance — the house brain and the next wake (`14:20`, `since 14:20`, `due`), `Off`, or `Evolving`
  * while an Evolve campaign runs, even with consciousness off — and carries one status mark (status_mark.js, DESIGN
  * "Status marks"): the moving dots while it is awake, the amber dot only for the owner's move (a spending limit that
  * stopped it, a first conversation it waits for, a campaign that waits for the owner), a failure's red dot, a faint
- * ring while unconfirmed, two bars for a paused wake. Its accessible name says the whole state in words.
+ * ring while unconfirmed, two bars for a paused wake, a still mark when due. Its accessible name says the state and time.
  *
  * Pressing the chip opens the Shade and switches nothing: the host's state line (consciousness_dashboard.headlineView),
- * Start or Stop (the `/bg` command the Dashboard sends), the money of the last 24 hours, the three last wakes in the
- * Dashboard's phase words (one `GET /api/consciousness` per opening, no poller of its own), `Dashboard ›` and, while
+ * Start or Stop (the `/bg` command the Dashboard sends), the money of the last 24 hours, three own wakes and three wakes
+ * in places in the Dashboard's phase words (one `GET /api/consciousness` per opening), `Dashboard ›` and, while
  * evolving, `Evolution ›`. The Shade is the room's work list material and gestures (room_work.js): it hangs under the
  * bar's capsules; an outside press, Escape or focus leaving it close it. The facts are the `/api/state` snapshot the
  * room already reads.
  */
 import { headlineView } from './consciousness_dashboard.js';
 import { normalizeConsciousness, readConsciousness } from './consciousness_api.js';
-import { clockText, wakePhaseText } from './consciousness_words.js';
+import { clockText, deadlineWords, splitWakes, wakePhaseText } from './consciousness_words.js';
+import { tr, fmt } from './i18n.js';
 import { controlIcon } from './page_icons.js';
 import { createStatusMark, paintStatusMark } from './status_mark.js';
 import { formatUsd2 } from './utils.js';
 import { hangUnderCapsules } from './room_work.js';
 import { motionMs, reducedMotion } from './motion.js';
+import { HEADER_FULL_ROW_MIN_WIDTH } from './page_header.js';
 
 // The owner's move (DESIGN "Status marks", amber): consciousness stopped by its spending limit or waiting for a first
 // conversation, a campaign stopped by its limit or waiting for the owner's chat. A failure is an outcome's red dot,
-// an unconfirmed outcome a ring, a paused wake two bars; everything else that goes on by itself draws no mark.
+// an unconfirmed outcome a ring, a paused wake two bars, a due wake the still mark.
 const OWNER_MOVE = new Set(['allowance_exhausted', 'waiting_for_first_conversation']);
 const CAMPAIGN_OWNER_MOVE = new Set(['waiting_for_first_conversation', 'waiting_for_owner_chat', 'budget_blocked', 'budget_stopped']);
 const FAILED = new Set(['wake_failed', 'wake_rejected', 'stopped']);
@@ -50,15 +52,20 @@ export function chipView(data = {}) {
     const status = snapshot.status;
     const owner = (!off && !unknown && OWNER_MOVE.has(status))
         || (evolving && CAMPAIGN_OWNER_MOVE.has(String(data.evolution_state?.status || '')));
-    const next = clockText(status === 'allowance_exhausted' ? snapshot.allowanceResetsAt || snapshot.nextWakeAt : snapshot.nextWakeAt);
+    const deadline = deadlineWords(snapshot);
+    const next = status === 'allowance_exhausted'
+        ? clockText(snapshot.allowanceResetsAt || snapshot.nextWakeAt) : deadline.chip;
     const word = evolving ? 'Evolving' : off ? 'Off' : headline.moving || unknown ? '' : next;
     const mark = owner ? { shape: 'dot', hue: 'owner' }
         : headline.moving ? { shape: 'moving', hue: 'ink' }
             : off ? NONE
                 : FAILED.has(status) ? { shape: 'dot', hue: 'failed' }
                     : unknown || UNCONFIRMED.has(status) ? { shape: 'ring', hue: 'ink' }
-                        : status === 'wake_paused' ? { shape: 'pause', hue: 'ink' } : NONE;
-    const said = [`Consciousness: ${headline.text}`, evolving ? 'evolution campaign running' : '', owner ? 'waits for you' : '']
+                        : status === 'wake_paused' ? { shape: 'pause', hue: 'ink' }
+                            : status === 'due' ? { shape: 'still', hue: 'ink' } : NONE;
+    const timeLine = status === 'allowance_exhausted' ? fmt('Next check at {time}', { time: next }) : deadline.line;
+    const said = [`Consciousness: ${headline.text}`, next && !headline.text.includes(next) ? timeLine : '',
+        evolving ? 'evolution campaign running' : '', owner ? 'waits for you' : '']
         .filter(Boolean).join(' · ');
     return { word, mark, off, evolving, said, headline, snapshot };
 }
@@ -133,10 +140,19 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     const toggle = element('button', 'btn btn-default btn-sm cx-toggle');
     toggle.type = 'button';
     head.append(headWords, toggle);
-    const wakesTitle = element('p', 'cx-wakes-title', 'Recent wakes');
-    const wakes = element('ol', 'cx-wakes');
-    wakes.setAttribute('data-i18n-authored', '');  // its own words, never the overlay's
-    const wakesNote = element('p', 'cx-wakes-note');
+    const groups = [
+        ['own', tr('consciousness.own_wakes', 'Its own wakes'),
+            tr('consciousness.no_own_wakes', 'No own wakes with a recorded model call in the last 48 h.')],
+        ['places', tr('consciousness.place_wakes', 'Wakes in places'),
+            tr('consciousness.no_place_wakes', 'No wakes in places in the last 48 h.')],
+    ].map(([key, title, empty]) => {
+        const heading = element('p', 'cx-wakes-title', title);
+        const wakes = element('ol', 'cx-wakes');
+        wakes.dataset.wakes = key;
+        wakes.setAttribute('aria-label', title);
+        wakes.setAttribute('data-i18n-authored', '');  // its own words, never the overlay's
+        return { key, empty, heading, wakes, note: element('p', 'cx-wakes-note') };
+    });
     const doors = element('div', 'cx-doors');
     const door = (label, tab) => {
         const button = element('button', 'cx-door ui-hit-area', label);
@@ -147,7 +163,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     const dashboardDoor = door('Dashboard ›', 'consciousness');
     const evolutionDoor = door('Evolution ›', 'evolution');
     doors.append(dashboardDoor, evolutionDoor);
-    body.append(head, wakesTitle, wakes, wakesNote, doors);
+    body.append(head, ...groups.flatMap((group) => [group.heading, group.wakes, group.note]), doors);
     shade.append(body);
     anchor.append(shade);
     bar.append(anchor);
@@ -166,7 +182,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         if (!view) return;
         chip.hidden = false;
         if (word.textContent !== view.word) word.textContent = view.word;
-        word.hidden = !view.word;
+        word.hidden = !view.word || (bar.clientWidth > 0 && bar.clientWidth < HEADER_FULL_ROW_MIN_WIDTH);
         chip.dataset.off = view.off ? 'true' : 'false';
         chip.dataset.evolving = view.evolving ? 'true' : 'false';
         paintStatusMark(mark, view.mark);
@@ -177,7 +193,8 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     function paintShade() {
         if (!view) return;
         const { snapshot, headline } = view;
-        stateLine.textContent = headline.text;
+        const deadline = deadlineWords(snapshot);
+        stateLine.textContent = [headline.text, deadline.chip && !headline.text.includes(deadline.chip) ? deadline.line : ''].filter(Boolean).join(' · ');
         const allowance = allowanceText(snapshot);
         money.textContent = allowance;
         money.hidden = !allowance;
@@ -189,21 +206,24 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     }
 
     function paintWakes(list, failed = false) {
-        const rows = wakeRows(list);
-        wakes.replaceChildren(...rows.map((row) => {
-            const item = element('li', 'cx-wake');
-            const time = element('span', 'cx-wake-time', row.time);
-            const text = element('span', 'cx-wake-text', row.text);
-            const outcome = element('span', 'cx-wake-outcome', row.outcome);
-            outcome.hidden = !row.outcome;
-            item.append(time, text, outcome);
-            return item;
-        }));
-        wakes.hidden = !rows.length;
-        const note = failed ? 'Recent wakes could not be read.'
-            : !Array.isArray(list) ? 'Reading recent wakes…' : rows.length ? '' : 'No wakes yet.';
-        wakesNote.textContent = note;
-        wakesNote.hidden = !note;
+        const split = splitWakes(list);
+        for (const group of groups) {
+            const rows = wakeRows(split[group.key]);
+            group.wakes.replaceChildren(...rows.map((row) => {
+                const item = element('li', 'cx-wake');
+                const time = element('span', 'cx-wake-time', row.time);
+                const text = element('span', 'cx-wake-text', row.text);
+                const outcome = element('span', 'cx-wake-outcome', row.outcome);
+                outcome.hidden = !row.outcome;
+                item.append(time, text, outcome);
+                return item;
+            }));
+            group.wakes.hidden = !rows.length;
+            const note = failed ? 'Recent wakes could not be read.'
+                : !Array.isArray(list) ? 'Reading recent wakes…' : rows.length ? '' : group.empty;
+            group.note.textContent = note;
+            group.note.hidden = !note;
+        }
     }
 
     async function readWakes() {
@@ -295,6 +315,10 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     });
     // The open list follows the bar's capsules when the window changes the bar.
     if (doc.defaultView) listen(doc.defaultView, 'resize', () => { if (open) hangUnderCapsules(bar, anchor); });
+    const Observer = doc.defaultView?.ResizeObserver;
+    const observer = Observer ? new Observer(() => { if (view) paintChip(); }) : null;
+    observer?.observe(bar);
+    disposers.push(() => observer?.disconnect());
     listen(shade, 'focusout', (event) => {
         const next = event.relatedTarget;
         if (open && next && !shade.contains(next) && next !== chip) close({ restoreFocus: false });

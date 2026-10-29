@@ -5,21 +5,14 @@ from ouroboros.consciousness_authority import (
 )
 
 
-class WakeCensusBusy(RuntimeError):
-    """A caller holding the direct gate must retry rather than invert Q -> gate."""
-
-
-def queued_wakes(*, blocking=True) -> list[str]:
+def queued_wakes(*, held_only: bool = False) -> list[str]:
+    """Own-clock wakes the pool carries; ``held_only``: those in PENDING (paused, held, not yet dispatched)."""
     from supervisor import queue as q
 
-    if not q._queue_lock.acquire(blocking=blocking):
-        raise WakeCensusBusy("queue census busy")
-    try:
-        tasks = [*q.PENDING, *(meta.get("task") or {} for meta in q.RUNNING.values())]
+    with q._queue_lock:
+        tasks = [*q.PENDING, *([] if held_only else (meta.get("task") or {} for meta in q.RUNNING.values()))]
         return list(dict.fromkeys(str(task["id"]) for task in tasks if task.get("id")
                                  and is_own_clock_wake(task.get("metadata"))))
-    finally:
-        q._queue_lock.release()
 
 
 def is_autonomous_work(metadata) -> bool:
