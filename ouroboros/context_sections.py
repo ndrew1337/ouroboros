@@ -40,7 +40,7 @@ def build_knowledge_sections(
     # One mind keeps its authored common orientation across rooms. The generated
     # inventory is navigation, not a substitute for that understanding; a
     # project's shelf adds focus without hiding the common corpus.
-    from ouroboros.knowledge import (OVERVIEW_TOPIC, knowledge_index_views,
+    from ouroboros.knowledge import (OVERVIEW_TOPIC,
                                      read_knowledge_note, resolve_knowledge_address)
 
     pid = str(project_id or "").strip()
@@ -63,29 +63,8 @@ def build_knowledge_sections(
         sections.append(_SHARED_UNDERSTANDING_GAP)
     except (OSError, UnicodeDecodeError) as exc:
         sections.append(f"Shared understanding source unavailable: knowledge_read(topic='{OVERVIEW_TOPIC}', scope='global'). {type(exc).__name__}.")
-    knowledge_indexes = [(global_address,
-                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
-                          "knowledge index")]
-    if pid:
-        from ouroboros.project_facts import project_knowledge_dir
-
-        project_address = resolve_knowledge_address(project_knowledge_dir(pid).parents[2], "topic", f"project:{pid}")
-        knowledge_indexes.append((project_address,
-                                  f"## Project knowledge ({pid})", "project knowledge index"))
-    for address, header, label in knowledge_indexes:
-        # Every shelf and overview branch projects the current source state, even
-        # when a previous writer could not publish its generated index.
-        reader = f"knowledge_list(scope={address.scope!r})"
-        try:
-            text, outline = knowledge_index_views(address, overview=overview)
-        except (OSError, UnicodeDecodeError) as exc:
-            text = outline = f"Knowledge navigation unavailable: {type(exc).__name__}; {reader}."
-        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
-            log.warning("context: %s is large (%d chars)", label, len(text))
-        # The durable index's operative view is its outline: every active note by address and
-        # title, people's summaries kept (``knowledge.render_knowledge_outline``).
-        sections.append(HostSection("knowledge_index" if address is global_address else "project_knowledge_index",
-                                    f"{header}\n\n{text}", f"{header}\n\n{outline}", reader=reader))
+    sections.extend(knowledge_navigation_sections(global_address.canonical_root, pid, overview=overview,
+                                                  warn_large=warn_large))
     if pid:
         # Bounded per-project journal tail + workpad (multi-project, v6.32.0):
         # the project's durable progress memory rides along with its knowledge.
@@ -110,6 +89,42 @@ def build_knowledge_sections(
                 sections.append(f"## Project workpad ({pid})\n\n{workpad}")
         except Exception:
             log.debug("project journal/workpad context injection failed", exc_info=True)
+    return sections
+
+
+def knowledge_navigation_sections(root: Any, project_id: str = "", *, overview: Any = None,
+                                  warn_large: bool = False) -> List[str]:
+    """One knowledge navigation rendering for integrating contexts and first delegations.
+
+    Captured full/outline forms retain the same source addresses and canonical root.
+    ``overview`` is the global note its caller already read, if any.
+    """
+    from ouroboros.knowledge import OVERVIEW_TOPIC, knowledge_index_views, resolve_knowledge_address
+
+    pid = str(project_id or "").strip()
+    global_address = resolve_knowledge_address(root, OVERVIEW_TOPIC, "global")
+    sections: List[str] = []
+    knowledge_indexes = [(global_address,
+                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
+                          "knowledge index")]
+    if pid:
+        project_address = resolve_knowledge_address(root, "topic", f"project:{pid}")
+        knowledge_indexes.append((project_address,
+                                  f"## Project knowledge ({pid})", "project knowledge index"))
+    for address, header, label in knowledge_indexes:
+        # Every shelf and overview branch projects the current source state, even
+        # when a previous writer could not publish its generated index.
+        reader = f"knowledge_list(scope={address.scope!r})"
+        try:
+            text, outline = knowledge_index_views(address, overview=overview)
+        except (OSError, UnicodeDecodeError) as exc:
+            text = outline = f"Knowledge navigation unavailable: {type(exc).__name__}; {reader}."
+        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
+            log.warning("context: %s is large (%d chars)", label, len(text))
+        # The durable index's operative view is its outline: every active note by address and
+        # title, people's summaries kept (``knowledge.render_knowledge_outline``).
+        sections.append(HostSection("knowledge_index" if address is global_address else "project_knowledge_index",
+                                    f"{header}\n\n{text}", f"{header}\n\n{outline}", reader=reader))
     return sections
 
 
@@ -335,15 +350,19 @@ def runtime_host_section(data: dict, coordination: str = "") -> HostSection:
 
 
 # The review-continuity host section (moved from review_state, which keeps its extraction bound).
-def continuity_status_lines(state: Any, repo_dir: pathlib.Path) -> List[str]:
+def continuity_status_lines(state: Any, repo_dir: pathlib.Path,
+                            stale_status: tuple[bool, str] = (False, "")) -> List[str]:
     """Current debts and uncertainty once, whole; historical executions have a reader."""
     from ouroboros.review_state import make_repo_key
 
     repo_key = make_repo_key(repo_dir)
     lines = ["## Review Continuity", f"- repo_key={repo_key}"]
-    if state.last_stale_from_edit_ts and state.last_stale_repo_key in ('', repo_key):
+    marker_current, look_unreadable = stale_status
+    if marker_current:
         lines += [f"- stale_marker={state.last_stale_from_edit_ts}: {state.last_stale_reason}",
                   f"  invalidated_by={state.stale_marker_attribution_note()}"]
+        if look_unreadable:
+            lines.append(f"  preflight_unreadable={look_unreadable} (marker unverified)")
     debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
     lines.append(f"- commit_readiness_debt={len(debts)}")
     for debt in debts:
@@ -360,9 +379,9 @@ def continuity_status_lines(state: Any, repo_dir: pathlib.Path) -> List[str]:
     return lines
 
 
-def review_status_host_section(state: Any, repo_dir: pathlib.Path) -> str:
-    from ouroboros.review_state import format_status_section
+def review_status_host_section(state: Any, repo_dir: pathlib.Path, drive_root: pathlib.Path) -> str:
+    from ouroboros.review_state import format_status_section, make_repo_key, stale_marker_status
 
     return HostSection('review_continuity', format_status_section(state, repo_dir),
-                       '\n'.join(continuity_status_lines(state, repo_dir)
+                       '\n'.join(continuity_status_lines(state, repo_dir, stale_marker_status(state, drive_root, make_repo_key(repo_dir)))
                                  + ['Historical review ledger: review_status().']))

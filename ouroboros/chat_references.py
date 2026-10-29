@@ -19,7 +19,7 @@ def projection_fields(row: dict) -> dict:
     submission the row answers, so the row's own name travels under a field of its own. A progress
     record is not named: it merges its frame's meta, owner correlation included.
     """
-    fields = {key: row[key] for key in ("reply_to", "relay") if isinstance(row.get(key), dict)}
+    fields = {key: row[key] for key in ("reply_to", "relay", "room_revisions") if isinstance(row.get(key), dict)}
     if row.get("reply_to_relay"):
         fields["reply_to_relay"] = row["reply_to_relay"]
     # A host-fact ingress row (a call's opening) is the host's own row named by that id, as history keys it.
@@ -42,11 +42,13 @@ def reference_from_row(row: dict) -> dict:
             "system" if row.get("direction") == "system" else "message")
     role = "assistant" if answer else {"in": "user", "out": "assistant", "system": "system"}.get(
         row.get("direction"), "system")
+    from ouroboros.room_membership import reply_target_home
     return {"address": format_address(row_address(row)), "chat_id": int(row.get("chat_id", 1)),
             "role": role, "author_label": (str(row.get("sender_label") or "You") if role == "user"
                                              else {"assistant": "Ouroboros", "system": "System"}[role]),
             "kind": kind, "snippet": " ".join(str(answer or row.get("text") or row.get("caption") or "").split())[:160],
-            "ts": str(row.get("ts") or ""), "task_id": str(row.get("task_id") or "")}
+            "ts": str(row.get("ts") or ""), "task_id": str(row.get("task_id") or ""),
+            "target_home": reply_target_home(row)}
 
 
 def resolve_reply(root, address: str) -> dict:
@@ -63,7 +65,8 @@ def resolve_reply(root, address: str) -> dict:
             return {"address": address, "chat_id": int(task.get("chat_id") or 1), "role": "assistant",
                     "author_label": "Ouroboros", "kind": "work_card",
                     "snippet": " ".join(str(task.get("title") or task.get("text") or "").split())[:160],
-                    "ts": str(task.get("updated_at") or task.get("started_at") or ""), "task_id": task_id}
+                    "ts": str(task.get("updated_at") or task.get("started_at") or ""), "task_id": task_id,
+                    "target_home": "work"}
     else:
         try:
             row, _resolution = resolve_row(root, address)
@@ -155,8 +158,11 @@ def history_row_destination(root, row, thread_id, project_ids, source_refs, room
     if thread_id in {1, *project_ids} and belongs(thread_id, source_refs):
         home = thread_id
     else:
-        candidates = {1, written, bound_room_chat(rooms, row)} & {1, *project_ids}
+        work = bound_room_chat(rooms, row)
+        candidates = {1, written, work} & {1, *project_ids}
         homes = [chat for chat in candidates if belongs(chat, [])]
+        if len(homes) > 1 and work in homes:  # work speech shown where it was written too: its work's room is home
+            homes = [work]
         if len(homes) != 1:
             return {"state": "ambiguous" if homes else "unavailable"}
         home = homes[0]

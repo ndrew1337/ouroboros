@@ -163,30 +163,31 @@ language-tagged fences and the declared skipped subsections ("External facts: un
 is not no" and this one); the untagged module-tree fence in ARCHITECTURE §1 is
 scanned.
 
-Size is pairwise: a change ends each composed book, entrypoint included, no
-larger than at its event base, so text it adds is paid by shortening the same
-book. With ordinary push/PR CI disabled (ARCHITECTURE §8), manual/tag runs
-lack a per-change base and skip the book comparison; they do not certify this rule.
-Local qualification supplies `OURO_SIZE_RATCHET_BASE_REF` explicitly; review
-checks the actual contribution. The owner's `book-growth` label can exempt it.
-Local surfaces never block: the edit
-tools, `plan_task`, the free `preflight_review(deterministic_only=True)` diagnostic
-and `codebase_health` report the running balance as a fact. Contribution is measured
-against the displayed merge-base of the cached official development ref; an unknown
-base stays unknown, and no network refresh is implied. Free diagnostics label book
+Size is pairwise: a change ends each composed book, entrypoint included,
+`BIBLE.md` and the prompts (`prompts/*.md` as one text) no larger than at its
+event base, so text it adds is paid by shortening the same text. With
+ordinary push/PR CI disabled (ARCHITECTURE §8), manual/tag runs lack a
+per-change base and skip this comparison. Local qualification supplies
+`OURO_SIZE_RATCHET_BASE_REF` explicitly; review checks the actual
+contribution. The owner's `book-growth` label can exempt it. Local surfaces
+never block: the edit tools, `plan_task`, the free
+`preflight_review(deterministic_only=True)` diagnostic and `codebase_health`
+report the balance as a fact. Contribution is measured from the displayed
+merge-base of the cached official development ref; an unknown base stays
+unknown and nothing is fetched. Free diagnostics label book
 bytes as worktree separately from the selected release-metadata source.
 Equivalent historical prose stays review-only under CHECKLISTS item 5.
 
 ### Current state first (ARCHITECTURE invariant 10)
 
 Apply ARCHITECTURE §10 invariant 10 (enforcement: 03 "Projection over replay"). Store transactions
-lease the shared core's per-thread connection, capture rows and end before decoding or external
-work; fork only outside them; lifecycle code quiesces users and calls `store.prepare_handoff`
-before renaming a database or handing it to an older runtime, name-tier callers holding their
-name lock (`tests/test_store_connections.py`, `tests/test_store.py`; the WAL gate both ways, FULL
-unchanged: `tests/test_store_journal.py`). Once per process is not once per installation: an
-installation fact is a durable row, and history-sized work is a named job of the maintenance
-child (`ouroboros/maintenance.py`).
+lease the shared core's per-thread connection, capture rows (`store_capture.py`) and end before
+decoding or external work; fork only outside them; lifecycle code quiesces users and calls
+`store.prepare_handoff` before renaming a database or handing it to an older runtime, name-tier
+callers holding their name lock (`tests/test_store_connections.py`, `tests/test_store.py`; the WAL
+gate both ways, FULL unchanged: `tests/test_store_journal.py`). Once per process is not once per
+installation: an installation fact is a durable row; history-sized work is a named job of the
+maintenance child (`ouroboros/maintenance.py`).
 
 ### Generality and emergence (P13)
 
@@ -218,10 +219,9 @@ integrity check on a known identity and as content-addressing where the content 
 identity. Enforce the reference as a required typed argument at the consuming seam (a
 valid ref or a closed-enum absence reason; omission raises), so no call site can skip it
 (`bind_task_to_project(..., *, origin)`, `tests/test_projects_v6640.py`); for fuzzy
-entities use `semantic_dedup`, never string equality. That reference is also the
-identity of the work: every task id minted from the same owner message inherits the
-origin's project binding, because a message is one convertible unit (ARCHITECTURE §6
-"Project binding by task and by origin"; `tests/test_retry_project_binding.py`).
+entities use `semantic_dedup`, never string equality. An origin records provenance,
+not shared work identity: moving one task does not move siblings from the same
+message (ARCHITECTURE §6 "Project placement"; `tests/test_one_work_placement.py`).
 
 One named exception: a verification receipt with no ingress point reconciles by one
 typed identity key, never across kinds, because per-component fallbacks are

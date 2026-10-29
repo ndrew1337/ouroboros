@@ -4,7 +4,7 @@
 import { META_PART_SEPARATOR, executorIdentityMarkup, executorModelText, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { effortChipMarkup } from './effort_chip.js';
 import { resultFilesItemHtml } from './result_files.js';
-import { taskSourceDownloadUrl, apiFetch } from './api_client.js';
+import { taskSourceDownloadUrl, readState } from './api_client.js';
 import { compactModel, formatLogDuration, modelExecutionView } from './log_events.js';
 import { connectionLabel, routeConnectionId } from './connection_labels.js';
 import { fitText, fullText } from './text_fit.js';
@@ -266,9 +266,12 @@ const perToolLine = (entries) => entries
     .filter(([name, n]) => name && n > 0)
     .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
 
+// A read that failed (a recorded gap, an unreadable live file), not one that stopped at a bound.
+const toolReadFailed = coverage => Boolean(coverage && (coverage.gaps?.length
+    || coverage.source && !Number.isFinite(coverage.live_size)));
+
 export function toolEvidenceIncomplete(coverage) {
-    return Boolean(coverage && (coverage.gaps?.length || coverage.matched > coverage.shown
-        || coverage.source && !Number.isFinite(coverage.live_size)));
+    return Boolean(coverage && (toolReadFailed(coverage) || coverage.matched > coverage.shown));
 }
 
 // One tool row combines host counts with invocation facts; names and read scope
@@ -278,11 +281,12 @@ export function toolEvidenceView(fold = null) {
     const host = fold?.host || null;
     const observed = live.length + (fold?.legacy?.calls || 0);
     const calls = Math.max(Number.isInteger(host?.calls) ? host.calls : 0, observed);
-    // Frozen totals count model wait errors. Canonical evidence reports operation
-    // outcomes; a bounded partial read discloses its gap instead of reviving waits.
-    const partial = toolEvidenceIncomplete(fold?.coverage) || Boolean(fold?.coverage) && observed < calls;
-    const bounded = fold?.coverage && (fold.coverage.archives_bounded || fold.coverage.archives_available > fold.coverage.archives
-        || fold.coverage.live_size > fold.coverage.live_window);
+    const coverage = fold?.coverage;
+    // Frozen totals count model wait errors. Canonical evidence reports operation outcomes; a read names
+    // its extent, never revives a wait: a counted call without a record is unread behind a bound, else missing.
+    const bounded = Boolean(coverage) && (coverage.archives_bounded || coverage.archives_available > coverage.archives
+        || coverage.live_size > coverage.live_window || coverage.matched > coverage.shown);
+    const partial = toolReadFailed(coverage) || Boolean(coverage) && observed < calls && !bounded;
     // Only settled, individually identified calls can supersede an aggregate
     // host error. Partial replay and legacy start-only rows have no such proof.
     const outcomesKnown = calls > 0 && live.length === calls && !(fold?.legacy?.calls)
@@ -299,19 +303,19 @@ export function toolEvidenceView(fold = null) {
             : ((!host && live.some((call) => call.status === 'calling')) ? 'calling' : 'result'),
         headline: headline + (errors > 0 ? ` · ${fmt(errors === 1 ? '{n} error' : '{n} errors', { n: errors })}` : '')
             + (live.some(call => call.waitEnded) || fold?.legacy?.wait_ended ? ` · ${tr('task.tools.wait_ended', 'wait ended')}` : '')
-            + (calls && (live.some(call => ['unknown', 'wait_ended'].includes(call.status)) || fold?.legacy?.unknown || fold?.coverage && observed < calls)
+            + (calls && (live.some(call => ['unknown', 'wait_ended'].includes(call.status)) || fold?.legacy?.unknown)
                 ? ` · ${tr('task.tools.outcome_unknown', 'outcome unknown')}` : ''),
         body: '',
         fullBody: (partial || bounded ? (partial ? tr('task.tools.incomplete', 'Invocation evidence is incomplete.')
             : tr('task.tools.bounded_window', 'Only recent tool history was read.'))
-            + (fold?.coverage?.source ? ` ${fmt('Source: {source}.', { source: fold.coverage.source })}` : '') + ' ' : '')
+            + (coverage?.source ? ` ${fmt('Source: {source}.', { source: coverage.source })}` : '') + ' ' : '')
             + perToolLine(host?.counts && typeof host.counts === 'object'
             ? Object.entries(host.counts) : [...liveCounts]),
         visible: true,
         // Host-stamped routing/completion acts are receipts, never work. Missing
         // aggregate fields do not erase complete per-invocation receipt evidence.
         receipt: calls > 0 && errors <= 0 && (Number(host?.routing || 0) + Number(host?.completion || 0) >= calls
-            || !partial && live.length >= calls && live.every((call) => call.receipt)),
+            || !toolEvidenceIncomplete(coverage) && live.length >= calls && live.every((call) => call.receipt)),
         calls,
         errors,
     };
@@ -425,8 +429,7 @@ export function restartConfirmBody(activities) {
 }
 
 async function readLiveActivities() {
-    const resp = await apiFetch('/api/state', { cache: 'no-store' });
-    const data = resp?.ok ? await resp.json() : null;
+    const { state: data } = await readState();  // a refusal, an unparsable body or no answer is unknown, never "none"
     if (!Array.isArray(data?.active_chat_activities) || data.active_chat_activities_complete !== true
         || data.works_complete === false) {
         throw new Error('census unavailable');
@@ -917,95 +920,8 @@ export function isTerminalTaskPhase(phase = '', terminal = false) {
 
 // In-flight chat activity status (owner decisions 1A-5A; managed continuity).
 
-/**
- * One request/apply clock for every /api/state consumer on a page. Responses
- * may finish in either order; once generation N applies, an older generation
- * can no longer mutate any projection. requestedAt stays tied to request start
- * and is the barrier for the CARD scan (`lastLiveObservedAt`) only — activity
- * hydration is a plain projection of the census and has no barrier.
- *
- * `gate(force)` is the page-wide single-flight admission for the readers: it
- * resolves to a request when the caller may read now. A periodic tick that
- * lands while a read is in flight is never queued: it resolves to null once
- * that read settles, so a caller that only needs some fresh read to have
- * landed (the boot prefetch before the socket opens) may await it. A forced
- * caller that lands mid-flight is coalesced with every other forced caller
- * into ONE follow-up read that starts when the in-flight read settles — the
- * first forced caller receives that request, the others resolve to null once
- * the follow-up has applied or failed. Gated requests settle via `apply`/`fail` even if a callback throws.
- * Only `fail` fans out `onUnavailable`; socket changes and confirmed mutations `retire()` older bodies.
- *
- * Each request names its `path`: once a full `task_bindings` map arrived with its revision, the
- * next read asks `bindings_since=<revision>`, and a body answering `task_bindings_unchanged` is
- * filled with that held map for that exact revision only; any other answer drops the held map,
- * so the read after it asks for the whole map again.
- */
-export function createStateSnapshotSequencer(onApply, now = () => Date.now(), onUnavailable = () => {}) {
-    let requestedGeneration = 0;
-    let appliedGeneration = 0;
-    // Newest applied body until a failed read or retire() clears it (late-mount seed).
-    let latest = null;
-    let held = null;  // {revision, bindings}: the last full task_bindings map this page applied
-    let inflight = null;
-    let settled = null;
-    let followUp = null;
-    const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
-    const begin = () => ({ generation: ++requestedGeneration, requestedAt: now(),
-        path: held ? `/api/state?bindings_since=${encodeURIComponent(held.revision)}` : '/api/state' });
-    const withBindings = (data) => {
-        if (!data || typeof data !== 'object') return data;
-        const revision = typeof data.task_bindings_revision === 'string' ? data.task_bindings_revision : '';
-        if (data.task_bindings_unchanged === true && held && revision === held.revision) {
-            return { ...data, task_bindings: held.bindings };
-        }
-        held = revision && data.task_bindings && typeof data.task_bindings === 'object'
-            ? { revision, bindings: data.task_bindings } : null;
-        return data;
-    };
-    const open = () => { settled = deferred(); inflight = begin(); return inflight; };
-    const settle = (request) => {
-        if (!inflight || request !== inflight) return;
-        const done = settled;
-        const next = followUp;
-        inflight = settled = followUp = null;
-        if (next) next.resolve({ request: open(), done: settled.promise });
-        done.resolve();
-    };
-    return {
-        begin,
-        retire() { appliedGeneration = begin().generation; latest = null; held = null; },
-        gate(force = false) {
-            if (!inflight) return Promise.resolve(open());
-            if (!force) return settled.promise.then(() => null);
-            if (!followUp) { followUp = deferred(); return followUp.promise.then((f) => f.request); }
-            return followUp.promise.then((f) => f.done).then(() => null);
-        },
-        apply(request, data) {
-            try {
-                const generation = Number(request?.generation) || 0;
-                if (!generation || generation <= appliedGeneration) return false;
-                appliedGeneration = generation;
-                latest = data = withBindings(data);
-                onApply(data, request.requestedAt, generation);
-                return true;
-            } finally { settle(request); }
-        },
-        isCurrent(request) {
-            return (Number(request?.generation) || 0) > appliedGeneration;
-        },
-        fail(request) {
-            try {
-                const generation = Number(request?.generation) || 0;
-                if (!generation || generation <= appliedGeneration) return false;
-                appliedGeneration = generation;
-                latest = null;
-                onUnavailable(request.requestedAt, generation);
-                return true;
-            } finally { settle(request); }
-        },
-        latest: () => latest,
-    };
-}
+// The page's single-flight state read lives in state_snapshots.js; its sequencer keeps this public name.
+export { createStateSnapshotSequencer } from './state_snapshots.js';
 
 /**
  * Main-thread fan-out gate for a live WS frame.
@@ -1047,7 +963,8 @@ export function mainLogFrameAccepts(msg, projectChatIds) {
 /** Route one ordinary Chat frame to the current Main or Project instance. */
 export function chatThreadAccepts(msg, isMain, chatId, projectChatIds) {
     if (isMain) return mainThreadAccepts(msg, projectChatIds);
-    return Number(msg?.chat_id ?? 1) === chatId;
+    // One row a Project also shows (its work's notice to Main, the owner's Reply to it): `also_rooms`.
+    return Number(msg?.chat_id ?? 1) === chatId || (Array.isArray(msg?.also_rooms) && msg.also_rooms.map(Number).includes(chatId));
 }
 
 /**
@@ -1541,7 +1458,7 @@ export function renderLiveCardMeta(record, { agentModel = record?.agentModel || 
         [chip ? 'Coordinator' : 'Agent model', coordinator ? escapeHtml(provenance ? `${coordinator} (${provenance})` : coordinator) : ''],
         // An unobserved execution of a card without an executor is its compact model fact already.
         [execution?.label || 'Model execution', execution && (chip || execution.observed) ? escapeHtml(execution.value) : ''],
-        ['Started by', record.initiator === 'consciousness' ? 'Consciousness' : ''],
+        ['Started by', record.scheduleName ? `${tr('task.fact.started_by.schedule', 'Schedule')} · <span data-i18n-authored>${escapeHtml(record.scheduleName)}</span>` : record.initiator === 'consciousness' ? 'Consciousness' : ''],
         ['Tool calls', !supervision && record.toolCalls === 0 ? '0' : ''],
         ['Rounds', !supervision && rounds ? `${record.rounds} · usable solve response${record.rounds === 1 ? '' : 's'}` : ''],
         ['Supervision', supervision && (rounds || toolCalls)

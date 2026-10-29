@@ -758,6 +758,7 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
     mode['stale'] = False
     activities[0]['required_question'] = pointer('waiting', blocks['waiting'])
     activities[1]['required_question'].update(quiz_state='answered', answered_index=1, owner_wait_state='resumed')
+    ui['errors'].watch(page)  # the reload may cut off the page's own reads; the reconnect above stays strict
     page.reload()
     page.wait_for_selector('#chat-input', state='attached')
     card('replaced').wait_for()

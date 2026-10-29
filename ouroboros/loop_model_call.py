@@ -1344,7 +1344,8 @@ def _fit_route_tool_ceiling(ctx: _RoundModelCallContext) -> bool:
 
 
 def _call_round_model(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:
-    return output_recovery.call(ctx, _call_round_model_once)
+    from ouroboros.presence_continuation import covered_send  # only an answered send covers (``reply_anchor``)
+    return covered_send(ctx.tools._ctx, lambda: output_recovery.call(ctx, _call_round_model_once))
 
 
 def _call_round_model_once(ctx: _RoundModelCallContext) -> Tuple[Any, float, str]:

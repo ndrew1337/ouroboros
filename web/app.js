@@ -1,11 +1,11 @@
 /** Web UI orchestrator: shared state, navigation, page init, WS startup. */
 
 import { createWS } from './modules/ws.js';
-import { apiFetch, fetchJson } from './modules/api_client.js';
+import { apiClient, apiFetch, fetchJson } from './modules/api_client.js';
 import { loadVersion } from './modules/utils.js';
 import { bindScrollFade } from './modules/scroll_fade.js';
 import { initChat, createChatInstance } from './modules/chat.js';
-import { createStateSnapshotSequencer } from './modules/chat_activity.js';
+import { createStateSnapshotSequencer, readStateSnapshot } from './modules/state_snapshots.js';
 import { IDLE_SUMMARY, buildProjectActivityIndex, markWords, reconcileProjectRooms } from './modules/project_activity.js';
 import { createStatusMark, markView, paintStatusMark, syncMarkPhases } from './modules/status_mark.js';
 import { bindRowMenuGesture } from './modules/row_menu_gesture.js';
@@ -18,7 +18,7 @@ import { startVoice } from './modules/voice_controls.js';
 import { projectRoomOptions, startConversations } from './modules/conversation_controls.js';
 import { createNotificationActivation, getNotifier } from './modules/notifications.js';
 import { showToast } from './modules/toast.js';
-import { apiClient } from './modules/api_client.js';
+import { noteReadAhead, onReadAheadChange, readAheadFor, unreadCount } from './modules/read_ahead.js';
 import { openNewProjectDialog, openProjectRowMenu, repositionProjectRowMenu } from './modules/project_create.js';
 
 import { initLogs } from './modules/logs.js';
@@ -205,7 +205,7 @@ async function openDashboardTab(tabName) {
 // Main's unread standalone messages, the count a Project's revision gives; unknown counts none.
 function mainUnreadCount() {
     const { mainVisibleRevision: revision, mainSeenRevision: seen } = state;
-    return Number.isSafeInteger(revision) && Number.isSafeInteger(seen) ? Math.max(0, revision - seen) : 0;
+    return Number.isSafeInteger(revision) && Number.isSafeInteger(seen) ? unreadCount(revision, seen, readAheadFor(1)) : 0;
 }
 
 function updateUnreadBadge() {
@@ -244,6 +244,7 @@ function observeMainRevision(revision) {
 // carries the key knows it: a failed read leaves it unknown, and an unknown cursor is never initialized.
 function mergeMainSeenRevision(prefs) {
     if (!prefs || typeof prefs !== 'object' || !('main_seen_revision' in prefs)) return false;
+    noteReadAhead(prefs);  // what the owner read in full in another room (read_ahead.js)
     state.mainSeenLoaded = true;
     const value = prefs.main_seen_revision;
     const advanced = Number.isSafeInteger(value) && value > (state.mainSeenRevision ?? -1);
@@ -375,16 +376,15 @@ function syncNavigationState() {
     if (leftNow.length) Promise.all([settled, exit]).then(() => leftNow.forEach(([pid, inst, at]) => rooms.settle(pid, inst, true, at)));
     // One commit for both layers (layers.js), after the panel's unhide so focus can go into it: the drawer, and the
     // Project panel's layer, modal only where it covers the room; on a phone only the covered room's inert (the whole
-    // room restyles) waits for the card's motion.
+    // room restyles) waits for the card's motion. Another Project is a new layer: its room takes the focus.
     layers.batch(() => {
         if (drawerOpen) {
             layers.push({ id: 'drawer', el: primarySidebar, modal: true, live: [navDrawerBackdrop].filter(Boolean),
                 onClose: () => setMobileDrawerOpen(false) });
         } else layers.remove('drawer');
-        if (activeProjectId) {
-            layers.push({ id: 'project', el: projectPanel, modal: isStackLayout(), live: [projectPanelBackdrop].filter(Boolean),
-                onClose: () => closeProjectPanel(), focus: focusProjectRoom });
-        } else layers.remove('project');
+        if (activeProjectId !== shownProjectId) layers.remove('project');
+        if (activeProjectId) layers.push({ id: 'project', el: projectPanel, modal: isStackLayout(),
+            live: [projectPanelBackdrop].filter(Boolean), onClose: () => closeProjectPanel(), focus: focusProjectRoom });
     }, { inertAfter: isStackLayout() ? settled : null });
     // The layer's inert release is registered first. A delayed read behind the drawer keeps its notice pending.
     Promise.all([settled, exit]).then(() => {
@@ -417,9 +417,9 @@ function arrivePanel(pid, since) {
     });
 }
 
-// Keys scroll what is being read: an opened Project gives the focus to its room's feed (focusable, out of the tab
-// order), so End, PageDown and the arrows move the messages, and a press on their text keeps the focus there. With
-// the panel itself focused they moved nothing (#1998). The panel takes it only before its room has mounted.
+// Keys scroll what is being read: an opened Project focuses its room's feed (out of the tab order; the panel only until
+// the room mounts), so End, PageDown and the arrows move the messages (#1998). Whether that focus shows is set by the
+// opening (openProjectPanel's `pointer`) and then by the room itself (chat.js, its focus corners).
 function focusProjectRoom() {
     const feed = projectInstances.get(navState.activeProjectId)?.page?.querySelector('.chat-messages') || projectPanel;
     if (!feed.hasAttribute('tabindex')) feed.tabIndex = -1;
@@ -628,7 +628,7 @@ function closeProjectPanel({ sync = true, reveal = false } = {}) {
     if (activeId && state.activePage === 'chat' && !reveal) void mainChat?.showLatest?.();
 }
 
-async function openProjectPanel(project, { closeDrawer = true, openOnly = false, taskId = '', quizId = '', sourceReveal = null } = {}) {
+async function openProjectPanel(project, { closeDrawer = true, openOnly = false, taskId = '', quizId = '', sourceReveal = null, pointer = false } = {}) {
     if (sourceReveal && !sourceReveal.current()) return null;
     if (!project?.id || String(project.lifecycle || 'active') !== 'active') return;
     const navigation = ++projectNavigationGeneration;
@@ -684,6 +684,7 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
             }
         }
         if (closeDrawer) navState.mobileDrawerOpen = false;
+        inst.quietFocus?.(pointer);  // pressed open by a pointer: the room's focus corners wait for a key
         syncNavigationState();
         if (sourceReveal) {
             const reveal = {};
@@ -697,8 +698,8 @@ async function openProjectPanel(project, { closeDrawer = true, openOnly = false,
             }
         }
         // Once visible, an unread room lands on its newest message (DESIGN "Unread").
-        const unread = Math.max(0, Number(freshProjectRow(project).visible_revision) || 0)
-            > Math.max(0, Number(state.projectSeenRevision?.[project.id]) || 0);
+        const unread = unreadCount(freshProjectRow(project).visible_revision, state.projectSeenRevision?.[project.id],
+            readAheadFor(project.chat_id)) > 0;
         if (!(taskId && quizId)) void inst.showLatest?.({ arrive: unread });
         // ACK the exact painted revision; chat.js owns the receipt and skips redundant reads.
         if (taskId && quizId) await revealProjectQuestion(project, inst, taskId, quizId);
@@ -873,8 +874,7 @@ function renderProjectsNav(projects, projectChatIds, activityIndex = projectActi
     // is a monotonic revision comparison, never a timestamp race.
     const seenRevision = state.projectSeenRevision || {};
     const recency = (p) => String(p.last_active_at || p.updated_at || p.created_at || '');
-    const isUnread = (p) => Math.max(0, Number(p.visible_revision) || 0)
-        > Math.max(0, Number(seenRevision[p.id]) || 0);
+    const isUnread = (p) => unreadCount(p.visible_revision, seenRevision[p.id], readAheadFor(p.chat_id)) > 0;
     const rows = all
         .filter(p => p && p.id && ['active', 'deleting'].includes(String(p.lifecycle || 'active')))
         .map(p => ({
@@ -1022,11 +1022,10 @@ function mergeProjectSeenRevisions(cursors) {
         state.projectSeenRevision[projectId] = seen;
         advanced = true;
     }
-    if (!advanced || !Array.isArray(lastProjectRows)) return advanced;
+    if (!Array.isArray(lastProjectRows)) return advanced;  // a read-ahead answer reaches here with no cursor moved
     let changed = false;
     for (const row of lastProjectRows) {
-        const unread = row._unread && (Number(row.visible_revision) || 0)
-            > (Number(state.projectSeenRevision[row.id]) || 0);
+        const unread = row._unread && unreadCount(row.visible_revision, state.projectSeenRevision[row.id], readAheadFor(row.chat_id)) > 0;
         if (row._unread !== unread) { row._unread = unread; changed = true; }
     }
     if (changed) paintProjectsNav();
@@ -1049,7 +1048,7 @@ function paintProjectsCount() {
     if (!navProjectsCount) return;
     const seen = state.projectSeenRevision || {};
     const count = lastProjectRows.reduce((sum, row) => sum + (row._unread
-        ? Math.max(0, (Number(row.visible_revision) || 0) - (Number(seen[row.id]) || 0)) : 0), 0);
+        ? unreadCount(row.visible_revision, seen[row.id], readAheadFor(row.chat_id)) : 0), 0);
     navProjectsCount.textContent = count ? (count > 99 ? '99+' : String(count)) : '';
     navProjectsCount.title = count ? `${count} unread message${count === 1 ? '' : 's'} in Projects` : '';
     if (count) navProjectsCount.setAttribute('aria-label', navProjectsCount.title);
@@ -1087,7 +1086,7 @@ function paintProjectsNav() {
                 item.appendChild(status);
             } else {
                 // Pressing a row opens its Project; pressing the open one again keeps it open (like every reference).
-                btn.addEventListener('click', () => openProjectPanel(item.project, { openOnly: true }));
+                btn.addEventListener('click', (event) => openProjectPanel(item.project, { openOnly: true, pointer: event.detail > 0 }));
                 // The action control is a sibling button, never nested interactive UI.
                 const kebab = document.createElement('button');
                 kebab.type = 'button';
@@ -1205,21 +1204,11 @@ document.getElementById('nav-projects-add')?.addEventListener('click', async (ev
 
 // Callers that must observe a read taken AFTER their own change (or after a
 // socket open) force one, coalesced behind an in-flight read; the boot prefetch
-// and the periodic poll join whatever page-wide read is in flight.
+// and the periodic poll join whatever page-wide read is in flight. Every read
+// settles within its lifetime, so the boot's socket connect never waits forever.
 async function refreshProjectsNav(force = true) {
     const request = await stateSnapshots.gate(force);
-    if (!request) return;
-    try {
-        const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
-        if (!resp.ok) {
-            stateSnapshots.fail(request);
-            return;
-        }
-        const data = await resp.json();
-        stateSnapshots.apply(request, data);
-    } catch {
-        stateSnapshots.fail(request);
-    }
+    if (request) await readStateSnapshot(stateSnapshots, request);
 }
 
 // A task bound to a project is ALREADY a project task. Main's chat instance owns
@@ -1245,8 +1234,8 @@ window.addEventListener('ouro:project-created', async (event) => {
 window.addEventListener('ouro:open-project', (event) => {
     const project = event?.detail?.project;
     if (!project?.id) return;
-    const resolved = lastProjectRows.find((item) => item.id === project.id) || project;
-    openProjectPanel(resolved, { openOnly: true, taskId: event.detail.task_id || '', quizId: event.detail.quiz_id || '' });
+    openProjectPanel(freshProjectRow(project), { openOnly: true, taskId: event.detail.task_id || '',
+        quizId: event.detail.quiz_id || '', pointer: event.detail.pointer === true });
 });
 
 // A contribution's `open.tab` (contributions.js): the Widgets page, at that skill's first card once it is drawn.
@@ -1335,6 +1324,7 @@ function setupResizablePanels(prefs) {
     makeHandle(document.getElementById('project-panel'), '--project-panel-width', 'left', 'project_panel_width', 320, 1100);
 }
 
+onReadAheadChange(() => { updateUnreadBadge(); mergeProjectSeenRevisions(); });  // a message read in full elsewhere
 apiFetch('/api/ui/preferences', { cache: 'no-store' })
     .then((r) => (r.ok ? r.json() : null))
     .then((prefs) => {

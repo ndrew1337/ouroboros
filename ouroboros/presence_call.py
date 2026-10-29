@@ -159,4 +159,3 @@ def record_call_utterance(drive_root: Path, task: Mapping[str, Any], *, directio
         log.warning("Presence call %s: a %s utterance could not be retained", task.get("id"), direction)
         return False
     return True
-

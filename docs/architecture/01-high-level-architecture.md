@@ -65,7 +65,7 @@ supervisor/ — background thread inside server.py (§5)
   restart_retention.py — stop retention and restart/update-abort return authority (§5, §9)
   queue_transitions.py, task_ownership.py — the root admission seal (stored as `acceptance_fences`), Resume, evolution stop, fenced Project deletion; ownership reads precede the queue lock (§5, §6)
   terminal_delivery.py, terminal_cascade.py, terminal_supersession.py — delivery-id dedupe, byte receipts, the bounded pending outbox of terminal answers; a settled cascade's one owner message (§5, §10)
-  task_reaper.py, task_reaper_cancel_handoff.py — the off-loop owner of timeout, crash, idle and unready jobs and its cancel-suppressed retry handoff; unconfirmed death keeps reaping; mints no cancel intents (§5)
+  task_reaper.py — the off-loop owner of timeout, crash, idle and unready jobs; a timeout never retries; unconfirmed death keeps reaping; mints no cancel intents (§5)
   owner_stop.py — graceful stop: finalize first (`finalize_now`), then cancel on the same durable cancel intent; grace bounded by `OWNER_STOP_OUTER_CAP_SEC`
   schedule_time.py, schedule_occurrence.py — cron/timezone parsing; a due occurrence admits at most one root
   schedule_notes.py — a due `kind:"notify"` row becomes a signed `reminder` System row; no model, no retry
@@ -89,13 +89,13 @@ supervisor/ — background thread inside server.py (§5)
   update_carriers.py, update_merge_plan.py — carriers a merge may not resolve by hand; merge planning
   update_merge_policy.py — presentation-only conflict labels
 ouroboros/ — agent core and shared runtime (§6)
-  config.py — SSOT facade: paths, settings load/save, PID lock (§7)
+  config.py, launch_roots.py — SSOT facade: paths, settings load/save, PID lock (§7)
   settings_defaults.py, settings_scales.py, model_slots.py, review_model_routes.py, runtime_limits.py — settings vocabularies `config.py` re-exports (§7; §10 invariant 3)
   version.py — version string from VERSION, importlib.metadata fallback
   secret_masking.py, settings_integrity.py, route_choice.py — Settings/MCP wire placeholders and secret repair before env overlay/persistence; task-local/skill settings views, snapshot pin (`OUROBOROS_SETTINGS_SHA256`), projection echo/digests (`OUROBOROS_PROJECTED_*`); live route keys, a turn's route choice (§6, §7)
   credential_shapes.py — credential leaf names and physical locations (§6 Credential mutation and diagnostic redaction)
   update_channels.py — Stable/QA/Development channel mapping (§8)
-  update_letter.py — the update letter: `base..target` commit material from one accounted light-slot call (§7; §3 Updates)
+  update_letter.py — update description: check facts, owner request, the writer (§3 Updates)
   update_qualification.py, update_generation_facts.py, update_impact.py, engine_pin_policy.py — range-bound merge/check evidence, before/after update facts, Apply effects and the pin rule restart shares (§3)
   evolution_history.py — Evolution's version history (§3)
   colab_bootstrap.py — Google Colab source-mode bootstrap (official source, Drive-backed data, no-UI server)
@@ -160,7 +160,7 @@ ouroboros/ — agent core and shared runtime (§6)
   review_pause.py, review_waiting.py, tools/review_collection.py — review custody, selected wakes and delivery cursors; $0 collection by reference before any re-freeze (§6)
   external_runs.py — a task's delegated runs under one stop policy (§6 Owner Pause)
   working_checkpoint.py — one rolling working state per attempt, delayed content ACK, frozen recovery (§6 Saved working state)
-  local_custody_repair.py — an addressed action retires a positively ended local owner's claim; passive reads write nothing (§6 Owner Continue)
+  local_custody_repair.py, custody_owed.py — ended owners' claims retire on proof; unwritten facts stay owed (§6 Owner Continue)
   owner_continue.py, schedule_continuation.py — Continue eligibility and sources (§6)
   routing_wait.py — receipt waits and the one act projection the picker, routing tools and observer share
   outcomes.py — typed task-outcome and objective authority with separate lifecycle, execution, objective, review, artifact and verification axes (§6 Task lifecycle; §10.1)
@@ -174,8 +174,8 @@ ouroboros/ — agent core and shared runtime (§6)
   _usage_rows.py, _usage_money.py, _usage_response.py, usage_ledger.py — the reducer, Decimal cash, the usage normalizer, row rules and the money lock (§6 Usage ledger substrate vs. accounting policy)
   _usage_cache_splits.py — process-local cache split by task/provider/route/review; a missing entry prices a full cache write (§6)
   _usage_settlement.py — usage/price evidence projected outside the ledger transaction (§6 Budget tracking)
-  usage_store.py, usage_journal.py, openrouter_cost.py — `state/usage.sqlite`, its journal import and explicit OpenRouter price receipts (docs/USAGE_STORE.md)
-  store.py, store_empty.py, store_journal.py, store_task_cards.py, store_timing.py, store_import.py, store_switch.py, install_identity.py, dialogue_store.py, dialogue_retry.py, dialogue_import.py, dialogue_positions.py — shared SQLite core (USAGE_STORE.md): `state/current.sqlite` (atomic `meta.commit_seq`; boot import/reconcile §2, export before storeless switches §9) and `state/dialog.sqlite` (chat/progress rows by chain coordinate, ordinals, import intervals; one `append` seam; cutover, archive import, rollback export; PERSISTENCE.md)
+  usage_store.py, usage_journal.py, openrouter_cost.py — `state/usage.sqlite`, its journal import and explicit OpenRouter price receipts (USAGE_STORE.md)
+  store.py, store_capture.py, store_empty.py, store_journal.py, store_task_cards.py, store_timing.py, store_import.py, store_switch.py, install_identity.py, dialogue_store.py, dialogue_retry.py, dialogue_import.py, dialogue_positions.py — shared SQLite core (USAGE_STORE.md): `state/current.sqlite` (atomic `meta.commit_seq`; boot import/reconcile §2, export before storeless switches §9), `state/dialog.sqlite` (chat/progress rows by chain coordinate, ordinals, import intervals; one `append` seam; cutover, archive import, rollback export; PERSISTENCE.md)
   cost_projection.py — the one task-cost projection for every producer: `accounted_upper_bound_usd`, null as None and never $0.00 (§6 Budget tracking)
   storage.py, storage_free.py, storage_removers.py — Dashboard counts and temporary-space actions (§3)
   delegate_custody.py, delegate_custody_reconcile.py, delegate_collection.py, delegate_state_sweep.py, delegate_custody_usage.py, delegate_capture_attempt.py, delegate_capture_job.py, delegate_named_evidence.py — run custody, observation, collection, child capture and usage; OWNED/FOREIGN/UNKNOWN (§6 Nanny, transport and custody)
@@ -208,18 +208,18 @@ ouroboros/ — agent core and shared runtime (§6)
   ouroboros/gateway/safety_settings.py — owner Safety level, rules and checker endpoints
   consciousness.py, consciousness_wake.py — the background alarm admitting an ordinary Main turn through the supervisor tick; the wake input and `wake_task_metadata` envelope (§6 Background consciousness)
   consciousness_authority.py, consciousness_allowance.py — dispatch-bound autonomy ceilings and the rolling 24-hour allowance (§6 Background consciousness and Evolution)
-  chat_chain.py, chat_references.py, chronicle_store.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts and separate common-view selections, disposable index (§6)
+  chat_chain.py, chat_references.py, chronicle_store.py, chronicle_quotes.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts, separate common-view selections, disposable index (§6)
   mark_anchors.py — a mark tied to a tool (optional call text) or a path trails that call's result once per task (§6 Post-task work)
   chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
   consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
-  knowledge.py, memory_publication.py — linked-Markdown notes with shelf indexes and revision-checked writes, so concurrent cognition cannot silently overwrite a newer note; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
+  knowledge.py, memory_publication.py — linked-Markdown notes, shelf indexes and revision-checked writes; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
   task_tree_ledger.py — append-only `data/task_trees/<root>/blackboard.jsonl`: ephemeral swarm coordination (`tree_note`/`tree_read`), mirrored into the project journal at root completion
   projects_registry.py, project_admission.py — the owner Project registry (active|deleting|tombstoned) and strict admission claims (§6 Project registry and lease)
   project_handoff.py — the Main transfer receipt owed through the terminal outbox after a durable bind (§3 Project handoff receipts)
   project_dialogue.py — read-only chat lens; append-only `logs/chat_annotations.jsonl` (`ROUTING_RECEIPT_FIELDS`) routes only `needs_manual_target` cards; `routing_refusal_cause` (§3 Chat and Projects)
-  room_membership.py — canonical stored-row membership for history and inventory; a place row belongs only to its place room (§3 Chat and Projects)
+  room_membership.py, room_appearances.py — canonical stored-row membership and its derived appearance index (§3)
   owner_words.py — the owner's words that caused a work tree, rendered verbatim for children, sessions and reviewers
   project_lease.py — one-writer-per-project lease in `assign_tasks`; same-project swarms exempt (§6 Project registry and lease)
   context.py — Main context assembly and the Available-subagents catalog (§6)
@@ -230,7 +230,7 @@ ouroboros/ — agent core and shared runtime (§6)
   context_measurement.py — sealed-request facts, deficits and reply allowance in route units (§6 Context fitting)
   context_budget.py — budget vocabulary and typed reclaim SSOT; `estimate_message_chars` (§6 Context fitting)
   context_mode_compat.py — reads normalize, boot persists `OUROBOROS_CONTEXT_MODE`/`OUROBOROS_CONTEXT_MODE_AUTO_LOW` together (§7 Default settings)
-  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses (§6)
+  memory_view.py, memory_view_legacy.py, memory_view_account.py — role-based story/room views, selected accounts, source changes and retained addresses; memory_reader.py — extensions' `read_memory` (§6)
   memory_floor.py, memory_max.py — physical memory-view floor (overflow becomes address lines, people's words last); lost-Max episode (§6 Context fitting)
   capability_evidence.py, response_limits.py, density_probe.py — sourced capability, token-density and maximum-response evidence (`data/state/capability_evidence.json`; windows size sends and grant no review authority); the bounded cold-start review-density probe, re-exported by capability_evidence (§6 Prompt size, density and windows)
   context_layout.py — doc-layout SSOT; `book_navigation` in Low/Nano, full ARCHITECTURE in Max; reduction relocates, never silently truncates (§6 Context fitting)
@@ -245,7 +245,7 @@ ouroboros/ — agent core and shared runtime (§6)
   workspace_copies.py — git-copy source/baseline identity and own-body policy (§6 Delegated subagents)
   coop_checkpoint.py — quiescent checkpoint commits of cooperative trees from a mutative child's `write_root`; a root mid merge/rebase/cherry-pick/revert is skipped (§5)
   delegate_output.py, delegate_directory.py, workspace_file_outputs.py — retained terminal JSON with physical-task reads; directory apply/discard and ordinary-folder results with exact before/after identities (§6 Terminal products)
-  delegate_activity.py — typed executor activity JSONL with an emission-committed cursor (§6 Delegated activity)
+  delegate_activity.py, delegate_observe.py — typed executor activity JSONL with an emission-committed cursor; the supervised wait's beat (§6 Delegated activity)
   delegate_containment.py — engine-derived isolation facts (§6 Access disclosure)
   delegate_progress.py — poll-bound transport retry and event-local executor observations (§6 Delegated subagents)
   nanny_pacing.py — round/cost anchors; no reset on coordination (§6 Supervision)
@@ -291,7 +291,7 @@ ouroboros/ — agent core and shared runtime (§6)
   reviewer_slot_config.py — The one review-pool builder, `review_pool_slots`, over enabled `review_eligible` catalog rows (§7 Review pool)
   review_pool_migration.py, review_pool_receipts.py — review-lane → review-pool migration at the settings read seam and its durable receipts (`state/review_migrations/`, the rollback source) (§11.4)
   review_run_isolation.py — contributor review isolation before `config`: private data root, pinned host settings and panel, cumulative cap, attach-only engine (§6 Delegated subagents; Monetary authority and projections)
-  review_state.py — Durable commit-review state (`state/advisory_review.json`; old advisory rows: read-only history); re-exports review_state_model.py, review_state_records.py, review_state_custody.py
+  review_state.py — Durable commit-review state (`state/advisory_review.json`; old advisory rows: verbatim archive); re-exports review_state_model.py, review_state_records.py, review_state_custody.py
   review_records.py, review_doctrine.py, review_verdict.py, review_projection.py, review_evidence_sections.py — panel records, verdict reducers, redacted projections (stored task-acceptance records read tolerantly), evidence section helpers (§6 Result review; Review ledger record)
   review_ledger.py — Durable per-wave review records (`state/review_ledger/<record_id>.json`; §6 Review ledger record)
   review_body_fact.py — Own-body identity and the checklist layer it selects (§6 Change review on any root)
@@ -368,7 +368,7 @@ ouroboros/ — agent core and shared runtime (§6)
   terminal_cost_reconciliation.py — Usage recovery/projection (§6 Budget tracking)
   task_continuation.py — Durable review continuation state
   task_results.py — Task-result merge-writes (one store transaction) and typed readers; `resolve_ctx_lineage` answers a context's root/child lineage (§6 Task lifecycle)
-  task_store.py, task_reads.py — Indexed facts/signatures, review/plan candidates, documents, batched display views; implicit body+handoff snapshots decode after close, explicit read/modify stays (PERSISTENCE.md)
+  task_store.py, task_reads.py — Indexed facts/signatures, review/plan candidates, documents, display views; one captured value per statement, decoded after close; read/modify inside (PERSISTENCE.md)
   pause_notices.py — Confirmed-pause System disclosures: pending episodes, saved-chat receipts, off-loop local replay
   task_result_schema.py — Task-result schema admission: the `_schema_version` stamp, the classifier, and the quarantine an unstamped, future or malformed row lands in
   task_status.py — effective status, lineage and waits; `execution_owner` and dated `execution_observation` separate lifecycle from liveness (§5); the worker-side cancel predicate fails open toward liveness (§10 invariant 14)
@@ -405,13 +405,14 @@ ouroboros/ — agent core and shared runtime (§6)
   gateways/ — Thin outbound transport adapters; no business logic
     claudexor_images.py — requestKind=image upload and whole-result ACK (docs/IMAGE_GENERATION.md)
     image_api.py — Image API routes/credentials; one send, bounded results, cost evidence
-    claudexor.py, claudexor_uploads.py — Loopback descriptor/handshake/runs/quota/uploads; private token; owned daemon; `discover_daemon_at`: daemon/control-api.json (§6)
+    claudexor.py, claudexor_uploads.py, claudexor_identity.py — Loopback descriptor/handshake/runs/quota/uploads, final-attempt catalog proof; private token, owned daemon; `discover_daemon_at`: daemon/control-api.json (§6)
     claudexor_metadata.py — handshake/catalog cache (`storeId`)
-    claudexor_run_events.py — Catalog-negotiated, bounded run-journal SSE frames and durable seq cursors; no polling owner (§6 Delegated subagents)
+    claudexor_run_events.py, claudexor_observation.py — Catalog-negotiated, bounded run-journal SSE frames and durable seq cursors, no polling owner; the run observation adapter (§6 Delegated subagents)
     claudexor_routing.py — Catalog-negotiated passive read of the engine's account/model marks (§3 Agent accounts)
+    claudexor_route_health.py — Catalog-negotiated passive read of the engine's per-route failure shares (§9)
   claudexor_runtime.py, claudexor_runtime_retention.py — Reviewed next-spawn pin in `data/state/cx`: seed/download, verify/probe, atomic promote; no mutable current; override `OUROBOROS_CLAUDEXOR_BIN` (§6); copies neither pinned nor serving retire (§5)
-  claudexor_exit_facts.py — Bounded saved exits; live memory/loop/store/admission facts and dated capacity snapshots, without lifecycle policy (§9)
-  claudexor_daemon.py — Owned `data/claudexor`: lazy start, authenticated attach, `stop_outcome`, failed-start latch, `install_missing_harness_cli` (§9)
+  claudexor_exit_facts.py — Bounded saved exits; live memory/loop/store/admission facts, dated capacity snapshots, route-health rows and the newest one's file, without lifecycle policy (§9)
+  claudexor_daemon.py, claudexor_harness_install.py — Owned `data/claudexor`: lazy start, authenticated attach, `stop_outcome`, failed-start latch; vendor-CLI repair by the pinned installer (§9)
   claudexor_startup_failure.py — Stdlib `ExitFact`; `failed_without_control` drives spawn latch; diagnostic-only log labels and latch record (§9)
   gateway/ — Gateway Boundary v1 (below): browser-facing route ownership and the frontend contract SSOT
     contracts.py — Active WS/HTTP envelope contract owner
@@ -491,7 +492,7 @@ ouroboros/ — agent core and shared runtime (§6)
     compact_context.py — LLM-requested tool-history compaction trigger, applied on the next round
     control.py — control tools: restart, timeout settings, scheduling, review, chat history and model switching; the `schedule_subagent` contract and compact `wait_task` projections (§6 Delegated subagents)
     control_delegation.py — Delegation-budget affordances and `move_to_project` (§6 Project placement)
-    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, control_ui_translation.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources, owner wording pins (§3)
+    control_events.py, control_mind.py, control_relay.py, control_routing.py, control_runtime.py, control_scheduling.py, control_subagent_spec.py, control_task_results.py, control_ui_translation.py, control_update_description.py, task_result_views.py — the control tools' leaves: events and their durable outcomes, the mind's lifecycle controls, `tell_task` relays, routing, runtime self-control, scheduling, the `schedule_subagent` parameter surface, absorbing a child's result and retained redacted call sources, owner wording pins (§3)
     tool_discovery.py — List/enable owner: callable catalog by namespace in every mode; grants nothing
     tool_result.py, tool_catalog.py, tool_resolution.py — the typed internal tool result and its text adapter, intrinsic tool descriptors, argument normalization with physical target binding
     arg_feedback.py — What a tool says about an argument it did not obey: the one-line ignored disclosure and the typed refusal naming field, value and repair (DEVELOPMENT "LLM-first affordances")
@@ -568,7 +569,7 @@ ouroboros/ — agent core and shared runtime (§6)
   startup_migrations.py, startup_task_files.py — Explicit inherited-state import/repair and addressed file recovery
   delegate_custody_current.py — Custody on the store: run rows, pending invocations, outbox, importer's fold
   owned_shutdown.py — the ownership set `state/owned_processes.json`, the one bounded exit stop with its next-start retry and entry `state/shutdown_entry.json` (§9)
-  platform_layer.py, platform_win32_abi.py — OS process/lock helpers, descendant seam, private Win32 ABI (Platform substrate below)
+  platform_layer.py, platform_win32_abi.py, platform_darwin_abi.py, process_identity.py — OS process/lock helpers, descendant seam, private Win32/Darwin ABI, birth tokens (Platform substrate below)
   verified_download.py — Shared exact-size/digest verification and atomic cached byte delivery
   node_runtime.py — Execution-probed Node runtime health (`node_runtime_health`; a missing binary is never cached), `select_skill_node_runtime`, `skill_node_emergency_path_dir`
 
@@ -580,7 +581,7 @@ ouroboros/ — agent core and shared runtime (§6)
 
 ### Devtools boundary
 
-`devtools/` is excluded from runtime imports and package discovery; review applies and outputs stay external. A benchmark launcher stamps the isolated-benchmark sentinel into its throwaway data root, turning off JSONL log rotation there (`supervisor/state.py`). Each benchmark's own README keeps its module map and methodology: `devtools/benchmarks/cybergym/` pauses dispatch on three typed gates (dead gateway transport, refused budget claim, a sibling's unresolved workspace-custody gate) and keeps never-dispatched ids row-free; `devtools/benchmarks/cowork_bench/` keeps scoring authority in its audit (`METHODOLOGY.md`); `devtools/benchmarks/osworld/` splits runners from their owner leaves. `devtools/e2e_live/` is the live E2E stand: isolated real servers running the owner-shaped scenarios SM1, SW1 and SK1, judged on durable artifacts and a browser probe (manual `devtools/e2e_live/README.md`; the one rule binding runtime changes: DEVELOPMENT "Live E2E stand").
+`devtools/` is excluded from runtime imports and package discovery; review applies; outputs stay external. A benchmark launcher stamps the isolated-benchmark sentinel in its throwaway data root, turning off JSONL log rotation there (`supervisor/state.py`). Each devtool's README keeps its module map and methodology: `devtools/benchmarks/cybergym/` pauses dispatch on three typed gates (dead gateway transport, refused budget claim, a sibling's unresolved workspace-custody gate) and keeps never-dispatched ids row-free; `devtools/benchmarks/cowork_bench/` keeps scoring authority in its audit (`METHODOLOGY.md`); `devtools/benchmarks/osworld/` splits runners from their owner leaves; `devtools/macos_wkwebview/` is the optional system-WKWebView composer check. `devtools/e2e_live/` is the live E2E stand: isolated real servers running owner-shaped scenarios SM1, SW1 and SK1, judged on durable artifacts and a browser probe (runtime rule: DEVELOPMENT "Live E2E stand").
 
 ### Gateway Boundary v1
 
@@ -598,7 +599,7 @@ Workspace tasks default to `memory_mode=forked`; `shared` is refused for an exte
 
 `--detach` returns after durable admission; `--no-stream` polls to completion. `ouroboros run` exits 0 only for a completed lifecycle with a clean execution axis, no failed or degraded objective and a finished artifact bundle (`_is_terminal_success`), so shell automation cannot read "the model answered" as "the deliverable exists"; `--patch`/`--patch-out` are stricter and trust `workspace_patch.json`, which distinguishes an omitted, no-op and failed patch (§6 Headless finalization and workspace patch capture). An explicitly partial cost gets a bounded finality wait (`_await_cost_finality`) before its partial flags stay visible. Schedules enqueue ordinary tasks (no second scheduler, §5); skill `scheduled_tasks` only suggest (`skill_schedule_suggestions.py`). A blank timezone means the DST-aware system zone (fixed offset only when that zone is unrecoverable); the schedule digest rides task and consciousness context.
 
-The packaged CLI wrapper/installer reuses the embedded interpreter, not a second PyInstaller runtime: `packaged_cli` finds the seed and bootstraps `~/Ouroboros/repo`, then runs `ouroboros.cli`; path overrides are scrubbed, explicit URLs retained. Packaged `server` is refused: it would bypass launcher-owned bootstrap, identity, restart and cleanup. `run --start` is loopback-only and starts the desktop app when no ready gateway answers. Release builds carry Node and ripgrep. Skill-side Node resolves bundled-first (`node_runtime.select_skill_node_runtime()`), the generic process launch PATH-first (`process_interpreters.resolve_process_node`: a healthy PATH node stays byte-identical in argv and child env; the bundled runtime substitutes only when PATH is missing or probe-dead, attests the prepend, never inside a non-local executor backend). `search_code` pre-enumerates policy-approved files before invoking ripgrep; a faster binary widens no search authority. Every bundled consumer searches `bundled_resource_bases()` in one order (`OUROBOROS_BUNDLE_DIR`, frozen root, interpreter-ancestor roots, source checkout): server and CLI children run from the managed repo, never an in-bundle module path; the ancestor step lets an older launcher start a newer checkout. The embedded interpreter never writes into the signed application (codesign seal): `embedded_python_env()` redirects bytecode to `data/state/pycache` and user installs to `data/state/python-userbase` (`pip_install_target_args()` adds `--user` only there); the userbase outranks bundle site-packages and is never pruned, so recovery is deleting it and relaunching.
+The packaged CLI wrapper/installer reuses the embedded interpreter, not a second PyInstaller runtime: `packaged_cli` finds the seed, bootstraps the repo of the configured tuple and runs `ouroboros.cli` in it; explicit URLs win. Packaged `server` is refused: it would bypass launcher-owned bootstrap, identity, restart and cleanup. Loopback-only `run --start` opens the app unless its data root's own server is ready. Release builds carry Node and ripgrep. Skill-side Node resolves bundled-first (`node_runtime.select_skill_node_runtime()`), the generic process launch PATH-first (`process_interpreters.resolve_process_node`: a healthy PATH node stays byte-identical in argv and child env; the bundled runtime substitutes only when PATH is missing or probe-dead, attests the prepend, never inside a non-local executor backend). `search_code` pre-enumerates policy-approved files before invoking ripgrep; a faster binary widens no search authority. Every bundled consumer searches `bundled_resource_bases()` in one order (`OUROBOROS_BUNDLE_DIR`, frozen root, interpreter-ancestor roots, source checkout): server and CLI children run from the managed repo, never an in-bundle module path; the ancestor step lets an older launcher start a newer checkout. The embedded interpreter never writes into the signed application (codesign seal): `embedded_python_env()` redirects bytecode to `data/state/pycache` and user installs to `data/state/python-userbase` (`pip_install_target_args()` adds `--user` only there); the userbase outranks bundle site-packages and is never pruned, so recovery is deleting it and relaunching.
 
 Workspace binding changes the contextual repo, never the system repo for BIBLE, prompts and review governance. `/api/tasks` and project-room promotion share `workspace_admission.validate_workspace_root()`. Ordinary folders support file/process work; Git operations need a Git worktree. Binding changes file, process and VCS defaults plus memory, lease, preflight and finalization, removes no top-level tool and keeps the Architecture context in Max mode. The workspace executor is a process-routing boundary, not a sandbox: `executor_ref` is host-owned, `network=none` holds only when the backend implements it; executor processes enter durable custody. Preflight writes the `workspace_preflight.json` artifact with a bounded summary in metadata; `tools_on_path`/`tools_missing_from_path` report `shutil.which` PATH presence, not executability, frozen in durable task metadata; a collection failure is a disclosed error summary, never a fictitious artifact.
 
@@ -632,7 +633,7 @@ The APK's `MainActivity` hosts the SPA and declares `ACTION_ASSIST` with an in-a
 
 `platform_layer.py` owns OS observations and lock/process primitives; callers own policy. `kernel_file_locks_enforced` probes each real directory once, never from a failed live acquisition: unsupported-lock errors and `ENOLCK` select a recorded name-only tier, an unprobeable directory stays enforced for that call, other kernel errors fail closed (else: `platform_layer.py`). The name tier uses O_EXCL plus identity recheck without kernel exclusion; callers may refuse it (money does). A won lock must still have a readable descriptor and path inode identity; unreadable identity is no proof. Owner-aware recovery skips the stale-age grace after confirmed owner death and keeps live writers; unknown metadata keeps the grace; permission denial proves no death. Refresh returns ownership, not a courtesy heartbeat: losing it means abandoning the protected work. Release unlinks only the held identity (ordering, the bounded unlink retry and the `LockFileEx` byte: `platform_layer.py`).
 
-Birth identity is separate from PID presence. Linux mints boot-qualified ticks, then the ps wall-clock token, then bare ticks with a disclosed cross-boot collision limit; the custody ledger keeps the `start_time` spelling and an optional boot-qualified sibling: an older reader meeting an unknown token after rollback would prune every row without a kill. Windows uses the exact creation FILETIME, checks presence through non-signalling handles and treats access-denied or unknown presence as no licence to clean up; Win32 calls declare full-width HANDLE arguments (omitted declarations truncate 64-bit handles), and Job termination treats a false BOOL return as failure, so survivors stay disclosed. Bundled resources use the CLI / Headless Boundary lookup order; `node_runtime` owns Node health and selection (re-exported lazily by the platform layer). TCP keepalive: §6 Context fitting, retry, and compaction; kernel dead-peer detection never shortens a cognitive deadline.
+Birth identity is separate from PID presence. Linux mints boot-qualified ticks, then the ps wall-clock token, then bare ticks with a disclosed cross-boot collision limit; the custody ledger keeps the `start_time` spelling and an optional boot-qualified sibling: an older reader meeting an unknown token after rollback would prune every row without a kill. macOS death proof adds kernel `p_starttime` (`process_identity`). Windows uses the exact creation FILETIME, checks presence through non-signalling handles and treats access-denied or unknown presence as no licence to clean up; Win32 calls declare full-width HANDLE arguments (omitted declarations truncate 64-bit handles), and Job termination treats a false BOOL return as failure, so survivors stay disclosed. Bundled resources use the CLI / Headless Boundary lookup order; `node_runtime` owns Node health and selection (re-exported lazily by the platform layer). TCP keepalive: §6 Context fitting, retry, and compaction; kernel dead-peer detection never shortens a cognitive deadline.
 
 ### Data layout (`~/Ouroboros/`)
 
@@ -687,8 +688,10 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   │   ├── post_task_evolution_counter.json ← per-drive every_n counter
 │   │   ├── scheduled_tasks.json   ← cron/one-shot schedules and `kind:"notify"` notes (§5)
 │   │   ├── claudexor_rotation_provisioning.json ← last rotation receipt
+│   │   ├── claudexor_route_health.json ← the engine's newest per-route failure shares, replaced on change
 │   │   ├── subagent_last_delegation.json ← dated helper observations, not dispatch authority
-│   │   ├── update_letter.json     ← update letter with `last_good`
+│   │   ├── update_letter.json     ← description, its range, check facts
+│   │   ├── update_material.json   ← checked range for its author
 │   │   ├── projects.json          ← Project registry; tombstones are durable
 │   │   ├── projects.json.committed ← commit witness: with it a missing registry is unavailable, not empty
 │   │   ├── project_task_bindings.json ← root↔Project bindings with typed origin

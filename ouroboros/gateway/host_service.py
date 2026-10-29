@@ -272,11 +272,11 @@ class HostServiceContext:
             **kwargs,
         )
 
-    async def admit_presence_gate(self, conversation_key: str) -> Any:
+    async def admit_presence_gate(self, conversation_key: str, *, wait: bool = True) -> Any:
         """Coroutine admission into the configured presence gate; the lease the turn runs under."""
         from ouroboros.presence_runner import admit_configured_gate
 
-        return await admit_configured_gate(self.data_dir, conversation_key)
+        return await admit_configured_gate(self.data_dir, conversation_key, wait=wait)
 
     @property
     def skills_state_dir(self) -> pathlib.Path:
@@ -433,7 +433,7 @@ async def _api_identity(request: Request) -> JSONResponse:
         return _json_error(str(exc), 403)
     name, description = await asyncio.to_thread(_identity_facts, ctx)
     from ouroboros.places import WAKE_FACTS
-    from ouroboros.presence_continuation import CONTINUATION_VERSION
+    from ouroboros.presence_continuation import CONTINUATION_VERSION, CONTINUATION_VERSIONS
     from ouroboros.presence_history import HISTORY_IMPORT_VERSION, SOURCE_ORDER_VERSION
     from ouroboros.presence_owner_contact import MAIN_CONTACT_VERSION
     from ouroboros.presence_recovery import WORK_OUTPUT_VERSION
@@ -441,6 +441,7 @@ async def _api_identity(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "name": name, "description": description,
                          "presence_delivery_version": DELIVERY_VERSION, "places_version": 1,
                          "presence_continuation_version": CONTINUATION_VERSION,
+                         "presence_continuation_versions": list(CONTINUATION_VERSIONS),
                          "presence_main_contact_version": MAIN_CONTACT_VERSION,
                          "presence_work_output_version": WORK_OUTPUT_VERSION,
                          "presence_history_import_version": HISTORY_IMPORT_VERSION,

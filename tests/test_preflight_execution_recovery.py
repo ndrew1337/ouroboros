@@ -9,7 +9,7 @@ import pytest
 
 from ouroboros import preflight_receipts as receipts
 from ouroboros import review_ledger
-from ouroboros.tools.registry import ToolContext
+from ouroboros.tools.registry import ToolContext, ToolRegistry
 from tests import _contributor_packet_shared as shared
 from tests.test_preflight_receipts_consumers import _foreign_review, _recording
 from tests.test_preflight_receipts import _git, _tiny_repo
@@ -41,6 +41,10 @@ def test_deterministic_refusal_reaches_every_seat_without_starting_tests(
     if prior_proof != "absent":
         # Model a context that still owns a prior attestation. The selected gate
         # below must not mistake it for an invocation that got past preflight.
+        # A worker mints it after its registry imported every tool module, so the browser
+        # module's PLAYWRIGHT_BROWSERS_PATH default is already in the environment the proof
+        # binds; a first registry built by the review below would change it (#2363).
+        ToolRegistry(repo_dir=repo, drive_root=ctx.drive_root)
         shared.passing_test_runner(ctx)
         if prior_proof == "stale":
             (repo / "ouroboros" / "helper.py").write_text("VALUE = 3\n", encoding="utf-8")
@@ -49,7 +53,7 @@ def test_deterministic_refusal_reaches_every_seat_without_starting_tests(
     monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", "cyber_pro")
     checked, launched, briefs, evidence = [], [], [], []
 
-    def refuse(*args):
+    def refuse(*args, **kwargs):
         checked.append(args)
         return refusal
 
@@ -93,10 +97,8 @@ def test_deterministic_refusal_reaches_every_seat_without_starting_tests(
                                      goal="Ship the proposal", scope="helper.py", review_reference=reference,
                                      author_disposition={"disposition": "accepted",
                                                          "rationale": "Read all three seats; the refusal is known."})
-    if prior_proof == "stale":  # its new ouroboros/helper.py is refused by the continuation's own current check
+    if prior_proof == "stale":  # the continuation's current check remains visible to its Cyber author
         assert "PREFLIGHT_BLOCKED" in committed and "ouroboros/helper.py" in committed, committed
-        assert shared.git(repo, "rev-parse", "HEAD") == head and len(briefs) == 3 and not launched
-        return
     assert shared.git(repo, "rev-parse", "HEAD") != head and ctx._commit_review_status == "author_continued", committed
     assert f"review_record_id: {reference['review_record_id']}" in committed and refusal in committed
     assert len(briefs) == 3 and len(checked) == 2 and not launched
@@ -111,6 +113,9 @@ def test_nonrefused_gate_keeps_real_test_and_skip_exhibits(tmp_path, monkeypatch
     from ouroboros.tools import commit_gate, git
 
     repo = _tiny_repo(tmp_path)
+    # This fixture reaches the real runner; release policy is exercised separately.
+    monkeypatch.setattr(commit_admission, "release_metadata_diagnostics", lambda *a, **kw: {
+        "status": "not_applicable", "findings": [], "unavailable": []})
     if outcome == "failed":
         (repo / "tests" / "test_parallel.py").write_text("def test_red():\n    assert False\n", encoding="utf-8")
         _git(repo, "add", "-A")

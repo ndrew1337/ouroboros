@@ -2982,12 +2982,13 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
 
 .review-facts-list {
     display: grid;
-    grid-template-columns: max-content minmax(0, 1fr);
+    /* A label takes at most 40% and wraps: a long one (`Review panel <record id>`) never squeezes the values. */
+    grid-template-columns: fit-content(40%) minmax(0, 1fr);
     gap: var(--space-1) var(--space-4);
     margin: 0;
 }
 
-.review-facts-list dt { color: var(--text-secondary); }
+.review-facts-list dt { min-width: 0; color: var(--text-secondary); overflow-wrap: anywhere; }
 
 .review-facts-list dd {
     min-width: 0;
@@ -5735,6 +5736,7 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
 .storage-place-why,
 .storage-place-split,
 .storage-place-remover { grid-column: 2 / -1; }
+.storage-place-why { overflow-wrap: anywhere; }  /* the server's reason can name an unbroken absolute path */
 .storage-group-body { display: grid; row-gap: 2px; margin: 2px 0 0 calc(8px + var(--space-2)); }
 .storage-group-places { display: grid; margin: var(--space-2) 0 0 calc(8px + var(--space-2)); padding: 0; list-style: none; }
 .storage-place.is-member { grid-template-columns: minmax(0, 1fr) auto minmax(56px, auto); padding-block: var(--space-2); border-top: 1px solid var(--surface-border-soft); }
@@ -6170,6 +6172,10 @@ textarea.chat-input::placeholder { color: var(--text-muted); }
     overflow-y: auto;
     overscroll-behavior: contain;
 }
+/* Cut (toast.js names it a region), the column takes the pointer itself, as any scrolling box does: a wheel or a finger
+   anywhere over it scrolls it in every engine (Linux WebKit finds a scroller only where it takes pointer events).
+   Uncut, its empty box lets the page through. */
+#toast-stack[tabindex] { pointer-events: auto; }
 /* A notice taller than the column shows keeps its close button on screen, at the nearer edge. */
 #toast-stack .toast-dismiss { position: sticky; top: 0; bottom: 0; }
 /* The focused scroll region uses the same ring as other keyboard controls. */
@@ -6616,6 +6622,41 @@ button.skills-mark { cursor: pointer; min-height: 0; }
 .confirm-dialog .marketplace-modal-body p {
     margin: 0;
     white-space: pre-line;
+}
+
+/* A dialog carrying rendered prose (the update description before Apply) reads at a wider
+   measure; the prose keeps its own bounded, keyboard-scrollable region so the consequences
+   below it and the actions stay in view at every height. */
+.confirm-dialog.has-content {
+    max-width: 640px;
+}
+
+.confirm-dialog-content {
+    max-height: min(42vh, 380px);
+    overflow-y: auto;
+    padding: 2px 12px 2px 0;
+    border-bottom: 1px solid var(--surface-border);
+}
+
+.confirm-dialog-content:focus-visible {
+    outline: 2px solid var(--focus-accent-border);
+    outline-offset: 2px;
+}
+
+/* The dialog's own paragraphs are flush plain text; rendered prose keeps the rich-content rhythm. */
+.confirm-dialog .confirm-dialog-content p {
+    white-space: normal;
+    margin-block: var(--space-2);
+}
+.confirm-dialog .confirm-dialog-content p:first-child { margin-block-start: 0; }
+.confirm-dialog .confirm-dialog-content p:last-child { margin-block-end: 0; }
+/* Beside rendered prose, the dialog's consequences and its Details summary read at the prose's
+   size and ink, so the plain facts never outweigh what changes. Ordinary dialogs keep theirs. */
+.confirm-dialog.has-content .marketplace-modal-body > p,
+.confirm-dialog.has-content .confirm-dialog-details > summary {
+    font-size: var(--type-body);
+    line-height: var(--line-body);
+    color: var(--text-primary);
 }
 
 .confirm-dialog-details {
@@ -8085,6 +8126,33 @@ body.keyboard-open .chat-instance-panel .chat-input-area {
 }
 .project-panel .chat-instance-panel .chat-messages {
     padding-top: var(--chat-feed-reserve, var(--chat-header-reserve, 56px));
+    /* Reserve the real scrollbar lane from the first layout: WebKit's auto-overflow transition can leave rows
+       wider than the content box until a resize, covering the focus corners. Overlay scrollbars take no space. */
+    overflow-y: scroll;
+}
+/* The open room's feed holds the keys (app.js focusProjectRoom). Its keyboard focus is two corners of the focus ring,
+   never a frame round the room: each 11px outside the rows' edge, in the feed's own gutter, 4px above the first row
+   and opening toward it; rows scroll under them, and a pointer quiets them until the next key (chat.js; DESIGN §3
+   Focus). Both engines place a background over the scrollbar's lane, so the right pair moves in by the lane the feed
+   actually draws (--chat-feed-lane, measured with the room's other reserves; none where scrollbars overlay). */
+.project-panel .chat-messages:focus { outline: none; }
+.project-panel .chat-messages:focus-visible:not(.is-quiet-focus) {
+    background-image: linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border)),
+        linear-gradient(var(--focus-accent-border), var(--focus-accent-border));
+    background-origin: content-box;
+    background-repeat: no-repeat;
+    background-size: 8px 2px, 2px 12px, 8px 2px, 2px 12px;
+    background-position: left -11px top -4px, left -11px top -4px,
+        right calc(var(--chat-feed-lane, 0px) - 11px) top -4px, right calc(var(--chat-feed-lane, 0px) - 11px) top -4px;
+}
+/* Forced colours drop gradients, the corners with them: there the keys get the system's ring, inset. */
+@media (forced-colors: active) {
+    .project-panel .chat-messages:focus-visible:not(.is-quiet-focus) {
+        outline: 2px solid Highlight;
+        outline-offset: -2px;
+    }
 }
 /* The note already reserves the floating bar. With a keyboard both are in flow. The room asks and its feed inherits
    the answer: :has() stays in its subject compound (DEVELOPMENT "Design System"). */
@@ -8787,10 +8855,11 @@ body.keyboard-open .project-panel {
     color: var(--status-error-fg);
 }
 
-/* The update letter: Ouroboros's own short paragraph about the update this
-   panel offers, kept after it lands as "What changed in this version". A fact
-   block, so it is separated from the action row the way Recovery is — a rule,
-   not a card, with a small description-only refresh action. */
+/* The update description: Ouroboros's own account of the update this panel
+   offers, kept after it lands as "What changed in this version". A fact block,
+   so it is separated from the action row the way Recovery is — a rule, not a
+   card, with two small actions: Check (facts only) and Write/Rewrite (an
+   ordinary task that authors it). */
 .updates-letter {
     display: flex;
     flex-direction: column;
@@ -8799,20 +8868,31 @@ body.keyboard-open .project-panel {
     border-top: 1px solid var(--divider);
     padding-top: var(--space-3);
 }
+/* The heading and the actions share a row while both fit; otherwise (a phone) the actions
+   follow on their own, so the date and range keep the width instead of a column beside them. */
 .updates-letter-head {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
+    display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: var(--space-2);
 }
 .updates-letter-heading {
+    flex: 1 1 auto;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
     gap: var(--space-2);
     min-width: 0;
 }
-.updates-letter-refresh {
+.updates-letter-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: var(--space-1);
+    margin-left: auto;
+}
+.updates-letter-refresh,
+.updates-letter-write {
     white-space: nowrap;
 }
 .updates-letter-label {

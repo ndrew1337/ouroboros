@@ -39,14 +39,14 @@ def _seed_target(tmp_path: pathlib.Path) -> pathlib.Path:
     target = tmp_path / "target"
     target.mkdir()
     _git(target, "init")
-    (target / "tracked.txt").write_text("one\n", encoding="utf-8")
+    (target / "tracked.txt").write_text("one\n", encoding="utf-8", newline="\n")  # LF: the tests compare bytes
     _git(target, "add", "-A")
     _git(target, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-m", "seed")
-    (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")   # unstaged mod
-    (target / "staged.txt").write_text("staged\n", encoding="utf-8")
-    _git(target, "add", "staged.txt")                                     # staged add
-    (target / "untracked.txt").write_text("loose\n", encoding="utf-8")    # eligible
-    (target / ".env").write_text("SECRET=1\n", encoding="utf-8")          # sensitive
+    (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8", newline="\n")   # unstaged mod
+    (target / "staged.txt").write_text("staged\n", encoding="utf-8", newline="\n")
+    _git(target, "add", "staged.txt")                                                   # staged add
+    (target / "untracked.txt").write_text("loose\n", encoding="utf-8", newline="\n")    # eligible
+    (target / ".env").write_text("SECRET=1\n", encoding="utf-8", newline="\n")          # sensitive
     return target
 
 
@@ -1398,7 +1398,7 @@ class TestApplyIntentAmbiguity:
         replayed = custody.replay(drive)["run-retry"]
         assert replayed.patch_apply_pending is False  # resolved: tree unmutated
         # The nanny reconciles the tree back, restarts, retries: apply works.
-        (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8")
+        (target / "tracked.txt").write_text("one\ntwo\n", encoding="utf-8", newline="\n")  # the seed's LF bytes
         out2 = _integrate_delegated_patch(ctx, "run-retry", "apply", "")
         assert "✅ Integrated" in out2, out2
         custody._CUSTODY.clear()

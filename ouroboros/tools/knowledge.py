@@ -9,6 +9,7 @@ from typing import List
 
 from ouroboros import knowledge as knowledge_store
 from ouroboros.project_facts import placed_project_id
+from ouroboros.tool_access_paths import canonical_data_root
 from ouroboros.knowledge import INDEX_FILE as INDEX_FILE, OVERVIEW_TOPIC as OVERVIEW_TOPIC
 from ouroboros.knowledge import sanitize_topic as _sanitize_topic
 from ouroboros.tools.arg_feedback import ignored_argument_note
@@ -26,22 +27,16 @@ PATTERNS_TOPIC = "patterns"
 GLOBAL_ONLY_TOPICS = knowledge_store.GLOBAL_ADDRESS_TOPICS
 
 
-def _backlog_root(ctx: ToolContext) -> Path:
-    return Path(str(getattr(ctx, "budget_drive_root", "") or ctx.drive_root))
-
-
 def _address(ctx: ToolContext, topic: str, scope: str = "") -> knowledge_store.KnowledgeAddress:
+    # One root for every shelf: the canonical data root the scratchpad and the room
+    # binding (placed_project_id) already use, never the ambient DATA_DIR.
     if not isinstance(scope, str):
         raise ValueError("scope must be global or project:<exact project id>")
     sanitized = _sanitize_topic(topic)
     if sanitized in GLOBAL_ONLY_TOPICS:
-        return knowledge_store.resolve_knowledge_address(_backlog_root(ctx), sanitized, "global")
-    project = str(placed_project_id(ctx) or "")
-    root = _backlog_root(ctx)
-    if not getattr(ctx, "budget_drive_root", "") and (project or scope.startswith("project:")):
-        from ouroboros.config import DATA_DIR
-        root = Path(DATA_DIR)
-    return knowledge_store.resolve_knowledge_address(root, sanitized, scope, project)
+        return knowledge_store.resolve_knowledge_address(canonical_data_root(ctx), sanitized, "global")
+    return knowledge_store.resolve_knowledge_address(
+        canonical_data_root(ctx), sanitized, scope, str(placed_project_id(ctx) or ""))
 
 
 def _source_view(note: knowledge_store.KnowledgeNote, start_char: int | None = None,
@@ -158,7 +153,7 @@ def _capture_previous(ctx: ToolContext, note: knowledge_store.KnowledgeNote) -> 
     # read_file's text ABI normalizes newlines. JSON escapes retain the exact
     # Markdown (CRLF included) through that reader; decode old_content as UTF-8.
     source = json.dumps({"old_content": note.text, "revision": note.revision}, ensure_ascii=True)
-    for root in dict.fromkeys((Path(ctx.drive_root), _backlog_root(ctx))):
+    for root in dict.fromkeys((Path(ctx.drive_root).resolve(strict=False), canonical_data_root(ctx))):
         _text, ref, issue = persist_exact_text_source(
             root, ctx.task_id, source_id="knowledge-previous", text=source)
         if issue:

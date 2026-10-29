@@ -410,15 +410,15 @@ def local_producer_observation(ctx: Any, *, timeout_sec: float) -> Dict[str, Any
     stays in the checkpoint, so Resume continues the same panel. While not
     ``quiescent`` the task stays fenced/nonterminal and keeps its native worker.
     """
+    from ouroboros import custody_owed  # a write still owed is named, never certified; quiescence is physical
     review = drain_local_review_attempts(str(ctx.task_id), timeout_sec=timeout_sec)
     tool_futures = drain_local_tool_futures(ctx, timeout_sec=timeout_sec)
     return {
-        "dispatch_fence": "closed",
-        "review_attempts": review,
+        "dispatch_fence": "closed", "review_attempts": review,
         "tool_futures": tool_futures,
         "quiescent": bool(review.get("drained")) and review.get("registry") == "ok"
                      and bool(tool_futures.get("drained")),
-    }
+        "publication_pending": custody_owed.labels() if custody_owed.drain() else []}
 
 
 # --- durable row --------------------------------------------------------------------
@@ -1053,11 +1053,10 @@ def parkable_direct_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def prestart_pause_event(task: Dict[str, Any], error: BaseException, owner: Any) -> Optional[Dict[str, Any]]:
     """Positive no-body evidence for a fresh input; never reclassify a continuation or prior attempt."""
-    from ouroboros.owner_wait import governing_continuation
+    from ouroboros.owner_wait import fresh_input
 
     if (not getattr(error, "before_task_start", False) or getattr(error, "control_reason", "") != RAIL_OWNER_PAUSE
-            or governing_continuation(task) or int(task.get("_attempt") or 1) != 1
-            or task.get("original_task_id") or task.get("timeout_retry_from")):
+            or not fresh_input(task)):
         return None
     task_id = str(task["id"])
     root_id = str(task.get("root_task_id") or (task.get("metadata") or {}).get("root_task_id") or task_id)

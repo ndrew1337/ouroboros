@@ -5,8 +5,9 @@
 // lifecycle button NAMES its action to the one audited server seam, so the owner's
 // buttons and the agent's tool mean exactly the same thing.
 
-import { fetchJson, isStoreMigrating } from './api_client.js';
+import { fetchJson, isStoreMigrating, readStateJson } from './api_client.js';
 import { setInlineStatus } from './ui_helpers.js';
+import { tr } from './i18n.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { taskCancelPending } from './log_events.js';
 import { waitingModel } from './project_activity.js';
@@ -150,8 +151,10 @@ function scheduleRunHtml(s) {
         parts.push('last run: outcome not observed yet');
     } else if (outcome?.state) {
         const quiet = outcome.quiet === true && outcome.notice !== true;
-        const state = quiet && outcome.state === 'completed' ? 'ran · no message' : outcome.state;
-        parts.push(`last run: ${esc(state)}${outcome.ended_at ? ` · ${scheduleInstantHtml(outcome.ended_at, { includeYear: true })}` : ''}${outcome.line && !quiet ? ` · ${outcome.notice ? 'notice: ' : ''}${esc(outcome.line)}` : ''}`);
+        const state = quiet && outcome.state === 'completed' ? tr('schedule.outcome.quiet', 'ran · no message') : outcome.state;
+        // The line is the host's notice, else the run's own words (its sentence, or the end of its answer).
+        const line = outcome.line ? ` · ${outcome.notice ? `notice: ${esc(outcome.line)}` : `<span data-i18n-authored>${esc(outcome.line)}</span>`}` : '';
+        parts.push(`last run: ${esc(state)}${outcome.ended_at ? ` · ${scheduleInstantHtml(outcome.ended_at, { includeYear: true })}` : ''}${line}`);
     }
     if (s.previous_run_open) {
         parts.push(`previous run still open${s.previous_run_open.task_id ? `: ${esc(s.previous_run_open.task_id)}` : ''}`);
@@ -450,7 +453,7 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
             // This view renders only the queue; queue_only skips the whole
             // task-results scan server-side (v6.9x P2).
             getJson('/api/tasks?queue_only=1'),
-            getJson('/api/state'),
+            readStateJson(),
             getJson('/api/schedules'),
         ]);
         if (destroyed || revision !== refreshRevision) return;

@@ -149,7 +149,7 @@ def _task_exception_terminal(env: Any, task: Dict[str, Any], exc: Exception, dri
                 "task_exception", review_trigger="agent_exception"),
             trace_summary=build_trace_summary(llm_trace),
             trace_refs=loop_outcome.get("trace_refs") or collect_trace_refs(usage, llm_trace),
-            **effort_result_fields(task), **terminal_result_fields(usage),
+            **effort_result_fields(task), **terminal_result_fields(usage, title=task.get("title")),
         )
     except Exception:
         log.debug("Failed to persist task exception projection", exc_info=True)
@@ -1044,6 +1044,16 @@ class OuroborosAgent:
                 root_limit = 0.0
             from ouroboros.usage_admission import task_billing_fields
             from ouroboros.usage_ledger import BillingAuthorityUnavailable
+            from ouroboros.owner_wait import fresh_input
+            if task.get("_fresh_identity") and task_id == root_task_id and fresh_input(task):
+                # An id the host minted for this input starts with the proven-empty fan-out base, so
+                # finalization reads no unrelated history; an absent row alone proves nothing (#1528).
+                from ouroboros.task_results import STATUS_REQUESTED, write_task_result
+                try:
+                    retry_presend(lambda: write_task_result(budget_root, task_id, STATUS_REQUESTED, create_only=True),
+                                  check=False, before_task_start=True)
+                except ValueError:  # a quarantined identity: the pin below refuses it as before
+                    log.warning("Fresh fan-out base not written for %s", task_id, exc_info=True)
             try:
                 # The whole-work group and its cap (a Continue's successor spends the ORIGINAL cap).
                 billing = retry_presend(lambda: task_billing_fields(
@@ -1199,8 +1209,12 @@ class OuroborosAgent:
                     llm_trace = {"reasoning_notes": ["deep_self_review_error"], "tool_calls": []}
             else:
                 with self._owner_message_admission_lock:
-                    if inline_execution(task):
+                    if opened := inline_execution(task):
                         self._accepting_owner_messages = True
+                if opened and callable(getattr(self, "intake_opened_callback", None)):
+                    # Only this prepared loop reads what intake accepts: a version-2 Presence author answers
+                    # its event here, after every start check and before its first model send.
+                    self.intake_opened_callback(task)
                 try:
                     text, usage, llm_trace = run_llm_loop(
                         messages=messages,

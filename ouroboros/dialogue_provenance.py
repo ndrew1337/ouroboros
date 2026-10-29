@@ -416,7 +416,31 @@ def dialogue_text(entry: Mapping[str, Any]) -> str:
         text += ("\n[Context recorded with this event, not new speech or current provider truth: "
                  "memory_read(source_ref=" + json.dumps(locator, ensure_ascii=False, sort_keys=True,
                                                       separators=(",", ":")) + ")]")
-    return text
+    return text + relation_text(entry)
+
+
+def relation_text(entry: Mapping[str, Any]) -> str:
+    """The relations the host resolved for a row, as labelled lines after its words: what it
+    replies to and, on a relay, the owner's words it quotes, complete, with where they were said
+    and what they replied to. History keeps these fields; every text reader shows them too."""
+    def reference(ref: Mapping[str, Any]) -> str:
+        if ref.get("unresolved"):
+            return f"[Reply to {_text(ref.get('address'))}: not resolved]"
+        return (f"[Reply to {_text(ref.get('author_label')) or 'a message'} {_text(ref.get('address'))}"
+                f" ({_text(ref.get('kind')) or 'message'}): {_text(ref.get('snippet'))}]")
+
+    lines = []
+    if _mapping(entry.get("reply_to")):
+        lines.append(reference(_mapping(entry.get("reply_to"))))
+    relay = _mapping(entry.get("relay"))
+    for quote in (relay.get("quotes") if isinstance(relay.get("quotes"), list) else [relay] if relay else []):
+        quote, place = _mapping(quote), _mapping(_mapping(quote).get("source"))
+        if _text(quote.get("text")):
+            lines.append(f"[Owner words quoted from {_text(place.get('label')) or 'a chat'} "
+                         f"{_text(place.get('address'))}]\n{_text(quote.get('text'))}")
+            if _mapping(quote.get("reply_to")):
+                lines.append(reference(_mapping(quote.get("reply_to"))))
+    return "".join("\n" + line for line in lines)
 
 
 # Source attribution of one canonical chat row: who wrote it is read from the row's

@@ -165,6 +165,13 @@ def _handle_ui_i18n_updated(evt: Dict[str, Any], ctx: Any) -> None:
     ctx.bridge.broadcast({"type": "ui_i18n_updated", "language": language.strip(), "revision": revision})
 
 
+def _handle_update_progress_changed(evt: Dict[str, Any], ctx: Any) -> None:
+    """A turn saved the update description (``record_update_description``); this process
+    holds the windows, so it asks them to read the update status again. The record is the
+    truth: the frame carries nothing else."""
+    ctx.bridge.broadcast({"type": "update_progress_changed"})
+
+
 def _handle_task_metrics(evt: Dict[str, Any], ctx: Any) -> None:
     payload = {
         "ts": str(evt.get("ts") or utc_now_iso()),

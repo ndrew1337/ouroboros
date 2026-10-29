@@ -409,7 +409,7 @@ def test_a_view_without_the_story_reads_its_own_rooms_pages_alone(tmp_path, monk
     _page(tmp_path, alpha, 13, 13, text="Alpha's page.")
     _part(tmp_path, "1", [_page(tmp_path, "1", 10, 11, text="Main's page."), _page(tmp_path, "1", 12, 12)])
     _page(tmp_path, beta, 14, 14, text="Beta's page.")
-    store, label = ChronicleStore(tmp_path), mv._labeler(tmp_path)
+    store, label = ChronicleStore(tmp_path), mv.room_labeler(tmp_path)
     units = {unit.record_id: unit for unit in mi.legacy_units(store, tmp_path)}
     whole = mv._story_pages(store, label, units)
     parsed, real = [], json.loads

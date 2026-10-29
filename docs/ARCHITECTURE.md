@@ -1,4 +1,4 @@
-# Ouroboros v7.8.1 — Architecture & Reference
+# Ouroboros v7.9.0 — Architecture & Reference
 
 This present-tense map (BIBLE P6) explains structure and rationale; module docstrings own mechanisms. Its three mandatory layers: **Structural**, components/modules/endpoints/flows/boundaries; **Operational**, the complete registry of logs/state/configs/paths/environment variables/tools, their locations and use; **Rationale**, why non-trivial decisions hold. Replace affected descriptions; mechanisms live in named docstrings. Guards, review and lifecycles need no historical search. History: README.md, tags and Git. Replace obsolete descriptions. History belongs in README.md, tags and Git.
 

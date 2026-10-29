@@ -27,7 +27,7 @@ def test_story_directory_pages_all_ids_and_their_exact_records(tmp_path, monkeyp
         assert next_start > start and f'memory_read(story=true, start={next_start})' in continuation
         start = next_start
     listing = ''.join(chunks)
-    expected, _, _ = mv._capture_story(store, tmp_path, mv._labeler(tmp_path))
+    expected, _, _ = mv.capture_story(store, tmp_path, mv.room_labeler(tmp_path))
     assert listing == '\n'.join(mv._page_pointer(item) for item in expected if not item.get('told_by'))
     for record in [part, *records[3:]]:
         assert record['id'] in listing

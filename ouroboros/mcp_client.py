@@ -33,9 +33,8 @@ from ouroboros.secret_masking import (
 )
 from ouroboros.secret_masking import (
     MCP_RESPONSE_ONLY_FIELDS,
-    mask_prefixed_secret,
 )
-from ouroboros.mcp_headers import mask_headers, validate_headers
+from ouroboros.mcp_headers import validate_headers
 from ouroboros.mcp_schema import filter_schema_literals, redact_metadata, tool_metadata
 from ouroboros.tools.tool_result import ToolResult
 from ouroboros.platform_layer import IS_WINDOWS
@@ -550,30 +549,6 @@ def parse_servers(
                            "tool_count": 0, "last_error": message, "code": "MCP_ID_AMBIGUOUS"})
     return out
 
-
-def redact_servers_for_status(configs: List[MCPServerConfig]) -> List[Dict[str, Any]]:
-    """Return UI-safe server configs with auth tokens masked."""
-    out: List[Dict[str, Any]] = []
-    for cfg in configs:
-        out.append(
-            {
-                "id": cfg.id,
-                "name": cfg.name,
-                "enabled": cfg.enabled,
-                "transport": cfg.transport,
-                "url": _redact_error_text(cfg.url, cfg),
-                "auth_header": cfg.auth_header,
-                "auth_token": mask_prefixed_secret(cfg.auth_token, visible_chars=4),
-                "auth_configured": cfg.has_auth(),
-                "headers": mask_headers(cfg.headers),
-                "allowed_tools": list(cfg.allowed_tools),
-                "cwd": cfg.cwd,
-                "env_from_settings": dict(cfg.env_from_settings),
-                "schemas_at_start": cfg.schemas_at_start,
-            }
-        )
-    return out
-
 # Async transport.
 
 
@@ -735,60 +710,61 @@ def _transport_factory(cfg: MCPServerConfig):
     raise RuntimeError(f"Unsupported transport: {cfg.transport!r}")
 
 
+@asynccontextmanager
+async def _session(cfg: MCPServerConfig):
+    """One fresh client session over ``cfg``'s transport; leaving it joins both contexts."""
+    if not _MCP_SDK_AVAILABLE:  # raised before any transport exists: a proven no-send
+        missing = RuntimeError("MCP client SDK not installed. Add `mcp>=1.10` to the runtime.")
+        missing.mcp_unsent_joined = True
+        raise missing
+    async with _transport_factory(cfg) as streams:  # every transport yields (read, write, ...)
+        async with ClientSession(streams[0], streams[1]) as session:
+            yield session
+
+
 async def _list_tools_async(cfg: MCPServerConfig, *, timeout_sec: int) -> List[Dict[str, Any]]:
     """Connect to ``cfg`` and return raw tools; errors surface to status."""
-    if not _MCP_SDK_AVAILABLE:
-        raise RuntimeError(
-            "MCP client SDK not installed. Add `mcp>=1.10` to the runtime."
-        )
     from ouroboros.owner_pause import submit_async_preparation
 
     async def _do_with_session() -> List[Dict[str, Any]]:
-        async with _transport_factory(cfg) as transport_ctx:
-            # Both transports yield read/write streams.
-            streams = transport_ctx
-            if isinstance(streams, tuple):
-                read, write = streams[0], streams[1]
-            else:
-                read, write = streams.read, streams.write  # pragma: no cover
-            async with ClientSession(read, write) as session:
-                initialized = await session.initialize()
-                # The server's own usage text rides as a marker row (mcp_catalog.split_instructions).
-                instructions = getattr(initialized, "instructions", None)
-                # Follow nextCursor (E5, capinv-447): the MCP listing is paginated
-                # and a single call silently loses every tool after page one. The
-                # page bound only guards against a cursor loop from a broken server.
-                tools_raw: List[Dict[str, Any]] = [{"_server_instructions": instructions}] if instructions else []
-                cursor: Any = None
-                for _page in range(50):
-                    result = await (
-                        session.list_tools(cursor=cursor) if cursor else session.list_tools()
+        async with _session(cfg) as session:
+            initialized = await session.initialize()
+            # The server's own usage text rides as a marker row (mcp_catalog.split_instructions).
+            instructions = getattr(initialized, "instructions", None)
+            # Follow nextCursor (E5, capinv-447): the MCP listing is paginated
+            # and a single call silently loses every tool after page one. The
+            # page bound only guards against a cursor loop from a broken server.
+            tools_raw: List[Dict[str, Any]] = [{"_server_instructions": instructions}] if instructions else []
+            cursor: Any = None
+            for _page in range(50):
+                result = await (
+                    session.list_tools(cursor=cursor) if cursor else session.list_tools()
+                )
+                for tool in result.tools or []:
+                    tools_raw.append(
+                        {
+                            "name": getattr(tool, "name", ""),
+                            "description": getattr(tool, "description", "") or "",
+                            "input_schema": getattr(tool, "inputSchema", {}) or {},
+                        }
                     )
-                    for tool in result.tools or []:
-                        tools_raw.append(
-                            {
-                                "name": getattr(tool, "name", ""),
-                                "description": getattr(tool, "description", "") or "",
-                                "input_schema": getattr(tool, "inputSchema", {}) or {},
-                            }
-                        )
-                        for key in ("annotations", "metadata"):
-                            value = getattr(tool, key, None)
-                            if value is not None:
-                                tools_raw[-1][key] = value.model_dump(mode="json", by_alias=True) if hasattr(value, "model_dump") else value
-                        if metadata := tool_metadata(tool):
-                            tools_raw[-1]["metadata"] = {**(tools_raw[-1].get("metadata") or {}), **metadata}
-                    cursor = getattr(result, "nextCursor", None)
-                    if not cursor:
-                        break
-                else:
-                    if cursor:
-                        # Cap exhausted with pages remaining: a partial catalog
-                        # must not read as the complete one (#447 P1).
-                        tools_raw.append({"name": "", "_pagination_truncated": True})
-                        log.warning("MCP tool listing stopped at the 50-page bound with "
-                                    "nextCursor still present; catalog is PARTIAL")
-                return tools_raw
+                    for key in ("annotations", "metadata"):
+                        value = getattr(tool, key, None)
+                        if value is not None:
+                            tools_raw[-1][key] = value.model_dump(mode="json", by_alias=True) if hasattr(value, "model_dump") else value
+                    if metadata := tool_metadata(tool):
+                        tools_raw[-1]["metadata"] = {**(tools_raw[-1].get("metadata") or {}), **metadata}
+                cursor = getattr(result, "nextCursor", None)
+                if not cursor:
+                    break
+            else:
+                if cursor:
+                    # Cap exhausted with pages remaining: a partial catalog
+                    # must not read as the complete one (#447 P1).
+                    tools_raw.append({"name": "", "_pagination_truncated": True})
+                    log.warning("MCP tool listing stopped at the 50-page bound with "
+                                "nextCursor still present; catalog is PARTIAL")
+            return tools_raw
 
     # Server listings and draft probes name no task; no task's Pause gates them.
     return await asyncio.wait_for(
@@ -800,10 +776,6 @@ async def _call_tool_async(
     cfg: MCPServerConfig, tool_name: str, arguments: Dict[str, Any], *, timeout_sec: int
 ) -> ToolResult:
     """Open a fresh session and preserve the SDK-owned error bit."""
-    if not _MCP_SDK_AVAILABLE:
-        raise RuntimeError(
-            "MCP client SDK not installed. Add `mcp>=1.10` to the runtime."
-        )
     from ouroboros.owner_pause import submit_async_operation, submit_async_preparation, OwnerPauseRefused, _TOOL_OPERATION
     from ouroboros.model_wait import ModelWaitInterrupted
     from ouroboros.usage_accounting import UsageAccountingError
@@ -813,26 +785,20 @@ async def _call_tool_async(
     async def _do() -> ToolResult:
         nonlocal unsent_joined
         refusal = None
-        async with _transport_factory(cfg) as transport_ctx:
-            streams = transport_ctx
-            if isinstance(streams, tuple):
-                read, write = streams[0], streams[1]
+        async with _session(cfg) as session:
+            try:
+                await session.initialize()
+            except BaseException as exc:
+                # Includes timeout cancellation before tools/call. Keep the
+                # original exception, but join both contexts before proof.
+                refusal = exc
             else:
-                read, write = streams.read, streams.write  # pragma: no cover
-            async with ClientSession(read, write) as session:
                 try:
-                    await session.initialize()
-                except BaseException as exc:
-                    # Includes timeout cancellation before tools/call. Keep the
-                    # original exception, but join both contexts before proof.
+                    pending = submit_async_operation(None, session.call_tool, tool_name, arguments)
+                except (OwnerPauseRefused, ModelWaitInterrupted, UsageAccountingError, StoreError) as exc:
                     refusal = exc
                 else:
-                    try:
-                        pending = submit_async_operation(None, session.call_tool, tool_name, arguments)
-                    except (OwnerPauseRefused, ModelWaitInterrupted, UsageAccountingError, StoreError) as exc:
-                        refusal = exc
-                    else:
-                        result = await pending  # any error here may follow a send
+                    result = await pending  # any error here may follow a send
         if refusal is not None:
             # Failed/unfinished cleanup never reaches this positive phase fact.
             unsent_joined = True
@@ -929,29 +895,57 @@ def _serialize_content_part(item: Any) -> Dict[str, Any]:
 # Sync wrapper.
 
 
-def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Optional[int] = None) -> Any:
-    """Run async work from sync code; the factory avoids reusing closed coroutines."""
+def _run_async(coro_factory: Callable[[], Awaitable[Any]], *, join_timeout: Optional[int] = None,
+               exited: Callable[[Any, Optional[BaseException]], None] = lambda _value, _error: None) -> Any:
+    """Run async work from sync code; the factory avoids reusing closed coroutines.
+
+    ``exited(value, error)`` runs where ``asyncio.run`` ran, once its loop has shut down
+    (leftover tasks, async generators, default executor). A nested runner thread holds the
+    active invocation until then, so the call cannot settle while the thread lives; a caller
+    whose join it outlives gets ``TimeoutError`` and owns none of its outcome.
+    """
+    def run() -> Any:
+        try:
+            value = asyncio.run(coro_factory())
+        except BaseException as exc:
+            exited(None, exc)
+            raise
+        exited(value, None)
+        return value
+
     try:
         running = asyncio.get_running_loop() is not None
     except RuntimeError:
         running = False
     if not running:  # outside the handler, whose RuntimeError would be every failure's context
-        return asyncio.run(coro_factory())
+        return run()
 
-    # Existing loop: run the coroutine in a sub-thread.
+    # Existing loop: run the coroutine in a sub-thread that joins the invocation's lifetime.
+    import contextvars
+    from ouroboros.tool_custody import hold_invocation
+
     holder: Dict[str, Any] = {}
+    release = hold_invocation()
 
     def _runner() -> None:
         try:
-            holder["value"] = asyncio.run(coro_factory())
+            holder["value"] = run()
         except BaseException as exc:
             holder["error"] = exc
-
-    import contextvars
+        finally:
+            release()
 
     context = contextvars.copy_context()
     thread = threading.Thread(target=lambda: context.run(_runner), name="mcp-sync-runner", daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:  # Thread.start raises these only before the thread exists
+        exc.mcp_unsent_joined = True  # nothing was entered, so nothing was sent
+        try:
+            exited(None, exc)
+        finally:
+            release()
+        raise
     thread.join(timeout=join_timeout)
     if thread.is_alive():
         raise TimeoutError("MCP async runner did not finish before timeout")
@@ -1472,37 +1466,42 @@ class MCPManager:
             timeout = self._tool_timeout_sec
         if resolution.status != "callable":
             return resolution.refusal(prefixed_name)
+        from ouroboros.owner_pause import OwnerPauseRefused, _TOOL_OPERATION, record_mcp_call_returned
+        from ouroboros.store import StoreError
         from ouroboros.tool_custody import external_handoff
         confirmed = external_handoff("mcp_transport")
+
+        def unsent(exc: Any) -> bool:  # no call, with either no transport entry or joined cleanup
+            active = _TOOL_OPERATION.get()
+            return getattr(exc, "mcp_unsent_joined", False) is True or bool(
+                isinstance(exc, OwnerPauseRefused) and active and active[2].get("not_started") is True)
+
+        def exited(value: Any, error: Optional[BaseException]) -> None:
+            # This invocation's local call is over, whatever its outcome. Only a final response
+            # or a proven no-send ends the remote duty too; nothing is ever resent.
+            record_mcp_call_returned(prefixed_name)
+            if isinstance(value, ToolResult) or unsent(error):
+                confirmed()
         try:
-            result = _run_async(
-                lambda: self._async_call_tool(cfg, tool.raw_name, arguments or {}, timeout),
-                join_timeout=timeout + 3,
-            )
+            result = _run_async(lambda: self._async_call_tool(cfg, tool.raw_name, arguments or {}, timeout),
+                                join_timeout=timeout + 3, exited=exited)
             if not isinstance(result, ToolResult):
                 raise TypeError("MCP transport returned a non-ToolResult outcome")
-        except asyncio.TimeoutError as exc:
-            unsent = getattr(exc, "mcp_unsent_joined", False) is True
-            if unsent:
-                confirmed()
+        # Two classes before Python 3.11. A runner the join outlived keeps its own outcome.
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            not_sent = unsent(exc)
             text = (
                 f"⚠️ MCP_TOOL_TIMEOUT: server {cfg.id!r} did not respond in {timeout}s. "
                 + ("The tool call was not submitted; its session and transport have closed."
-                   if unsent else "The remote outcome is unknown: side effects may already have happened, "
+                   if not_sent else "The remote outcome is unknown: side effects may already have happened, "
                    "and remote cancellation is not confirmed. Use the server-specific status/read "
                    "tool, if available, to reconcile the operation before retrying.")
             )
             return ToolResult(status="timeout", code="MCP_TIMEOUT", text=text,
-                              meta={"mcp_call_not_sent": unsent})
+                              meta={"mcp_call_not_sent": not_sent})
         except BaseException as exc:  # noqa: BLE001 - any failure is reported
-            from ouroboros.owner_pause import OwnerPauseRefused, _TOOL_OPERATION
-            from ouroboros.store import StoreError
-            active = _TOOL_OPERATION.get()
-            unsent = getattr(exc, "mcp_unsent_joined", False) is True or (
-                isinstance(exc, OwnerPauseRefused) and active and active[2].get("not_started") is True)
-            if unsent:
-                confirmed()  # no call, with either no transport entry or joined cleanup
-            if unsent and isinstance(exc, (OwnerPauseRefused, StoreError)):
+            not_sent = unsent(exc)
+            if not_sent and isinstance(exc, (OwnerPauseRefused, StoreError)):
                 from ouroboros.tools.tool_result import launch_refusal_result, _replace_tool_result
                 return _replace_tool_result(launch_refusal_result(exc),
                                             meta_updates={"mcp_call_not_sent": True})
@@ -1512,13 +1511,8 @@ class MCPManager:
                 status="error",
                 code="MCP_ERROR",
                 text=text,
-                meta={"dynamic_provider": True, "mcp_call_not_sent": bool(unsent)},
+                meta={"dynamic_provider": True, "mcp_call_not_sent": not_sent},
             )
-        # Joined normal return (either SDK error bit): this invocation's call is over.
-        from ouroboros.owner_pause import record_mcp_call_returned
-
-        record_mcp_call_returned(prefixed_name)
-        confirmed()
         text = _model_facing_result(
             cfg,
             tool.raw_name,

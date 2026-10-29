@@ -333,7 +333,7 @@ def _plan(root: pathlib.Path, stream: str, plan: List[Dict[str, Any]]) -> Dict[s
             "SELECT * FROM import_ledger WHERE stream=?", (stream,))}
         export = ds._meta(conn, f"export:{stream}") or {}
         coordinates = export.get("coordinates", [])
-        end = total
+        end, planned = total, []
         for segment in plan:
             kept = known.get(segment["name"])
             if kept is None:
@@ -355,6 +355,7 @@ def _plan(root: pathlib.Path, stream: str, plan: List[Dict[str, Any]]) -> Dict[s
                 end = max(end, base + segment["size"])
                 cursor = conn.execute("INSERT INTO import_ledger (stream, name, base, size, mtime_ns, state) VALUES (?,?,?,?,?,'pending')",
                                       (stream, segment["name"], base, segment["size"], segment["mtime_ns"]))
+                planned.append(cursor.lastrowid)
                 if mapped:
                     # Keep physical offsets separate from canonical coordinates, including when
                     # a changed span made us reserve a fresh range for the older body's new rows.
@@ -375,6 +376,12 @@ def _plan(root: pathlib.Path, stream: str, plan: List[Dict[str, Any]]) -> Dict[s
             # All live files were rotated before planning. Entries past their actual end
             # belong to an unwritten/torn batch, not to a future file at that offset.
             ds._set_meta(conn, f"export:{stream}", {**export, "coordinates": []})
+        if planned and stream == "chat":  # this body derives them as it imports; an older body would not
+            ds._set_meta(conn, ds.APPEARANCES_AWAITING, sorted({*(ds._meta(conn, ds.APPEARANCES_AWAITING) or []), *planned}))
+            # Planned segments are tracked by awaiting, including on first cutover. Cross only a
+            # previously derived prefix, never older-body live rows still below the frontier.
+            conn.execute("UPDATE meta SET value=? WHERE key=? AND value=?",
+                         (json.dumps(end), ds.APPEARANCES_MARK, json.dumps(int(marks["next_seq"]))))
         conn.execute("UPDATE streams SET next_seq=max(next_seq, ?), files_seq=max(files_seq, ?), "
                      "cutover_seq=coalesce(cutover_seq, ?) WHERE stream=?",
                      (end, total if not shifted else files_seq, total, stream))
@@ -405,6 +412,33 @@ def pending_segments(root: Any) -> List[Dict[str, Any]]:
         records = conn.execute("SELECT * FROM import_ledger WHERE state='pending' "
                                "ORDER BY CASE stream WHEN 'chat' THEN 0 ELSE 1 END, base DESC").fetchall()
     return [dict(record) for record in records]
+
+
+def import_keys(root: Any, lines: List[Any]) -> Optional[List[Tuple[str, int]]]:
+    """``(key, seq)`` of the imported chat rows a Project shows outside their written chat; ``None``
+    when the room rule cannot be read now (the job derives them; the mark stays)."""
+    from ouroboros.room_appearances import write_facts
+
+    keys: List[Tuple[str, int]] = []
+    for line in lines:
+        found, _shown = write_facts(root, line.row)
+        if found is None:
+            return None
+        keys.extend((key, line.seq) for key in found)
+    return keys
+
+
+def record_imported(conn: Any, keys: List[Tuple[str, int]], lower: int, upper: int, segment: int) -> None:
+    """Record the segment's keys and retire its awaiting entry in its import transaction. Advance the
+    frontier only if it reaches this segment: an older body's unindexed appends may precede a newly
+    restored archive, and importing that archive must not certify those earlier rows."""
+    conn.execute(ds.APPEARANCES_DDL)
+    conn.executemany("INSERT OR IGNORE INTO room_appearances (key, stream, seq) VALUES (?, 'chat', ?)", keys)
+    conn.execute("UPDATE meta SET value=? WHERE key=? AND CAST(value AS INTEGER) >= ? AND CAST(value AS INTEGER) < ?",
+                 (json.dumps(upper), ds.APPEARANCES_MARK, lower, upper))
+    awaiting = ds._meta(conn, ds.APPEARANCES_AWAITING) or []
+    if segment in awaiting:
+        ds._set_meta(conn, ds.APPEARANCES_AWAITING, [entry for entry in awaiting if entry != segment])
 
 
 def import_segment(root: Any, stream: str, name: str) -> Dict[str, Any]:
@@ -465,6 +499,8 @@ def import_segment(root: Any, stream: str, name: str) -> Dict[str, Any]:
             last_seq, last_ts = touched.get(columns["chat_id"], (None, ""))
             touched[columns["chat_id"]] = (max(last_seq or -1, line.seq) if stream == "chat" else last_seq,
                                            max(last_ts, columns["ts"]))
+    # Imported rows are derived as they land (``room_appearances.import_keys``): the mark may then pass them.
+    shown = import_keys(root, [line for line, *_rest in parsed]) if stream == "chat" else None
     with ds.transaction(root, write=True) as conn:
         current = conn.execute("SELECT state FROM import_ledger WHERE stream=? AND name=?", (stream, name)).fetchone()
         if current is None or current["state"] != "pending":
@@ -481,6 +517,8 @@ def import_segment(root: Any, stream: str, name: str) -> Dict[str, Any]:
             conn.executemany("INSERT OR IGNORE INTO skipped (stream, seq, length, kind) VALUES (?,?,?,?)", skipped)
         if coordinates is not None:
             ds._set_meta(conn, f"import_coordinates:{ledger['id']}", verified)
+        if shown is not None:
+            record_imported(conn, shown, int(ledger["base"]), int(ledger["base"]) + int(ledger["size"]), int(ledger["id"]))
         for chat_id, (last_seq, last_ts) in touched.items():
             ds.touch_room(conn, chat_id, last_seq, last_ts, 0)
         conn.execute("UPDATE import_ledger SET state='done', rows=?, stream_rows=?, bad=?, gen=?, imported_at=? "

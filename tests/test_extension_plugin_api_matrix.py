@@ -149,16 +149,10 @@ def test_recorded_fingerprint_matches_the_live_surface():
 
 
 def test_unknown_version_key_fails_closed(monkeypatch):
-    monkeypatch.setattr(
-        papi, "PLUGIN_API_SURFACE_FINGERPRINTS",
-        {"2.0": PLUGIN_API_SURFACE_FINGERPRINTS["2.0"],
-         PLUGIN_API_VERSION: plugin_api_surface_fingerprint(), "2.9": "unused"},
-    )
     monkeypatch.setattr(papi, "PLUGIN_API_VERSION", "2.9")
     # Declared "2.0" is inside major/minor range for host 2.9 but has no
     # recorded fingerprint entry in this simulated table -> refused.
-    monkeypatch.setitem(papi.PLUGIN_API_SURFACE_FINGERPRINTS, "2.9", papi.plugin_api_surface_fingerprint())
-    del papi.PLUGIN_API_SURFACE_FINGERPRINTS["2.0"]
+    monkeypatch.setattr(papi, "PLUGIN_API_SURFACE_FINGERPRINTS", {"2.9": papi.plugin_api_surface_fingerprint()})
     result = papi.negotiate_plugin_api(_manifest('plugin_api: "2.0"\n'))
     assert not result.ok and "no recorded surface fingerprint" in result.error
 

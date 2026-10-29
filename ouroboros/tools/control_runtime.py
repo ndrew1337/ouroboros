@@ -445,10 +445,11 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
     """Send a separate owner reply without completing the ongoing task.
 
     ``destination="main"`` addresses the owner's main chat from an owner-visible
-    root room: the row is typed ``main_notice``, which the supervisor
-    and history replay pin to Main whatever the sender's Project binding, and
-    which never counts as the task's final answer. When to send one is the
-    model's judgment (BIBLE P5); no host counter or timer triggers it.
+    root room: the row is typed ``main_notice``, written to Main whatever the
+    sender's Project binding and shown by that Project too (one row,
+    ``room_membership.row_rooms``); it never counts as the task's final answer.
+    When to send one is the model's judgment (BIBLE P5); no host counter or
+    timer triggers it.
     """
     chat_id = getattr(ctx, "current_chat_id", None)
     if chat_id is None or chat_id == "":  # 0 is a real hidden session, not absence
@@ -518,9 +519,9 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         chat_id, system_type = relay["source"]["chat_id"], "relay_reply"
         reply_meta = {"reply_to": resolve_reply(canonical_data_root(ctx), relay["source"]["address"]),
                       "reply_to_relay": relay["relay_id"]}
-    from ouroboros.tools.owner_delivery import deliver_owner_event
+    from ouroboros.tools.owner_delivery import deliver_owner_event, stamp_lineage
     from ouroboros.utils import append_jsonl
-    mode = deliver_owner_event(ctx, {
+    event = stamp_lineage(ctx, {
         "type": "send_message",
         "chat_id": chat_id,
         "text": text,
@@ -529,7 +530,19 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         "system_type": system_type,
         "progress_meta": reply_meta,
         "ts": utc_now_iso(),
-    })
+    })  # the producer before the debt and the dispatch: a replayed answer is the same work's
+    if relay:
+        # A relay's answer is owed before the queue sees it (the terminal outbox, as Presence Main contact is):
+        # a send that fails after enqueue is retried under this id, and the open return retires only once owed.
+        from supervisor.terminal_delivery import register_pending_delivery
+        from ouroboros.tool_access import canonical_data_root
+
+        event["delivery_id"] = f"relay-return:{relay['relay_id']}:{getattr(ctx, 'task_id', '') or ''}"
+        if not register_pending_delivery(canonical_data_root(ctx), event):
+            return publish_no_effect(ctx, ToolResult(status="unavailable", code="CAPABILITY_UNAVAILABLE", text=(
+                f"⚠️ RELAY_RETURN_NOT_OWED: the answer to relay {relay['relay_id']} could not be recorded for delivery. "
+                "Nothing was sent and the relay stays open; retry the same words."), meta={"reason_code": "RELAY_RETURN_NOT_OWED"}))
+    mode = deliver_owner_event(ctx, event)
     append_jsonl(ctx.drive_logs() / "events.jsonl", {
         "ts": utc_now_iso(),
         "type": "proactive_message",
@@ -543,6 +556,8 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         ctx._open_relays.pop(relay["relay_id"], None)
         from ouroboros.owner_relay import persist_held_state
         persist_held_state(ctx)
+        return (f"OK: answer to relay {relay['relay_id']} owed to {relay['source'].get('label') or 'its source room'} "
+                f"(delivery {event['delivery_id']}); the outbox retries it until sent.")
     if target == "main":
         return "OK: notice sent to the main chat." if mode == "live" else "OK: notice queued for delivery to the main chat."
     if mode == "live":
@@ -946,33 +961,30 @@ def _finish_task(ctx: ToolContext, action: str, answer: str | None = None,
                  answer_sha256: str | None = None, rationale: str = "",
                  acceptance_subject: dict | None = None, pending_review: str | None = None,
                  silent: bool = False, swarm_comparison: str | None = None, summary: str = "") -> str:
-    """Stage an author act; an own-clock or focused wake, or a schedule-born root, may choose silence."""
+    """Stage an author act; a self-started run (an own-clock or focused wake, a schedule-born root
+    without a Presence binding) may choose silence and may leave one sentence for its human."""
     from ouroboros.consciousness_authority import is_focus_wake, is_own_clock_wake
+    from ouroboros.dialogue_provenance import presence_caller_binding
+    from ouroboros.task_results import resolve_ctx_lineage
 
     metadata = getattr(ctx, "task_metadata", None) or {}
-    wake = bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
+    occurrence = metadata.get("schedule_occurrence")
+    self_started = (bool(getattr(ctx, "is_direct_chat", False)) and (is_own_clock_wake(metadata) or is_focus_wake(metadata))
+                    or (isinstance(occurrence, dict)
+                        and str(occurrence.get("schedule_id") or "").strip()
+                        and str(occurrence.get("token") or "").strip()
+                        and resolve_ctx_lineage(ctx)["is_root_task"]
+                        and presence_caller_binding(ctx) is None))
     summary = " ".join(str(summary or "").split())
-    if summary and not wake:
+    if silent and action != "finish":
         return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
-            text="ERROR: COMPLETION_ARGUMENT: summary is available only on a consciousness wake's own turn"))
+            text="ERROR: COMPLETION_ARGUMENT: silent requires action=finish"))
+    if (summary or silent) and not self_started:
+        return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
+            text="ERROR: COMPLETION_ARGUMENT: silent and summary are available only on a self-started run: "
+                 "a consciousness wake's own turn, or a schedule-born root without a Presence binding"))
     allow_empty = False
     if silent:
-        if action != "finish":
-            return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
-                text="ERROR: COMPLETION_ARGUMENT: silent requires action=finish"))
-        from ouroboros.dialogue_provenance import presence_caller_binding
-        from ouroboros.task_results import resolve_ctx_lineage
-
-        occurrence = metadata.get("schedule_occurrence")
-        scheduled_root = (isinstance(occurrence, dict)
-                          and str(occurrence.get("schedule_id") or "").strip()
-                          and str(occurrence.get("token") or "").strip()
-                          and resolve_ctx_lineage(ctx)["is_root_task"]
-                          and presence_caller_binding(ctx) is None)
-        if not (wake or scheduled_root):
-            return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR",
-                text="ERROR: COMPLETION_ARGUMENT: silent is available only on a consciousness wake's own turn, "
-                     "or a schedule-born root without a Presence binding"))
         allow_empty = True
         if answer is None and not answer_sha256:
             answer = ""  # silence needs no words; complete bytes given anyway stay an internal result

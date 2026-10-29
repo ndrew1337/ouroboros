@@ -4,7 +4,7 @@ from dataclasses import replace
 from types import SimpleNamespace
 
 from ouroboros.context_sections import _build_installed_skills_section, runtime_host_section
-from ouroboros.review_state import AdvisoryReviewState, AdvisoryRunRecord, CommitReadinessDebtItem, make_repo_key
+from ouroboros.review_state import AdvisoryReviewState, CommitAttemptRecord, CommitReadinessDebtItem, make_repo_key
 from ouroboros.subagent_runtime import review_pool_host_section, subagent_catalog_section
 from tests import _memory_scale_fixture as scale
 
@@ -31,9 +31,10 @@ def review_state(root):
     key = make_repo_key(root)
     debts = [CommitReadinessDebtItem(f'crd-{n}', 'validation', f'Unresolved debt {n}: verify the retained source.',
              repo_key=key, evidence=[f'Unresolved debt {n}: verify the retained source.']) for n in range(3)]
-    runs = [AdvisoryRunRecord(f'{n:064x}', f'v7.4.0 historical execution {n}: ' + 'detail ' * 90,
-                             'stale', '2026-09-20T00:00:00Z', repo_key=key) for n in range(5)]
-    return AdvisoryReviewState(advisory_runs=runs, commit_readiness_debts=debts,
+    runs = [CommitAttemptRecord('2026-09-20T00:00:00Z',
+                f'v7.4.0 historical execution {n}: ' + 'detail ' * 90, 'failed',
+                snapshot_hash=f'{n:064x}', repo_key=key) for n in range(5)]
+    return AdvisoryReviewState(attempts=runs, commit_readiness_debts=debts,
         last_stale_from_edit_ts='2026-10-23T12:00:00Z', last_stale_reason='The checkout changed.', last_stale_repo_key=key)
 
 
@@ -73,6 +74,8 @@ def skills_section(root, monkeypatch):
 def host_sections(root, monkeypatch):
     from ouroboros.agent_task_pipeline import build_review_context
     monkeypatch.setattr('ouroboros.review_state.load_state', lambda *_: review_state(root))
+    monkeypatch.setattr('ouroboros.review_ledger.latest_preflight_record',
+                        lambda *_a, **_kw: {'ts': '2026-10-23T11:00:00Z'})
     continuity = build_review_context(SimpleNamespace(drive_root=root, repo_dir=root))
     return (runtime_host_section(runtime_data()), review_pool_host_section(pool()), continuity,
             subagent_catalog_section(catalog()), skills_section(root, monkeypatch))

@@ -68,6 +68,8 @@ def quiet_tick(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "DATA_DIR", tmp_path)
     monkeypatch.setattr(sm, "_LAST_CANCEL_INTENT_SWEEP", [time.time()])
     monkeypatch.setattr(sm, "_installed_skill_names", lambda: None)
+    # Not this fixture's duty: the real child's own thread would outlive the test (it has its own tests).
+    monkeypatch.setattr(sm, "_tick_maintenance_child", lambda: None)
     monkeypatch.setattr(queue, "RUNNING", {})
     monkeypatch.setattr(queue, "PENDING", [])
     monkeypatch.setattr(workers, "WORKERS", {})
@@ -165,7 +167,7 @@ def test_the_delegated_reconciler_reads_its_candidates_before_it_reads_liveness(
     seen: list = []
 
     def reading_candidates(root, where="", params=()):
-        assert (where, params) == ("state=?", ("held",))
+        assert (where, params) == (current.HELD_WHERE, ("held",))
         live.add("late-task")  # admitted while current candidates are read
         return {run.run_id: run}
 

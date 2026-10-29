@@ -1,4 +1,4 @@
-"""The voice contract (PluginAPI 2.2): provider catalogs, route facts, call configuration, registration."""
+"""The voice contract (PluginAPI 2.3): provider catalogs, route facts, call configuration, registration."""
 from __future__ import annotations
 
 import importlib.util
@@ -138,15 +138,22 @@ def test_built_in_engines_declare_labelled_dated_windows(skill, window, credenti
     assert catalog.privacy
 
 
-def test_plugin_api_2_2_keeps_the_prior_generations_negotiable():
+def test_plugin_api_2_3_unites_memory_and_voice_without_losing_prior_minimums():
     from ouroboros.contracts.plugin_api import (PLUGIN_API_SURFACE_FINGERPRINTS, PLUGIN_API_VERSION,
-                                                VALID_EXTENSION_PERMISSIONS, plugin_api_surface_fingerprint)
+                                                VALID_EXTENSION_PERMISSIONS, negotiate_plugin_api, plugin_api_surface_fingerprint)
 
-    # The additive voice generation keeps the 2.0 surface negotiable; one generation, one fingerprint.
-    assert PLUGIN_API_VERSION == "2.2"
+    # The target memory reader and branch voice additions share one additive host generation.
+    assert PLUGIN_API_VERSION == "2.3"
     assert PLUGIN_API_SURFACE_FINGERPRINTS == {
         "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
-        "2.1": "648ecc02839e2ef5fc7bb18bb14f66acf6836f0ce041da9c6b19d3d2e143f336",
-        "2.2": plugin_api_surface_fingerprint(),
+        "2.1": "7e288212fd5bcaaa5de961bde9180ca8669e45c00bbfa8d59ffbccccf9442cdb",
+        "2.2": "46ee2d134ca3c3957adef9366b326b97a84abaae757e8e9d18030a7838329506",
+        "2.3": plugin_api_surface_fingerprint(),
     }
     assert {"realtime_provider", "live_conversation", "call_peer"} <= VALID_EXTENSION_PERMISSIONS
+
+    from types import SimpleNamespace
+    for minimum in ("2.0", "2.1", "2.2", "2.3"):
+        for capabilities in (["read_memory"], ["register_realtime_provider", "register_live_conversation"]):
+            result = negotiate_plugin_api(SimpleNamespace(plugin_api={"version": minimum, "capabilities": capabilities}))
+            assert result.ok and result.generation == "2.3", result

@@ -126,3 +126,20 @@ def test_runtime_unrecognized_shapes_remain_whole():
     assert compact_other_live_work([unidentified])['unabridged'] == [unidentified]
     commit = {'sha': 'future', 'receipt': {'schema': 1, 'review': [{'unknown': 'shape'}]}}
     assert compact_qualification({'commits': [commit]})['commits']['unabridged'] == [commit]
+
+
+@pytest.mark.parametrize('look, expected', [(None, False), ('2026-10-23T11:00:00Z', True),
+                                           ('2026-10-23T13:00:00Z', False)])
+def test_compact_continuity_uses_current_preflight_freshness(tmp_path, monkeypatch, look, expected):
+    from ouroboros.agent_task_pipeline import build_review_context
+    from types import SimpleNamespace
+    state = shape.review_state(tmp_path)
+    monkeypatch.setattr('ouroboros.review_state.load_state', lambda *_: state)
+    monkeypatch.setattr('ouroboros.review_ledger.latest_preflight_record',
+                        lambda *_a, **_kw: {'ts': look} if look else None)
+    part = build_review_context(SimpleNamespace(drive_root=tmp_path, repo_dir=tmp_path))
+    assert ('stale_marker=' in part.full_text) == expected
+    assert ('stale_marker=' in part.operative_view) == expected
+    fallback = context_sections.review_status_host_section(state, tmp_path, tmp_path)
+    assert ('stale_marker=' in fallback.operative_view) == expected
+    assert 'v7.4.0' in fallback.full_text  # historical attempts remain readable

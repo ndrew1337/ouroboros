@@ -365,7 +365,7 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     parent = str(row.get("parent_task_id") or result.get("parent_task_id") or "")
     role = str(row.get("delegation_role") or result.get("delegation_role") or "")
     noun = f"child task {task_id} of {parent}" if role == "subagent" and parent else f"task {task_id}"
-    return f"- {noun} {status}{cost_text}{where}, {when}: {title}".rstrip(": ")
+    return f"- {noun} {status}{cost_text}{where}, {when}: {title}".rstrip(": ") + summary
 
 
 # --- canonical transitions: identities in the task results, not chat rows or stamps --------
@@ -592,7 +592,7 @@ def _task_window(root, prior, chat_rows):
             "SELECT task_id FROM tasks WHERE has_owner_questions=1 OR has_owner_questions IS NULL"))
         fetched = task_store._fetch(txn, "t.task_id IN (SELECT value FROM json_each(?))",
                                    (json.dumps(sorted(selected)),))
-    rows = task_store._decode(*fetched)
+    rows = task_store._decode(fetched)
     retained = {tid: {key: None for key in prior["inventory"][tid]}
                 for tid in signatures if complete and tid not in selected}
     return rows, signatures, retained

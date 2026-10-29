@@ -219,7 +219,8 @@ def _drain_incoming_messages(
                 # and the sender id ride the row, the injected event and the ack.
                 provenance = str(entry.get("provenance") or "ancestor_task")
                 if provenance == "place_event":
-                    controls["place_event"] = True  # accepted context, never owner authority
+                    from ouroboros.presence_continuation import note_place_delivery
+                    note_place_delivery(owner_ctx, entry, controls)  # context, never owner authority
                 if provenance not in CONTEXT_ONLY_TASK_PROVENANCES:
                     _loop()._record_owner_directive(
                         owner_ctx, content=dmsg, msg_id=str(entry.get("msg_id") or ""),

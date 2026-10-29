@@ -86,6 +86,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/update/status",
     "POST /api/update/check",
     "POST /api/update/preflight",
+    "POST /api/update/description",
     "POST /api/update/apply",
     "GET /api/cost-breakdown",
     "GET /api/storage",
@@ -336,8 +337,9 @@ HTTP_SHAPES: dict[str, Shape] = {
     "POST /api/tasks/{task_id}/pause": Shape(f"200,202:TaskPauseResponse {_TASK_ERRORS}", "TaskPauseRequest"),
     "POST /api/tasks/{task_id}/continue": Shape(f"200:TaskContinueResponse {_TASK_ERRORS}", "TaskContinueRequest",
                                                 note="a timeout is not a refusal: retry with the same action_nonce"),
-    "POST /api/tasks/{task_id}/resume": Shape("200:TaskResumeResponse 400,404,409,503:ErrorResponse",
-                                              note="a budget-paused task; not idempotent: a repeat is refused"),
+    "POST /api/tasks/{task_id}/resume": Shape("200:TaskResumeResponse 400,404,409,503:ErrorResponse", "TaskResumeRequest",
+                                              note="a budget-paused task; not idempotent: a repeat is refused; "
+                                                   "a 409 may list acceptable_unknown ids to name in the body"),
     "POST /api/decisions": Shape(
         "200,202:DecisionResponse 400,404:ErrorResponse 409:DecisionResponse|ErrorResponse 501,503:ErrorResponse",
         "DecisionRequest", note="request_id is the idempotency key; the first answer wins (a card press: unless once)"),
@@ -463,8 +465,12 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/update/status": Shape("200:UpdateStatusResponse 500:ErrorResponse",
                                     note="no network; running_sha is the executing core"),
     "POST /api/update/check": Shape("200:UpdateStatusResponse 500:ErrorResponse",
-                                    note="reads no body; fetches, may write the update letter; broadcasts update_progress_changed"),
+                                    note="reads no body; fetches and records range facts, never prose; broadcasts update_progress_changed"),
     "POST /api/update/preflight": Shape("200:UpdatePreflightResponse 500:ErrorResponse", "UpdatePreflightRequest"),
+    "POST /api/update/description": Shape(
+        "200:UpdateDescriptionResponse 400,409,503:UpdateDescriptionErrorResponse 500:ErrorResponse",
+        "UpdateDescriptionRequest",
+        note="admits one ordinary Main task that writes the description; 409 while a requested one runs; never repeats on its own"),
     "POST /api/update/apply": Shape(
         "200:UpdateApplySuccessResponse 400:ErrorResponse 409,500:UpdateApplyErrorResponse", "UpdateApplyRequest",
         note="200: inspect status (manual, assisted_started, restart_required, or ok with restarting); adoption requires the landed transaction/merge identity and running_sha after startup"),

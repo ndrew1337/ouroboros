@@ -22,6 +22,61 @@ export function liveConversationSocket(path) {
     return new WebSocket(url.href);
 }
 
+/** How long one `/api/state` read may take, request and body together: an engineering tolerance, not a target. */
+export const STATE_READ_LIFETIME_MS = 60_000;
+
+const stateReadEnded = (reason) => Object.assign(new Error(`state read ${reason}`), { name: 'StateReadEnded', reason });
+
+/** Run `read(transportSignal)`, request and body, within one lifetime: the caller's `signal` ends it with
+ * `aborted()` (an already aborted one sends nothing), the lifetime with a `StateReadEnded` `expired`. Either end
+ * cancels the transport, and the read settles then even when the transport ignores the cancellation. */
+function withinStateLifetime(read, { signal = null, lifetimeMs = STATE_READ_LIFETIME_MS,
+    aborted = () => stateReadEnded('aborted') } = {}) {
+    if (signal?.aborted) return Promise.reject(aborted());
+    const transport = new AbortController();
+    let end;
+    const ended = new Promise((_, reject) => {
+        end = (error) => { transport.abort(); reject(error); };
+    });
+    const onAbort = () => end(aborted());
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => end(stateReadEnded('expired')), lifetimeMs);
+    return Promise.race([read(transport.signal), ended]).finally(() => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', onAbort);
+    });
+}
+
+/**
+ * One `/api/state` read that settles within its lifetime: `{response, state}`, where `state` is the parsed body
+ * of an OK answer and `undefined` for a non-OK answer or a body that does not parse. It rejects with the
+ * transport's own error, or with a `StateReadEnded` whose `reason` is `expired` (the lifetime ran out, request or
+ * body) or `aborted` (the caller's `signal`; an already aborted one sends nothing).
+ */
+export function readState(path = '/api/state', { signal = null, lifetimeMs = STATE_READ_LIFETIME_MS } = {}) {
+    return withinStateLifetime(async (transport) => {
+        const response = await apiFetch(path, { cache: 'no-store', signal: transport });
+        if (!response.ok) return { response, state: undefined };
+        try {
+            return { response, state: await response.json() };
+        } catch (error) {
+            if (transport.aborted) throw error;
+            return { response, state: undefined };
+        }
+    }, { signal, lifetimeMs });
+}
+
+/**
+ * `fetchJson('/api/state')` within the same lifetime, for readers that keep its contract: the body, or its typed
+ * error (`status`, `body`, `payload`; `isStoreMigrating`) for a non-OK answer. The caller's `init.signal` ends it
+ * as fetch would (its abort reason, an `AbortError`); a read that outlives the lifetime is a `StateReadEnded`.
+ */
+export function readStateJson(init = {}) {
+    const { signal = null, ...rest } = init;
+    return withinStateLifetime((transport) => fetchJson('/api/state', { cache: 'no-store', ...rest, signal: transport }),
+        { signal, aborted: () => signal.reason ?? new DOMException('This operation was aborted', 'AbortError') });
+}
+
 /**
  * The core's own same-origin sign-in, returning to this page. Only its network
  * gate answers 401 on the readiness and state reads that send a page here: a
@@ -243,8 +298,15 @@ export function taskSourceDownloadUrl(taskId, ref) {
     return `${url}?source=${encodeURIComponent(path)}`;
 }
 
-export async function resumeTask(taskId) {
-    return fetchJson(`/api/tasks/${encodeURIComponent(taskId)}/resume`, { method: 'POST' });
+/**
+ * Owner Resume. A refusal may list `acceptable_unknown`: held calls whose outcome is unknown; naming
+ * them in `body` goes on without their results (recorded on the task, never run again).
+ * @param {string} taskId
+ * @param {import('./client_contract_types.js').TaskResumeRequest|null} [body]
+ */
+export async function resumeTask(taskId, body = null) {
+    const url = `/api/tasks/${encodeURIComponent(taskId)}/resume`;
+    return body ? jsonPost(url, body) : fetchJson(url, { method: 'POST' });
 }
 
 /**
@@ -439,7 +501,7 @@ export const apiClient = {
     /** @returns {Promise<import('./api_types.js').HealthResponse>} */
     health: () => fetchJson('/api/health', { cache: 'no-store' }),
     /** @returns {Promise<import('./api_types.js').StateResponse>} */
-    state: () => fetchJson('/api/state', { cache: 'no-store' }),
+    state: () => readStateJson(),
     /** One composer file into the upload store. @returns {Promise<import('./api_types.js').UploadResponse>} */
     uploadChatAttachment: (file) => {
         const body = new FormData();
@@ -593,6 +655,14 @@ export const apiClient = {
     updateCheck: () => jsonPost('/api/update/check', {}),
     /** @returns {Promise<import('./api_types.js').UpdatePreflightResponse>} */
     updatePreflight: () => jsonPost('/api/update/preflight', {}),
+    /**
+     * The owner's Write/Rewrite: one ordinary Main task describes this exact range.
+     * @param {'write'|'rewrite'} mode
+     * @returns {Promise<import('./api_types.js').UpdateDescriptionResponse>}
+     */
+    updateDescription: (mode, key = {}) => jsonPost('/api/update/description', {
+        mode, base_sha: String(key.base_sha || ''), target_sha: String(key.target_sha || ''),
+    }),
     /** @returns {Promise<import('./api_types.js').UpdateApplySuccessResponse>} */
     updateApply: (strategy, plan = {}, { confirmRecovery = false } = {}) => jsonPost('/api/update/apply', {
         strategy,

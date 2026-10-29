@@ -46,7 +46,8 @@ DISPATCH_STATES = ("none", "pending", "dispatched", "completed", "abandoned")
 # estimate -- without statistics SQLite walks the primary key (every newer row of every room) instead.
 _PROBE_INDEX = {"chat_id": "dialogue_room", "task_id": "dialogue_task", "parent_task_id": "dialogue_parent",
                 "root_task_id": "dialogue_root", "subagent_task_id": "dialogue_subagent", "origin": "dialogue_origin",
-                "client_message_id": "dialogue_named", "kind": "dialogue_kind"}
+                "client_message_id": "dialogue_named", "kind": "dialogue_kind",
+                "appearance": "room_appearances"}  # the derived index (``APPEARANCES_DDL``), not a dialogue column
 _TASK_KEYS = ("task_id", "parent_task_id", "root_task_id", "subagent_task_id")  # every identifier a task's row may carry
 SKIPPED_KINDS = ("invalid", "non_object")  # a line that is not JSON; valid JSON that is not an object
 _SCHEMA = """
@@ -239,7 +240,10 @@ def create(root: Any, *, tier: Optional[str] = None) -> pathlib.Path:
                     live = conn.execute("INSERT INTO import_ledger (stream, name, base, size, state) VALUES (?, ?, 0, 0, 'live')",
                                         (stream, LIVE_REL[stream].name)).lastrowid
                     conn.execute("INSERT INTO streams (stream, next_seq, live) VALUES (?, 0, ?)", (stream, live))
-                for key, value in (("schema_version", SCHEMA_VERSION), ("lock_tier", tier), ("created_at", utc_now_iso())):
+                # An empty store has nothing to derive: its appearance mark starts at the first row's start.
+                conn.execute(APPEARANCES_DDL)
+                for key, value in (("schema_version", SCHEMA_VERSION), ("lock_tier", tier), ("created_at", utc_now_iso()),
+                                   (APPEARANCES_MARK, 0)):
                     conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(value)))
                 store.commit(conn)
             os.replace(tmp, target)
@@ -444,19 +448,44 @@ def _existing_named(conn: sqlite3.Connection, chat_id: Optional[int], client_mes
         "AND direction='in' ORDER BY seq DESC LIMIT 1", (client_message_id, chat_id)).fetchone()
 
 
+# The derived appearance index: a chat row some room shows outside its written chat, by the key
+# ``room_membership.appearance_keys`` names (``room:<chat>``, ``task:<id>``). A candidate superset
+# the room readers probe (``_probe``'s ``appearance`` column); ``room_membership.row_rooms`` decides.
+# Created on first use; an older body ignores it. ``room_appearances`` (a maintenance job) derives
+# the rows below its mark, which an append moves only from exactly its own start: rows an older
+# body appended (it never moves the mark) stay below it for the job.
+APPEARANCES_DDL = ("CREATE TABLE IF NOT EXISTS room_appearances (key TEXT NOT NULL, stream TEXT NOT NULL, "
+                   "seq INTEGER NOT NULL, PRIMARY KEY (key, stream, seq)) WITHOUT ROWID")
+APPEARANCES_MARK = "room_appearances_mark"
+# Chat import segments this body planned and has not derived yet (``dialogue_import``): one an older
+# body imports turns ``done`` while still listed, and the job derives exactly its rows.
+APPEARANCES_AWAITING = "room_appearances_awaiting"
+
+
+def _unstamped(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A row's content identity without its in-transaction revision stamp (``room_revisions``)."""
+    return {key: value for key, value in row.items() if key != "room_revisions"}
+
+
 def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Dict[str, Any]] = None,
            feed: bool = False, wait_sec: float = WAIT_SEC, idempotent: bool = False,
-           emit_live: bool = True) -> Receipt:
+           emit_live: bool = True, also_feed: Iterable[int] = (), room_revisions: bool = False,
+           appearances: Optional[Iterable[str]] = ()) -> Receipt:
     """Store exact JSON, room facts and named dispatch in one transaction.
 
     Named inbound duplicates return the existing receipt (the UNIQUE index also
     settles concurrent writers). Dispatch input is JSON without bytes; presence
-    means pending, absence means none. Feed advances the unread revision. Optional
-    idempotence compares content identity under the existing room/time index.
+    means pending, absence means none. Feed advances the unread revision; ``also_feed``
+    advances the revision of each other room that shows the row (one message, unread
+    where it is shown), and ``room_revisions`` stamps the row with the revision it took in
+    every fed room, so one read can be recorded wherever it counted. ``appearances`` are
+    its derived index keys (``None``: unknown, left to the job). Optional idempotence
+    compares content identity, stamp aside, under the existing room/time index.
     Store failures propagate; append_quietly owns best-effort retry and live fallback.
     """
     if stream not in STREAMS:
         raise ValueError(f"unknown dialogue stream: {stream!r}")
+    row = _unstamped(row)
     body = encode(row)
     columns = facts(row)
     named = columns["direction"] == "in" and bool(columns["client_message_id"])
@@ -474,7 +503,7 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
                 f"{_SELECT} INDEXED BY dialogue_room_ts WHERE stream=? AND chat_id IS ? AND ts=?",
                 (stream, columns["chat_id"], columns["ts"]))
             for existing in candidates:
-                if source_row_id(decode(existing["body"])) == digest:
+                if source_row_id(_unstamped(decode(existing["body"]))) == digest:
                     return _receipt(existing)
         if named:
             existing = _existing_named(conn, columns["chat_id"], columns["client_message_id"])
@@ -482,6 +511,14 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
                 return _receipt(existing)
         marks = conn.execute("SELECT next_seq, live, next_ordinal, next_pos FROM streams WHERE stream=?", (stream,)).fetchone()
         seq = int(marks["next_seq"])
+        others = [int(chat) for chat in dict.fromkeys(also_feed) if feed and int(chat) != columns["chat_id"]]
+        if room_revisions and feed and columns["chat_id"] is not None:
+            fed = [columns["chat_id"], *others]
+            held = {record["chat_id"]: int(record["revision"]) for record in conn.execute(
+                f"SELECT chat_id, revision FROM rooms WHERE chat_id IN ({','.join('?' * len(fed))})", fed)}
+            row = {**row, "room_revisions": {str(chat): held.get(chat, 0) + 1 for chat in fed}}
+            body = encode(row)
+            length = len(body.encode("utf-8")) + 1
         try:
             insert_row(conn, stream, seq, row, body, length=length, segment=int(marks["live"]), ordinal=int(marks["next_ordinal"]),
                        pos=int(marks["next_pos"]) if counted else None, dispatch=state, dispatch_input=dispatch,
@@ -491,6 +528,16 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
             if existing is None:
                 raise
             return _receipt(existing)
+        for chat in others:
+            touch_room(conn, chat, None, columns["ts"], 1)
+        keys = sorted(set(appearances)) if appearances is not None else []
+        if keys:
+            conn.execute(APPEARANCES_DDL)
+            conn.executemany("INSERT OR IGNORE INTO room_appearances (key, stream, seq) VALUES (?, ?, ?)",
+                             [(key, stream, seq) for key in keys])
+        if stream == "chat" and appearances is not None:
+            conn.execute("UPDATE meta SET value=? WHERE key=? AND value=?",
+                         (json.dumps(seq + length), APPEARANCES_MARK, json.dumps(seq)))
         conn.execute("UPDATE streams SET next_seq=?, next_ordinal=next_ordinal+1, next_pos=next_pos+? WHERE stream=?",
                      (seq + length, int(counted), stream))
     if stream == "progress" and emit_live:
@@ -535,7 +582,9 @@ def append_quietly(root: Any, stream: str, row: Dict[str, Any], **kwargs: Any) -
     except (StoreError, OSError, ValueError):
         if stream == "progress":
             _stream_live(row)
-        dialogue_retry.retain(root, stream, row, feed=kwargs.get("feed", False))
+        dialogue_retry.retain(root, stream, row, feed=kwargs.get("feed", False), **{
+            key: list(kwargs[key]) if key != "room_revisions" and kwargs[key] is not None else kwargs[key]
+            for key in ("also_feed", "room_revisions", "appearances") if key in kwargs})
         return None
 
 
@@ -652,35 +701,39 @@ _PAGE = ("SELECT json_group_array(json_object('stream',stream,'seq',seq,'body',b
          "length FROM dialogue ")
 
 
-def _page(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -> List[Dict[str, Any]]:
-    """The rows ``where`` selects in ONE step, by coordinate (``_row`` takes them as it takes ``sqlite3.Row``):
-    every ``sqlite3_step`` releases the GIL, so beside busy threads a page re-queues once, not once per row."""
-    return sorted(json.loads(conn.execute(_PAGE + where + ")", params).fetchone()[0] or "[]"),
-                  key=lambda record: record["seq"])
+def _page(conn: sqlite3.Connection, where: str, params: Tuple[Any, ...]) -> str:
+    """The rows ``where`` selects in ONE step, as one text (``_decoded`` after the transaction closed): every
+    ``sqlite3_step`` releases the GIL, so beside busy threads a page re-queues once, not once per row."""
+    return conn.execute(_PAGE + where + ")", params).fetchone()[0] or "[]"
+
+
+def _decoded(*pages: str) -> List[Dict[str, Any]]:
+    """The records of captured pages by coordinate (``_row`` takes them as it takes ``sqlite3.Row``)."""
+    return sorted((record for page in pages for record in json.loads(page)), key=lambda record: record["seq"])
 
 
 def rows_at(root: Any, stream: str, seqs: Iterable[int]) -> Dict[int, Row]:
     """The rows at many coordinates in one read (a statement per 500): each row found, by coordinate."""
-    wanted, records = sorted({int(seq) for seq in seqs}), []
+    wanted, pages = sorted({int(seq) for seq in seqs}), []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 500):
             chunk = wanted[start:start + 500]
-            records += _page(conn, f"WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})", (stream, *chunk))
-    return {record["seq"]: _row(record) for record in records}
+            pages.append(_page(conn, f"WHERE stream=? AND seq IN ({','.join('?' * len(chunk))})", (stream, *chunk)))
+    return {record["seq"]: _row(record) for record in _decoded(*pages)}
 
 
 def rows_between(root: Any, stream: str, lower: int, upper: int) -> List[Row]:
     """Every row with ``lower <= seq < upper`` in order (a frozen page replayed by its coordinates)."""
     with transaction(root, write=False) as conn:
-        records = _page(conn, "WHERE stream=? AND seq>=? AND seq<?", (stream, lower, upper))
-    return [_row(record) for record in records]
+        page = _page(conn, "WHERE stream=? AND seq>=? AND seq<?", (stream, lower, upper))
+    return [_row(record) for record in _decoded(page)]
 
 
 def rows_after(root: Any, stream: str, seq: int, *, limit: int = 1000) -> List[Row]:
     """The rows appended after ``seq`` (a live follower's next batch, a wake's window), in order."""
     with transaction(root, write=False) as conn:
-        records = _page(conn, "WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit))
-    return [_row(record) for record in records]
+        page = _page(conn, "WHERE stream=? AND seq>? ORDER BY seq LIMIT ?", (stream, seq, limit))
+    return [_row(record) for record in _decoded(page)]
 
 
 def iter_rows(root: Any, stream: str, *, lower: int = 0, upper: Optional[int] = None, batch: int = 500) -> Iterator[Row]:
@@ -690,8 +743,9 @@ def iter_rows(root: Any, stream: str, *, lower: int = 0, upper: Optional[int] = 
     bound = _bound(upper)
     while True:
         with transaction(root, write=False) as conn:
-            records = _page(conn, "WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
-                            (stream, lower, bound, batch))
+            page = _page(conn, "WHERE stream=? AND seq>=? AND seq<? ORDER BY seq LIMIT ?",
+                         (stream, lower, bound, batch))
+        records = _decoded(page)
         for record in records:
             yield _row(record)
         if len(records) < batch:
@@ -727,12 +781,18 @@ def probe_rows(root: Any, stream: str, keys: Iterable[Tuple[str, Any]], *, befor
     at most ``limit`` coordinates through its index; only the union's winning rows fetch bodies in
     that snapshot; JSON decoding follows release. ``("chat_id", None)`` probes NULL chats."""
     with transaction(root, write=False) as conn:
-        records = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=newest_first)
-    return [_row(record) for record in records]
+        probed = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=newest_first)
+    return _probed(*probed)
+
+
+def _probed(chosen: List[int], pages: List[str]) -> List[Row]:
+    """``_probe``'s winning rows, decoded after the transaction closed, in its order."""
+    records = {record["seq"]: record for record in _decoded(*pages)}
+    return [_row(records[seq]) for seq in chosen]
 
 
 def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]], *, before: Optional[int],
-           lower: int, limit: int, newest_first: bool) -> List[Dict[str, Any]]:
+           lower: int, limit: int, newest_first: bool) -> Tuple[List[int], List[str]]:
     """Capture the winning stored records; the transaction owner decodes after release.
 
     One statement per column selects, through that column's index, the first ``limit`` coordinates
@@ -751,6 +811,12 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
         select = (f"SELECT json_group_array(seq) FROM (SELECT seq FROM dialogue INDEXED BY {_PROBE_INDEX[column]} "
                   f"WHERE stream=? AND {column} ")
         tail = f" AND seq<? AND seq>=? ORDER BY seq {order} LIMIT ?)"
+        if column == "appearance":  # one seek per key of the derived index; absent before its first row
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_appearances'").fetchone():
+                found.update(json.loads(conn.execute(
+                    "SELECT json_group_array(seq) FROM (SELECT seq FROM room_appearances WHERE stream=? AND key IN "
+                    "(SELECT value FROM json_each(?))" + tail, (stream, json.dumps(listed), *bounds)).fetchone()[0]))
+            continue
         if None in listed:  # the chat-less rows, through the full room index
             found.update(json.loads(conn.execute(select + "IS NULL" + tail, (stream, *bounds)).fetchone()[0]))
         if any(value is not None for value in listed):
@@ -758,17 +824,13 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
                 select + "IN (SELECT +value FROM json_each(?))" + tail,  # unary + keeps the column's affinity
                 (stream, json.dumps([value for value in listed if value is not None]), *bounds)).fetchone()[0]))
     chosen = heapq.nlargest(limit, found) if newest_first else heapq.nsmallest(limit, found)
-    if not chosen:
-        return []
     # Python 3.10 has no getlimit; 999 is the default variable limit at our SQLite 3.24 floor.
     variables = conn.getlimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER) if hasattr(conn, "getlimit") else 999
-    records = {}
+    pages = []
     for start in range(0, len(chosen), variables - 1):  # one binding is the stream, including for 10,000-row readers
         batch = chosen[start:start + variables - 1]
-        marks = ",".join("?" for _ in batch)
-        for record in _page(conn, f"WHERE stream=? AND seq IN ({marks})", (stream, *batch)):
-            records[record["seq"]] = record
-    return [records[seq] for seq in chosen]
+        pages.append(_page(conn, f"WHERE stream=? AND seq IN ({','.join('?' for _ in batch)})", (stream, *batch)))
+    return chosen, pages
 
 
 def room_candidates(root: Any, stream: str, chat_id: int, *, tasks: Iterable[str] = (), origins: Iterable[str] = (),
@@ -794,8 +856,8 @@ def main_candidates(root: Any, stream: str, *, exclude_chats: Iterable[int], pin
                  if record["chat_id"] not in excluded]
         keys: List[Tuple[str, Any]] = [("chat_id", chat) for chat in chats] + [("chat_id", None)]
         keys.extend(("kind", kind) for kind in pinned_kinds)
-        records = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=True)
-    return [_row(record) for record in records]
+        probed = _probe(conn, stream, keys, before=before, lower=lower, limit=limit, newest_first=True)
+    return _probed(*probed)
 
 
 def task_rows(root: Any, task_ids: Iterable[str], *, stream: str, after: int = -1,
@@ -863,7 +925,7 @@ def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tu
     of addresses, then of rows, in ONE step each, as ``_page`` reads a page)."""
     wanted = sorted({(str(gen), int(line)) for gen, line in pairs if gen and line})
     seqs: Dict[Tuple[str, int], List[int]] = {}
-    records = []
+    pages = []
     with transaction(root, write=False) as conn:
         for start in range(0, len(wanted), 250):
             chunk = wanted[start:start + 250]
@@ -875,8 +937,8 @@ def legacy_candidates_of(root: Any, pairs: Iterable[Tuple[str, int]]) -> Dict[Tu
         found = sorted({seq for listed in seqs.values() for seq in listed})
         for start in range(0, len(found), 500):
             chunk = found[start:start + 500]
-            records += _page(conn, f"WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})", tuple(chunk))
-    rows = {record["seq"]: _row(record) for record in records}
+            pages.append(_page(conn, f"WHERE stream='chat' AND seq IN ({','.join('?' * len(chunk))})", tuple(chunk)))
+    rows = {record["seq"]: _row(record) for record in _decoded(*pages)}
     return {pair: [rows[seq] for seq in sorted(seqs.get(pair, ())) if seq in rows] for pair in wanted}
 
 

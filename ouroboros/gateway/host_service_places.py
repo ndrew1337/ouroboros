@@ -116,10 +116,12 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
 
     Authentication, admission and file confinement run off the event loop. The turn is
     host work this request only waits on (``presence_runner.PresenceTurnExecutions``): it
-    queues on the gate as a coroutine and runs on its own thread. Both versions release
+    queues on the gate as a coroutine and runs on its own thread. Every version releases
     the request reservation at a qualified park (or terminal settlement); version 1
     returns the initial envelope while version 0's HTTP waiter stays open until the
-    terminal result. A retry of the same event joins the retained execution.
+    terminal result. Version 2 takes that envelope as soon as its author accepts intake,
+    and never queues: a busy conversation or slot is a typed retry. A retry of the same
+    event joins the retained execution.
     """
 
     from ouroboros.gateway import host_service as host
@@ -240,18 +242,22 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
             started = await host._bounded_host_read(ctx, functools.partial(
                 live_author, event.conversation_key, drive_root=ctx.data_dir)) == turn_id
         if result is None and admission.place is not None and not started:
-            from ouroboros.place_intake import decide_attention, offer_to_author, settle_heard
+            from ouroboros.place_intake import author_hears, decide_attention, offer_to_author, settle_heard
             decision, allowance = await host._bounded_host_read(ctx, functools.partial(
                 decide_attention, ctx.data_dir, admission, event))
-            if decision == "silent":
+            # The conversation's current author hears it first, wake or background, before any
+            # rate, reservation, slot or allowance; its final drain settles what it accepted.
+            wake = author_hears(decision, allowance, event)
+            if wake is not None and await host._bounded_host_read(ctx, functools.partial(
+                    offer_to_author, ctx.data_dir, captured, event, wake=wake)):
+                result = await host._bounded_host_read(ctx, functools.partial(settle_heard, ctx.data_dir, captured, event, "current_author"))
+            elif decision == "silent":
                 result = await host._bounded_host_read(ctx, functools.partial(settle_heard, ctx.data_dir, captured, event, allowance["reason"]))
             elif decision == "retry":
                 return _presence_error("Consciousness allowance is unavailable; retry this event.", 429,
                     "consciousness_allowance_exhausted", "retry", retry_after=allowance["retry_after"])
             else:
                 admission = replace(admission, allowance=allowance)
-                if await host._bounded_host_read(ctx, functools.partial(offer_to_author, ctx.data_dir, captured, event)):
-                    result = await host._bounded_host_read(ctx, functools.partial(settle_heard, ctx.data_dir, captured, event, "current_author"))
         if result is None:
             if not ctx.rate_limiter.allow(f"{skill_name}:presence"):
                 return _presence_error("rate limit exceeded", 429, "presence_rate_limited", "retry")
@@ -260,21 +266,23 @@ async def _api_presence_turn(request: Request) -> JSONResponse:
                 turn_id, identity=identity,
                 reserve=functools.partial(ctx._enter_inflight, budget),
                 release=functools.partial(ctx._leave_inflight, budget),
-                admit=functools.partial(ctx.admit_presence_gate, event.conversation_key),
+                # Version 2 never waits in the gate: a busy resource is a typed retry (``admit_configured_gate``).
+                admit=functools.partial(ctx.admit_presence_gate, event.conversation_key, wait=continuing < 2),
                 run=lambda lease: ctx.presence_runner(
                     admission=admission, event=event, staged_files=staged_files, admitted=lease,
                 ),
             )
             if execution is None:
                 return _presence_error("too many in-flight presence requests", 429, "presence_capacity_full", "retry")
-            # A version-1 consumer takes a continuing author's initial envelope; v0 waits for its terminal.
+            # Versions 1 and 2 take a continuing author's initial envelope; v0 waits for its terminal.
             result = await asyncio.wrap_future(execution.initial if continuing else execution.result)
         return JSONResponse(await host._bounded_host_read(ctx, functools.partial(
             turn_response, result, continuing, ctx.data_dir)))
     except json.JSONDecodeError:
         return _presence_error("invalid json", 400, "presence_payload_invalid", "rejected")
     except (PresenceAdmissionError, PresenceTurnError) as exc:
-        return _presence_exception(exc, 403 if exc.code == "presence_origin_mismatch" else 409)
+        return _presence_exception(exc, 403 if exc.code == "presence_origin_mismatch"
+                                   else 429 if exc.code == "presence_capacity_full" else 409)
     except PresenceTurnNotStarted as exc:
         return _presence_error(str(exc), 503, "presence_turn_not_started", "retry")
     except OSError as exc:

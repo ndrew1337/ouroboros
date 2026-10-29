@@ -180,7 +180,7 @@ def _publish_unresolved(root, observations, *, subject=ATTEMPTS, faults=None, ke
                      _ID_FIELDS[subject]: list(shown), "reasons": {key: current[key] for key in shown}}
             path.parent.mkdir(parents=True, exist_ok=True)
             data = (json.dumps(event, ensure_ascii=False) + '\n').encode('utf-8')
-            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, 'O_BINARY', 0), 0o644)
             try:
                 _write_fd_fully(fd, data, path)
             finally:
@@ -395,8 +395,9 @@ def reconcile_abandoned_usage(drive_root: pathlib.Path) -> None:
     from ouroboros import usage_store
 
     root = pathlib.Path(drive_root).resolve()
-    with usage_store.read(root) as txn:
-        rows = txn.attempts(f"{usage_store._OPEN_PREDICATE} AND {_RECOVERABLE}")
+    with usage_store.read(root) as txn:  # captured in one step, decoded after the read closed
+        captured = txn.attempt_rows(f"{usage_store._OPEN_PREDICATE} AND {_RECOVERABLE}")
+    rows = usage_store.decode_attempts(captured)
     reads, eligible, observations, faults = TaskOwnershipRead(root), {}, {}, {}
     # A task proven absent or not settled yet cannot be eligible: one statement, not 3-4 reads per task per pass.
     ids, facts = _present_facts(root, {str(row.get("task_id") or "") for row in rows})

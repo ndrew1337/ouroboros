@@ -225,9 +225,9 @@ def _ensure_playwright_installed(*, engine: str = "chromium", allow_install: boo
             os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "0"
             _playwright_browsers_path_managed = True
         elif current_browser_path == "0" or _playwright_browsers_path_managed:
-            data_dir = pathlib.Path(
-                os.environ.get("OUROBOROS_DATA_DIR") or pathlib.Path.home() / "Ouroboros" / "data"
-            )
+            from ouroboros.config import resolve_data_dir
+
+            data_dir = resolve_data_dir()  # the configured data root, APP_ROOT's when only it is set
             target = data_dir / "playwright-browsers"
             if target.exists() and _has_platform_browser(target, engine):
                 target_str = str(target)

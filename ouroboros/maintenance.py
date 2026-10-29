@@ -35,7 +35,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ouroboros import (delegate_capture_job, delegate_pending, maintenance_jobs, maintenance_retirement,
-                       plan_collection_job, record_compression, store, subagent_metrics)
+                       plan_collection_job, record_compression, room_appearances, store, subagent_metrics)
 from ouroboros.startup_historical_audit import _REPORT_BYTES, finish_maintenance_job, spawn_maintenance_job
 
 log = logging.getLogger(__name__)
@@ -304,6 +304,19 @@ def _tail_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, 
     return report
 
 
+def _appearances_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """``room_appearances.run``, resumable at the store's mark; this row keeps only its state."""
+    try:
+        report = room_appearances.run(root, should_stop)
+    except Exception as exc:
+        if not _contention(exc):
+            maintenance_jobs.record(root, "room_appearances", state="failed")
+        raise
+    if (maintenance_jobs.job(root, "room_appearances") or {}).get("state") != report["state"]:
+        maintenance_jobs.record(root, "room_appearances", state=report["state"])
+    return report
+
+
 def _hot_facts_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
     """Rows written before the hot-fact columns (or by an older writer since) wait for a classification
     pass (``store_hot_facts.run_hot_facts``); a root without such rows has nothing to do. A failed pass
@@ -335,6 +348,7 @@ JOBS: Dict[str, tuple] = {
     "legacy_reconcile": (_legacy_due, _legacy_run),
     "dialogue_import": (_dialogue_due, _dialogue_run),  # the owner's history: newest segments first
     "memory_tail": (_tail_due, _tail_run),  # after the import: the tail's positions are settled
+    "room_appearances": (room_appearances.due, _appearances_run),  # after the import, like the tail
     "hot_facts": (_hot_facts_due, _hot_facts_run),
     "ended_plan_asks": (plan_collection_job.due, plan_collection_job.run),
     "custody_trash": (_trash_due, _trash_run),  # before retirement: a removed drive's bytecode goes in the same pass

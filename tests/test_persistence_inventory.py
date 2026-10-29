@@ -885,7 +885,13 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 426 -> 429 (live calls): live wire evidence, the extension import lock and the live tariff cache.
 # 429 -> 430: ``state/delegate_document_imports/*.lock``, one selected document's import decision.
 # 430 -> 431: ``observability/calls/*/*``, the target's per-call evidence (408d9a84d), counted on merge.
-EXPECTED_SCAN_PATHS = 431
+# 427 -> 429: ``observability/calls/*/*``, scanned on the target before this pin moved, and
+# ``state/claudexor_route_health.json``, the engine's newest per-route failure shares (its section-2 row).
+# 429 -> 430: adds ``state/update_material.json`` and ``state/update_letter.lock``;
+# the scan no longer yields the legacy ``state/usage_attempts.lock`` spelling.
+# 430 -> 431: checkout-specific preflight heads, registered in the review-ledger row.
+# 431 -> 434: union of target paths and the three call wire/import-lock/tariff paths.
+EXPECTED_SCAN_PATHS = 434
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

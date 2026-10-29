@@ -341,8 +341,9 @@ def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: boo
     if record is None:
         return None
     try:
-        receipt = (dialogue_store.append(root, "chat", record, feed=feed, idempotent=direction != "in")
-                   if require_write else dialogue_store.append_quietly(root, "chat", record, feed=feed))
+        shown = _shown_elsewhere(root, record, feed)
+        receipt = (dialogue_store.append(root, "chat", record, feed=feed, idempotent=direction != "in", **shown)
+                   if require_write else dialogue_store.append_quietly(root, "chat", record, feed=feed, **shown))
     except (StoreError, OSError, ValueError) as exc:
         if require_write:
             raise RuntimeError("canonical message acceptance could not be persisted") from exc
@@ -355,6 +356,18 @@ def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: boo
     return receipt.row
 
 
+def _shown_elsewhere(root: Any, record: dict, feed: bool) -> Dict[str, Any]:
+    """The append facts of a row some Project also shows (``room_appearances.write_facts``): its
+    derived index keys and, for work speech, the revision stamp and the other rooms it feeds, so
+    one message is unread where it is shown."""
+    from ouroboros.project_dialogue import WORK_SPEECH_ELSEWHERE_TYPES
+    from ouroboros.room_appearances import write_facts
+
+    keys, shown = write_facts(root, record)
+    speech = record.get("type") in WORK_SPEECH_ELSEWHERE_TYPES
+    return {"appearances": keys, **({"room_revisions": True, "also_feed": shown} if speech and feed else {})}
+
+
 def accept_chat(chat_id: int, user_id: int, text: str, *, dispatch: Optional[Dict[str, Any]] = None,
                 **fields: Any) -> "dialogue_store.Receipt":
     """A named acceptance's canonical write: the inbound row, its dedup, the room and the dispatch
@@ -362,7 +375,7 @@ def accept_chat(chat_id: int, user_id: int, text: str, *, dispatch: Optional[Dic
     earlier delivery's row answered). A store failure is ``RuntimeError`` (nothing landed)."""
     root, record = _chat_record("in", chat_id, user_id, text, require_write=True, **fields)
     try:
-        receipt = dialogue_store.append(root, "chat", record, dispatch=dispatch)
+        receipt = dialogue_store.append(root, "chat", record, dispatch=dispatch, **_shown_elsewhere(root, record, False))
     except (StoreError, OSError, ValueError) as exc:
         raise RuntimeError("canonical message acceptance could not be persisted") from exc
     if not receipt.duplicate:
@@ -566,6 +579,7 @@ def record_inbound_message(bridge, message: dict, *, chat_id: int, user_id: int,
         )
         ref = build_owner_message_ref(chat_id=chat_id, client_message_id=client_message_id, ts=ts, text=text)
     from ouroboros.chat_references import projection_fields
+    from ouroboros.room_appearances import frame_rooms
     if source != "web":
         # A parked inline photo is one of the views: one bubble, never a second photo frame;
         # its text is the row's, placeholder mark included, as history replays it.
@@ -579,7 +593,7 @@ def record_inbound_message(bridge, message: dict, *, chat_id: int, user_id: int,
             "sender_label": str(message.get("sender_label") or ""),
             "sender_session_id": str(message.get("sender_session_id") or ""),
             "client_message_id": client_message_id, "transport": message.get("transport") or {},
-            "chat_id": chat_id, **(projection_fields(row) if row else {}),
+            "chat_id": chat_id, **(projection_fields(row) if row else {}), **frame_rooms(message_bus.DATA_DIR, row),
             **({"subagents_mode": "swarm"} if row and row.get("subagents_mode") == "swarm" else {}),
         })
     return ref
@@ -602,6 +616,7 @@ def handle_web_message(
     from supervisor import message_bus as bus
     from ouroboros.chat_uploads import claim_refs
     from ouroboros.chat_references import ingress_reply, projection_fields
+    from ouroboros.room_appearances import frame_rooms
 
     # Web ownership stays user_id=1; positive chat_id selects Main/Project.
     # Negative A2A ids are not web destinations and fall back to Main.
@@ -707,7 +722,7 @@ def handle_web_message(
                 echo["system_type"] = row["system_type"]
             # Positive call-entry evidence, never the acceptance stamp alone; a deferred dispatch is still pending.
             echo.update(delivery_facts(row, thread_id))
-            echo.update(projection_fields(row))
+            echo.update(projection_fields(row), **frame_rooms(bus.DATA_DIR, row))  # a Reply a Project also shows
             bus.stamp_project_thread(bus.DATA_DIR, echo)
             self._broadcast_fn(echo)
     finally:

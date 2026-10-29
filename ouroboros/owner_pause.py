@@ -933,8 +933,9 @@ def tree_model_requests(root_drive: Any, root_task_id: str) -> list:
     first so their task ids tie damaged rows to this tree. Raises when unreadable: unknown, never none."""
     from ouroboros import usage_store
 
-    with usage_store.read(root_drive) as txn:
-        return txn.open_attempts(root_task_id=str(root_task_id))
+    with usage_store.read(root_drive) as txn:  # captured in one step, decoded after the read closed
+        captured = txn.open_attempt_rows(root_task_id=str(root_task_id))
+    return usage_store.decode_attempts(captured)
 
 
 @contextmanager
@@ -992,12 +993,12 @@ def current_tool_operation(source: Any, name: str) -> str:
 
 
 def record_mcp_call_returned(name: str) -> None:
-    """The host joined this open invocation's MCP call: its final response and
-    clean session/transport exit arrived. Only that caller records it, never a
-    runner still running after its timeout nor result text or provider meta;
-    it settles this claim alone, not other processes, runs or money."""
+    """This invocation's MCP runner ended: its ``asyncio.run`` returned or raised after loop
+    shutdown. Only that runner records it, also after a timeout closed the call (a nested
+    runner holds the invocation until then), never result text or provider meta. It settles
+    this local claim alone, not its remote duty, other processes, runs or money."""
     active = _TOOL_OPERATION.get()
-    if active and active[1] == name and not active[2].get("closed"):
+    if active and active[1] == name:
         active[2]["mcp_call_returned"] = True
 
 

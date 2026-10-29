@@ -146,9 +146,12 @@ def persist_queue_snapshot(reason: str = "") -> bool:
     while HTTP handlers mutate them raised "dictionary changed size during
     iteration" in the supervisor loop (counted toward its crash limit).
     True when published, False when the publication failed, None when the
-    saved queue on disk is kept because this process has not taken it into
-    custody (``_keeps_saved_queue``).
+    documents on disk are kept: no queue was initialized in this process, or
+    it has not taken the saved queue into custody (``_keeps_saved_queue``).
     """
+    if not _queue().INITIALIZED:  # a boot without a provider: state initialization reads a snapshot as history (#2412)
+        log.info("Queue snapshot not published (reason=%s): no supervisor queue in this process", reason)
+        return None
     from supervisor.direct_roots import collect_direct_roots
 
     direct = collect_direct_roots()  # Never wait for an actor while holding Q.

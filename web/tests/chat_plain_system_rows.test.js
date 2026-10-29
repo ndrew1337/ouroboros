@@ -420,7 +420,7 @@ test('a completion row carrying the answer renders as an ordinary Ouroboros mess
             globalThis.CustomEvent = priorCustomEvent;
         }
         assert.deepEqual(opened, {
-            type: 'ouro:open-project', detail: { project: { id: 'launch', name: 'Launch' }, task_id: '', quiz_id: '' },
+            type: 'ouro:open-project', detail: { project: { id: 'launch', name: 'Launch' }, task_id: '', quiz_id: '', pointer: false },
         });
     } finally {
         instance?.destroy();

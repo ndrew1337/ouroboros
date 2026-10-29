@@ -54,13 +54,10 @@ from typing import Any, Callable, Dict, FrozenSet, Iterable, Iterator, List, Map
 from ouroboros import chat_chain
 from ouroboros.chronicle_import import legacy_frontier
 from ouroboros.chronicle_store import ChronicleStore, capture, capture_memo, source_time_span
-from ouroboros.contracts.chat_id_policy import HIDDEN_CHAT_ID, is_a2a_chat_id
 from ouroboros.dialogue_provenance import in_reading_order, rooms_read_by_time, row_class, row_provenance
 
 # The key of the memory view's last-capture fact in a task's ``llm_trace``.
 VIEW_TRACE_KEY = "memory_view"
-
-MAIN_ROOM = 1
 
 # The row fields the room and attribution readers consult (``project_dialogue.room_membership``,
 # ``dialogue_provenance.row_author``) plus the host facts of a task row, its recorded finality and
@@ -73,6 +70,10 @@ _META_FIELDS = ("chat_id", "ts", "type", "direction", "task_id", "parent_task_id
                 "status", "outcome", "outcome_phase", "reason_code", "outcome_final", "outcome_authority",
                 "result_ref", "presence", "presence_provenance", "host_fact", "historical_import", "source_order")
 _MEMBERSHIP_FIELDS = ("chat_id", "ts", "type", "task_id", "parent_task_id", "root_task_id", "source_keys")
+_REPLY_FIELDS = ("address", "chat_id", "task_id", "role", "target_home", "unresolved")
+# Bumped when ``row_meta`` gains a fact membership reads: a stored prefix of another version is
+# another source, read live until the maintenance job ``memory_tail`` refills it.
+_META_VERSION = 3
 
 Entry = Tuple[Dict[str, Any], Dict[str, Any], int]
 
@@ -88,6 +89,11 @@ def row_meta(row: Mapping[str, Any]) -> Dict[str, Any]:
     """
     meta = {key: row[key] for key in _META_FIELDS if key in row}
     meta["text_chars"] = len(str(row.get("text") or ""))
+    quiz = row.get("quiz") if isinstance(row.get("quiz"), dict) else {}
+    if isinstance(contact := row.get("presence_contact") or quiz.get("presence_contact"), dict):
+        meta["presence_contact"] = dict(contact)  # ``presence_owner_contact.private_main_row`` reads it
+    if isinstance(ref := row.get("reply_to"), dict):  # ``room_membership.reply_target_room`` reads these, a
+        meta["reply_to"] = {key: ref[key] for key in _REPLY_FIELDS if key in ref}  # saved target by its address
     if str(row.get("direction") or "") == "in":
         from ouroboros.project_dialogue import _entry_source_identities, _text_sha256  # D15->D17 is lazy-only
 
@@ -137,34 +143,15 @@ def _membership_facts(root: Any) -> MembershipFacts:
 
 
 def rooms_of_row(meta: Mapping[str, Any], facts: MembershipFacts) -> FrozenSet[str]:
-    """Every room ``project_dialogue.room_membership`` puts this row in, as room ids.
-
-    A Project room holds its own chat, the rows of tasks bound to it and the bound
-    owner message (also kept by the room it was written in); lifecycle rows pinned to
-    Main never enter a Project. Main holds every other unbound row outside Projects
-    except the hidden partition; any other chat holds its own unbound rows.
-    """
-    from ouroboros.project_dialogue import (MAIN_PINNED_ROW_TYPES, ORIGIN_ADDRESSED_NOTICE_TYPES,  # D15->D17 is lazy-only
-                                            bound_room_chat)
+    """Every room ``room_membership.row_rooms`` puts this row in, as room ids, plus the Projects
+    whose binding names it as their origin owner message (it also stays where it was written)."""
+    from ouroboros.room_membership import binding_origin_allowed, row_rooms  # D15->D17 is lazy-only
 
     chat = chat_chain._row_chat_id(meta)
-    if is_a2a_chat_id(chat):
-        return frozenset()
-    if row_provenance(meta) == "place":
-        return frozenset({str(chat)}) if chat != MAIN_ROOM else frozenset()
-    kind = meta.get("type")
-    bound = 0 if kind in ORIGIN_ADDRESSED_NOTICE_TYPES else bound_room_chat(facts.rooms, meta)
-    pinned = kind in MAIN_PINNED_ROW_TYPES
-    projects = facts.project_chat_ids
-    rooms = set()
-    if not pinned:  # the resolved room is authoritative over the stored address (``room_membership``)
-        rooms.update(room for room in ((bound,) if bound else (chat,)) if room in projects)
+    rooms = set(row_rooms(chat, meta, facts.project_chat_ids, facts.rooms))
+    if binding_origin_allowed(chat, meta):
         for key in meta.get("source_keys") or ():
             rooms.update(facts.projects_by_source_key.get(tuple(key), ()))
-    if MAIN_ROOM not in projects and chat != HIDDEN_CHAT_ID and chat not in projects and (pinned or not bound):
-        rooms.add(MAIN_ROOM)
-    if chat not in projects and chat != MAIN_ROOM and not bound:
-        rooms.add(chat)
     return frozenset(str(room) for room in rooms)
 
 
@@ -195,7 +182,7 @@ def _tail_source(root: Any, frontier: Mapping[str, Any]) -> Dict[str, Any]:
     from ouroboros.store import file_identity
 
     return {"store": list(file_identity(ds.path(root)) or ()), "frontier": int(frontier["pos"]),
-            "text_revision": int(ds.meta(root, "chat_text_revision") or 0)}
+            "text_revision": int(ds.meta(root, "chat_text_revision") or 0), "meta": _META_VERSION}
 
 
 def _projected(entries: Iterable[Any]) -> List[List[Any]]:
@@ -347,9 +334,11 @@ def rows_after_frontier(root: Any) -> List[Entry]:
     return [] if frontier is None else _projection_rows(root, frontier)
 
 
-def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
+def open_rows_by_room(root: Any, gaps: Optional[Dict[str, set]] = None) -> Dict[str, List[Entry]]:
     """The open rows of every room that has one: after the frontier, outside the room's sealed set, in
-    reading order (``open_room_rows``)."""
+    reading order (``open_room_rows``). ``gaps`` collects, by room, what its rows may lack: a Reply whose
+    saved target cannot be read is Main's here and a gap of each Project it could join
+    (``room_membership.unknown_target_rooms``)."""
     store = ChronicleStore(root)
     with capture(root):  # one state of the chronicle: its frontier and every room's sealed set
         frontier = _active_frontier(store)
@@ -361,9 +350,15 @@ def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
         # The rows' task lineages in one read a generation (``RoomResolver.warm``), not one read per task.
         facts.rooms.warm({str(entry[1].get(key) or "") for entry in projected
                           for key in ("task_id", "parent_task_id", "root_task_id")} - {""})
+        if gaps is not None:
+            from ouroboros.room_appearances import REPLY_TARGET_UNREADABLE  # D15->D17 is lazy-only
+            from ouroboros.room_membership import unknown_target_rooms
         for entry in projected:
             for room in rooms_of_row(entry[1], facts):
                 grouped.setdefault(room, []).append(entry)
+            if gaps is not None and isinstance(entry[1].get("reply_to"), dict):
+                for room in unknown_target_rooms(entry[1], facts.project_chat_ids, facts.rooms):
+                    gaps.setdefault(str(room), set()).add(REPLY_TARGET_UNREADABLE)
         rooms: Dict[str, List[Entry]] = {}
         timed = rooms_read_by_time(root, (entry[1] for entry in projected))  # every room at once, sealed rows or not
         for room, entries in grouped.items():
@@ -375,7 +370,7 @@ def open_rows_by_room(root: Any) -> Dict[str, List[Entry]]:
 
 
 def _room_entries(root: Any, store: ChronicleStore, room: str,
-                  pos_range: Optional[Tuple[int, int]] = None) -> List[Entry]:
+                  pos_range: Optional[Tuple[int, int]] = None, gaps: Optional[set] = None) -> List[Entry]:
     """One room's rows in append order, sealed ones included: after the frontier, or in a half-open range.
 
     ``pos_range`` is a legacy unit's ``raw_range.pos``; its rows carry the membership fields
@@ -396,16 +391,16 @@ def _room_entries(root: Any, store: ChronicleStore, room: str,
     lower = chat_chain.position_boundary(root, start)
     upper = chat_chain.position_boundary(root, end) if end is not None else None
     return [(address, row_meta(row), pos) for address, row, pos in
-            chat_chain.iter_room_rows(root, room, lower=lower, upper=upper)]
+            chat_chain.iter_room_rows(root, room, lower=lower, upper=upper, gaps=gaps)]
 
 
-def open_room_rows(root: Any, room_id: Any) -> List[Entry]:
+def open_room_rows(root: Any, room_id: Any, gaps: Optional[set] = None) -> List[Entry]:
     """``(address, row_meta, pos)`` of one room's open rows in reading order: append order, or in a room
     holding imported earlier messages its time order, though pages sealed them all
     (``dialogue_provenance.in_reading_order``), so lanes and the floor's oldest-first walk follow time;
     ``room_facts`` bounds their stored times. Addresses and positions stay physical."""
     store, room = ChronicleStore(root), str(room_id)
-    entries = _room_entries(root, store, room)
+    entries = _room_entries(root, store, room, gaps=gaps)  # ``gaps``: what this Project's read may lack (``chat_chain.room_rows``)
     if not entries:
         return []
     sealed = store.sealed_row_refs(room)

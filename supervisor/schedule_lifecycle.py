@@ -425,13 +425,16 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
                           actor: str, task_id: str = "",
                           drive_root: pathlib.Path | None = None,
                           expected_hold_id: str = "", relation: str = "",
-                          writer_kind: str = "consciousness", writer_metadata: Any = None) -> Dict[str, Any]:
+                          writer_kind: str = "consciousness", writer_metadata: Any = None,
+                          owned_by: Any = None) -> Dict[str, Any]:
     """Apply one owner-governed future-dispatch mutation, audited intent-first.
 
     Affects DISPATCH only: a task already admitted from this schedule keeps
     running, and ``running_or_queued`` says so rather than implying a stop — or
     says ``None`` when this process cannot see the live queue, because an
-    unknown in-flight run is not the same claim as no run at all.
+    unknown in-flight run is not the same claim as no run at all. ``owned_by``,
+    a narrowed caller's ownership predicate, is judged on the stored row under the
+    same transaction; a row it does not own reads ``not_found`` with nothing written.
     """
     wanted, operation = str(schedule_id or "").strip(), str(action or "").strip().lower()
     if operation not in SCHEDULE_ACTIONS:
@@ -462,7 +465,7 @@ def mutate_scheduled_task(action: str, schedule_id: str, *, reason: str,
                         "schedule_id": wanted, "detail": str(exc), "audit": "not_written"}
             tasks = list(data.get("tasks") or [])
             current = next((item for item in tasks if str(item.get("id") or "") == wanted), None)
-            if current is None:
+            if current is None or (owned_by is not None and not owned_by(current)):
                 return {"ok": False, "changed": False, "status": "not_found",
                         "schedule_id": wanted, "audit": "not_written"}
             try:

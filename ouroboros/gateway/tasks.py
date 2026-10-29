@@ -1018,16 +1018,21 @@ def _cascade_waits_only_on_runs(task_id: str) -> bool:
 
     Their cancel is in flight (an engine confirms a cancel asynchronously), refused (a containment fault,
     critical until a verified terminal) or not sent (the engine is unreachable: pending until it answers).
-    The Stop stays pending and the cancel-intent watchdog settles it once custody records them settled;
-    none of these is a cascade that cancelled nothing. An unreadable answer proves nothing, so the
-    incident stays.
+    A witnessed live inline Presence root waits the same way: its runner observes the open intent at its
+    next stop check and writes the terminal itself (#2012). The Stop stays pending and the cancel-intent
+    watchdog settles it once custody records them settled; none of these is a cascade that cancelled
+    nothing. An unreadable answer, an unreadable author census included, proves nothing, so the incident
+    stays; only a Presence root's own row reads that census.
     """
     try:
         from ouroboros.delegate_custody_reconcile import tree_open_runs
+        from ouroboros.presence_runner import presence_execution_witness
+        from supervisor.cancel_publication import live_presence_row
         from supervisor.queue import DRIVE_ROOT, task_subtree_is_live
 
-        return bool(tree_open_runs(DRIVE_ROOT, task_id)) and not task_subtree_is_live(
-            task_id, ignore_intents=True, count_runs=False)
+        waits = tree_open_runs(DRIVE_ROOT, task_id) or (live_presence_row(load_task_result(DRIVE_ROOT, task_id))
+                                                         and presence_execution_witness(task_id, drive_root=DRIVE_ROOT) is True)
+        return bool(waits) and not task_subtree_is_live(task_id, ignore_intents=True, count_runs=False)
     except Exception:
         log.debug("Cascade liveness read failed for %s", task_id, exc_info=True)
         return False
@@ -1090,8 +1095,9 @@ def _record_stop(task_id: str, *, cascade: bool, stop_action_id: str) -> Optiona
         from supervisor.cancel_publication import live_presence_row
 
         row = load_task_result(DRIVE_ROOT, task_id, strict=True)
-        # A live Presence turn is its runner's (as on the single Stop's miss lane).
-        if live_presence_row(row) or (not row and not still_owned()):
+        # A Presence row is its runner's: only a turn the shared owner still holds takes the Stop (#2012).
+        if (live_presence_row(row) and not task_has_live_ownership(task_id)
+                or not row and not still_owned()):
             return None
     source = "http_cascade" if cascade else "http_single"
     record = functools.partial(
@@ -1338,16 +1344,26 @@ async def api_task_resume(request: Request) -> JSONResponse:
     revocation, an acceptance fence at restore) is granted by the same call once
     its durable authority validates again; a fence-lifted zero-dispatch sibling
     is released by this same call as an explicit selection. A paused direct
-    owner-chat turn is resumed here too, under its own task id.
+    owner-chat turn is resumed here too, under its own task id. The optional
+    body (``TaskResumeRequest``) names held calls whose outcome is unknown that
+    the owner goes on past (a refusal's ``acceptable_unknown``), never re-run.
     """
     try:
         task_id = validate_task_id(request.path_params.get("task_id"))
     except ValueError as exc:
         return json_error(str(exc), 400)
+    body = await request_json_or(request, {}) or {}
+    named = body.get("accept_unknown", []) if isinstance(body, dict) else None
+    if (not isinstance(named, list) or set(body) - {"accept_unknown", "reason"}
+            or not all(isinstance(value, str) for value in named)):
+        return json_error('resume accepts only {"accept_unknown", "reason"}', 400, task_id=task_id,
+                          reason_code="unexpected_fields")
     try:
+        from ouroboros.control_actor import accepting_unknown
         from supervisor.queue import resume_budget_paused_task
 
-        result = resume_budget_paused_task(task_id)
+        with accepting_unknown(named, str(body.get("reason") or "")):
+            result = resume_budget_paused_task(task_id)
     except Exception as exc:
         return json_exception(exc, 503)
     if result.get("ok"):
@@ -1379,8 +1395,8 @@ async def api_task_resume(request: Request) -> JSONResponse:
         # a held Continue's observed blockers (#1721): an existing successor, never Not Found
         "predecessor_writers_unsettled", "selection_owner_held",
     } else 404
-    return JSONResponse({"error": error, "task_id": task_id,
-                         **{key: result[key] for key in ("action", "blockers", "message") if result.get(key)}},
+    return JSONResponse({"error": error, "task_id": task_id, **{key: result[key] for key in (
+                             "action", "blockers", "message", "acceptable_unknown") if result.get(key)}},
                         status_code=status)
 
 

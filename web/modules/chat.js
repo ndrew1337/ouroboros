@@ -26,9 +26,11 @@ import { createChatReadingPosition } from './chat_reading_position.js';
 import { createRowSleep } from './chat_row_sleep.js';
 import { onRefit } from './text_fit.js';
 import { createChatHistoryPager, historyCoverage, historyIslandAtEdge } from './chat_history.js';
-import { createProjectReadReceipt, isAtNewestMessage, newestMessageOffset } from './project_read_state.js';
+import { createProjectReadReceipt, isAtNewestMessage, newestMessageOffset, readBand } from './project_read_state.js';
+import { createSharedReadTracker } from './read_ahead.js';
 import { mergeHistoricalTimelineItem, historyNodeIsProtected, historyRowIds, historyStamps, stampHistoryNode, compareHistoryPosition } from './chat_history_replay.js';
 import { apiClient, apiFetch, fetchTaskDetail, fetchTaskDetailStrict, isStoreMigrating } from './api_client.js';
+import { readStateSnapshot } from './state_snapshots.js';
 import { syncHistoryRetentionItem } from './history_retention.js';
 import {
     childReportLabel,
@@ -627,14 +629,7 @@ export function createChatInstance({
     async function refreshHeaderControlState(force = false) {
         if (!force && state.activePage !== 'chat') return;
         const request = await stateSnapshots.gate(force);
-        if (!request) return;
-        try {
-            const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
-            if (!resp.ok) throw new Error(`State read failed: HTTP ${resp.status}`);
-            stateSnapshots.apply(request, await resp.json());
-        } catch {
-            stateSnapshots.fail?.(request);
-        }
+        if (request) await readStateSnapshot(stateSnapshots, request);
     }
 
     function persistVisibleHistory() {
@@ -785,9 +780,13 @@ export function createChatInstance({
             || (work ? record.lastHumanHeadline || (record.finished ? 'Task activity' : '') : '');
     }
 
-    // Write only on change: a rewrite would destroy a selection being copied.
+    // Write only on change: a rewrite would destroy a selection being copied. A finished root's own sentence is its
+    // line under an authored title; a wake's sentence is its title, so its last narration stays the line; a host cause
+    // holding the line stays.
     function syncCardHeadline(record) {
-        const title = cardTitle(record), line = record.collapsedActivity;
+        const title = cardTitle(record);
+        const own = record.finished && !record.isSubagent && !record.causeHeld && record.wakeSummary;
+        const line = own && own !== title ? own : record.collapsedActivity;
         if (record.titleEl.textContent !== title) { record.titleEl.textContent = title; portals.relabel(record); }
         renderCollapsedActivity(record, projectCollapsedActivity({ isSubagent: record.isSubagent, suggestedName: title, headline: line, body: line }));
     }
@@ -1099,12 +1098,14 @@ export function createChatInstance({
     function noteTaskDetails(record, detail) {
         const files = syncSettledItems(record, detail, { write: withStableViewport });
         const words = record && detail && 'wake_summary' in detail && record.wakeSummary !== detail.wake_summary;
-        if (words) record.wakeSummary = detail.wake_summary;
+        if (words) { record.wakeSummary = detail.wake_summary; syncCardHeadline(record); }  // live and replay meet here: the sentence is also the finished card's line
+        const origin = record && detail?.schedule_name && record.scheduleName !== detail.schedule_name;
+        if (origin) record.scheduleName = detail.schedule_name;
         const history = syncHistoryRetentionItem(record, detail);
         const candidate = syncCandidateRemainderItem(record, detail);
         const chain = episodes.note(record, detail);
         const receipt = syncSwarmReceipt(record, detail);
-        return Boolean((words || files || history || candidate) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
+        return Boolean((words || origin || files || history || candidate) && (renderLiveCardMeta(record), updateLiveCardCount(record), renderLiveCardTimeline(record), true))
             || chain || receipt;
     }
 
@@ -2399,7 +2400,7 @@ export function createChatInstance({
 
                 const historicalTerminalProjections = new Set();
                 for (const msg of messages) if (msg.historical_terminal && msg.task_id) {
-                    historicalTerminals.set(msg.task_id, { ...msg.historical_terminal, wake_summary: msg.wake_summary });
+                    historicalTerminals.set(msg.task_id, { ...msg.historical_terminal, wake_summary: msg.wake_summary, suggested_name: msg.suggested_name, schedule_name: msg.schedule_name });
                     if (msg.summary_kind === 'terminal_root_projection' || msg.outcome_final === true) {
                         historicalTerminalProjections.add(msg.task_id);
                     }
@@ -2534,6 +2535,7 @@ export function createChatInstance({
                     if (subagentChildParents.has(tid)) return routeSubagentTerminalToCard(tid, terminalRecord);
                     const record = liveCardRecords.get(tid);
                     if (!record) return;
+                    if (terminalRecord.suggested_name) applySuggestedName(tid, terminalRecord.suggested_name);  // evidence names a card whose own rows lie elsewhere
                     record.quietEffective = terminalRecord.quiet_effective ?? record.quietEffective;
                     noteTaskDetails(record, terminalRecord);
                     insertCardIfNeeded(tid);
@@ -2702,7 +2704,10 @@ export function createChatInstance({
     // joined; the sticky hydration answers a covered one (project_read_state.js).
     const newestFacts = { delivered: id => retainedHistoryIds().has(id), nodes: id => historyNodes(id),
         viewport: messagesDiv, header: pageHeader, composer: inputArea };
-    const readReceipt = createProjectReadReceipt({
+    // A message this room shares with another is read once wherever it was shown whole (read_ahead.js).
+    const sharedRead = createSharedReadTracker({ chatId, feed: messagesDiv, band: () => readBand(messagesDiv, pageHeader, inputArea),
+        shown: () => !destroyed && !leaving && !page.hidden && isInstanceVisible() });
+    const readReceipt = createProjectReadReceipt({ onNote: sharedRead.sample,
         read: async (fresh, whole) => {
             await (!fresh && initialHydrationPromise || historyPager.read({ whole }));
             return lastHistorySyncSucceeded;
@@ -2882,6 +2887,9 @@ export function createChatInstance({
             return changed;
         };
         const changed = preserveStickiness ? withStableViewport(mutate) : mutate();
+        // The scrollbar this feed draws (none where scrollbars overlay the page): a Project's focus corners keep off it.
+        const lane = `${messagesDiv.offsetWidth - messagesDiv.clientWidth}px`;
+        if (asPanel && page.style.getPropertyValue('--chat-feed-lane') !== lane) page.style.setProperty('--chat-feed-lane', lane);
         updateScrollButton();
         return changed;
     }
@@ -2911,6 +2919,18 @@ export function createChatInstance({
     }
 
     installChatResizeObservers();
+
+    // A Project room's feed holds the keys while it is open (app.js focusProjectRoom) and shows that focus as two
+    // corners (style.css). A pointer in the panel quiets them; a key anywhere in the room restores the cue, including
+    // Back to reading from the composer. Lone modifiers and non-scrolling shortcuts (Cmd+C, Cmd+Shift+4) stay quiet.
+    const focusPanel = asPanel ? container.closest?.('.project-panel') : null;
+    const quietFocus = () => messagesDiv.classList.add('is-quiet-focus');
+    const showFocus = ({ key, metaKey, ctrlKey, altKey }) => {
+        if (metaKey || ctrlKey || altKey ? /^(Arrow|Page|Home$|End$| $)/.test(key)
+            : !/^(Shift|CapsLock|Fn)$/.test(key)) messagesDiv.classList.remove('is-quiet-focus');
+    };
+    focusPanel?.addEventListener('pointerdown', quietFocus);
+    focusPanel?.addEventListener('keydown', showFocus);
 
     let headerControlInterval = null;
     if (asPanel) {
@@ -2971,6 +2991,7 @@ export function createChatInstance({
 
     // One retirement path per message node: media, decision views and markdown go with it.
     function releaseMessageNode(node) {
+        sharedRead.release(node);
         chatMedia.release(node); chatDecision.releaseViews(node); destroyChatMarkdown(node); node.remove();
     }
 
@@ -3002,6 +3023,7 @@ export function createChatInstance({
                 const wrapper = node.closest('.chat-bubble');
                 releaseMessageNode(node);
                 if (wrapper && wrapper !== node && !wrapper.querySelector('.chat-gallery-item, .chat-file-item, .chat-quiz-card')) {
+                    sharedRead.release(wrapper);
                     chatMedia.release(wrapper); wrapper.remove();
                 }
             }
@@ -3578,6 +3600,8 @@ export function createChatInstance({
         // reading and its transients stop at once, it is neither shown nor read; `stay` is a reopen meanwhile.
         leave: () => { leaving = true; readReceipt.cancel(); reading.cancel(); roomWork?.leave(); chatMedia.closeTransient(); },
         stay: () => { leaving = false; },
+        // How the room was opened (app.js): pressed open by a pointer, its focus corners wait for a key.
+        quietFocus: (quiet) => messagesDiv.classList.toggle('is-quiet-focus', Boolean(quiet)),
         // Full teardown (P3): release every resource this instance acquired —
         // ws subscriptions, window/document listeners, the ResizeObserver, all
         // timers — then drop the buffered collections and remove the DOM last.
@@ -3593,6 +3617,7 @@ export function createChatInstance({
             unconfirmed.release();
             emptyWelcome?.dispose();
             readReceipt.cancel();
+            sharedRead.dispose();
             for (const dispose of wsDisposers) {
                 try { dispose(); } catch {}
             }
@@ -3611,6 +3636,8 @@ export function createChatInstance({
             window.removeEventListener('ouro:page-shown', handlePageShown);
             document.removeEventListener('visibilitychange', handlePageShown);
             header?.destroy();
+            focusPanel?.removeEventListener('pointerdown', quietFocus);
+            focusPanel?.removeEventListener('keydown', showFocus);
             chatResizeObserver?.disconnect();
             chatResizeObserver = null;
             historyResyncScheduler.cancel();

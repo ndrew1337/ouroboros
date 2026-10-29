@@ -229,11 +229,6 @@ def get_safety_call_timeout_sec() -> float:
     return _clamped_number_setting("OUROBOROS_SAFETY_CALL_TIMEOUT_SEC", low=5.0, high=600.0)
 
 
-def get_update_letter_timeout_sec() -> float:
-    """Transport ceiling of the update-letter LIGHT one-shot (`update_letter.py`)."""
-    return _clamped_number_setting("OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC", low=10.0, high=600.0)
-
-
 def get_ui_translation_timeout_sec() -> float:
     """Transport ceiling of ONE translation-generator batch call (`ui_translation.py`)."""
     return _clamped_number_setting("OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC", low=10.0, high=600.0)
