@@ -1,3 +1,5 @@
+import { PROVIDER_SECRET_KEYS } from './settings_provider_cards.js';
+import { bindSecretInputs } from './settings_secrets.js';
 import { refreshModelCatalog, watchAccountModelCatalog } from './settings_catalog.js';
 export { accountCatalogRefreshKey } from './settings_catalog.js';
 import { getNotifier } from './notifications.js';
@@ -22,7 +24,7 @@ import {
 import { initHarnessAccounts } from './harness_accounts.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { confirmAndSendRestart } from './chat_activity.js';
-import { PROVIDER_SECRET_KEYS, SECRET_KEYS, bindSecretInputs, bindSettingsTabs, renderSettingsPage } from './settings_ui.js';
+import { SECRET_KEYS, bindSettingsTabs, renderSettingsPage } from './settings_ui.js';
 import { connectionReferencesText, createConnectionsEditor } from './settings_connections.js';
 import { showToast } from './toast.js';
 import { escapeHtmlAttr as escapeHtml } from './utils.js';

@@ -9,8 +9,8 @@ import { apiClient } from './api_client.js';
 import { adoptConnectionLabels } from './connection_labels.js';
 import { API_PROVIDER_ORDER, apiConnections, apiProviderLabel, parseModelSource } from './route_editor_primitives.js';
 import { setButtonBusy } from './settings_controls.js';
-import { resetSecretReveals } from './settings_secrets.js';
-import { PROVIDER_CARDS, bindSecretInputs, connectionRowHtml } from './settings_ui.js';
+import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
+import { PROVIDER_CARDS, connectionRowHtml } from './settings_provider_cards.js';
 import { revealNewRow, setInlineStatus } from './ui_helpers.js';
 
 export const CONNECTIONS_KEY = 'OUROBOROS_CONNECTIONS';
@@ -143,7 +143,8 @@ export function providerTestResultIsCurrent({
 
 /** The Accounts API-key rows of one Settings page: load, draft edits, collect, validate, Test. */
 export function createConnectionsEditor({ root, onChange = () => {}, test = (body) => apiClient.providerTest(body) } = {}) {
-    const cards = new Map(PROVIDER_CARDS.map((card) => [card.kind, card]));
+    const cards = new Map(PROVIDER_CARDS.filter((card) => root.querySelector(`[data-connection-rows="${card.kind}"]`))
+        .map((card) => [card.kind, card]));
     const kinds = API_PROVIDER_ORDER.filter((kind) => cards.has(kind));
     const advanced = PROVIDER_CARDS.filter((card) => card.advanced).map((card) => card.kind);
     const panel = root.querySelector('[data-settings-panel="providers"]');
@@ -391,6 +392,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         if (!row) return;
         expire(row);
         if (event.target.matches('[data-connection-label]')) paintRow(row);
+        onChange();
     }
 
     panel?.addEventListener('click', onClick);

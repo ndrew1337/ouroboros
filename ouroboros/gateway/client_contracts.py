@@ -136,6 +136,7 @@ class SetupInitialState(TypedDict):
     ``contract.providerFields[].stateKey`` (a configured secret reads as ``secretPlaceholder``,
     never the secret), per ``contract.budgetFields[].stateKey`` and per ``contract.modelSlots[].stateKey``."""
 
+    connections: List[Dict[str, Any]]  # masked OUROBOROS_CONNECTIONS rows, keyed by kind/name
     safetyModel: str
     providerProfile: str
     reviewEnforcement: str

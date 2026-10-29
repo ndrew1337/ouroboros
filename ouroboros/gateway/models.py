@@ -598,6 +598,22 @@ async def api_openai_compatible_models(request: Request) -> JSONResponse:
         body = await request.json()
         base_url = str(body.get("baseUrl", "") or "").strip()
         api_key = str(body.get("apiKey", "") or "").strip()
+        # A wizard reopening an install holds a masked key, just as Settings does.
+        # Resolve only the selected identity; an explicit blank still means no auth.
+        from ouroboros.secret_masking import looks_masked_settings_secret
+        if looks_masked_settings_secret(PROVIDER_KINDS["openai-compatible"].flat_key("api_key"), api_key):
+            from ouroboros.gateway.secret_rows import rehydrate_connections
+            settings = dict(load_settings())
+            name = str(body.get("connection") or "").strip()
+            if name:
+                draft = {"kind": "openai-compatible", "name": name, "api_key": api_key}
+                api_key = rehydrate_connections([draft], settings.get(CONNECTIONS_KEY))[0]["api_key"]
+            else:
+                from ouroboros.llm_routing import resolve_target
+                # Explicit discovery also works while the built-in source is off.
+                settings[CONNECTIONS_KEY] = [row for row in connection_rows(settings.get(CONNECTIONS_KEY))
+                                             if (row.get("kind"), row.get("name")) != ("openai-compatible", BUILTIN_CONNECTION)]
+                api_key = resolve_target("openai-compatible::catalog", settings)["api_key"]
         if not base_url:
             return json_error("baseUrl is required", 400)
         async with httpx.AsyncClient(timeout=10.0, **verify_kwargs()) as client:

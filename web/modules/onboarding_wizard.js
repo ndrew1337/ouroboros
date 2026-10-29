@@ -23,6 +23,9 @@ import { MODEL_CATALOG_TIMEOUT_MS, mergeModelCatalog, catalogReadState, summariz
 import { accountRows } from './claudexor_status_store.js';
 import { accountRowFacts } from './harness_accounts.js';
 import { createStarterSkillsRow } from './onboarding_starter_skills.js';
+import { createConnectionsEditor } from './settings_connections.js';
+import { PROVIDER_CARDS, providerSettingsCard } from './settings_provider_cards.js';
+import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
 
 (() => {
         // The served wizard document needs its own menu-key binding.
@@ -60,8 +63,6 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
         const MODEL_DEFAULTS = bootstrap.modelDefaults || {};
         const LOCAL_PRESETS = bootstrap.localPresets || {};
         const INITIAL_STATE = bootstrap.initialState || {};
-        // Credential placeholders retain stored values through the shared validator.
-        const SECRET_PLACEHOLDER = bootstrap.secretPlaceholder || '';
         const root = document.getElementById('root');
 
     const state = Object.assign({
@@ -76,7 +77,7 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
         subagentsOpen: false,
         localSourceOpen: Boolean(INITIAL_STATE.localSource),
         moreProvidersOpen: Boolean(INITIAL_STATE.cloudruKey || INITIAL_STATE.minimaxKey || INITIAL_STATE.deepseekKey
-            || INITIAL_STATE.zaiKey || INITIAL_STATE.compatibleBaseUrl || INITIAL_STATE.compatibleApiKey),
+            || INITIAL_STATE.zaiKey),
         localStatusText: 'Status: Offline',
         localStatusTone: 'muted',
         localTestResult: '',
@@ -113,6 +114,9 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     let catalogGeneration = 0;
     const stepScrollPositions = new Map();
     let suggestedVisionModel = null;
+    let connectionsEditor = null;
+    let compatibleCatalogs = {};
+    const compatibleCard = PROVIDER_CARDS.find((card) => card.kind === 'openai-compatible');
     const starterSkills = createStarterSkillsRow(); // the Summary's Starter skills row keeps its ticks across renders
     const modelRoles = createModelRolesEditor({ hostId: 'onboarding-model-roles', onChange: (settings, { slot } = {}) => {
         if (slot === 'vision') suggestedVisionModel = null;
@@ -138,8 +142,7 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     }
 
     function hasApiAccess() {
-        return PROVIDER_FIELDS.some((field) => !['MINIMAX_REGION', 'ZAI_PLAN', 'OPENAI_COMPATIBLE_API_KEY'].includes(field.settingKey)
-            && trim(state[field.stateKey]));
+        return configuredApiProviders(draftSettings(), PROVIDER_PROFILES).length > 0;
     }
 
     function hasModelSubscription() {
@@ -226,21 +229,11 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     }
 
     function moreProviderFields() {
-        return PROVIDER_FIELDS.filter((field) => field.group === 'more');
+        return PROVIDER_FIELDS.filter((field) => field.group === 'more' && !field.settingKey.startsWith('OPENAI_COMPATIBLE_'));
     }
 
     function hasMoreProviderValue() {
         return moreProviderFields().some((field) => trim(state[field.stateKey]).length > 0);
-    }
-
-    // A credential prefilled from disk arrives as SECRET_PLACEHOLDER, never as
-    // the value, so "is this configured?" can no longer be answered by length.
-    // The length rule stays for what the owner types here: it is the client
-    // mirror of the server's too-short check.
-    function isConfiguredCredential(value) {
-        const text = trim(value);
-        if (!text) return false;
-        return text === SECRET_PLACEHOLDER || text.length >= 10;
     }
 
         function isLocalFilesystemSource(value) {
@@ -252,27 +245,14 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
             return (items || []).find((item) => item.value === value) || {};
         }
 
-        function detectProviderProfile() {
-            const configured = Object.fromEntries(PROVIDER_FIELDS.map((field) => [
-                field.settingKey,
-                isConfiguredCredential(state[field.stateKey]),
-            ]));
-            const hasOpenrouter = configured.OPENROUTER_API_KEY;
-            const hasCompatible = trim(state.compatibleBaseUrl).length > 0;
-            const direct = [
-                ['OPENAI_API_KEY', 'openai'],
-                ['CLOUDRU_FOUNDATION_MODELS_API_KEY', 'cloudru'],
-                ['MINIMAX_API_KEY', 'minimax'],
-                ['DEEPSEEK_API_KEY', 'deepseek'], ['ZAI_API_KEY', 'zai'],
-                ['ANTHROPIC_API_KEY', 'anthropic'],
-            ].filter(([settingKey]) => configured[settingKey]);
-            if (hasOpenrouter) return 'openrouter';
-            if (hasCompatible) return 'openai-compatible';
-            if (direct.length > 1) return 'direct-multi';
-            if (direct.length === 1) return direct[0][1];
-            if (hasLocalModel()) return 'local';
-            return 'openrouter';
-        }
+    function detectProviderProfile() {
+        const kinds = [...new Set(configuredApiProviders(draftSettings(), PROVIDER_PROFILES)
+            .map((entry) => entry.id.split('@')[0]))];
+        if (kinds.includes('openrouter')) return 'openrouter';
+        if (kinds.includes('openai-compatible')) return 'openai-compatible';
+        if (kinds.length > 1) return 'direct-multi';
+        return kinds[0] || (hasLocalModel() ? 'local' : 'openrouter');
+    }
 
     function activeProviderProfile() {
         const profile = detectProviderProfile();
@@ -405,6 +385,8 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     }
 
         function validateProvidersStep() {
+            const connectionError = connectionsEditor?.validate()[0];
+            if (connectionError) return connectionError.message;
             const keyValues = PROVIDER_FIELDS.map((field) => [field, trim(state[field.stateKey])]);
             const localSource = trim(state.localSource);
             const localFilename = trim(state.localFilename);
@@ -414,9 +396,9 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
             // the owner never touched arrives here unchanged; rejecting it blocks
             // Next/Save on the providers step and the offending value becomes the
             // one value the wizard can never replace.
-            const shortKey = keyValues.find(([field, value]) => value && (field.inputType || 'password') === 'password' && value.length < 10 && value !== trim(INITIAL_STATE[field.stateKey]));
+            const shortKey = keyValues.find(([field, value]) => field.settingKey !== 'OPENAI_COMPATIBLE_API_KEY' && value && (field.inputType || 'password') === 'password' && value.length < 10 && value !== trim(INITIAL_STATE[field.stateKey]));
             if (shortKey) return `${shortKey[0].label.replace(' API Key', '')} API key looks too short.`;
-            const hasRemote = keyValues.some(([field, value]) => value && !['OPENAI_COMPATIBLE_API_KEY', 'MINIMAX_REGION', 'ZAI_PLAN'].includes(field.settingKey));
+            const hasRemote = hasApiAccess();
             if (!hasRemote && !localSource && !hasModelSubscription()) {
                 return state.agentsConnected.length
                     ? 'A Main model source has not been confirmed. Retry discovery, add an API key, or choose a local model.'
@@ -727,6 +709,9 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
                 <div class="field-grid">
                     ${primaryProviderFields().map(providerKeyField).join('')}
                 </div>
+            <div data-settings-panel="providers">
+                ${providerSettingsCard({ ...compatibleCard, title: 'Custom OpenAI-compatible servers', open: Boolean(state.compatibleBaseUrl || state.connections?.length) })}
+            </div>
             <details class="wizard-collapse" data-collapse="more-providers" ${moreProvidersOpen ? 'open' : ''}>
                 <summary>
                     <span>More options</span>
@@ -860,22 +845,27 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
         `;
     }
 
-        function renderCompatibleModelLoader() {
-            return `
+    function compatibleSources() {
+        return configuredApiProviders(draftSettings(), PROVIDER_PROFILES)
+            .filter((entry) => entry.id.split('@')[0] === 'openai-compatible');
+    }
+
+    function renderCompatibleModelLoader() {
+        return `
             <div class="panel-card" id="compatible-model-loader">
-                <h3>Load models from endpoint</h3>
-                <p class="field-note">Fetch the model list from your configured URL, then click a model to fill all empty slots.</p>
+                <h3>Models from your server</h3>
                 <div class="compatible-model-actions">
+                    <label class="ui-field">Server
+                        <select class="ui-control" id="compatible-model-source">${compatibleSources().map((entry) =>
+                            `<option value="${escapeHtml(entry.id)}">${escapeHtml(entry.label)}</option>`).join('')}</select>
+                    </label>
                     <button type="button" class="btn btn-secondary" id="load-compatible-models">Load models</button>
-                    <span id="compatible-load-status" class="field-note compatible-load-status"></span>
                 </div>
-                <div id="compatible-model-list" class="compatible-model-list" hidden></div>
-            </div>
-            `;
-        }
+                <div id="compatible-load-status" class="field-note compatible-load-status" role="status">Choose a source for each role below. You can also type any model ID.</div>
+            </div>`;
+    }
 
         function renderModelsStep() {
-            const profile = activeProviderProfile();
             return `
             <div class="step-header">
                 <div>
@@ -883,7 +873,7 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
                     <p class="step-copy">${escapeHtml(STEP_META.models.copy)}</p>
                 </div>
             </div>
-                ${profile === 'openai-compatible' ? renderCompatibleModelLoader() : ''}
+                ${compatibleSources().length ? renderCompatibleModelLoader() : ''}
                 ${modelRolesHost('onboarding-model-roles')}
                 <details class="wizard-collapse" data-collapse="subagents" ${state.subagentsOpen ? 'open' : ''}><summary>Available subagents</summary>
                     <div class="wizard-collapse-body">${availableSubagentsEditorHost('onboarding-available-subagents')}</div>
@@ -1049,6 +1039,9 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     }
 
     function render() {
+        connectionsEditor?.destroy();
+        connectionsEditor = null;
+        resetSecretReveals(root);
         const meta = STEP_META[state.currentStep];
         const index = STEP_ORDER.indexOf(state.currentStep);
         // An UNKNOWN save (503 settings_save_timeout: the write may still be
@@ -1134,6 +1127,37 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
     }
 
     function bindProvidersStep() {
+        const panel = root.querySelector('[data-settings-panel="providers"]');
+        if (panel) {
+            const changed = () => {
+                const rows = connectionsEditor?.collect().OUROBOROS_CONNECTIONS;
+                if (rows) state.connections = rows;
+                for (const field of compatibleCard.fields) {
+                    const input = panel.querySelector(`#${field.id}`);
+                    const stateKey = PROVIDER_FIELDS.find((entry) => entry.settingKey === field.settingKey)?.stateKey;
+                    if (input && stateKey) state[stateKey] = input.value;
+                }
+                compatibleCatalogs = {};
+                markStepEdited();
+            };
+            connectionsEditor = createConnectionsEditor({ root, onChange: changed });
+            connectionsEditor.load(draftSettings(), { modelSlots: MODEL_SLOTS });
+            for (const field of compatibleCard.fields) {
+                const input = panel.querySelector(`#${field.id}`);
+                input.value = draftSettings()[field.settingKey] || '';
+                const stateKey = PROVIDER_FIELDS.find((entry) => entry.settingKey === field.settingKey)?.stateKey;
+                input.dataset.appliedValue = INITIAL_STATE[stateKey] || '';
+            }
+            // Back remounts the draft, not a saved document. Show and Test must still
+            // use edited values locally rather than look up an unsaved row's key.
+            panel.querySelectorAll('[data-connection-row][data-uid]').forEach((row) => {
+                const saved = (INITIAL_STATE.connections || []).find((entry) => entry.kind === row.dataset.kind && entry.name === row.dataset.name);
+                row.querySelectorAll('[data-connection-field]').forEach((input) => {
+                    input.dataset.appliedValue = saved?.[input.dataset.connectionField] || '';
+                });
+            });
+            bindSecretInputs(panel);
+        }
             const localPreset = document.getElementById('local-preset');
             const localSource = document.getElementById('local-source');
         const localFilename = document.getElementById('local-filename');
@@ -1233,76 +1257,45 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
         syncCurrentStepActionState();
     }
 
-        function bindCompatibleModelLoader() {
-            const loadBtn = document.getElementById('load-compatible-models');
-            if (!loadBtn) return;
-            loadBtn.addEventListener('click', async () => {
-                const baseUrl = trim(state.compatibleBaseUrl).replace(/\/+$/, '');
-                const apiKey = trim(state.compatibleApiKey);
-                const statusEl = document.getElementById('compatible-load-status');
-                const listEl = document.getElementById('compatible-model-list');
-                if (!baseUrl) {
-                    if (statusEl) statusEl.textContent = 'Go back and enter a base URL first.';
-                    return;
-                }
-                if (statusEl) statusEl.textContent = 'Loading…';
-                loadBtn.disabled = true;
-                try {
-                    let models;
-                    if (HOST_MODE === 'web') {
-                        const resp = await fetch('/api/openai-compatible/models', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ baseUrl, apiKey }),
-                            cache: 'no-store',
-                        });
-                        const data = await resp.json().catch(() => ({}));
-                        if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
-                        models = (data.models || []).map((m) => trim(m)).filter(Boolean).sort();
-                    } else {
-                        if (!window.pywebview?.api?.fetch_compatible_models) {
-                            throw new Error('Desktop model-fetch bridge unavailable.');
-                        }
-                        const result = await window.pywebview.api.fetch_compatible_models({ baseUrl, apiKey });
-                        if (result?.error) throw new Error(result.error);
-                        models = (result?.models || []).map((m) => trim(m)).filter(Boolean).sort();
-                    }
-                    if (!models.length) throw new Error('No models returned by endpoint.');
-                    if (statusEl) statusEl.textContent = `${models.length} model${models.length === 1 ? '' : 's'} found — click one to fill empty slots.`;
-                    if (listEl) {
-                        listEl.hidden = false;
-                        listEl.innerHTML = models.map((m) =>
-                            `<button type="button" class="selection-pill" data-apply-model="${escapeHtml(m)}">${escapeHtml(m)}</button>`
-                        ).join('');
-                    }
-                } catch (err) {
-                    const msg = String(err?.message || err || 'Unknown error');
-                    if (statusEl) statusEl.textContent = `Failed: ${msg}`;
-                    if (listEl) { listEl.hidden = true; listEl.innerHTML = ''; }
-                } finally {
-                    loadBtn.disabled = false;
-                }
-            });
-            if (!root._compatModelListenerBound) {
-                root._compatModelListenerBound = true;
-                root.addEventListener('click', (event) => {
-                    const pill = event.target.closest('[data-apply-model]');
-                    if (!pill) return;
-                    const modelId = `openai-compatible::${pill.dataset.applyModel}`;
-                    if (!trim(state.mainModel)) state.mainModel = modelId;
-                    if (!trim(state.lightModel)) state.lightModel = modelId;
-                    if (!trim(state.fallbackModel)) state.fallbackModel = modelId;
-                    state.modelsDirty = true;
-                    agentsStep?.invalidateGeneratedPreview();
-                    render();
+    function bindCompatibleModelLoader() {
+        const button = document.getElementById('load-compatible-models');
+        const select = document.getElementById('compatible-model-source');
+        const status = document.getElementById('compatible-load-status');
+        if (!button) return;
+        select.addEventListener('change', () => { status.textContent = 'Load this server’s models, or type a model ID below.'; });
+        button.addEventListener('click', async () => {
+            const source = select.value;
+            const name = source.split('@')[1] || '';
+            const row = name ? state.connections.find((entry) => entry.kind === 'openai-compatible' && entry.name === name) : null;
+            const payload = { baseUrl: name ? row?.base_url : state.compatibleBaseUrl,
+                apiKey: name ? row?.api_key || '' : state.compatibleApiKey, ...(name ? { connection: name } : {}) };
+            const sent = JSON.stringify(payload);
+            status.textContent = 'Loading…';
+            button.disabled = true;
+            try {
+                const data = await fetchJson('/api/openai-compatible/models', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: sent, cache: 'no-store',
                 });
+                if (disposed || !button.isConnected) return;
+                const models = (data.models || []).map(trim).filter(Boolean).sort();
+                compatibleCatalogs[source] = models.map((id) => ({ value: `${source}::${id}`, label: id }));
+                modelRoles.adoptCatalog({ items: Object.values(compatibleCatalogs).flat(), read_state: 'ok' });
+                if (select.value === source) status.textContent = models.length
+                    ? `${models.length} model${models.length === 1 ? '' : 's'} listed for this server. Choose one in its role below.`
+                    : 'No models listed. You can type a model ID below.';
+            } catch (error) {
+                if (!disposed && button.isConnected && select.value === source) status.textContent = `Could not load models: ${error.message}. You can type a model ID below.`;
+            } finally {
+                if (button.isConnected) button.disabled = false;
             }
-        }
+        });
+    }
 
     function bindModelsStep() {
         bindCompatibleModelLoader();
         loadModelRoles();
         modelRoles.mount();
+        if (Object.keys(compatibleCatalogs).length) modelRoles.adoptCatalog({ items: Object.values(compatibleCatalogs).flat(), read_state: 'ok' });
         agentsStep?.mount();
         agentsStep?.setProcessingPreference(state.processingPreference);
         syncCurrentStepActionState();
@@ -1580,6 +1573,8 @@ import { createStarterSkillsRow } from './onboarding_starter_skills.js';
         catalogGeneration += 1;
         catalogRequest?.controller.abort();
         modelRoles.destroy();
+        connectionsEditor?.destroy();
+        resetSecretReveals(root);
         starterSkills.destroy();
     });
     render();
