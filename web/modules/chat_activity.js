@@ -266,9 +266,12 @@ const perToolLine = (entries) => entries
     .filter(([name, n]) => name && n > 0)
     .map(([name, n]) => (n > 1 ? `${name} ×${n}` : name)).join(' · ');
 
+// A read that failed (a recorded gap, an unreadable live file), not one that stopped at a bound.
+const toolReadFailed = coverage => Boolean(coverage && (coverage.gaps?.length
+    || coverage.source && !Number.isFinite(coverage.live_size)));
+
 export function toolEvidenceIncomplete(coverage) {
-    return Boolean(coverage && (coverage.gaps?.length || coverage.matched > coverage.shown
-        || coverage.source && !Number.isFinite(coverage.live_size)));
+    return Boolean(coverage && (toolReadFailed(coverage) || coverage.matched > coverage.shown));
 }
 
 // One tool row combines host counts with invocation facts; names and read scope
@@ -278,11 +281,12 @@ export function toolEvidenceView(fold = null) {
     const host = fold?.host || null;
     const observed = live.length + (fold?.legacy?.calls || 0);
     const calls = Math.max(Number.isInteger(host?.calls) ? host.calls : 0, observed);
-    // Frozen totals count model wait errors. Canonical evidence reports operation
-    // outcomes; a bounded partial read discloses its gap instead of reviving waits.
-    const partial = toolEvidenceIncomplete(fold?.coverage) || Boolean(fold?.coverage) && observed < calls;
-    const bounded = fold?.coverage && (fold.coverage.archives_bounded || fold.coverage.archives_available > fold.coverage.archives
-        || fold.coverage.live_size > fold.coverage.live_window);
+    const coverage = fold?.coverage;
+    // Frozen totals count model wait errors. Canonical evidence reports operation outcomes; a read names
+    // its extent, never revives a wait: a counted call without a record is unread behind a bound, else missing.
+    const bounded = Boolean(coverage) && (coverage.archives_bounded || coverage.archives_available > coverage.archives
+        || coverage.live_size > coverage.live_window || coverage.matched > coverage.shown);
+    const partial = toolReadFailed(coverage) || Boolean(coverage) && observed < calls && !bounded;
     // Only settled, individually identified calls can supersede an aggregate
     // host error. Partial replay and legacy start-only rows have no such proof.
     const outcomesKnown = calls > 0 && live.length === calls && !(fold?.legacy?.calls)
@@ -299,19 +303,19 @@ export function toolEvidenceView(fold = null) {
             : ((!host && live.some((call) => call.status === 'calling')) ? 'calling' : 'result'),
         headline: headline + (errors > 0 ? ` · ${fmt(errors === 1 ? '{n} error' : '{n} errors', { n: errors })}` : '')
             + (live.some(call => call.waitEnded) || fold?.legacy?.wait_ended ? ` · ${tr('task.tools.wait_ended', 'wait ended')}` : '')
-            + (calls && (live.some(call => ['unknown', 'wait_ended'].includes(call.status)) || fold?.legacy?.unknown || fold?.coverage && observed < calls)
+            + (calls && (live.some(call => ['unknown', 'wait_ended'].includes(call.status)) || fold?.legacy?.unknown)
                 ? ` · ${tr('task.tools.outcome_unknown', 'outcome unknown')}` : ''),
         body: '',
         fullBody: (partial || bounded ? (partial ? tr('task.tools.incomplete', 'Invocation evidence is incomplete.')
             : tr('task.tools.bounded_window', 'Only recent tool history was read.'))
-            + (fold?.coverage?.source ? ` ${fmt('Source: {source}.', { source: fold.coverage.source })}` : '') + ' ' : '')
+            + (coverage?.source ? ` ${fmt('Source: {source}.', { source: coverage.source })}` : '') + ' ' : '')
             + perToolLine(host?.counts && typeof host.counts === 'object'
             ? Object.entries(host.counts) : [...liveCounts]),
         visible: true,
         // Host-stamped routing/completion acts are receipts, never work. Missing
         // aggregate fields do not erase complete per-invocation receipt evidence.
         receipt: calls > 0 && errors <= 0 && (Number(host?.routing || 0) + Number(host?.completion || 0) >= calls
-            || !partial && live.length >= calls && live.every((call) => call.receipt)),
+            || !toolEvidenceIncomplete(coverage) && live.length >= calls && live.every((call) => call.receipt)),
         calls,
         errors,
     };
