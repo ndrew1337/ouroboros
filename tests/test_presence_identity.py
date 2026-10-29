@@ -142,7 +142,7 @@ def test_place_readers_never_import_or_call_connector_dispatch(focus, monkeypatc
     elif reader == "call_place_facts":
         ctx = SimpleNamespace(drive_root=root, task_metadata={})
         facts = place_guard.call_place_facts(ctx, "place_reply", {"place_id": place.place_id})
-        assert "sends_as" not in facts
+        assert "sends_as" not in facts["places"][0]
     else:
         assert place.place_id in consciousness_view.places_text(root, consciousness_view.place_views(root))
     assert not calls

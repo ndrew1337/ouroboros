@@ -53,7 +53,7 @@ export function safetySectionHtml() {
         <div class="form-field ui-field">
             <label for="s-safety-rules">Your rules</label>
             <textarea id="s-safety-rules" class="ui-control consciousness-owner-words" rows="3" spellcheck="false" aria-describedby="s-safety-rules-help"></textarea>
-            <div class="settings-inline-note ui-field-help" id="s-safety-rules-help">Rules the Safety Supervisor reads on every check. Rules for one place live in that place's notes.</div>
+            <div class="settings-inline-note ui-field-help" id="s-safety-rules-help">Ouroboros and the Safety Supervisor read these in every task and check. Rules for one place live in that place's notes.</div>
         </div>
         <div id="s-safety-skip-counter" class="settings-inline-note"></div>`;
 }
