@@ -502,6 +502,11 @@ def test_installer_replaces_its_own_dead_link_and_still_refuses_a_live_other_cop
     with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
         plan_posix_install(root, target_dir=target_dir)
     assert plan_posix_install(root, target_dir=target_dir, force=True).action == "replace"
+    (target_dir / "ouroboros").unlink()
+    (target_dir / "ouroboros").symlink_to(tmp_path / "temporarily-offline" / "owner-command")  # someone else's
+    with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
+        plan_posix_install(root, target_dir=target_dir)
+    assert plan_posix_install(root, target_dir=target_dir, force=True).action == "replace"
 
 
 def test_installer_replaces_its_own_cmd_whose_app_is_gone(tmp_path):

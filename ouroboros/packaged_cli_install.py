@@ -232,6 +232,19 @@ def _packaged_wrapper_source(bundle_root: pathlib.Path, *, windows: bool) -> pat
     return bundle_root / "bin" / name
 
 
+def _dead_own_link(target: pathlib.Path, source: pathlib.Path) -> bool:
+    """A dead link Install CLI made from some copy of this app: its target ends with this source's path below
+    its app copy (``Contents/.../bin/ouroboros`` under an ``.app``, ``bin/ouroboros`` under a bundle root).
+    A dead link to anything else still needs ``--force``."""
+    from ouroboros.desktop_autostart import app_copy
+
+    try:
+        tail = source.relative_to(app_copy(source.parent.parent)).parts
+        return not target.exists() and pathlib.Path(os.readlink(target)).parts[-len(tail):] == tail
+    except (OSError, ValueError):
+        return False
+
+
 def _existing_action(target: pathlib.Path, source: pathlib.Path, *, force: bool) -> str:
     if not target.exists() and not target.is_symlink():
         return "create"
@@ -241,7 +254,7 @@ def _existing_action(target: pathlib.Path, source: pathlib.Path, *, force: bool)
                 return "refresh"
         except OSError:
             pass
-        if force or not target.exists():  # a dead link (its app moved or was removed) runs nothing
+        if force or _dead_own_link(target, source):  # its app copy moved or was removed: it runs nothing
             return "replace"
     else:
         try:
