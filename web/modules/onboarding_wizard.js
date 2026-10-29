@@ -180,9 +180,7 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
                 clearTimeout(timer);
                 if (generation !== catalogGeneration) return;
                 catalogRequest = null;
-                modelSources = (modelCatalog.model_sources || []).filter((source) => state.agentsConnected.includes(source.credentialHarness));
-                clearFreshSubscriptionDefaults();
-                modelRoles.adoptCatalog({ ...modelCatalog, model_sources: modelSources });
+                adoptModelCatalog();
                 refreshSummary();
             });
         syncCurrentStepActionState();
@@ -198,7 +196,7 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
             adoptModelSettings(response.model_settings);
             if (JSON.stringify(draftSettings()) !== previous) loadModelRoles();
         }
-        modelRoles.adoptCatalog(response);
+        if (Array.isArray(response.items)) adoptModelCatalog(response);
         if (state.agentsConnected.length) void refreshModelSources();
         refreshSummary();
     }
@@ -206,6 +204,13 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
     function loadModelRoles() {
         modelRoles.load(draftSettings(), { ...SETUP_CONTRACT,
             modelSlots: MODEL_SLOTS.map((slot) => ({ ...slot, settingsToggleId: '' })) });
+    }
+
+    function adoptModelCatalog(data) {
+        if (data) modelCatalog = mergeModelCatalog(modelCatalog, data);
+        modelSources = (modelCatalog.model_sources || []).filter((source) => state.agentsConnected.includes(source.credentialHarness));
+        clearFreshSubscriptionDefaults();
+        modelRoles.adoptCatalog({ ...modelCatalog, model_sources: modelSources }, { connectionCatalogs: compatibleCatalogs });
     }
 
     function trim(value) {
@@ -1143,13 +1148,13 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
                 markStepEdited();
             };
             connectionsEditor = createConnectionsEditor({ root, onChange: changed });
-            connectionsEditor.load(draftSettings(), { modelSlots: MODEL_SLOTS });
             for (const field of compatibleCard.fields) {
                 const input = panel.querySelector(`#${field.id}`);
                 input.value = draftSettings()[field.settingKey] || '';
                 const stateKey = PROVIDER_FIELDS.find((entry) => entry.settingKey === field.settingKey)?.stateKey;
                 input.dataset.appliedValue = INITIAL_STATE[stateKey] || '';
             }
+            connectionsEditor.load(draftSettings(), { modelSlots: MODEL_SLOTS });
             // Back remounts the draft, not a saved document. Show and Test must still
             // use edited values locally rather than look up an unsaved row's key.
             panel.querySelectorAll('[data-connection-row][data-uid]').forEach((row) => {
@@ -1281,7 +1286,7 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
                 if (disposed || !button.isConnected) return;
                 const models = (data.models || []).map(trim).filter(Boolean).sort();
                 compatibleCatalogs[source] = models.map((id) => ({ value: `${source}::${id}`, label: id }));
-                modelRoles.adoptCatalog({ items: Object.values(compatibleCatalogs).flat(), read_state: 'ok' });
+                adoptModelCatalog();
                 if (select.value === source) status.textContent = models.length
                     ? `${models.length} model${models.length === 1 ? '' : 's'} listed for this server. Choose one in its role below.`
                     : 'No models listed. You can type a model ID below.';
@@ -1297,7 +1302,7 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
         bindCompatibleModelLoader();
         loadModelRoles();
         modelRoles.mount();
-        if (Object.keys(compatibleCatalogs).length) modelRoles.adoptCatalog({ items: Object.values(compatibleCatalogs).flat(), read_state: 'ok' });
+        adoptModelCatalog();
         agentsStep?.mount();
         agentsStep?.setProcessingPreference(state.processingPreference);
         syncCurrentStepActionState();

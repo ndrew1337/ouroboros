@@ -159,6 +159,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
     const touched = new Set();  // cards the owner opened or closed: a reload never overrides that
     const generations = new Map();
     const inFlight = new Set();
+    let rowBaselines = new WeakMap();
 
     const cardNode = (kind) => root.querySelector(`[data-provider-card="${cards.get(kind)?.id}"]`);
     const rowsHost = (kind) => root.querySelector(`[data-connection-rows="${kind}"]`);
@@ -219,7 +220,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         const id = builtin ? kind : `${kind}@${row.dataset.name}`;
         const entry = draft ? null : entries.find((item) => item.id === id);
         const enabled = builtin ? !builtinOff.has(kind) : row.dataset.enabled !== '0';
-        const facts = connectionRowFacts({ draft, enabled, configured: Boolean(entry?.configured),
+        const facts = connectionRowFacts({ draft: draft || rowFingerprint(row) !== rowBaselines.get(row), enabled, configured: Boolean(entry?.configured),
             source: entry?.source, usedBy: usage.get(id) || [] });
         const status = row.querySelector('[data-connection-status]');
         Object.assign(status, { textContent: facts.label, hidden: false });
@@ -244,6 +245,16 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
 
     function paintAll() {
         root.querySelectorAll('[data-connection-row]').forEach(paintRow);
+    }
+
+    // Field edits withdraw saved readiness without duplicating provider credential rules.
+    // Toggle status remains independent, and restoring the loaded fields restores their facts.
+    function rowFingerprint(row) {
+        return JSON.stringify([row.querySelector('[data-connection-label]')?.value.trim() || '',
+            ...cards.get(row.dataset.kind).fields.map((field) => {
+                const input = fieldInput(row, field);
+                return [field.secret ? input?.value || '' : (input?.value || '').trim(), input?.dataset.forceClear || ''];
+            })]);
     }
 
     function expire(row) {
@@ -278,6 +289,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
             if (added.length && !touched.has(card.kind)) setCardOpen(card.kind, true);
         }
         root.querySelectorAll('[data-connection-row]').forEach(expire);
+        rowBaselines = new WeakMap([...root.querySelectorAll('[data-connection-row]')].map((row) => [row, rowFingerprint(row)]));
         paintAll();
         const fold = root.querySelector('#settings-more-providers');
         if (fold && moreProvidersOpen(entries, advanced)) fold.open = true;
@@ -391,7 +403,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         const row = event.target instanceof Element ? event.target.closest('[data-connection-row]') : null;
         if (!row) return;
         expire(row);
-        if (event.target.matches('[data-connection-label]')) paintRow(row);
+        paintRow(row);
         onChange();
     }
 

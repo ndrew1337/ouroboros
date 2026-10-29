@@ -68,7 +68,7 @@ def _frame(page, evidence, name):
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_server_with_data, tmp_path, engine):
-    from playwright.sync_api import sync_playwright, expect
+    from playwright.sync_api import expect, sync_playwright
 
     ui = direct_server_with_data
     evidence = diagnostic_directory(tmp_path / "frames", f"named-servers-{engine}")
@@ -92,6 +92,7 @@ def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_
         page.locator('#s-openai-compatible-base-url').fill('')
         page.locator('#s-openai-compatible-key').fill('')
         default = page.locator('[data-connection-row][data-kind="openai-compatible"][data-builtin="1"]')
+        expect(default.locator('[data-connection-status]')).to_have_text('Not saved')
         report['cleared_default'] = {
             'base_url': default.locator('[data-connection-field="base_url"]').input_value(),
             'status': default.locator('[data-connection-status]').inner_text(),
@@ -223,6 +224,26 @@ def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_
         rows = page.locator('[data-connection-row][data-kind="openai-compatible"][data-uid]')
         expect(rows).to_have_count(2)
         expect(rows.nth(1).locator('[data-connection-label]')).to_have_value('Research server renamed')
+        # Saved masked rows withdraw readiness on field edits, and restore it on undo.
+        saved_row = rows.nth(1)
+        row_status = saved_row.locator('[data-connection-status]')
+        expect(row_status).to_have_text('Ready')
+        for field in ('base_url', 'api_key'):
+            control = saved_row.locator(f'[data-connection-field="{field}"]')
+            original = control.input_value()
+            control.fill('')
+            expect(row_status).to_have_text('Not saved')
+            control.fill(original)
+            expect(row_status).to_have_text('Ready')
+        secret = saved_row.locator('[data-connection-field="api_key"]')
+        mask = secret.input_value()
+        saved_row.locator('.secret-clear').click()
+        expect(secret).to_have_value('')
+        expect(row_status).to_have_text('Not saved')
+        assert secret.get_attribute('data-force-clear') == '1'
+        secret.fill(mask)
+        expect(row_status).to_have_text('Ready')
+        assert secret.get_attribute('data-force-clear') is None
         # Test the saved destinations from their real rows; alpha sends no auth, beta uses its own saved key.
         for row in (rows.nth(0), rows.nth(1)):
             with page.expect_response('**/api/providers/test') as tested:
@@ -245,7 +266,7 @@ def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_
 
 @pytest.mark.parametrize("engine", ["chromium", "webkit"])
 def test_undo_named_server_edits_restores_the_current_wizard_draft(direct_server_with_data, tmp_path, engine):
-    from playwright.sync_api import sync_playwright, expect
+    from playwright.sync_api import expect, sync_playwright
 
     ui = direct_server_with_data
     evidence = diagnostic_directory(tmp_path / "frames", f"undo-server-{engine}")
@@ -255,7 +276,15 @@ def test_undo_named_server_edits_restores_the_current_wizard_draft(direct_server
         page = browser.new_page(viewport={"width": 1360, "height": 900})
         errors, failed = record_console_errors(page), record_failed_loads(page)
         page.goto(ui["url"] + "/onboarding", wait_until="networkidle")
+        default = page.locator('[data-connection-row][data-kind="openai-compatible"][data-builtin="1"]')
+        base = default.locator('[data-connection-field="base_url"]')
+        initial_url = base.input_value()
+        expect(default.locator('[data-connection-status]')).to_have_text('Ready')
         page.locator('#s-openai-compatible-base-url').fill('')
+        expect(default.locator('[data-connection-status]')).to_have_text('Not saved')
+        base.fill(initial_url)
+        expect(default.locator('[data-connection-status]')).to_have_text('Ready')
+        base.fill('')
         page.locator('#s-openai-compatible-key').fill('')
         page.locator('[data-connection-add="openai-compatible"]').click()
         row = page.locator('[data-connection-row][data-uid]').last
@@ -271,16 +300,22 @@ def test_undo_named_server_edits_restores_the_current_wizard_draft(direct_server
         page.click('#back-btn')  # The editor now has a nonempty mount baseline.
         row = page.locator('[data-connection-row][data-uid]').last
         row.locator('[data-connection-toggle]').click()
+        expect(row.locator('[data-connection-status]')).to_have_text('Disabled')
         expect(page.locator('#next-btn')).to_be_disabled()
         row.locator('[data-connection-toggle]').click()
+        expect(row.locator('[data-connection-status]')).to_have_text('Ready')
         expect(page.locator('#next-btn')).to_be_enabled()
         report = {"candidate_identity": ui["candidate_identity"], "engine": engine,
                   "toggle_back": _frame(page, evidence, 'toggle-back')}
         # Returning fields to the loaded values emits an empty patch, not a new document.
         row.locator('[data-connection-field="base_url"]').fill('http://127.0.0.1:1/v1')
+        expect(row.locator('[data-connection-status]')).to_have_text('Not saved')
         row.locator('[data-connection-field="base_url"]').fill(url)
+        expect(row.locator('[data-connection-status]')).to_have_text('Ready')
         row.locator('[data-connection-field="api_key"]').fill('temporary-draft-key')
+        expect(row.locator('[data-connection-status]')).to_have_text('Not saved')
         row.locator('[data-connection-field="api_key"]').fill('b')
+        expect(row.locator('[data-connection-status]')).to_have_text('Ready')
         page.click('#next-btn')
         expect(main.locator('[data-model-role-source]')).to_have_value(source)
         expect(main.locator('[data-model-role-model]')).to_have_value('same-model')
