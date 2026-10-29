@@ -312,20 +312,18 @@ class ChatOutbound(ChatReferenceFields, SharedRowFrame):
     project_thread: NotRequired[bool]
 
 
-class PhotoOutbound(ChatReferenceFields):
-    """Outbound WS photo frame."""
+class _MediaOutbound(ChatReferenceFields):
+    """The fields the photo, video and document frames share; each frame adds its type, payload and own keys."""
 
-    type: Literal["photo"]
     role: Literal["user", "assistant"]
-    image_base64: str
     mime: str
     ts: str
     caption: NotRequired[str]
-    # Durable task-artifact URL for the stored media, replayed by chat history
-    # (the live frame carries the bytes inline instead).
+    # Canonical durable task-artifact URL of the stored media (a document's captured file), replayed by chat history:
+    # the live frame carries the bytes inline, so replay never needs to persist them.
     download_url: NotRequired[str]
-    # Second address for the SAME bytes on the long-shipped /api/files/download route, present only when the stored file
-    # resolves inside the current file-browser root. Packaged desktop launchers gate their file bridge to a URL
+    # Second address for the SAME bytes on the long-shipped /api/files/download route, non-empty only when the stored
+    # file resolves inside the current file-browser root. Packaged desktop launchers gate their file bridge to a URL
     # allowlist that predates the artifact route, so the browser uses download_url and the host bridge prefers this one.
     download_url_compat: NotRequired[str]
     content: NotRequired[str]
@@ -333,7 +331,6 @@ class PhotoOutbound(ChatReferenceFields):
     sender_label: NotRequired[str]
     sender_session_id: NotRequired[str]
     client_message_id: NotRequired[str]
-    subagents_mode: NotRequired[Literal["swarm"]]  # Accepted owner message, never a client claim.
     transport: NotRequired[TransportMetadata]
     chat_id: NotRequired[int]
     task_id: NotRequired[str]
@@ -341,56 +338,29 @@ class PhotoOutbound(ChatReferenceFields):
     project_thread: NotRequired[bool]
 
 
-class VideoOutbound(ChatReferenceFields):
+class PhotoOutbound(_MediaOutbound):
+    """Outbound WS photo frame."""
+
+    type: Literal["photo"]
+    image_base64: str
+    subagents_mode: NotRequired[Literal["swarm"]]  # Accepted owner message, never a client claim.
+
+
+class VideoOutbound(_MediaOutbound):
     """Outbound WS video frame."""
 
     type: Literal["video"]
-    role: Literal["user", "assistant"]
     video_base64: str
-    mime: str
-    ts: str
-    caption: NotRequired[str]
-    # Same as PhotoOutbound.download_url above.
-    download_url: NotRequired[str]
-    # Same dual-address contract as PhotoOutbound.download_url_compat above.
-    download_url_compat: NotRequired[str]
-    content: NotRequired[str]
-    source: NotRequired[str]
-    sender_label: NotRequired[str]
-    sender_session_id: NotRequired[str]
-    client_message_id: NotRequired[str]
-    transport: NotRequired[TransportMetadata]
-    chat_id: NotRequired[int]
-    task_id: NotRequired[str]
-    # Same Project-thread stamp contract as PhotoOutbound.project_thread.
-    project_thread: NotRequired[bool]
 
 
-class DocumentOutbound(ChatReferenceFields):
+class DocumentOutbound(_MediaOutbound):
     """Outbound WS document/file frame."""
 
     type: Literal["document"]
-    role: Literal["user", "assistant"]
     file_base64: str
-    mime: str
     filename: str
-    ts: str
-    caption: NotRequired[str]
-    # Canonical captured-file URL; replay never needs to persist inline bytes.
-    download_url: NotRequired[str]
-    download_url_compat: NotRequired[str]
     file_ref: NotRequired[Dict[str, Any]]
-    content: NotRequired[str]
-    source: NotRequired[str]
-    sender_label: NotRequired[str]
-    sender_session_id: NotRequired[str]
-    client_message_id: NotRequired[str]
-    transport: NotRequired[TransportMetadata]
-    chat_id: NotRequired[int]
-    task_id: NotRequired[str]
     size_bytes: NotRequired[int]
-    # Server-stamped when chat_id is a reserved Project thread: Main never adopts it, even before the browser learns it.
-    project_thread: NotRequired[bool]
 
 
 class LinkAction(TypedDict):

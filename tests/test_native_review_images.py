@@ -263,6 +263,36 @@ def test_only_actual_window_refusal_withholds_image_and_preserves_original(tmp_p
         assert len(llm.calls) == 2 and fact["delivered"] is True
 
 
+def test_a_late_strict_stamp_failure_ends_the_episode_instead_of_resending_without_the_image(tmp_path, screenshot):
+    """#1652: a window refusal the provider completed would continue the episode without the image;
+    after a strict paid stamp failed for that send the episode stops there with the refusal raised."""
+    from ouroboros.review_dispatch import ReviewPaidStamp
+
+    path = _shot(tmp_path, screenshot)
+
+    class WindowReviewer(_ScriptedLLM):
+        def chat(self, **kwargs):
+            if len(self.calls) == 1:
+                self.calls.append(copy.deepcopy(kwargs))
+                error = RuntimeError("request exceeds provider window")
+                error.code = "context_length_exceeded"
+                error.physical_attempt_capture = SimpleNamespace(state="settled", attempt_id="image-refusal",
+                                                                 provider_status_code=400)
+                raise error
+            return super().chat(**kwargs)
+
+    def refuse():
+        raise RuntimeError("commit review paid write-ahead could not be verified")
+
+    llm = WindowReviewer([{"tool_calls": [_tool_call("view_image", {"path": str(path)}, "picture")]},
+                          {"content": _VERDICT}])
+    executor, _ = _executor(tmp_path, path, llm=llm)
+    executor.assignment = dataclasses.replace(executor.assignment, dispatch_stamp=ReviewPaidStamp(refuse, fail_closed=True))
+    with pytest.raises(RuntimeError, match="request exceeds provider window"):
+        executor.execute()
+    assert len(llm.calls) == 2, "no send without the image after the failed strict stamp"
+
+
 def test_route_switch_reprepares_original_without_delivering_caption(tmp_path, screenshot, monkeypatch):
     path = _shot(tmp_path, screenshot)
     executor, _ = _executor(tmp_path, path)

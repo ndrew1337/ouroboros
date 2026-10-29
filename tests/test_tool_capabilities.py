@@ -656,20 +656,19 @@ def test_discovery_lists_the_callable_catalog_in_every_mode(mode):
 
 
 def test_burst_absorb_clause_states_the_prefix_write_cost():
-    """The burst affordance names its cash side, not only its latency win."""
+    """The burst affordance names its cash side, not only its latency win, as facts; the choice
+    between them is the caller's (#1175), and absorbing is wait_tasks' own contract."""
     from ouroboros.tools.registry import ToolRegistry
     from ouroboros.tool_policy import initial_tool_schemas
     import pathlib, tempfile
     tmp = pathlib.Path(tempfile.mkdtemp())
     registry = ToolRegistry(repo_dir=tmp, drive_root=tmp)
-    schema = next(
-        s for s in initial_tool_schemas(registry)
-        if s["function"]["name"] == "schedule_subagent"
-    )
-    description = schema["function"]["description"]
-    assert "one round run concurrently; wait_tasks(any_terminal) absorbs whichever finishes first" in description
-    assert "prefix write" in description
-    assert "choose burst latency or spaced cost savings" in description
+    descriptions = {s["function"]["name"]: s["function"]["description"] for s in initial_tool_schemas(registry)}
+    description = descriptions["schedule_subagent"]
+    assert "Children scheduled in one round run concurrently" in description
+    assert ("on cache-write-priced routes each sibling started before the first responds pays a full "
+            "prefix write") in description
+    assert "With mode=any_terminal it returns as soon as the FIRST child finishes" in descriptions["wait_tasks"]
 
 
 def test_escalate_is_available_wherever_planning_runs():
