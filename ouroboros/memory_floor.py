@@ -72,7 +72,8 @@ def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str,
         "F7": [(i["address"], i["line"], mv._row_pointer(i, "words")) for i in lane1
                if i.get("owner_side", i["kind"] == "human") and not i.get("immune")],
         "F5l": [(e["id"], "\n".join(mv._page_lines(e)), mv._page_label(e))
-                for e in snapshot.story if e.get("kind") == "page" and not e.get("told_by")],
+                for e in sorted(snapshot.story, key=lambda e: tuple(e.get("floor_order", (0, 0))))
+                if e.get("kind") == "page" and not e.get("told_by")],
         "F5": [(e["id"], "\n".join(mv._page_lines(e)), mv._page_pointer(e))
                for e in sorted(snapshot.story, key=lambda e: tuple(e.get("floor_order", (0, 0))))
                if e.get("kind") not in ("legacy", "account") and not e.get("told_by")],

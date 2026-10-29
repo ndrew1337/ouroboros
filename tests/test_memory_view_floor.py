@@ -137,9 +137,21 @@ def test_story_cuts_old_pages_before_fresh_retellings_without_changing_display(t
     snapshot = mv.capture_memory_view(tmp_path, {"id": "next0001", "chat_id": 1}, mv.ROLE_DEFAULTS["integrator"])
     assert [entry["id"] for entry in snapshot.story] == [part, ids[0]]  # cache-friendly display
     level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 100))
-    assert dict(level.addressed)["F5"] == (ids[0],)
+    assert dict(level.addressed)["F5l"] == (ids[0],)
     story = mv.render_story(snapshot, level)
-    assert "Fresh retelling." in story and "Page 0." not in story
+    assert "Fresh retelling." in story and "Page 0." in story and "p" * 8_000 not in story
+
+
+def test_page_sentence_rung_uses_covered_age_even_when_publication_order_differs():
+    old, recent = [{**page, "floor_order": [n, n + 1]} for n, page in enumerate(syn.pages(2, 8_000))]
+    snapshot = syn.snapshot(story=[recent, old])
+    level = mf.fit_memory_view(snapshot, frame(tokens(snapshot) - 100))
+    assert dict(level.addressed) == {"F5l": (old["id"],)}
+    story = mv.render_story(snapshot, level)
+    assert recent["text"] in story and old["text"] not in story
+    assert story.index("Page 1.") < story.index("Page 0.")  # display remains publication order
+    elements = mf.floor_elements(snapshot)
+    assert [ident for step, ident, *_ in elements if step == "F5"] == [old["id"], recent["id"]]
 
 
 def test_story_giveback_does_not_restore_an_old_small_page_over_a_newer_retelling():

@@ -231,7 +231,7 @@ def _cut_units(messages):
     from ouroboros import context_compaction as cc
     from ouroboros.context_budget import OWNER_WORDS_KIND, host_row_intact
     from ouroboros.context_source_view import chosen_read_units
-    from ouroboros.main_context_authority import PREDECESSOR_NOTES_NAME
+    from ouroboros.main_context_authority import LATE_ANSWER_NOTES_NAME, PREDECESSOR_NOTES_NAME
     from ouroboros.review_history_view import REVIEW_CONTEXT_INDEX_KEY, obsolete_review_index_positions
     first = next((i for i, row in enumerate(messages) if row.get('role') == 'user'), -1)
     latest = max((i for i, row in enumerate(messages) if i > first
@@ -241,7 +241,8 @@ def _cut_units(messages):
     obsolete = set(obsolete_review_index_positions(messages))
     feedback = _current_feedback_positions(messages)
     protected = {i for i, row in enumerate(messages) if i <= first or i >= latest or row.get('role') == 'system'
-        or _is_note(row) or _restored_address(row) or row.get(HOST_CONTEXT_KIND_KEY) == PREDECESSOR_NOTES_NAME
+        or _is_note(row) or _restored_address(row)
+        or row.get(HOST_CONTEXT_KIND_KEY) in {PREDECESSOR_NOTES_NAME, LATE_ANSWER_NOTES_NAME}
         or i in feedback or (row.get(REVIEW_CONTEXT_INDEX_KEY) and i not in obsolete)
         or row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut'}
     prior = {i for i, row in enumerate(messages) if first < i < latest
