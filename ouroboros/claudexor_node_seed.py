@@ -59,15 +59,15 @@ def _sha256(path: "str | pathlib.Path") -> str:
     return digest.hexdigest()
 
 
-def seed_node(legacy: pathlib.Path, version: str, platform_key: str) -> str:
-    """Copy the exact bundled Node into a generation beside ``legacy`` and return the copy.
+def seed_node(legacy: pathlib.Path, version: str, platform_key: str, record_name: str) -> str:
+    """Copy the exact bundled Node into a generation beside ``legacy``, its record named ``record_name`` (the
+    runtime's own reader's file), and return the copy.
 
     Returns the bundled path when that copy fails or this platform has no managed Node layout, and
     ``""`` when the bundle has no exact Node (the caller downloads one)."""
     source = bundled_node(version)
     if not source or not platform_key:
         return source
-    from ouroboros.claudexor_runtime import _NODE_META_FILENAME
     from ouroboros.platform_layer import embedded_node_candidates, probe_node_version
     from ouroboros.utils import atomic_write_json, replace_atomic
 
@@ -81,7 +81,7 @@ def seed_node(legacy: pathlib.Path, version: str, platform_key: str) -> str:
         digest = _sha256(node)
         if digest != _sha256(source) or probe_node_version(str(node)) != version:
             raise OSError(f"the copy does not run as the bundled Node {version}")
-        atomic_write_json(staging / _NODE_META_FILENAME, {
+        atomic_write_json(staging / record_name, {
             "schema_version": 1, "version": version, "platform": platform_key, "source": SEED_SOURCE,
             "binary_sha256": digest, "app_version": os.environ.get("OUROBOROS_APP_VERSION", "").strip(),
         }, trailing_newline=True, fsync=True)

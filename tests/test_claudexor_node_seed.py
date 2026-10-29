@@ -106,3 +106,15 @@ def test_a_failed_copy_leaves_the_daemon_on_the_bundled_node_and_says_so(tmp_pat
         assert manager.ensure()[0] == str(bundled)
     assert not list(nodes.glob("*")) and not fetches, "no generation, no staging, no download"
     assert f"runs on the bundled Node {bundled}" in caplog.text
+
+
+def test_the_seed_module_never_imports_the_runtime_back():
+    """claudexor_runtime imports the seed module when it loads; the seed receives its record's file name instead."""
+    import ast
+
+    from ouroboros import claudexor_node_seed
+
+    tree = ast.parse(pathlib.Path(claudexor_node_seed.__file__).read_text(encoding="utf-8"))
+    imported = {node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)}
+    imported |= {alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names}
+    assert "ouroboros.claudexor_runtime" not in imported

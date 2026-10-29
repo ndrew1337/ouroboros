@@ -1024,7 +1024,7 @@ class ClaudexorRuntimeManager:
 
         platform_key = node_distribution_platform()
         node = self._resolve_node(pin, bundled=False) or seed_node(
-            managed_node_dir(pin, platform_key), pin.node_version, platform_key)
+            managed_node_dir(pin, platform_key), pin.node_version, platform_key, _NODE_META_FILENAME)
         if node:
             return node
         artifact = pin.node_artifacts.get(platform_key)
