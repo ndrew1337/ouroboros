@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ouroboros.consciousness_view import describe_consciousness_state
 from tests.test_room_work_browser import PROJECT, Transport, activity, progress, reading
 from tests.test_subscription_setup_browser import capture, subscription_ui as subscription_ui
 from tests.test_window_chrome_browser import record
@@ -242,9 +244,10 @@ def test_floating_headers_gap_notice_and_immediate_selection(shell_ui, tmp_path,
     ], history={1: reading(14), 42: reading(14, room="Project")})
     # Consciousness sleeps until its next wake: the bar's chip says it and opens its Shade.
     census = transport.body
+    next_wake = datetime.now(timezone.utc) + timedelta(hours=1)
     transport.body = lambda **kwargs: {**census(**kwargs), "bg_consciousness_enabled": True,
-                                       "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00+00:00",
-                                                                  "spent_24h_usd": 1.5, "daily_usd": 20}}
+                                       "bg_consciousness_state": describe_consciousness_state(
+                                           {"next_wake_at": next_wake.isoformat(), "spent_24h_usd": 1.5, "daily_usd": 20}, True)}
 
     def history(route):
         chat_id = int(parse_qs(urlparse(route.request.url).query).get("chat_id", ["1"])[0])

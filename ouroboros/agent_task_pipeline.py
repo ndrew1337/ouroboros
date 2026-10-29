@@ -222,10 +222,8 @@ def _run_post_task_processing_async(
             # failed paid stage costs the card its facts; it is not a stage.
             _record_task_facts(env, task_snapshot, usage_snapshot, trace_snapshot, drive_logs)
             from ouroboros.llm import LLMClient
-            from ouroboros.memory import Memory
 
             llm_client = LLMClient()
-            task_memory = Memory(drive_root=env.drive_root, repo_dir=env.repo_dir)
 
             def _promotion() -> str:
                 if is_presence_task(task_snapshot):
@@ -246,13 +244,12 @@ def _run_post_task_processing_async(
                 return failure
 
             # All late model work belongs to this one scoped worker.  This keeps
-            # the root checkpoint non-final until the fallback memory draft,
-            # consolidation and promotion have all stopped billing.
+            # the root checkpoint non-final until the fallback memory draft and
+            # promotion have both stopped billing. No stage rewrites the
+            # scratchpad: only a fold the mind accepts replaces its blocks (#918).
             stages: List[tuple[str, Callable[[], Any]]] = [
                 ("memory_fallback_draft", lambda: _run_memory_fallback_draft(
                     env, task_snapshot, llm_client, drive_logs, trace_snapshot)),
-                ("scratchpad_consolidation", lambda: _run_scratchpad_consolidation(
-                    env, task_memory, llm_client)),
                 ("promotion", _promotion),
             ]
             from ouroboros.post_task_synthesis import (
@@ -1546,5 +1543,4 @@ from ouroboros.post_task_synthesis import (  # noqa: E402, F401 -- intentional p
     _record_task_facts,
     _post_task_paid_interruption,
     _run_memory_fallback_draft,
-    _run_scratchpad_consolidation,
 )

@@ -24,6 +24,14 @@ CARRIERS = {
     # A question's × and Send (no inset of their own: the × once reached 10px out, over the Project capsule above it).
     "web/modules/question_presentation.js": ("closeButton.className = 'chat-quiz-close ui-hit-area';",
                                              "send.className = 'chat-quiz-send ui-hit-area';"),
+    # A task card's doors and commands and ↓ latest reach a finger too (owner 29.10): the Reviews door draws its chevron
+    # as an element, so its ::after is the recipe's. (A question's recovery row wraps on a phone: its buttons take
+    # the touch minimum as their own height, as the send doubts' do, so no two hit areas overlap.)
+    "web/modules/chat.js": ('class="chat-live-review-summary ui-hit-area" data-live-review-summary aria-expanded="false" hidden>${CHEVRON}',
+                            'class="chat-scroll-bottom-btn ui-hit-area"', "btn.className = 'btn btn-sm btn-default ui-hit-area';"),
+    "web/modules/work_portal.js": ("btn.className = 'btn btn-sm btn-default ui-hit-area';",),
+    "web/modules/task_control_menu.js": ("button.className = 'btn btn-sm btn-primary ui-hit-area';",),
+    "web/modules/main_waiting.js": ("button.className = 'btn btn-xs btn-default ui-hit-area';",),
 }
 
 
@@ -56,6 +64,9 @@ def test_the_hit_extension_recipe_lives_once_in_ui_css_and_the_small_controls_ca
         for marker in markers:
             assert marker in source, f"{rel} lacks {marker}"
     assert ".chat-quiz-close::after" not in _read("web/style.css"), "the question's × has no hit area of its own"
+    # One owner per pseudo-element: the Reviews door's ::after is its hit area, never its chevron as well (on touch the
+    # recipe once moved that chevron above the door's words and left the door 28px tall).
+    assert ".chat-live-review-summary::after" not in _read("web/style.css")
     # The composer rows part by --space-2 (8px): a 32px control's 6px overshoot never meets its neighbour's.
     css = _read("web/style.css")
     wrap = css.split(".chat-input-wrap {", 1)[1].split("}", 1)[0]

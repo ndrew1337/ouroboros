@@ -176,7 +176,6 @@ def test_emitted_rounds_survive_split_dispatch_and_result_pruning(
     monkeypatch.setattr(llm, "LLMClient", SimpleNamespace)
     monkeypatch.setattr(pipeline, "_run_memory_fallback_draft",
                         lambda env, *_args: post_roots.append(env.drive_root))
-    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", lambda *_args: None)
     monkeypatch.setattr(post_task_evolution, "maybe_promote", lambda *_args: None)
     monkeypatch.setattr(pipeline, "_task_cost_fields", lambda *_args: {"total_rounds": 99})
     events = []

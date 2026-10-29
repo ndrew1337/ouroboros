@@ -17,7 +17,7 @@ import time
 import pytest
 
 from ouroboros import platform_darwin_abi, platform_layer
-from ouroboros.process_identity import birth_identity, different_birth, process_kernel_birth
+from ouroboros.process_identity import birth_identity, different_birth, process_kernel_birth, same_birth
 
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _BOOT = "0123456789abcdef0123456789abcdef"
@@ -87,6 +87,27 @@ def test_two_kinds_never_prove_a_different_birth(first, second):
     live, recorded = _KINDS[first][0], _KINDS[second][1]
     assert different_birth(live, recorded) is (first == second)
     assert different_birth(recorded, live) is (first == second)
+    assert same_birth(live, recorded) is same_birth(recorded, live) is (False if first == second else None)
+
+
+@pytest.mark.parametrize("first,second,same", [
+    ("darwin-start:1793143271.251840", "darwin-start:1793143271.251840", True),
+    ("darwin-start:1793143271.251840", "darwin-start:1793143271.251841", False),
+    (f"812.{_BOOT}", f"812.{_BOOT}", True),  # already validated kinds keep both answers
+    (f"812.{_BOOT}", f"811.{_BOOT}", False),
+    ("812.", "812", True),
+    ("win-filetime:1300", "win-filetime:1300", True),
+    ("win-filetime:1300", "win-filetime:1200", False),
+    ("Wed Oct 28 14:38:55 2026", "Wed Oct 28 03:53:55 2026", None),  # one process, two ps zones
+    ("Wed Oct 28 14:38:55 2026", "Wed Oct 28 14:38:55 2026", None),  # an equal spelling proves nothing either
+    ("darwin-start:1793143271.25184", "darwin-start:1793143271.25184", None),  # malformed twins
+    ("darwin-start:1793143271.251840", "win-filetime:1300", None),
+    ("darwin-start:1793143271.251840", "", None),
+    ("darwin-start:1793143271.251840", None, None),
+])
+def test_same_birth_answers_only_for_two_validated_tokens_of_one_kind(first, second, same):
+    assert same_birth(first, second) is same and same_birth(second, first) is same
+    assert different_birth(first, second) is (same is False)
 
 
 def test_macos_mints_only_from_the_kernel_record(monkeypatch):

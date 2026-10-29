@@ -550,7 +550,7 @@ function closeNotificationReaders() {
 }
 
 mainChat = initChat(ctx);
-initFiles(ctx);
+initFiles({ ...ctx, layers });
 
 // Skills' contributions (CLIENT_CONTRACT §11): one store, read now and on every lifecycle change; their message
 // actions join the row registry, and their page modules mount unless this start skips them (host_modules.js). Voice

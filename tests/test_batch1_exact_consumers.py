@@ -104,7 +104,7 @@ def test_consciousness_recovers_unknown_but_never_overrides_live_stop(root, monk
     state.STATE_PATH.unlink()
     state.STATE_LAST_GOOD_PATH.unlink()
     clock = BackgroundConsciousness(root, root / "repo", lambda: 7, now=100)
-    monkeypatch.setattr(clock, "live_turns", lambda: ("", False))
+    monkeypatch.setattr(clock, "live_wake", lambda: "")
     assert clock.tick(now=100) == "disabled"
     state.STATE_PATH.write_bytes(primary)
     state.STATE_LAST_GOOD_PATH.write_bytes(backup)

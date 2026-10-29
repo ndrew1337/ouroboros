@@ -453,11 +453,13 @@ def test_the_open_usage_set_crosses_once_per_statement(data_root):  # noqa: F811
 
 def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_path):
     """The held custody runs and the live tasks are a few rows among the whole closed history: once the
-    maintenance child's ANALYZE wrote planner statistics, their reads stay on their indexes and cost the same
-    SQLite VM steps over 10 and 300 closed rows of each. Without it SQLite walks every row: before 3.46 to spare
-    sorting the held few in key order (tests/test_cost_contract.py B7 on the PERSIST leg's SQLite 3.45.1), on every
-    version for the live tasks and the packer's keep rows, and from 3.46 for the context's run lines."""
+    maintenance child's ``sqlite_analyze`` wrote planner statistics, their reads stay on their indexes and cost the
+    same SQLite VM steps over 10 and 300 closed rows of each, a new connection's schema load included. Without it
+    SQLite walks every row: before 3.46 to spare sorting the held few in key order (tests/test_cost_contract.py B7 on
+    the PERSIST leg's SQLite 3.45.1), on every version for the live tasks and the packer's keep rows, and from 3.46
+    for the context's run lines."""
     from ouroboros import delegate_custody as custody, delegate_custody_current as current, evidence_packer, obligations
+    from ouroboros import maintenance
     from tests._cost_meter import VM_STEP
     from tests.test_store import publish
 
@@ -476,8 +478,7 @@ def test_the_few_current_rows_cost_the_same_over_any_history_once_analyzed(tmp_p
                 txn.put_custody(run_id, {**closed, "run_id": run_id, "task_id": f"done-{n}"}, state="closed")
         for n in range(3):
             custody.emit(root, custody.STARTED, {"run_id": f"run-live-{n}", "task_id": f"live-{n}"})
-        with store.open_store(root, write=True) as txn:
-            txn.conn.execute("ANALYZE")
+        assert maintenance.run_job(root, "sqlite_analyze")["state"] == "done"
         store.close_connections()  # the reads below open their connections under the meter
         with CostMeter(root) as meter:
             held = tagged("held", lambda: current.snapshot(root)["state"])

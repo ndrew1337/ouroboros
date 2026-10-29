@@ -258,6 +258,7 @@ BAND_PATHS = {
     "tests/test_room_work_branches_browser.py": "Room-work edge journeys reuse the existing controlled transport and real-server fixtures to cover translated chrome, keyed focus and exact lifecycle actions together.",
     "tests/test_room_work_browser.py": "One browser transport fixture exercises room work projection, exact actions, late reads, focus and geometry; real backend scenarios remain in a separate suite.",
     "tests/test_safety_policy.py": None,
+    "tests/test_shell_interactions_browser.py": "Shared real shell fixture covers the paired Back and focus journeys without duplicating setup.",
     "tests/test_skill_review_runner.py": "Skill lifecycle/review terminal-state regression coverage stays one focused suite below the 1500-line band cap.",
     "tests/test_swe_pro_e1v2.py": None,
     "tests/test_telegram_miniapp_lifecycle.py": None,

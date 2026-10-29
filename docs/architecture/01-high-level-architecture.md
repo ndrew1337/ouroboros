@@ -208,7 +208,7 @@ ouroboros/ — agent core and shared runtime (§6)
   chat_chain.py, chat_references.py, chronicle_store.py, chronicle_quotes.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts, separate common-view selections, disposable index (§6)
   mark_anchors.py — a mark tied to a tool (optional call text) or a path trails that call's result once per task (§6 Post-task work)
   chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
-  consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
+  consolidator.py, memory_fallback.py — shared Light transport, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
   knowledge.py, memory_publication.py — linked-Markdown notes, shelf indexes and revision-checked writes; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
@@ -618,7 +618,7 @@ The APK's `MainActivity` hosts the SPA and declares `ACTION_ASSIST` with an in-a
 
 `platform_layer.py` owns OS observations and lock/process primitives; callers own policy. `kernel_file_locks_enforced` probes each real directory once, never from a failed live acquisition: unsupported-lock errors and `ENOLCK` select a recorded name-only tier, an unprobeable directory stays enforced for that call, other kernel errors fail closed (else: `platform_layer.py`). The name tier uses O_EXCL plus identity recheck without kernel exclusion; callers may refuse it (money does). A won lock must still have a readable descriptor and path inode identity; unreadable identity is no proof. Owner-aware recovery skips the stale-age grace after confirmed owner death and keeps live writers; unknown metadata keeps the grace; permission denial proves no death. Refresh returns ownership, not a courtesy heartbeat: losing it means abandoning the protected work. Release unlinks only the held identity (ordering, the bounded unlink retry and the `LockFileEx` byte: `platform_layer.py`).
 
-Birth identity is separate from PID presence. Linux mints boot-qualified ticks, then the ps wall-clock token, then bare ticks with a disclosed cross-boot collision limit; the custody ledger keeps the `start_time` spelling and an optional boot-qualified sibling: an older reader meeting an unknown token after rollback would prune every row without a kill. macOS death proof adds kernel `p_starttime` (`process_identity`). Windows uses the exact creation FILETIME, checks presence through non-signalling handles and treats access-denied or unknown presence as no licence to clean up; Win32 calls declare full-width HANDLE arguments (omitted declarations truncate 64-bit handles), and Job termination treats a false BOOL return as failure, so survivors stay disclosed. Bundled resources use the CLI / Headless Boundary lookup order; `node_runtime` owns Node health and selection (re-exported lazily by the platform layer). TCP keepalive: §6 Context fitting, retry, and compaction; kernel dead-peer detection never shortens a cognitive deadline.
+Birth identity is separate from PID presence. Linux mints boot-qualified ticks, then the ps wall-clock token, then bare ticks with a disclosed cross-boot collision limit; the custody ledger keeps the `start_time` spelling and an optional boot-qualified sibling: an older reader meeting an unknown token after rollback would prune every row without a kill. macOS adds kernel `p_starttime` (`process_identity`); death proof, worker readiness and review controllers compare it before ps. Windows uses the exact creation FILETIME, checks presence through non-signalling handles and treats access-denied or unknown presence as no licence to clean up; Win32 calls declare full-width HANDLE arguments (omitted declarations truncate 64-bit handles), and Job termination treats a false BOOL return as failure, so survivors stay disclosed. Bundled resources use the CLI / Headless Boundary lookup order; `node_runtime` owns Node health and selection (re-exported lazily by the platform layer). TCP keepalive: §6 Context fitting, retry, and compaction.
 
 ### Data layout (`~/Ouroboros/`)
 
@@ -698,7 +698,7 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   ├── claudexor/                 ← Ouroboros-owned Claudexor home (`CLAUDEXOR_CONFIG_DIR`)
 │   ├── memory/
 │   │   ├── identity.md            ← durable identity
-│   │   ├── scratchpad.md          ← rendered from scratchpad_blocks.json, bounded
+│   │   ├── scratchpad.md          ← rendered from scratchpad_blocks.json
 │   │   ├── dialogue_blocks.json   ← chronicle import source, with dialogue_summary.md
 │   │   ├── dialogue_meta.json     ← chronicle import cursor and nomination source
 │   │   ├── chronicle/             ← records.jsonl (append-only authority), index.sqlite3 (disposable)
