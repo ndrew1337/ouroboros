@@ -1,6 +1,7 @@
 """Read-only consciousness facts from places, current roots and durable results."""
 
 import contextlib
+from datetime import datetime
 import json
 import time
 from typing import Any
@@ -26,11 +27,16 @@ def _reading(store_name: str):
 
 
 def _clock_of(iso_value: Any) -> str:
-    """``HH:MM`` in the server's local time for an ISO instant (``?`` when absent)."""
+    """Server-local clock, with a short date unless today (``?`` when absent)."""
     from ouroboros.deadline_utils import parse_deadline_ts
 
     parsed = parse_deadline_ts(str(iso_value or ""))
-    return parsed.astimezone(_DISPLAY_ZONE).strftime("%H:%M") if parsed is not None else "?"
+    if parsed is None:
+        return "?"
+    at = parsed.astimezone(_DISPLAY_ZONE)
+    today = datetime.fromtimestamp(time.time()).astimezone(_DISPLAY_ZONE).date()
+    date = f"{at:%b} {at.day} " if at.date() != today else ""
+    return date + at.strftime("%H:%M")
 
 
 def _when(iso_value: Any) -> str:
@@ -253,7 +259,7 @@ def _wake_phase(row: dict, clock_live: bool) -> str:
 
 def recent_wakes(drive_root, places, *, live_wake_task_id: str = "", now: float | None = None,
                  ids: list[str] | None = None) -> list[dict]:
-    """At most 50 wakes that reached a model call in the last 48 h, newest first.
+    """At most 50 wakes that reached a model call in the last 48 h, with room for both kinds, newest first.
 
     Wakes that never reached a model call are not listed. Selection uses the
     allowance's ledger horizon; reservations alone are not calls. Facts come

@@ -16,13 +16,12 @@
 import { headlineView } from './consciousness_dashboard.js';
 import { normalizeConsciousness, readConsciousness } from './consciousness_api.js';
 import { clockText, deadlineWords, splitWakes, wakePhaseText } from './consciousness_words.js';
-import { tr, fmt } from './i18n.js';
+import { tr } from './i18n.js';
 import { controlIcon } from './page_icons.js';
 import { createStatusMark, paintStatusMark } from './status_mark.js';
 import { formatUsd2 } from './utils.js';
 import { hangUnderCapsules } from './room_work.js';
 import { motionMs, reducedMotion } from './motion.js';
-import { HEADER_FULL_ROW_MIN_WIDTH } from './page_header.js';
 
 // The owner's move (DESIGN "Status marks", amber): consciousness stopped by its spending limit or waiting for a first
 // conversation, a campaign stopped by its limit or waiting for the owner's chat. A failure is an outcome's red dot,
@@ -52,10 +51,7 @@ export function chipView(data = {}) {
     const status = snapshot.status;
     const owner = (!off && !unknown && OWNER_MOVE.has(status))
         || (evolving && CAMPAIGN_OWNER_MOVE.has(String(data.evolution_state?.status || '')));
-    const deadline = deadlineWords(snapshot);
-    const next = status === 'allowance_exhausted'
-        ? clockText(snapshot.allowanceResetsAt || snapshot.nextWakeAt) : deadline.chip;
-    const word = evolving ? 'Evolving' : off ? 'Off' : headline.moving || unknown ? '' : next;
+    const word = evolving ? 'Evolving' : off ? 'Off' : headline.moving || unknown ? '' : deadlineWords(snapshot);
     const mark = owner ? { shape: 'dot', hue: 'owner' }
         : headline.moving ? { shape: 'moving', hue: 'ink' }
             : off ? NONE
@@ -63,8 +59,7 @@ export function chipView(data = {}) {
                     : unknown || UNCONFIRMED.has(status) ? { shape: 'ring', hue: 'ink' }
                         : status === 'wake_paused' ? { shape: 'pause', hue: 'ink' }
                             : status === 'due' ? { shape: 'still', hue: 'ink' } : NONE;
-    const timeLine = status === 'allowance_exhausted' ? fmt('Next check at {time}', { time: next }) : deadline.line;
-    const said = [`Consciousness: ${headline.text}`, next && !headline.text.includes(next) ? timeLine : '',
+    const said = [`Consciousness: ${headline.text}`,
         evolving ? 'evolution campaign running' : '', owner ? 'waits for you' : '']
         .filter(Boolean).join(' · ');
     return { word, mark, off, evolving, said, headline, snapshot };
@@ -140,6 +135,8 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     const toggle = element('button', 'btn btn-default btn-sm cx-toggle');
     toggle.type = 'button';
     head.append(headWords, toggle);
+    const coverageNote = element('p', 'cx-wakes-coverage');
+    coverageNote.setAttribute('data-i18n-authored', '');
     const groups = [
         ['own', tr('consciousness.own_wakes', 'Its own wakes'),
             tr('consciousness.no_own_wakes', 'No own wakes with a recorded model call in the last 48 h.')],
@@ -163,7 +160,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     const dashboardDoor = door('Dashboard ›', 'consciousness');
     const evolutionDoor = door('Evolution ›', 'evolution');
     doors.append(dashboardDoor, evolutionDoor);
-    body.append(head, ...groups.flatMap((group) => [group.heading, group.wakes, group.note]), doors);
+    body.append(head, coverageNote, ...groups.flatMap((group) => [group.heading, group.wakes, group.note]), doors);
     shade.append(body);
     anchor.append(shade);
     bar.append(anchor);
@@ -182,7 +179,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         if (!view) return;
         chip.hidden = false;
         if (word.textContent !== view.word) word.textContent = view.word;
-        word.hidden = !view.word || (bar.clientWidth > 0 && bar.clientWidth < HEADER_FULL_ROW_MIN_WIDTH);
+        word.hidden = !view.word;
         chip.dataset.off = view.off ? 'true' : 'false';
         chip.dataset.evolving = view.evolving ? 'true' : 'false';
         paintStatusMark(mark, view.mark);
@@ -193,8 +190,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     function paintShade() {
         if (!view) return;
         const { snapshot, headline } = view;
-        const deadline = deadlineWords(snapshot);
-        stateLine.textContent = [headline.text, deadline.chip && !headline.text.includes(deadline.chip) ? deadline.line : ''].filter(Boolean).join(' · ');
+        stateLine.textContent = headline.text;
         const allowance = allowanceText(snapshot);
         money.textContent = allowance;
         money.hidden = !allowance;
@@ -205,7 +201,10 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         evolutionDoor.hidden = !view.evolving;
     }
 
-    function paintWakes(list, failed = false) {
+    function paintWakes(list, coverage = '', failed = false) {
+        coverageNote.textContent = coverage || (failed ? 'Recent wakes could not be read.'
+            : !Array.isArray(list) ? 'Reading recent wakes…' : '');
+        coverageNote.hidden = !coverageNote.textContent;
         const split = splitWakes(list);
         for (const group of groups) {
             const rows = wakeRows(split[group.key]);
@@ -219,8 +218,7 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
                 return item;
             }));
             group.wakes.hidden = !rows.length;
-            const note = failed ? 'Recent wakes could not be read.'
-                : !Array.isArray(list) ? 'Reading recent wakes…' : rows.length ? '' : group.empty;
+            const note = Array.isArray(list) && !rows.length ? group.empty : '';
             group.note.textContent = note;
             group.note.hidden = !note;
         }
@@ -232,8 +230,8 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
         let snapshot = null;
         try { snapshot = await read(); } catch { snapshot = null; }
         if (destroyed || seq !== readSeq || !open) return;
-        if (!snapshot || !Array.isArray(snapshot.recentWakes)) paintWakes([], true);
-        else paintWakes(snapshot.recentWakes);
+        if (!snapshot || !Array.isArray(snapshot.recentWakes)) paintWakes(null, snapshot?.coverage, true);
+        else paintWakes(snapshot.recentWakes, snapshot.coverage);
     }
 
     function foldAway() {
@@ -315,10 +313,6 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     });
     // The open list follows the bar's capsules when the window changes the bar.
     if (doc.defaultView) listen(doc.defaultView, 'resize', () => { if (open) hangUnderCapsules(bar, anchor); });
-    const Observer = doc.defaultView?.ResizeObserver;
-    const observer = Observer ? new Observer(() => { if (view) paintChip(); }) : null;
-    observer?.observe(bar);
-    disposers.push(() => observer?.disconnect());
     listen(shade, 'focusout', (event) => {
         const next = event.relatedTarget;
         if (open && next && !shade.contains(next) && next !== chip) close({ restoreFocus: false });

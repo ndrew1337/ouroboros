@@ -23,7 +23,10 @@ const strip = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim()
 
 test('Dashboard keeps two titled wake lists and their separate empty sentences', () => {
     for (const rows of [full().recentWakes, [], [wake('214a31b6')], [wake('w-focus-user')]]) {
-        const groups = wakesCardHtml(rows).split('<section ').slice(1);
+        const html = wakesCardHtml(rows, full().coverage);
+        assert.equal(html.split(full().coverage).length - 1, 1);
+        assert.ok(html.indexOf(full().coverage) < html.indexOf('<section '));
+        const groups = html.split('<section ').slice(1);
         assert.deepEqual(groups.map((group) => group.match(/<h4[^>]*>([^<]+)</)[1]), ['Its own wakes', 'Wakes in places']);
         for (const [n, cause, empty] of [[0, 'own', 'No own wakes with a recorded model call in the last 48 h.'],
             [1, 'focus', 'No wakes in places in the last 48 h.']]) {
@@ -34,13 +37,20 @@ test('Dashboard keeps two titled wake lists and their separate empty sentences',
     }
 });
 
-test('Dashboard adds deadline words without changing the host headline', (t) => {
+test('Dashboard keeps the host headline as its only clock', (t) => {
     t.mock.method(Date, 'now', () => Date.parse('2027-01-15T12:00:00Z'));
-    const snapshot = normalizeConsciousness({ enabled: true, status: 'due', detail: 'Due; the wake-up has not started yet.',
-        appointment_at: '2027-01-15T11:00:00Z', next_wake_at: '2027-01-15T11:30:00Z' });
-    assert.match(summaryHtml(snapshot), /Due since /);
-    assert.deepEqual(headlineView(snapshot), { text: snapshot.detail, moving: false });
-    assert.doesNotMatch(summaryHtml({ ...snapshot, liveWakeTaskId: 'own', liveWakeHeld: true, detail: 'Paused' }), /Due since|Next wake at/);
+    for (const [status, detail, next_wake_at] of [
+        ['due', 'Due since 11:00; the wake-up has not started yet.', '2027-01-15T11:30:00Z'],
+        ['sleeping', 'Sleeping until 13:00.', '2027-01-15T13:00:00Z'],
+        ['wake_paused', 'Wake-up own is paused or waiting in the queue; its card shows why. The next wake-up follows it.', '2027-01-15T11:30:00Z'],
+    ]) {
+        const snapshot = normalizeConsciousness({ enabled: true, status, detail, next_wake_at,
+            appointment_at: '2027-01-15T11:00:00Z' });
+        const text = strip(summaryHtml(snapshot));
+        assert.equal(text.split(detail).length - 1, 1);
+        assert.doesNotMatch(text.replace(detail, ''), /\d\d:\d\d|[Dd]ue|since|[Nn]ext wake/);
+        assert.deepEqual(headlineView(snapshot), { text: detail, moving: false });
+    }
 });
 
 test('focus account stamps cross normalization and preserve the wake anatomy and authored note lead', () => {
@@ -134,7 +144,7 @@ test('summary is authored, note is whole and disclosed, only flagged checks get 
     assert.match(focusRow, /data-cx-open-room="1099511627777"/, 'a focus row opens its captured conversation');
     assert.match(focusRow, /Open the conversation/);
     assert.doesNotMatch(wakeRowHtml({ ...named, cause: 'focus', chatId: 0, placeLabel: 'Slack' }), /data-cx-open-room/, 'no room, no door');
-    assert.match(wakesCardHtml(full().recentWakes, full().coverage), /wakes with a recorded model call in the last 48 h/);
+    assert.match(wakesCardHtml(full().recentWakes, full().coverage), /wakes that reached a model call in the last 48 h/);
 });
 
 test('unknown, zero, known, open and mixed costs stay distinct in visible and accessible words', () => {
@@ -456,7 +466,9 @@ test('unavailable wakes keep the authored reason and painted rows, unlike an abs
     t.after(() => applyPayload({ language: '', english: true, revision: 0, entries: {} }));
     const unavailable = wakesCardHtml(snapshot.recentWakes, snapshot.coverage);
     assert.match(unavailable, /role="status" data-tone="warn" data-i18n-authored/);
-    assert.ok(unavailable.includes(reason));
+    assert.equal(unavailable.split(reason).length - 1, 1);
+    assert.equal((unavailable.match(/role="status"/g) || []).length, 1);
+    assert.ok(unavailable.indexOf(reason) < unavailable.indexOf('<section '));
     assert.doesNotMatch(unavailable, /Must not translate|does not report|No wakes/);
     assert.match(wakesCardHtml(legacy.recentWakes, legacy.coverage), /does not report its recent wakes yet/);
     assert.match(wakesCardHtml([]), /За последние 48 ч пробуждений нет/);
@@ -466,7 +478,7 @@ test('unavailable wakes keep the authored reason and painted rows, unlike an abs
     const put = (node, html) => { node.innerHTML = html; };
     paintWakeRows(region, null, reason, new Set(), put);
     assert.equal(region.querySelector('[data-wake]'), row, 'closed rows survive a failed read too');
-    assert.ok(region.querySelector('[role="status"]').textContent.includes(reason));
+    assert.equal(region.querySelector('[role="status"]'), null, 'the card owns the warning, not either list');
     paintWakeRows(region, [], full().coverage, new Set(), put);
     assert.equal(region.querySelector('[data-wake]'), null);
     assert.equal(region.querySelector('[role="status"]'), null, 'success clears the warning');

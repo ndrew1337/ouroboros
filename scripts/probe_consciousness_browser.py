@@ -185,10 +185,14 @@ def probe(output):
                             await controller.refresh();
                         }""")
                         assert page.locator('[data-cx-wakes] [data-wake]').count() > 0
-                        assert page.locator('[data-cx-wakes] [role="status"][data-tone="warn"][data-i18n-authored]').inner_text() == 'Recent wakes could not be read: storage is busy.'
-                        for unavailable, words in [(None, 'This server does not report its recent wakes yet.'), ([], 'No wakes in the last 48 h.')]:
+                        warning = page.locator('[data-cx-wakes] [role="status"][data-tone="warn"][data-i18n-authored]')
+                        assert warning.count() == 1 and warning.inner_text() == 'Recent wakes could not be read: storage is busy.'
+                        for unavailable, sentences in [(None, ['This server does not report its recent wakes yet.']),
+                                                       ([], ['No own wakes with a recorded model call in the last 48 h.',
+                                                             'No wakes in places in the last 48 h.'])]:
                             page.evaluate("async wakes => { snapshot.recentWakes = wakes; snapshot.coverage = ''; await controller.refresh(); }", unavailable)
-                            assert words in page.locator('[data-cx-wakes]').inner_text()
+                            for words in sentences:
+                                assert words in page.locator('[data-cx-wakes]').inner_text()
                         page.evaluate("""async () => {
                             snapshot.recentWakes = [{ ...latestWakes.find(row => row.taskId === '214a31b6'), note: '~~~js\\nanswer();\\n~~~' }];
                             await controller.refresh();

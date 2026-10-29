@@ -175,23 +175,24 @@ export function clockText(value) {
     return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-/** The next attempt in the viewer's zone; a passed attempt names only a known appointment. */
+/** The chip's clock in the viewer's zone; only an unexplained due wake names its appointment. */
 export function deadlineWords(snapshot, now = Date.now()) {
     if (snapshot.liveWakeTaskId || snapshot.liveWakeHeld || snapshot.enabled === false || snapshot.enabled === null) {
-        return { chip: '', line: '' };
+        return '';
     }
-    const next = Date.parse(snapshot.nextWakeAt);
-    if (!Number.isFinite(next)) return { chip: '', line: '' };
+    const nextAt = snapshot.status === 'allowance_exhausted'
+        ? snapshot.allowanceResetsAt || snapshot.nextWakeAt : snapshot.nextWakeAt;
+    const next = Date.parse(nextAt);
+    if (!Number.isFinite(next)) return '';
     const due = next <= now;
-    const value = due ? snapshot.appointmentAt : snapshot.nextWakeAt;
+    if (due && snapshot.status !== 'due') return '';
+    const value = due ? snapshot.appointmentAt : nextAt;
     const at = new Date(value);
-    if (!Number.isFinite(at.getTime())) return due
-        ? { chip: tr('consciousness.due', 'due'), line: tr('consciousness.due_line', 'Due') } : { chip: '', line: '' };
+    if (!Number.isFinite(at.getTime())) return due ? tr('consciousness.due', 'due') : '';
     const date = at.toDateString() === new Date(now).toDateString() ? ''
-        : `${at.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })} `;
+        : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} `;
     const time = date + clockText(value);
-    return due ? { chip: fmt('since {time}', { time }), line: fmt('Due since {time}', { time }) }
-        : { chip: time, line: fmt('Next wake at {time}', { time }) };
+    return due ? fmt('since {time}', { time }) : time;
 }
 
 /** Own wakes and all place wakes keep their order within their separate lists. */

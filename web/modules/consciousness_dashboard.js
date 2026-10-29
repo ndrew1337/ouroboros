@@ -12,7 +12,7 @@ import { allowanceLabel } from './utils.js';
 import { tr, fmt } from './i18n.js';
 import { PLACES_CHANGED_EVENT, readConsciousness, readConsciousnessFromState, readPlaces } from './consciousness_api.js';
 import { getContributions } from './contributions.js';
-import { CHECK_CHIPS, clockText, deadlineWords, splitWakes, durationText, noteLeadText, placeStatusText, sendsAsHtml, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
+import { CHECK_CHIPS, clockText, splitWakes, durationText, noteLeadText, placeStatusText, sendsAsHtml, usdText, wakePhaseText, wakeFactsText, wakeCheckText, wakeCostText } from './consciousness_words.js';
 import { mountChatMarkdown, enhanceChatMarkdown, destroyChatMarkdown } from './chat_markdown.js';
 import { costPresentationDetail } from './chat_activity.js';
 import { openPlaceSheet } from './place_sheet.js';
@@ -70,13 +70,11 @@ export function summaryHtml(snapshot, { placeCount = null, hasSocket = true } = 
     const kicker = snapshot.enabled === null ? 'Consciousness · state unknown' : `Consciousness · ${snapshot.enabled ? 'on' : 'off'}`;
     const money = allowanceLabel(snapshot.spentUsd, snapshot.dailyUsd, snapshot.unknownUnmetered, snapshot.integrityDegraded);
     const roots = countedRootsParts(snapshot);
-    const deadline = deadlineWords(snapshot);
     const toggle = snapshot.enabled === null ? '' : `<button type="button" class="btn btn-ghost btn-sm consciousness-stop" data-cx-act="toggle" data-enabled="${snapshot.enabled ? '1' : '0'}"${hasSocket ? '' : ' disabled'}>${snapshot.enabled ? 'Stop' : 'Start'}</button>`;
     return `<div class="storage-summary-head">
             <div class="storage-summary-text consciousness-summary-text">
                 <div class="storage-kicker">${escapeHtml(kicker)}</div>
                 <div class="consciousness-headline"><div class="storage-total">${escapeHtml(headline.text)}${headline.moving ? dots() : ''}</div>${toggle}</div>
-                ${deadline.line ? `<p class="consciousness-next">${escapeHtml(deadline.line)}</p>` : ''}
                 ${roots ? `<p class="consciousness-next">${escapeHtml(roots.head)}${roots.names.map((name) => ` · <span data-i18n-authored>${escapeHtml(name)}</span>`).join('')}</p>` : ''}
             </div>
         </div>
@@ -152,7 +150,8 @@ export function wakeRowHtml(wake, { open = false } = {}) {
     </li>`;
 }
 
-const coverageHtml = (wakes, coverage) => coverage ? `<p class="storage-meta${wakes === null ? ' ui-status' : ''}"${wakes === null ? ' role="status" data-tone="warn"' : ''} data-i18n-authored>${escapeHtml(coverage)}</p>` : '';
+const coverageHtml = (wakes, coverage) => coverage ? `<p class="storage-meta${wakes === null ? ' ui-status' : ''}"${wakes === null ? ' role="status" data-tone="warn"' : ''} data-i18n-authored>${escapeHtml(coverage)}</p>`
+    : !Array.isArray(wakes) ? `<p class="consciousness-copy">${escapeHtml(tr('consciousness.wakes_unavailable', 'This server does not report its recent wakes yet.'))}</p>` : '';
 
 const wakeGroupTitle = (group) => group === 'places' ? tr('consciousness.place_wakes', 'Wakes in places')
     : tr('consciousness.own_wakes', 'Its own wakes');
@@ -163,16 +162,15 @@ const wakeGroupEmpty = (group) => group === 'places'
 export function wakesCardHtml(wakes, coverage = '', group = '') {
     if (!group) {
         const split = splitWakes(wakes);
-        return ['own', 'places'].map((key) => `<section class="consciousness-wake-group" aria-label="${escapeHtml(wakeGroupTitle(key))}" data-cx-wake-group="${key}">${
+        return `<div data-cx-wake-coverage>${coverageHtml(wakes, coverage)}</div>`
+            + ['own', 'places'].map((key) => `<section class="consciousness-wake-group" aria-label="${escapeHtml(wakeGroupTitle(key))}" data-cx-wake-group="${key}">${
             wakesCardHtml(Array.isArray(wakes) ? split[key] : null, coverage, key)}</section>`).join('');
     }
-    const body = !Array.isArray(wakes)
-        ? coverage ? '' : `<p class="consciousness-copy">${escapeHtml(tr('consciousness.wakes_unavailable', 'This server does not report its recent wakes yet.'))}</p>`
+    const body = !Array.isArray(wakes) ? ''
         : !wakes.length ? `<p class="consciousness-copy">${escapeHtml(wakeGroupEmpty(group))}</p>`
             : `<ol class="consciousness-wakes">${wakes.map((wake) => wakeRowHtml(wake)).join('')}</ol>`;
     return `<div class="consciousness-card-head"><div class="consciousness-card-head-text">
             <h4 class="storage-card-title">${escapeHtml(wakeGroupTitle(group))}</h4>
-            ${coverageHtml(wakes, coverage)}
         </div></div>${body}`;
 }
 
@@ -186,8 +184,6 @@ export function paintWakeRows(region, wakes, coverage, opened, put, release = de
     const reading = [...(list?.children || [])].find((row) => opened.has(row.dataset.wake));
     const top = reading?.getBoundingClientRect().top;
     const keepPosition = () => { if (scroller && reading?.isConnected) scroller.scrollTop += reading.getBoundingClientRect().top - top; };
-    const header = region.querySelector('.consciousness-card-head-text');
-    if (header) put(header, `<h4 class="storage-card-title">${escapeHtml(wakeGroupTitle(group))}</h4>${coverageHtml(wakes, coverage)}`);
     if (list && (wakes === null && coverage || reading && (!Array.isArray(wakes) || !wakes.length))) { keepPosition(); return; }
     if (!list || !Array.isArray(wakes) || !wakes.length) { put(region, wakesCardHtml(wakes, coverage, group)); return; }
     const rows = new Map([...list.children].map((row) => [row.dataset.wake, row]));
@@ -263,6 +259,7 @@ export function initConsciousnessDashboard({ mount, ws, state, openSettingsTab, 
         const wakes = snapshot?.recentWakes ?? null;
         const coverage = snapshot?.coverage || '';
         if (!regions.wakes.querySelector('[data-cx-wake-group]')) { put(regions.wakes, wakesCardHtml(wakes, coverage)); return; }
+        put(regions.wakes.querySelector('[data-cx-wake-coverage]'), coverageHtml(wakes, coverage));
         const split = splitWakes(wakes);
         for (const region of regions.wakes.querySelectorAll('[data-cx-wake-group]')) {
             paintWakeRows(region, wakes === null ? null : split[region.dataset.cxWakeGroup], coverage, opened, put, releaseNotes);

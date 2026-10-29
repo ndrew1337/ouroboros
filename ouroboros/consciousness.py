@@ -497,13 +497,17 @@ class BackgroundConsciousness:
         from ouroboros.usage_store import UsageLockUnavailable
 
         snapshot = describe_consciousness_state(self.status_snapshot(), requested_enabled)
-        coverage = "wakes with a recorded model call in the last 48 h"
+        coverage = "wakes that reached a model call in the last 48 h"
         try:
             ids = wake_ids(self._drive_root, time.time())
             wakes = recent_wakes(self._drive_root, snapshot.get("places_brief"),
                                  live_wake_task_id=snapshot.get("live_wake_task_id", ""), ids=ids)
             if len(ids) == RECENT_WAKE_LIMIT:
-                coverage = f"the latest {RECENT_WAKE_LIMIT} " + coverage + "; own wakes and wakes in places have separate shares"
+                places = sum(wake.get("cause") == "focus" for wake in wakes)
+                own = len(wakes) - places
+                coverage = (f"the latest {own} of its own wakes and {places} wakes in places "
+                            "that reached a model call in the last 48 h" if own and places
+                            else f"the latest {RECENT_WAKE_LIMIT} " + coverage)
         except UsageLockUnavailable:
             wakes, coverage = None, "Recent wakes could not be read: usage ledger busy."
         except StoreBusy as exc:  # the read that met it names the store (consciousness_view._reading)

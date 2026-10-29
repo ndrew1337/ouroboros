@@ -32,8 +32,9 @@ def test_deadline_and_both_lists_refresh_without_reload_or_hover(subscription_ui
         const { initConsciousnessDashboard } = await import('/static/modules/consciousness_dashboard.js');
         const { createConsciousnessStatus } = await import('/static/modules/consciousness_status.js');
         Date.now = () => Date.parse('2027-01-15T12:00:00Z');
-        window.raw = { enabled: true, status: 'due', detail: 'The next wake is due.',
+        window.raw = { enabled: true, status: 'due', detail: 'Due since 11:30; the wake-up has not started yet.',
             next_wake_at: '2027-01-15T11:50:00Z', appointment_at: '2027-01-15T11:30:00Z',
+            recent_wakes_coverage: 'wakes that reached a model call in the last 48 h',
             recent_wakes: ['own', 'focus'].flatMap(cause => Array.from({ length: 4 }, (_, n) => ({
                 task_id: `${cause}-${n}`, cause, summary: `${cause} note ${n}`, phase: 'done',
                 note: `The whole ${cause} note ${n}.`, started_at: '2027-01-15T11:00:00Z'
@@ -51,17 +52,24 @@ def test_deadline_and_both_lists_refresh_without_reload_or_hover(subscription_ui
     }""", {"width": width, "telegram": telegram})
     chip = page.locator(".cx-chip")
     since = "since 11:30" if zone == "UTC" else "since 14:30"
-    assert since in chip.get_attribute("aria-label")
+    detail = "Due since 11:30; the wake-up has not started yet."
+    assert chip.get_attribute("aria-label") == "Consciousness: " + detail
+    assert page.locator(".cx-chip-word").inner_text() == since
+    assert page.locator(".cx-chip-word").is_visible()
     if width >= 980:
         assert page.locator(".cx-chip-word").inner_text() == since
         page.set_viewport_size({"width": 390, "height": 844})
-        page.wait_for_function("document.querySelector('.cx-chip-word').hidden")
-        assert since in chip.get_attribute("aria-label")
+        assert page.locator(".cx-chip-word").is_visible()
+        assert chip.get_attribute("aria-label") == "Consciousness: " + detail
         page.set_viewport_size({"width": width, "height": 844})
         page.wait_for_function("!document.querySelector('.cx-chip-word').hidden")
-    else:
-        assert page.locator(".cx-chip-word").is_hidden()
     chip.tap() if width < 980 else chip.click()
+    assert page.locator(".cx-state").inner_text() == detail
+    summary = page.locator("[data-cx-summary]").inner_text()
+    assert summary.count(detail) == 1 and "since" not in summary.replace(detail, "")
+    coverage = "wakes that reached a model call in the last 48 h"
+    for selector in [".cx-shade", "[data-cx-wakes]"]:
+        assert page.locator(selector).inner_text().count(coverage) == 1
     for group, title in [("own", "Its own wakes"), ("places", "Wakes in places")]:
         assert page.locator(f'.cx-shade [data-wakes="{group}"] li').count() == 3
         region = page.locator(f'[data-cx-wake-group="{group}"]')
@@ -86,8 +94,14 @@ def test_deadline_and_both_lists_refresh_without_reload_or_hover(subscription_ui
     for text in ["No own wakes with a recorded model call in the last 48 h.", "No wakes in places in the last 48 h."]:
         assert text in page.locator(".cx-shade").inner_text()
         assert text in page.locator("[data-cx-wakes]").inner_text()
-    page.evaluate("async () => { raw.live_wake_task_id = 'held'; raw.live_wake_held = true; raw.status = 'wake_paused'; raw.detail = 'Wake-up held is paused.'; await repaint(); }")
+    page.evaluate("async () => { raw.status = 'sleeping'; raw.detail = 'Sleeping until 14:20.'; raw.next_wake_at = '2027-01-15T14:20:00Z'; await repaint(); }")
+    assert page.locator(".cx-chip-word").inner_text() == ("14:20" if zone == "UTC" else "17:20")
+    assert chip.get_attribute("aria-label") == "Consciousness: Sleeping until 14:20."
+    assert page.locator(".cx-state").inner_text() == "Sleeping until 14:20."
+    assert "17:20" not in page.locator("[data-cx-summary]").inner_text()
+    page.evaluate("async () => { raw.live_wake_task_id = 'held'; raw.live_wake_held = true; raw.status = 'wake_paused'; raw.detail = 'Wake-up held is paused or waiting in the queue; its card shows why. The next wake-up follows it.'; await repaint(); }")
     assert "since" not in chip.get_attribute("aria-label")
+    assert page.locator(".cx-chip-word").is_hidden()
     assert "paused" in page.locator(".cx-state").inner_text()
     assert "Due since" not in page.locator("[data-cx-summary]").inner_text()
     page.evaluate("cx.close(); dash.destroy(); cx.destroy()")

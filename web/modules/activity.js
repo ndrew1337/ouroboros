@@ -8,8 +8,6 @@
 import { fetchJson, isStoreMigrating, readStateJson } from './api_client.js';
 import { setInlineStatus } from './ui_helpers.js';
 import { fmt, tr } from './i18n.js';
-import { normalizeConsciousness } from './consciousness_api.js';
-import { deadlineWords } from './consciousness_words.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { taskCancelPending } from './log_events.js';
 import { waitingModel } from './project_activity.js';
@@ -389,7 +387,6 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
         const detail = esc(bg.detail || (enabled ? 'enabled' : 'disabled'));
         const facts = [
             bg.level ? `autonomy ${esc(bg.level)}` : '',
-            esc(deadlineWords(normalizeConsciousness(bg, { enabled })).line),
             bg.last_wake_at ? `last wake ${esc(formatWhen(bg.last_wake_at))}${bg.last_wake_outcome ? ` (${esc(bg.last_wake_outcome)})` : ''}` : '',
             allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded)
                 ? `allowance ${esc(allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded))} (24 h)` : '',

@@ -700,8 +700,10 @@ def test_template_names_only_its_placeholders_and_the_wake_hints():
 @pytest.fixture
 def describe(monkeypatch):
     import server
+    from ouroboros import consciousness_view
 
     holder = {}
+    monkeypatch.setattr(consciousness_view, "time", SimpleNamespace(time=lambda: wake._parse_iso("2027-01-15T12:00:00Z")))
     monkeypatch.setattr(server, "_consciousness", SimpleNamespace(status_snapshot=lambda: dict(holder)))
     return lambda snapshot, enabled=True: (holder.clear(), holder.update(snapshot), server._describe_bg_consciousness_state(enabled))[2]
 

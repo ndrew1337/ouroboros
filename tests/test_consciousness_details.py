@@ -59,7 +59,7 @@ def test_primary_endpoint_and_state_fallback_share_status(monkeypatch, tmp_path,
     assert {key: panel[key] for key in fallback} == fallback
     assert clock.details_snapshot(True) == panel
     assert "places" not in panel and panel["recent_wakes"] == [{"task_id": "wake"}]
-    assert panel["recent_wakes_coverage"] == "wakes with a recorded model call in the last 48 h"
+    assert panel["recent_wakes_coverage"] == "wakes that reached a model call in the last 48 h"
     assert response.status_code == 200 and response.headers["cache-control"] == "no-store"
 
 
@@ -144,5 +144,47 @@ def test_recent_wake_coverage_names_the_selection_cap_even_with_pruned_documents
     panel = clock.details_snapshot(True)
     assert len(reads) == 1 and len(panel["recent_wakes"]) == bool(selected_count)
     prefix = "the latest 50 " if selected_count == 50 else ""
-    suffix = "; own wakes and wakes in places have separate shares" if selected_count == 50 else ""
-    assert panel["recent_wakes_coverage"] == prefix + "wakes with a recorded model call in the last 48 h" + suffix
+    assert panel["recent_wakes_coverage"] == prefix + "wakes that reached a model call in the last 48 h"
+
+
+@pytest.mark.parametrize("own,places", [(50, 0), (0, 50), (49, 1), (25, 25), (1, 49), (24, 25)])
+def test_recent_wake_coverage_names_actual_shares_only_on_a_full_mixed_page(monkeypatch, tmp_path, own, places):
+    wakes = [{"task_id": str(i), "cause": "own_clock" if i < own else "focus"} for i in range(own + places)]
+    monkeypatch.setattr(view, "wake_ids", lambda *args: [wake["task_id"] for wake in wakes])
+    monkeypatch.setattr(view, "recent_wakes", lambda *args, **kwargs: wakes)
+    clock = object.__new__(BackgroundConsciousness)
+    clock._drive_root = tmp_path
+    monkeypatch.setattr(clock, "status_snapshot", lambda: {"places_brief": []})
+    coverage = clock.details_snapshot(True)["recent_wakes_coverage"]
+    if own + places < 50:
+        assert coverage == "wakes that reached a model call in the last 48 h"
+    elif own and places:
+        assert coverage == (f"the latest {own} of its own wakes and {places} wakes in places "
+                            "that reached a model call in the last 48 h")
+    else:
+        assert coverage == "the latest 50 wakes that reached a model call in the last 48 h"
+
+
+@pytest.mark.parametrize("offset", [0, 3])
+@pytest.mark.parametrize("day,words", [(14, "Jan 14 10:00"), (15, "10:00"), (16, "Jan 16 10:00")])
+def test_headlines_date_instants_outside_the_server_local_day(monkeypatch, offset, day, words):
+    zone = dt.timezone(dt.timedelta(hours=offset))
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: NOW))
+    monkeypatch.setattr(view, "_DISPLAY_ZONE", zone)
+    instant = dt.datetime(2027, 1, day, 10, tzinfo=zone).isoformat()
+    assert view._clock_of(instant) == words
+    facts = {"next_wake_at": instant, "appointment_at": instant}
+    shown = view.describe_consciousness_state(facts, True)
+    assert shown["detail"] == (f"Sleeping until {words}." if day == 16
+                               else f"Due since {words}; the wake-up has not started yet.")
+    exhausted = view.describe_consciousness_state({**facts, "allowance_resets_at": instant,
+                                                  "last_wake_outcome": "skipped:allowance_exhausted"}, True)
+    assert f"next check {'at' if day == 16 else 'due since'} {words}." in exhausted["detail"]
+
+
+def test_host_date_follows_local_midnight_not_the_utc_day(monkeypatch):
+    monkeypatch.setattr(view, "_DISPLAY_ZONE", dt.timezone(dt.timedelta(hours=3)))
+    monkeypatch.setattr(view, "time", SimpleNamespace(time=lambda: dt.datetime(2027, 1, 15, 22, tzinfo=dt.timezone.utc).timestamp()))
+    assert view._clock_of("2027-01-15T21:30:00Z") == "00:30"
+    assert view._clock_of("2027-01-15T20:30:00Z") == "Jan 15 23:30"
+    assert view._clock_of("") == "?"
