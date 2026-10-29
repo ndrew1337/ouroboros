@@ -6,6 +6,7 @@ Tools state an intent; the supervisor owns admission and its durable receipt.
 from __future__ import annotations
 
 import logging
+import json
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -433,26 +434,82 @@ def _start_task(
 
 
 @completed_local_read
-def _list_projects(ctx: ToolContext, limit: int = 50) -> str:
+def _list_projects(ctx: ToolContext, limit: int = 50, closed: Optional[bool] = None,
+                   oldest_first: bool = False, start: int = 0) -> str:
     """Enumerate the owner's projects (id, name, recency) so the one mind can
     decide whether a main-chat message belongs to an existing project. The registry
     lives on the CANONICAL data root: a forked execution drive never carries
     ``state/projects.json``, so reading the task's own drive answered "no projects"."""
+    if type(start) is not int or start < 0:
+        return "⚠️ TOOL_ARG_ERROR (list_projects): start must be a nonnegative integer."
     try:
         from ouroboros.projects_registry import projects_summary
-        rows = projects_summary(canonical_data_root(ctx), limit=max(1, min(int(limit or 50), 200)))
+        limit = max(1, min(int(limit or 50), 200))
+        rows = projects_summary(canonical_data_root(ctx), limit=limit + 1, start=start,
+                                closed=closed, oldest_first=oldest_first)
     except Exception as exc:
         return f"⚠️ PROJECTS_ERROR: {type(exc).__name__}: {exc}"
     if not rows:
-        return "No projects yet. move_to_project places this work in a named room."
+        return "No matching projects. move_to_project places this work in a named room."
     lines = []
-    for p in rows:
+    for p in rows[:limit]:
         pid = str(p.get("id") or "")
         name = str(p.get("name") or pid)
         last = str(p.get("last_active_at") or p.get("created_at") or "")
         active = " · running" if p.get("has_thread_activity") else ""
-        lines.append(f"- {pid} — {name}{active}{(' · last ' + last) if last else ''}")
+        closure = json.dumps(p.get("closed", False), ensure_ascii=False)
+        lines.append(f"- {pid} — {name}{active} · last_active_at={last} · closed={closure}")
+    if len(rows) > limit:
+        args = [f"start={start + limit}", f"limit={limit}", f"oldest_first={oldest_first!r}"]
+        if closed is not None:
+            args.append(f"closed={closed!r}")
+        lines.append("Next: list_projects(" + ", ".join(args) + ")")
     return "Projects (move_to_project places this work in a room):\n" + "\n".join(lines)
+
+
+def _close_project(ctx: ToolContext, project_id: str, note: str, reopen: bool = False) -> str:
+    """Record a project decision and owe its owner one System row in that room."""
+    meta = getattr(ctx, "task_metadata", {}) or {}
+    lineage = (getattr(ctx, "task_contract", {}) or {}).get("lineage") or {}
+    if str(meta.get("delegation_role") or lineage.get("delegation_role") or "") == "subagent":
+        return "⚠️ TOOL_ERROR (close_project): subagents inherit the parent's project scope."
+    from ouroboros.project_facts import explicit_project_id_ok
+    from ouroboros.project_closure import change_project_closed
+    from supervisor import terminal_delivery as outbox
+
+    if not explicit_project_id_ok(project_id) or not isinstance(note, str) or not note.strip() or type(reopen) is not bool:
+        return "⚠️ TOOL_ARG_ERROR (close_project): supply a filesystem-clean project_id, a nonempty note and boolean reopen."
+    task_id = str(getattr(ctx, "task_id", "") or "")
+    if not task_id:
+        return "⚠️ TOOL_ERROR (close_project): this work has no task id."
+    root, at = canonical_data_root(ctx), utc_now_iso()
+    by = f"ouroboros:{task_id}"
+    try:
+        project, changed = change_project_closed(root, project_id,
+                                                None if reopen else {"at": at, "by": by, "note": note.strip()})
+    except Exception as exc:
+        return f"⚠️ PROJECTS_ERROR: {type(exc).__name__}: {exc}"
+    if project is None:
+        return "⚠️ PROJECTS_ERROR: project is missing or no longer active."
+    state = "open" if reopen else "closed"
+    if not changed:
+        return f"OK: project {project['id']} is already {state}."
+    action = "reopened" if reopen else "closed"
+    text = f"Ouroboros ({task_id}) {action} this project at {at}. {note.strip()}"
+    if not reopen:
+        text += " A message from you in this room or a new task will reopen it."
+    try:
+        delivery = outbox.enqueue_terminal_delivery_outcome(root, {
+            "type": "send_message", "chat_id": project["chat_id"],
+            "role": "system", "system_type": "project_closure",
+            "text": text, "delivery_id": f"project-closure:{uuid.uuid4().hex}",
+        }, event_queue=getattr(ctx, "event_queue", None))
+    except Exception:
+        log.warning("Project closure committed but room notice failed", exc_info=True)
+        delivery = outbox.ENQUEUE_UNAVAILABLE
+    suffix = ("Room notice queued." if delivery in {outbox.ENQUEUE_QUEUED, outbox.ENQUEUE_ALREADY_DELIVERED}
+              else f"Room notice delivery is {delivery}; the project change is saved.")
+    return f"OK: project {project['id']} is {state}. {suffix}"
 
 
 def _cause_words(code: str) -> str:

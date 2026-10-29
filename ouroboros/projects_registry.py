@@ -1,6 +1,6 @@
 """Project registry (data/state/projects.json): id/name/memory/positive chat id, optional folder.
-Only owners archive/delete, never age pruning; tombstones preserve history/data and prevent
-rediscovery. Store-marker recovery creates fresh incarnations, not lost folders/tombstones
+Mind/owner closure is reversible; only owners delete. Tombstones preserve history/data and prevent
+rediscovery, never age pruning. Store-marker recovery creates fresh incarnations, not lost folders/tombstones
 (PERSISTENCE); rooms share one identity (BIBLE P1)."""
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from ouroboros.contracts.chat_id_policy import project_chat_id
 from ouroboros.composer_cognition import ensure_project_cognition, main_cognition, project_cognition
 from ouroboros.contracts.schema_versions import with_schema_version
 from ouroboros.project_facts import project_display_name, sanitize_project_id
+from ouroboros.project_closure import apply_closed, select_projects
 from ouroboros.store import StoreBusy, open_store
 from ouroboros.store_capture import capture
 from ouroboros import utils
@@ -274,10 +275,8 @@ def bind_task_to_project(
     # Registry lock linearizes binding with destination deletion.
     with _file_write_lock(_registry_path(drive_root)), \
             project_admission_guard(drive_root, admission_basis) if admission_basis is not None else nullcontext():
-        project = next(
-            (row for row in _load(drive_root, strict=True, project_id=pid)["projects"] if row.get("id") == pid),
-            None,
-        )
+        registry_data = _load(drive_root, strict=True, project_id=pid)
+        project = next((row for row in registry_data["projects"] if row.get("id") == pid), None)
         if not isinstance(project, dict) or project.get("lifecycle") != PROJECT_ACTIVE:
             lifecycle = project.get("lifecycle") if isinstance(project, dict) else "missing"
             raise ValueError(f"project {pid!r} is {lifecycle}; it cannot accept bindings")
@@ -317,6 +316,9 @@ def bind_task_to_project(
                 )
             data["bindings"][tid] = row
             _save_bindings(drive_root, data)
+            if "closed" in project:
+                apply_closed(project, None)
+                _save(drive_root, registry_data)
     touch_project(drive_root, pid)
     return dict(row)
 
@@ -768,8 +770,9 @@ def list_reserved_projects(drive_root: Any, *, strict: bool = False) -> List[Dic
     )
 
 
-def list_projects(drive_root: Any, *, strict: bool = False) -> List[Dict[str, Any]]:
-    """Active, routable Projects (most recently active first)."""
+def list_projects(drive_root: Any, *, strict: bool = False,
+                  closed: Optional[bool] = None, oldest_first: bool = False) -> List[Dict[str, Any]]:
+    """Active, routable Projects; optional closure filter and oldest activity first."""
     from ouroboros import dialogue_store as ds
 
     projects = [
@@ -777,8 +780,8 @@ def list_projects(drive_root: Any, *, strict: bool = False) -> List[Dict[str, An
         if project.get("lifecycle") == PROJECT_ACTIVE
     ]
     facts = {room["chat_id"]: room for room in ds.rooms(drive_root)} if projects else {}
-    return sorted((_with_dialogue_facts(project, facts.get(project["chat_id"])) for project in projects),
-                  key=lambda project: project["last_active_at"], reverse=True)
+    return select_projects((_with_dialogue_facts(project, facts.get(project["chat_id"])) for project in projects),
+                           closed=closed, oldest_first=oldest_first)
 
 
 def list_sidebar_projects(drive_root: Any) -> List[Dict[str, Any]]:
@@ -1035,18 +1038,14 @@ def update_project(
     drive_root: Any, project_id: str, *, only_if_empty: tuple = (),
     admission_basis: Optional[dict] = None, **updates: Any,
 ) -> Optional[Dict[str, Any]]:
-    """Update mutable fields. v6.59.0 adds the additive source-provenance facts:
-    ``provenance`` (attached|cloned|genesis|none — how the working_dir came to be),
-    ``clone_url`` (historical fact; live git data is always read from .git), and
-    ``trusted_at`` (stamped automatically on attach/clone — the notification trust
-    model: attaching IS the owner's explicit grant, no second confirmation gate).
-    A field named in ``only_if_empty`` is written only while still empty — a
-    compare-and-set under the registry lock; the caller reads the winner back."""
+    """Update metadata, including ``closed={at, by, note}`` or None to reopen.
+    Provenance/clone_url/trusted_at are historical attach facts, not live Git data.
+    ``only_if_empty`` compares under the writer lock; the caller reads the winner."""
     pid = sanitize_project_id(project_id)
     if not pid:
         return None
     allowed = {
-        "name", "pinned", "working_dir", "last_active_at", "provenance", "clone_url", "trusted_at",
+        "name", "pinned", "closed", "working_dir", "last_active_at", "provenance", "clone_url", "trusted_at",
         # Retained legacy activity fact; current activity comes from dialogue rooms.
         "thread_activity_seen",
         # Durable pointer to the project's newest finalized task result
@@ -1071,7 +1070,10 @@ def update_project(
                     raise ValueError("pinned must be a boolean")
                 if key == "working_dir" and value != entry.get(key):
                     entry["routing_generation"] = int(entry.get("routing_generation") or 0) + 1
-                entry[key] = value
+                if key == "closed":
+                    apply_closed(entry, value)
+                else:
+                    entry[key] = value
             _save(drive_root, data)
             return dict(entry)
     return None
@@ -1350,7 +1352,8 @@ def _with_dialogue_facts(project: Dict[str, Any], room: Optional[dict]) -> Dict[
 
 
 def projects_summary(drive_root: Any, *, limit: int = 50, chat_id: Any = None,
-                     include_pinned: bool = False) -> List[Dict[str, Any]]:
+                     include_pinned: bool = False, closed: Optional[bool] = None,
+                     oldest_first: bool = False, start: int = 0) -> List[Dict[str, Any]]:
     """Sidebar or strict addressed room, with unread/activity from dialogue room facts.
 
     Registry reads retain lifecycle and binding authority. An unproved inactive room
@@ -1370,16 +1373,18 @@ def projects_summary(drive_root: Any, *, limit: int = 50, chat_id: Any = None,
             raise ValueError("Project chat identity is ambiguous")
         facts = {address: ds.room(drive_root, address)} if projects else {}
     else:
-        projects = list_sidebar_projects(drive_root)
+        projects = [p for p in list_sidebar_projects(drive_root)
+                    if closed is None or p.get("lifecycle") == PROJECT_ACTIVE]
         facts = {room["chat_id"]: room for room in ds.rooms(drive_root)} if projects else {}
     projects = [_with_dialogue_facts(project, facts.get(project["chat_id"])) for project in projects]
-    projects.sort(key=lambda project: str(project.get("last_active_at") or ""), reverse=True)
+    projects = select_projects(projects, closed=closed, oldest_first=oldest_first)
     if chat_id is None and include_pinned:
         # Pins remain reachable without starving the ordinary recent-room slice.
         projects = ([p for p in projects if p.get("pinned") is True]
                     + [p for p in projects if p.get("pinned") is not True][:max(1, int(limit))])
     elif chat_id is None:
-        projects = projects[:max(1, int(limit))]
+        start = max(0, int(start))
+        projects = projects[start:start + max(1, int(limit))]
     absence_covered = False
     for project in projects:
         room = facts.get(project["chat_id"]) or {}
@@ -1412,6 +1417,7 @@ def projects_summary(drive_root: Any, *, limit: int = 50, chat_id: Any = None,
             "cognition": project_cognition(project, cognition),
             "provenance": project.get("provenance") or "",
             "last_active_at": project.get("last_active_at") or "",
+            **({"closed": dict(project["closed"])} if "closed" in project else {}),
             "lifecycle": project.get("lifecycle") or PROJECT_ACTIVE,
             "routing_generation": int(project.get("routing_generation") or 0),
             "visible_revision": int(project.get("visible_revision") or 0),

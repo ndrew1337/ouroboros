@@ -558,6 +558,14 @@ class ProjectCreateRequest(TypedDict, total=False):
     with_workspace: bool
 
 
+class ProjectClosure(TypedDict):
+    """A reversible decision; absent ``ProjectEntry.closed`` means open."""
+
+    at: str
+    by: str  # owner or ouroboros:<focus task id>
+    note: str
+
+
 class ProjectEntry(TypedDict, total=False):
     """A registry project row. ``provenance`` (attached|cloned|genesis|none) and ``clone_url``
     are historical facts; operational git data is read live from ``.git``. List rows are a
@@ -577,6 +585,7 @@ class ProjectEntry(TypedDict, total=False):
     created_at: str
     last_active_at: str
     lifecycle: Literal["active", "deleting", "tombstoned"]
+    closed: ProjectClosure  # independent of lifecycle; room, history and routing stay available
     routing_generation: int
     routing_incarnation: str
     visible_revision: int
@@ -1497,7 +1506,7 @@ __all__ = [
     "UpdateApplySuccessResponse", "UpdateApplyErrorResponse",
     "UpdateDescriptionRequest", "UpdateDescriptionResponse", "UpdateDescriptionErrorResponse",
     "UpdateStatusReadyOutbound", "UpdateProgressChangedOutbound",
-    "ProjectCreateRequest", "ProjectEntry", "ProjectDeleteResponse", "ProjectCognition",
+    "ProjectCreateRequest", "ProjectEntry", "ProjectClosure", "ProjectDeleteResponse", "ProjectCognition",
     "FsDirsEntry", "FsDirsResponse",
     "TaskNamedOutbound",
     "ErrorResponse", "StatusResponse", "HealthResponse", "StateResponse",

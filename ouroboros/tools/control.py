@@ -150,6 +150,36 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
 )
 
 
+def _project_tool_entries() -> List[ToolEntry]:
+    """Reversible project decisions and their paginated reader, beside work placement."""
+    return [
+        ToolEntry("close_project", {
+            "name": "close_project",
+            "description": "Close a finished project with a note, or reopen it. Its room and history stay; a new owner message or task reopens it.",
+            "parameters": {"type": "object", "properties": {
+                "project_id": {"type": "string"},
+                "note": {"type": "string", "description": "Why I close or reopen this project."},
+                "reopen": {"type": "boolean", "default": False},
+            }, "required": ["project_id", "note"], "additionalProperties": False},
+        }, _close_project, safety_policy="skip"),
+        ToolEntry("list_projects", {
+            "name": "list_projects",
+            "description": (
+                "List projects with id, name, last_active_at, closed record and activity — read-only. "
+                "Follow the next-page call to enumerate every match. "
+                "Use it in a main-chat turn to decide whether a message belongs to an existing "
+                "project, then place this work there with move_to_project."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
+                "start": {"type": "integer", "minimum": 0, "default": 0, "description": "Offset in the filtered, sorted list; use the returned next-page call."},
+                "closed": {"type": "boolean", "description": "False: open projects; true: closed projects; omit for both."},
+                "oldest_first": {"type": "boolean", "default": False, "description": "List by last_active_at from oldest to newest."},
+            }},
+        }, _list_projects),
+    ]
+
+
 def get_tools() -> List[ToolEntry]:
     from ouroboros.subagent_inspection import inspect_subagent_tool
     from ouroboros.tools.control_maintenance import maintenance_tool_entries
@@ -245,17 +275,7 @@ def get_tools() -> List[ToolEntry]:
                 "required": [],
             },
         }, _move_to_project),
-        ToolEntry("list_projects", {
-            "name": "list_projects",
-            "description": (
-                "List the owner's projects (id, name, recency, running flag) — read-only. "
-                "Use it in a main-chat turn to decide whether a message belongs to an existing "
-                "project, then place this work there with move_to_project."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
-            }},
-        }, _list_projects),
+        *_project_tool_entries(),
         ToolEntry("tell_task", {
             "name": "tell_task",
             "description": "Send a note to another work, with optional exact owner quotes selected from "
@@ -466,6 +486,7 @@ from ouroboros.tools.control_routing import (  # noqa: E402, F401 -- intentional
     _attach_client_surface,
     _attach_origin_from_metadata,
     _finish_swarm_handoff,
+    _close_project,
     _list_projects,
     _start_task,
 )

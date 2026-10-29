@@ -346,6 +346,9 @@ def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: boo
         return None
     from ouroboros.notice_receipts import record as record_notice_receipt
     record_notice_receipt(root, record)  # idempotent: a duplicate also repairs a receipt its first write lost
+    if not receipt.duplicate:
+        from ouroboros.project_closure import reopen_for_owner_message
+        reopen_for_owner_message(root, receipt.row)
     return receipt.row
 
 
@@ -374,6 +377,8 @@ def accept_chat(chat_id: int, user_id: int, text: str, *, dispatch: Optional[Dic
     if not receipt.duplicate:
         from ouroboros.notice_receipts import record as record_notice_receipt
         record_notice_receipt(root, record)
+        from ouroboros.project_closure import reopen_for_owner_message
+        reopen_for_owner_message(root, receipt.row)
     return receipt
 
 

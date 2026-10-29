@@ -751,6 +751,11 @@
  * @property {boolean=} with_workspace
  */
 
+/** @typedef {Object} ProjectClosure
+ * @property {string} at
+ * @property {string} by  // owner or ouroboros:<focus task id>
+ * @property {string} note
+ */
 /**
  * A registry project row: list rows are the compact projection (with `has_thread_activity`);
  * a create/update answer is the full row (`created: false`: an idempotent repeat create).
@@ -767,6 +772,7 @@
  * @property {string=} created_at
  * @property {string=} last_active_at
  * @property {"active"|"deleting"|"tombstoned"=} lifecycle
+ * @property {ProjectClosure=} closed  // absent means open; independent of routing lifecycle
  * @property {number=} routing_generation
  * @property {string=} routing_incarnation
  * @property {number=} visible_revision

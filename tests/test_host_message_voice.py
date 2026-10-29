@@ -178,6 +178,7 @@ HOST_ROW_CLASSES = {
     "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),
     "project_completion_summary": ("main_lifecycle", 1),
+    "project_closure": ("runtime_state", 1),  # the mind's reversible project decision, in its room
     "project_handoff": ("main_lifecycle", 1),
     "project_started": ("main_lifecycle", 1),
     "promotion_notice": ("runtime_state", 4),
