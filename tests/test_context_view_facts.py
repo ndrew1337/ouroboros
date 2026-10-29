@@ -59,3 +59,32 @@ def test_memory_line_names_where_unfolded_pages_pile_up_what_is_addressed_and_th
     assert "Room D" not in line  # the three rooms holding most of them
     assert "; shown only by address: 3 other rooms in an aggregate, 2 task fact lines;" in line
     assert line.endswith("; marks in view 3")
+
+
+def test_memory_facts_appear_once_while_visible_then_after_rebuild_or_change(monkeypatch):
+    from types import SimpleNamespace
+    from ouroboros import loop_messages as lm
+    from ouroboros.context_budget import HOST_CONTEXT_KIND_KEY, bound_host_row
+    from tests._memory_view_synthetic import marks
+
+    p, snap = plan()
+    ctx = SimpleNamespace(context_fit_plan=p, messages=[], accumulated_usage={}, active_context_mode="max",
+                          active_model="test", round_idx=1, tool_schemas=[])
+    monkeypatch.setattr(lm, "cached_tariff_text", lambda *args: "tariff unknown")
+    memory = memory_facts(p, "max")
+    first = lm.context_facts_line(ctx, money={}, measured=False, subagents_fact="")
+    assert memory in first
+    ctx.messages.append(bound_host_row(lm.CONTEXT_FACTS_NAME, first))
+    ctx.round_idx += 1
+    second = lm.context_facts_line(ctx, money={}, measured=False, subagents_fact="")
+    assert memory not in second
+    ctx.messages.append(bound_host_row(lm.CONTEXT_FACTS_NAME, second))
+    del ctx.messages[0]  # the first row left the visible context during a rebuild
+    assert memory in lm.context_facts_line(ctx, money={}, measured=False, subagents_fact="")
+    ctx.messages.append(bound_host_row(lm.CONTEXT_FACTS_NAME, first))
+    changed = replace(snap, marks=tuple(marks(1)))
+    ctx.context_fit_plan = replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(changed)))
+    assert "; marks in view 1" in lm.context_facts_line(ctx, money={}, measured=False, subagents_fact="")
+    # A matching ordinary message cannot suppress the host's facts.
+    ctx.messages = [{k: v for k, v in ctx.messages[-1].items() if k != HOST_CONTEXT_KIND_KEY}]
+    assert memory_facts(p, "max", ctx.messages) == memory

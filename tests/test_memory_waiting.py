@@ -42,7 +42,7 @@ def test_counts_include_foreign_reviews_notes_and_only_open_projects_and_fall_af
         projects = pr.list_projects(tmp_path, closed=False, oldest_first=True)
         assert facts["projects"] == {"count": len(projects), "oldest": projects[0]["last_active_at"]}
         assert facts["notes"]["rooms"] == [(str(rooms["beta"]), 1)]
-        assert "waiting for me: late reviews 1, oldest " in shown
+        assert "waiting for me at the start: late reviews 1, oldest " in shown
         assert "release_ids=[...]" in shown and "chronicle_write(kind='page'" in shown and "close_project(" in shown
         assert "failed001" not in shown and "late words" not in shown
     for role in ("child", "nanny"):

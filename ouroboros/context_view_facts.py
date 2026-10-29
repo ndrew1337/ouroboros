@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from ouroboros import memory_floor as floor, memory_view as mv
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
+from ouroboros.context_budget import HOST_CONTEXT_KIND_KEY
 from ouroboros.memory_waiting import text as waiting_text
+
+CONTEXT_FACTS_NAME = "ouroboros_context_facts"
 
 
 def memory_snapshot(plan):
@@ -24,8 +27,8 @@ def block_label(message, index, block, plan):
     return "core and books" if index == 0 else "runtime facts"
 
 
-def memory_facts(plan, mode):
-    """One round line of an integrating focus (every view role but a delegated child or nanny), on every start:
+def memory_facts(plan, mode, messages=()):
+    """Start facts of an integrating focus, only while this exact memory part is absent from visible facts rows:
     on the owner's Max with a known window, the host's measure of the start's Max room part by part (books, core,
     knowledge and runtime facts, assignment, reply reserve, work room, tool schemas) and how the start settled;
     my memory: the story with its pages no part or account holds yet (how many, their tokens, the rooms holding
@@ -48,8 +51,9 @@ def memory_facts(plan, mode):
             "route": "; Low, a disclosed fact of this route: folding memory or dropping tool schemas cannot make room here",
         }[room["cause"]]
     shown = floor.addressed_text((receipt.get("floor") or {}).get("steps") or {})
-    return (line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
-            + waiting_text(snapshot.waiting))
+    line += (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}" + waiting_text(snapshot.waiting)
+    return "" if any(message.get(HOST_CONTEXT_KIND_KEY) == CONTEXT_FACTS_NAME
+                     and f" | {line} | " in f" | {message.get('content') or ''} | " for message in messages) else line
 
 
 def low_start_line(plan, mode, task_id):

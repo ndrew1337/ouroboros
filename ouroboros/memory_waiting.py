@@ -54,7 +54,7 @@ def text(waiting):
         rooms = ", ".join(f"room {room}: {count}" for room, count in facts.get("rooms", ()))
         lines.append(f"{cls['subject']} {facts['count']}, oldest {facts['oldest']}"
                      + (f", most in {rooms}" if rooms else "") + f"; {cls['reader']}; act {cls['act']}")
-    return "; waiting for me: " + " | ".join(lines)
+    return "; waiting for me at the start: " + " | ".join(lines)
 
 
 def listing(kind, marks, notes):
