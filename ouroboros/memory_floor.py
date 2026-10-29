@@ -35,7 +35,8 @@ def view_tokens(text: str) -> int:
 
 
 def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str, str]]:
-    """Ordered addressable forms, oldest first. Core and governing words have no rung."""
+    """Ordered addressable forms, oldest first; F5 in the story's order (the settled retellings, then the pages
+    as they were sealed, ``memory_view._story_pages``). Core and governing words have no rung."""
     if not snapshot.active:
         return []
     room = snapshot.room or {}

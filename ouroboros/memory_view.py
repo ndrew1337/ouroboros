@@ -376,8 +376,12 @@ def _fixes(store: ChronicleStore, record: Mapping[str, Any], fixes: Mapping[str,
 def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mapping[str, memory_inventory.LegacyUnit],
                  room_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """Every acting page and part not folded into a part (``room_id``'s alone, when named), and every account my
-    selection shows, all rooms, by the first row of its own room then sequence; the records a shown account tells in
-    its place are marked ``told_by``."""
+    selection shows, all rooms; the records a shown account tells in its place are marked ``told_by``.
+
+    The settled retellings come first — parts and accounts, by the first row of their own room then sequence —
+    and then the pages no part or account holds yet, in publication order (sequence). A newly sealed page so
+    joins the end of the story and leaves every byte before it unchanged (the story closes the cached block B,
+    ``context_fit._system_blocks``); a fold rewrites the story from its first changed retelling, as before."""
     fixes: Dict[str, List[Dict[str, Any]]] = {}
     for record in store.records(kinds=("correction", "decision")):
         if record["kind"] == "correction" or record.get("accepted") is False:
@@ -402,8 +406,8 @@ def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mappin
             "stamp": _stamp_summary(record.get("host_stamp")), "fixes": _fixes(store, record, fixes),
             "terminal_links": terminal_links(store.data_root, record, terminal_cache), "quotes": record.get("quotes") or []}))
     told = told_map([entry for _key, entry in keyed if entry["kind"] == "account"])
-    return [{**entry, "told_by": told[entry["id"]]} if entry["id"] in told else entry
-            for _key, entry in sorted(keyed, key=lambda pair: pair[0])]
+    ordered = sorted(keyed, key=lambda pair: (1, pair[0][1]) if pair[1]["kind"] == "page" else (0, *pair[0]))
+    return [{**entry, "told_by": told[entry["id"]]} if entry["id"] in told else entry for _key, entry in ordered]
 
 
 def capture_story(store: ChronicleStore, root: pathlib.Path, label: Callable[..., str],
@@ -896,7 +900,8 @@ class FloorLevel:
 
 
 FULL_VIEW = FloorLevel()
-_STORY_INTRO = ("Sealed pages and parts, and my accounts across rooms, oldest first; each is mine unless marked. "
+_STORY_INTRO = ("My parts and my accounts across rooms, oldest first, then the sealed pages no part or account holds "
+                "yet, in the order they were sealed; each is mine unless marked. "
                 "Anything named here is one memory_read away by its id.")
 
 
@@ -1056,13 +1061,14 @@ def _status_lines(status: Mapping[str, Any], refusals: Tuple[Dict[str, Any], ...
 
 
 def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) -> str:
-    """Block B's tail, ``## My story``: the retold old memory, then my pages and parts, then the status.
+    """Block B's tail, ``## My story``: the settled retellings, then the pages not yet folded, then the status.
 
-    Every unfolded retold record is whole, then my pages, parts and selected accounts; a
-    records an account tells retain their combined period and count with its composition reader. Its bytes depend only on the
+    Every unfolded retold record is whole, then my parts and selected accounts, then the pages no
+    part or account holds yet in publication order (``_story_pages``), so a new page joins the end;
+    the records an account tells retain their combined period and count with its composition reader. Its bytes depend only on the
     chronicle, the room labels, the helper route and ``level`` (the physical floor's; the
     empty level renders the full view): F3 turns a room's retold records into one line, F5
-    my oldest pages, parts and accounts into address lines.
+    story entries into address lines in this order, the settled retellings first.
     """
     spec = snapshot.spec
     if not spec.story:
