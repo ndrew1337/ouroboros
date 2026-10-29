@@ -368,25 +368,20 @@ def note_author_decision(drive_root: Any, record_id: str, decision: Dict[str, An
         return None
 
 
-def note_commit_landing(drive_root: Any, record_id: str, landing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Record that this candidate's Git command succeeded. Same landing twice is a no-op."""
-    from ouroboros.review_doctrine import validate_landing, with_landing
+def note_commit_landing(drive_root: Any, record_id: str, landing: Optional[Dict[str, Any]],
+                        commit: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Record what this record's successful Git command landed (``review_doctrine.landed_record``):
+    the commit against the reviewed tree, and the author's landing on a decision it holds. A repeat is a no-op."""
+    from ouroboros.review_doctrine import landed_record
+    from ouroboros.review_history import retain_author_decision
 
     try:
-        checked = validate_landing(landing)
-        current = load_record(drive_root, record_id) if checked is not None else None
-        author = current.get("author_decision") if isinstance(current, dict) else None
-        if checked is None or not isinstance(author, dict) or author.get("landing") == checked:
+        current = load_record(drive_root, record_id)
+        if current is None or landed_record(current, landing, commit, recorded_at="") is None:
             return current
-
-        def _mutate(payload: Dict[str, Any]) -> Dict[str, Any]:
-            from ouroboros.review_history import retain_author_decision
-
-            payload["author_decision"] = retain_author_decision(
-                drive_root, payload, with_landing(payload.get("author_decision") or {}, checked))
-            return payload
-
-        return revise_record(drive_root, record_id, _mutate)
+        return revise_record(drive_root, record_id, lambda payload: landed_record(
+            payload, landing, commit, recorded_at=utc_now_iso(),
+            retain=lambda body, decision: retain_author_decision(drive_root, body, decision)) or payload)
     except (OSError, ValueError):
         log.warning("review ledger commit landing not recorded on %s", record_id, exc_info=True)
         return None

@@ -162,6 +162,7 @@ def test_exceptions_are_counted_and_stale_rows_fail():
 # `skill_repair` also the host's automatic repair after a marketplace install. Nothing produces an
 # `acceptance_late_settlement` row since the review fold; the old rows still render as card rows.
 HOST_ROW_CLASSES = {
+    "body_adoption": ("card_row", 1),  # the authorizing task's settled adoption; a task-unbound one stays restart_notice
     "budget_notice": ("runtime_state", 1),
     "cancel_receipt": ("owner_act_receipt", 2),
     "command_reply": ("owner_act_receipt", 2),
