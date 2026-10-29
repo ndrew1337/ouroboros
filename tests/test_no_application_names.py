@@ -35,3 +35,13 @@ def test_no_tracked_path_is_application_shaped():
         pytest.skip("not a Git checkout")
     paths = [path for path in listed.stdout.decode("utf-8", "surrogateescape").split("\0") if path]
     assert paths and application_shaped(paths) == []
+
+
+def test_the_rule_claims_what_is_enforced_and_no_more():
+    """Tracked names are checked here; a generated tree that may hold such a name (the bytecode mirror, a
+    safe_test root) is born ``.noindex`` instead. The books never claim generated names are clean."""
+    development = (REPO / "docs/development/10-platform-abstraction-rule.md").read_text(encoding="utf-8")
+    invariants = (REPO / "docs/architecture/10-key-invariants.md").read_text(encoding="utf-8")
+    assert "no tracked name is application-typed" in development and "trees that may hold one" in development
+    assert "no tracked name is application-typed" in invariants
+    assert "generated name" not in development + invariants
