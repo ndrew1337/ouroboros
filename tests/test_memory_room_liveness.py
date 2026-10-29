@@ -62,7 +62,7 @@ def test_only_a_typed_quiet_finish_of_the_mind_considers_earlier_words_without_s
         assert beta in {r["room_id"] for r in _view(tmp_path, MAIN_TASK)[0].live_rooms}
 
 
-def test_running_work_is_read_from_the_addressed_task_view_and_completion_stops_holding_the_room(tmp_path):
+def test_running_work_is_read_from_typed_facts_and_completion_stops_holding_the_room(tmp_path):
     rooms, rows = _install(tmp_path)
     beta = str(rooms["beta"])
     seal(tmp_path, beta, rows[13])
@@ -87,20 +87,67 @@ def test_bound_running_work_keeps_an_empty_room_live_without_reading_history(tmp
         seal(tmp_path, beta, row)
     seed_result(tmp_path, "tb1", {"status": "running"})
     _view(tmp_path, MAIN_TASK)  # load the fixture's legacy spans before guarding against new history walks
-    original, reads = task_store.task_versions, []
+    original, reads = task_store.task_facts, []
 
-    def versions(root, ids):
-        reads.append(set(ids))
-        return original(root, ids)
+    def facts(root, **query):
+        result = original(root, **query)
+        reads.append((query, set(result)))
+        return result
 
-    monkeypatch.setattr(task_store, "task_versions", versions)
+    monkeypatch.setattr(task_store, "task_facts", facts)
+    monkeypatch.setattr(task_store, "display_documents", lambda *a, **kw: pytest.fail("running needs no task body"))
     monkeypatch.setattr(chat_chain, "iter_rows", lambda *a, **kw: pytest.fail("no history walk"))
     snapshot, text = _view(tmp_path, MAIN_TASK)
-    assert reads == [{"tb1"}]
+    assert reads == [({"where": "status=?", "params": ("running",)}, {"tb1"})]
     room = next(r for r in snapshot.live_rooms if r["room_id"] == beta)
     assert room["facts"]["rows"] == 0 and "get_task_result(task_id='tb1')" in text
     seed_result(tmp_path, "tb1", {"status": "completed"})
     assert beta not in {r["room_id"] for r in _view(tmp_path, MAIN_TASK)[0].live_rooms}
+
+
+def test_explicit_words_stay_live_after_a_quiet_finish_even_when_the_finish_is_sealed(tmp_path):
+    rooms, _rows = _install(tmp_path)
+    beta = str(rooms["beta"])
+    finish = shared.msg(_ts(30), "No answer needed", chat_id=int(beta), direction="out", task_id="wake1",
+                        root_task_id="wake1", terminal_origin="model_final", wake_silent=True)
+    shared.append(tmp_path / "logs" / "chat.jsonl", finish)
+    seal(tmp_path, beta, finish)
+    assert beta in {room["room_id"] for room in _view(tmp_path, MAIN_TASK)[0].other_rooms}
+    snapshot, text = _view(tmp_path, MAIN_TASK, live_rooms="lines_with_words")
+    room = next(room for room in snapshot.live_rooms if room["room_id"] == beta)
+    assert room["facts"]["unconsidered_people"] == 0 and room["words"]
+    assert "beta words" in text
+
+
+def test_finished_bindings_add_no_task_bodies_to_lines_or_an_inactive_directory_room(tmp_path, monkeypatch):
+    from ouroboros import projects_registry, task_store
+
+    rooms, rows = _install(tmp_path)
+    beta = str(rooms["beta"])
+    seal(tmp_path, beta, rows[13])
+    _view(tmp_path, MAIN_TASK)  # finish legacy import before measuring view reads
+    read, seen = task_store.display_documents, []
+
+    def documents(root, task_ids):
+        seen.append(set(task_ids) - {""})
+        return read(root, task_ids)
+
+    monkeypatch.setattr(task_store, "display_documents", documents)
+    measured = []
+    for count in (0, 40):
+        for index in range(count):
+            task_id = f"finished-{index}"
+            projects_registry.bind_task_to_project(tmp_path, task_id, "beta", origin={"absent": "system"})
+            seed_result(tmp_path, task_id, {"status": "completed", "project_id": "beta"})
+        for mode in ("lines", "lines_with_words"):
+            seen.clear()
+            _view(tmp_path, MAIN_TASK, live_rooms=mode)
+            assert not seen
+        seen.clear()
+        snapshot, _ = _view(tmp_path, MAIN_TASK, live_rooms="directory")
+        assert beta in {room["room_id"] for room in snapshot.other_rooms}
+        measured.append(seen[:])
+    assert measured[0] == measured[1] and measured[0]
 
 
 def test_a_gap_keeps_a_room_live_without_words_or_notes(tmp_path):

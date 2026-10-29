@@ -380,8 +380,9 @@ def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mappin
 
     The settled retellings come first — parts and accounts, by the first row of their own room then sequence —
     and then the pages no part or account holds yet, in publication order (sequence). A newly sealed page so
-    joins the end of the story and leaves every byte before it unchanged (the story closes the cached block B,
-    ``context_fit._system_blocks``); a fold rewrites the story from its first changed retelling, as before."""
+    joins the end and preserves the prefix on routes with prefix caching. With one cache marker for the whole
+    block B, a new page misses that block (``context_fit._system_blocks``). A fold rewrites the story from its
+    first changed retelling, as before."""
     fixes: Dict[str, List[Dict[str, Any]]] = {}
     for record in store.records(kinds=("correction", "decision")):
         if record["kind"] == "correction" or record.get("accepted") is False:
@@ -407,7 +408,9 @@ def _story_pages(store: ChronicleStore, label: Callable[..., str], units: Mappin
             "terminal_links": terminal_links(store.data_root, record, terminal_cache), "quotes": record.get("quotes") or []}))
     told = told_map([entry for _key, entry in keyed if entry["kind"] == "account"])
     ordered = sorted(keyed, key=lambda pair: (1, pair[0][1]) if pair[1]["kind"] == "page" else (0, *pair[0]))
-    return [{**entry, "told_by": told[entry["id"]]} if entry["id"] in told else entry for _key, entry in ordered]
+    # The floor spends the oldest covered period first, independently of publication order in B.
+    return [{**entry, "floor_order": list(key), **({"told_by": told[entry["id"]]} if entry["id"] in told else {})}
+            for key, entry in ordered]
 
 
 def capture_story(store: ChronicleStore, root: pathlib.Path, label: Callable[..., str],
@@ -661,7 +664,7 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
                            for record in retold if not getattr(unit := units.get(record["id"]), "folded", False)
                            and record["id"] not in whole and record["id"] not in told]
         own = {} if spec.story else {e["id"]: {**e, "part": None} for e in _story_pages(store, label, units, room)
-                                      if e["room_id"] == room and e["kind"] != "account"}  # story order: the floor takes the oldest first
+                                      if e["room_id"] == room and e["kind"] != "account"}  # floor_order retains period age
         facts["under_parts"] = [own.get(record["id"]) or {"id": record["id"], "kind": record["kind"], "part": record["folded_into"],
                                  "period": _period((p := memory_inventory.record_period(store, record, units)).span, p.note()), "text": str(record.get("current_text") or ""),
                                  **({"standing": True} if spec.story and record["folded_into"] in standing else {})}
@@ -676,22 +679,19 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     return facts
 
 
-def _room_focus(root, by_room, notes):
-    """Latest authored focus and running work, from the same addressed task display views."""
+def _room_focus(root, by_room, notes, shown_rooms, running):
+    """Latest authored focus only for rooms actually shown in the directory."""
     from ouroboros.focus import compact_focus
-    from ouroboros.task_store import display_documents, task_versions
+    from ouroboros.task_store import display_documents
 
     ids = {room: {str(row.get("task_id") or "") for _a, row, _p in entries}
-           for room, entries in by_room.items()}
+           for room, entries in by_room.items() if room in shown_rooms}
     for room, entries in notes.items():
-        ids.setdefault(room, set()).update(note.get("task_id", "") for note in entries)
+        if room in shown_rooms:
+            ids.setdefault(room, set()).update(note.get("task_id", "") for note in entries)
+    for room in shown_rooms:
+        ids.setdefault(room, set()).update(running.get(room, ()))
     bindings = memory_inventory.membership_facts(root).bindings
-    unseen = {task: str(room) for task, room in bindings.items() if str(room) not in ids}
-    # Empty rooms have no row naming their work: read only the already-known binding ids' typed status,
-    # never task bodies or a history scan. Only running work joins the existing display read.
-    for task, (_version, status, _synthesis) in (task_versions(root, unseen) if unseen else {}).items():
-        if status == "running":
-            ids.setdefault(unseen[task], set()).add(task)
     for task_id, room in bindings.items():
         if str(room) in ids:
             ids[str(room)].add(task_id)
@@ -710,21 +710,22 @@ def _room_focus(root, by_room, notes):
         if candidates:
             line = max(candidates, key=lambda item: (dated[item["author_task_id"]], item["author_task_id"]))
             latest[room] = f"{line['text']} (task {line['author_task_id']}, {_minute(line['authored_at'])})"
-    running = {room: sorted(t for t in tasks if documents.get(t, {}).get("status") == "running")
-               for room, tasks in ids.items()}
-    return latest, running
+    return latest
 
 
 def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label: Callable[..., str],
                 by_room: Mapping[str, List[Entry]], notes: Mapping[str, List[Dict[str, Any]]],
                 lineage: Mapping[str, Any], gaps: Optional[Mapping[str, set]] = None,
-                quiet: Optional[Mapping[str, List[Entry]]] = None) -> List[Dict[str, Any]]:
+                quiet: Optional[Mapping[str, List[Entry]]] = None, projects=None) -> List[Dict[str, Any]]:
     """All other open rooms, with a live verdict; an inactive room keeps only its directory address."""
     from ouroboros.dialogue_provenance import row_provenance
-    from ouroboros.memory_room_activity import considered_through, unconsidered_people
+    from ouroboros.memory_room_activity import considered_through, running_by_room, unconsidered_people
 
     rooms = []
-    focus, running = _room_focus(root, by_room, notes)
+    if projects is None:  # the explicit room-directory reader has no waiting census to reuse
+        from ouroboros.projects_registry import list_projects
+        projects = list_projects(root)
+    running = running_by_room(root, by_room, notes, memory_inventory.membership_facts(root).bindings, projects)
     shown = {entry[0]["row_sha256"] for entry in by_room.get(spec.room_id, [])} if spec.room_lanes else set()
     for room in sorted((set(by_room) | set(notes) | {room for room, kinds in (gaps or {}).items() if kinds}
                         | {room for room, tasks in running.items() if tasks})
@@ -755,9 +756,14 @@ def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label
                                   "conversation_key": origin.get("conversation_key", ""),
                                   "answered_events": 0, "last_address": "no open rows"}
         rooms.append({"room_id": room, "label": label(room, sample), "key": entries[-1][2] if entries else -1,
-                      "live": bool(facts["unconsidered_people"] or facts["notes"] or facts["running_tasks"] or facts.get("gaps")),
-                      "facts": facts, "directory": spec.live_rooms == "directory", "focus": focus.get(room, ""),
+                      "live": bool((spec.live_rooms == "lines_with_words" and facts["people"])
+                                   or facts["unconsidered_people"] or facts["notes"] or facts["running_tasks"] or facts.get("gaps")),
+                      "facts": facts, "directory": spec.live_rooms == "directory", "focus": "",
                       "notes": list(notes.get(room, ())), "words": words})
+    if spec.live_rooms == "directory":
+        focus = _room_focus(root, by_room, notes, {room["room_id"] for room in rooms if room["live"]}, running)
+        for room in rooms:
+            room["focus"] = focus.get(room["room_id"], "")
     return sorted(rooms, key=lambda item: (item["key"], item["room_id"]))
 
 
@@ -843,21 +849,22 @@ def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     warm_lineage(lineage, ((meta, pos) for entries in quiet.values() for _address, meta, pos in entries))
     room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story, gaps)
             if spec.room_id is not None else None)
-    live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps, quiet) if spec.live_rooms != "none" else []
     marks = store.active_marks(None) if spec.marks != "none" or integrating else []
-    waiting = {}
-    if integrating:
+    waiting, projects = {}, None
+    if integrating or spec.live_rooms != "none":
         from ouroboros.memory_waiting import measure
         from ouroboros.projects_registry import list_projects
         from ouroboros.store import StoreError
 
         try:
-            projects = list_projects(root, strict=True, closed=False, oldest_first=True)
+            projects = list_projects(root, strict=True, oldest_first=True)
         except (OSError, ValueError, StoreError) as exc:
             # An unavailable project census does not make readable room history unavailable.
             log.warning("memory view: project waiting facts unavailable (%s)", type(exc).__name__)
             projects = None
-        waiting = measure(marks, notes, projects)
+        if integrating:
+            waiting = measure(marks, notes, [p for p in projects if "closed" not in p] if projects is not None else None)
+    live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps, quiet, projects or []) if spec.live_rooms != "none" else []
     return room, live, _capture_marks(store, spec, label, marks), waiting
 
 
@@ -1101,7 +1108,7 @@ def render_story(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW) ->
     the records an account tells retain their combined period and count with its composition reader. Its bytes depend only on the
     chronicle, the room labels, the helper route and ``level`` (the physical floor's; the
     empty level renders the full view): F3 turns a room's retold records into one line, F5
-    story entries into address lines in this order, the settled retellings first.
+    story entries into address lines by covered-period age, independently of this display order.
     """
     spec = snapshot.spec
     if not spec.story:

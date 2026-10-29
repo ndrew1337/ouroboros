@@ -407,7 +407,7 @@ def write_task_result(
     from ouroboros.task_store import Reprepare, prepared_write
 
     prepared: Dict[str, Any] = {}
-    transition: Dict[str, bool] = {}  # set by the reducer when THIS write turns the row truly terminal
+    transition: Dict[str, bool] = {}  # the reducer's first admission / truly terminal transition
 
     def _write(needs: set) -> Dict[str, Any]:
         # TZ-1 V10: the mailbox bytes are read BEFORE the row lock (a bounded union happens
@@ -504,6 +504,8 @@ def write_task_result(
         now = utc_now_iso()
         projected_fields.update(terminal_time_patch(existing, projected_fields, status=projected_status,
             task_id=task_id, observed_at=now if _terminal_observed else None, replica=_terminal_time_source))
+        transition["admitted"] = (existing_status in {"", STATUS_REQUESTED}
+                                  and projected_status in {STATUS_SCHEDULED, STATUS_RUNNING})
         # ABI-3: shared deep cost normalization handles both rows/nested planes; incoming values win.
         return stamp_task_result_schema(normalize_task_result_cost_planes({
             **normalize_task_result_cost_planes(existing),
@@ -515,6 +517,14 @@ def write_task_result(
         }))
 
     stored = prepared_write(_write)
+    if transition.get("admitted") and stored.get("project_id"):
+        # The first committed admission, including a schedule receipt, opens the room once.
+        # Replayed receipts, status mirrors and restored work cannot undo a later closure.
+        try:
+            from ouroboros.projects_registry import update_project
+            update_project(results_drive_root, stored["project_id"], closed=None)
+        except Exception:
+            log.warning("Admitted task %s could not reopen its project", task_id, exc_info=True)
     if transition.get("terminal"):
         # Prior safety flags are in-process retry authority, never a durable grant.
         # Child completion cannot clear its still-running root's history.
