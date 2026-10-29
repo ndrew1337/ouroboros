@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from ouroboros import memory_inventory as mi, memory_max as mm
+from ouroboros import memory_inventory as mi
 from ouroboros.chronicle_store import ChronicleStore
 from tests import _memory_inventory_shared as shared
 from tests.test_memory_fallback import _consciousness, _drafts, _Light, _mind_page, _run, light_route
@@ -102,16 +102,6 @@ def test_one_page_is_a_run_light_judges(tmp_path, monkeypatch, light):
     assert _drafts(tmp_path)[0]["covers"]["member_ids"] == [page]
 
 
-def test_the_close_line_counts_folds_by_author_within_the_episode(tmp_path, monkeypatch, light):
-    shared.world(tmp_path)
-    _consciousness(monkeypatch, False)
-    _main_pages(tmp_path)
-    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {}
-    assert _run(tmp_path, _Light(PART), direct=True, trace=_crowded()).outcome == "published"
-    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {"helper": 1}
-    assert mm.folds_by(tmp_path, "2000-01-01", "2000-01-02") == {}  # outside the episode's span
-
-
 def test_a_run_light_kept_leaves_the_next_run_of_the_room_in_turn(tmp_path, monkeypatch, light):
     shared.world(tmp_path)
     _consciousness(monkeypatch, False)
@@ -121,13 +111,3 @@ def test_a_run_light_kept_leaves_the_next_run_of_the_room_in_turn(tmp_path, monk
     assert kept.outcome == "kept_original" and kept.unit.member_ids == (first,)
     assert _run(tmp_path, _Light(PART), direct=True, trace=_crowded()).outcome == "published"
     assert _drafts(tmp_path)[0]["covers"]["member_ids"] == [last]  # the told page stays the account's
-
-
-def test_folds_written_meanwhile_count_by_publication_a_later_rejection_aside(tmp_path, monkeypatch, light):
-    shared.world(tmp_path)
-    _consciousness(monkeypatch, False)
-    _main_pages(tmp_path)
-    assert _run(tmp_path, _Light(PART), direct=True, trace=_crowded()).outcome == "published"
-    [part] = _drafts(tmp_path)
-    assert ChronicleStore(tmp_path).decide(part["id"], False, shared.MIND, "not what happened").ok
-    assert mm.folds_by(tmp_path, "2000-01-01", "2100-01-01") == {"helper": 1}

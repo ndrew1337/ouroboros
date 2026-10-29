@@ -298,3 +298,22 @@ def test_an_old_body_writing_a_legacy_latch_file_is_reconciled_into_an_intent(tm
     assert store_import.run_legacy_reconcile(tmp_path)["root_report"]["status"] == "reconciled"
     assert results.load_task_result(tmp_path, "old-task", strict=True)["_schema_version"] == 1
     assert cancel_pending(tmp_path, "old-task", strict=True)
+
+
+def test_a_retired_sets_rows_leave_at_boot_and_its_owed_lines_stay_owed(tmp_path):
+    """The lost-Max episode left with its producer (29.10): the boot removes the row an older body kept, and a
+    line that producer queued stays owed to the terminal outbox, which delivers it; nothing counts it delivered."""
+    from ouroboros import startup_migrations as m
+    from supervisor import terminal_delivery as outbox
+
+    m.prepare_startup_state(tmp_path)
+    o.add(tmp_path, "memory_max", "episode", {"id": "e1", "notices": {"open": {"id": "memory_max:e1:open"}}})
+    o.add(tmp_path, "unknowns", "kept", {"reason": "another set"})
+    assert outbox.register_pending_delivery(tmp_path, {
+        "type": "send_message", "chat_id": 1, "task_id": "", "text": "Max lost: an older body's line.",
+        "role": "system", "system_type": "memory_max_notice", "delivery_id": "memory_max:e1:open"})
+    assert m.prepare_startup_state(tmp_path)["retired_rows"] == 1
+    assert o.members(tmp_path, "memory_max") == {} and set(o.members(tmp_path, "unknowns")) == {"kept"}
+    assert "retired_rows" not in m.prepare_startup_state(tmp_path)  # nothing left: one read, no write
+    assert [row["delivery_id"] for row in outbox.pending_deliveries(tmp_path)] == ["memory_max:e1:open"]
+    assert not outbox.already_delivered(tmp_path, "memory_max:e1:open")

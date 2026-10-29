@@ -1168,7 +1168,7 @@ def _capture_context_core(
     from ouroboros.delegate_supervision import _attempt_key
     attempt_key = _attempt_key(ctx if ctx is not None else SimpleNamespace(task_attempt=task.get("_attempt")))
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
-                                             active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
+                                             active_root=active_root, attempt_key=attempt_key)
     dynamic_parts = [health_section] if health_section else []
     dynamic_parts.extend(review_activity)
     try:
