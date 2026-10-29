@@ -57,6 +57,9 @@ def _owner_line(ctx: Any, text: str, key: str, tone: str) -> None:
 # the next tick re-reads the descriptor and re-handshakes, and it cannot close an
 # open outage episode either: silence of a different shape is not contact.
 _NO_DAEMON_ANSWER_STATUSES = frozenset({"observation_pending", "refused"})
+# A tick text the host could not read as a JSON object (``_payload``): no daemon
+# answer is established either, whatever the text was.
+_OBSERVATION_MALFORMED = "observation_malformed"
 
 
 def _loop_gateway() -> Any:
@@ -118,12 +121,24 @@ def _emit(ctx: Any, kind: str, payload: dict[str, Any]) -> bool:
     })
 
 
-def _payload(raw: str) -> dict[str, Any]:
+def _payload(raw: Any, run_id: str) -> tuple[dict[str, Any], bool]:
+    """One tick's observation and whether the host could read it at all.
+
+    The observing wait renders a JSON object; anything else is the host's own
+    read failure (#947), not a daemon answer and not a run's state. It keeps the
+    ``fault`` status the hold exits on, carries the family's refusal envelope so
+    it never classifies as a successful observation, and keeps the whole tick
+    text: an oversized wake spills it to its exact source (``_render_wake_payload``).
+    """
     try:
         data = json.loads(raw)
-        return data if isinstance(data, dict) else {"status": "fault", "detail": raw}
     except (TypeError, ValueError):
-        return {"status": "fault", "detail": str(raw or "")}
+        data = None
+    if isinstance(data, dict):
+        return data, True
+    return {"status": "fault", "ok": False, "host_code": refusal_host_code(_OBSERVATION_MALFORMED),
+            "reason": _OBSERVATION_MALFORMED, "run_id": str(run_id),
+            "detail": raw if isinstance(raw, str) else repr(raw)}, False
 
 
 def _coordination_root_id(ctx: Any) -> str:
@@ -1230,8 +1245,8 @@ def supervised_wait(
                     gateway = _loop_gateway()
                 raw = wait_once(ctx, run_id, _TICK_SEC, int(state.get("journal_cursor") or 0),
                                 **({"gateway": gateway} if gateway is not None else {}))
-            payload = _payload(raw)
-            answered = str(payload.get("status") or "") not in _NO_DAEMON_ANSWER_STATUSES
+            payload, readable = _payload(raw, run_id)
+            answered = readable and str(payload.get("status") or "") not in _NO_DAEMON_ANSWER_STATUSES
             # A typed 503 the engine itself sent to the read reached the daemon over an intact
             # transport: rebuilding it would re-handshake into the same refusal and wake the
             # model, and it is no outage either. Only a read nothing answered is a dead socket.
