@@ -90,6 +90,29 @@ def test_run_start_never_opens_another_appimage_apps_file(tmp_path, monkeypatch)
     assert packaged_cli._desktop_app_path(root / "_internal") == root / "Ouroboros"
 
 
+@pytest.mark.parametrize("windows", [False, True])
+def test_run_start_launches_the_app_without_the_cli_bytecode_prefix(tmp_path, monkeypatch, windows):
+    """The CLI shim's prefix lies outside the data dir; the app derives its own, so its workers write bytecode."""
+    from ouroboros import packaged_cli
+
+    root = tmp_path / "Ouroboros"
+    (root / "_internal").mkdir(parents=True)
+    (root / ("Ouroboros.exe" if windows else "Ouroboros")).write_bytes(b"app")
+    runtime = packaged_cli.PackagedRuntime(
+        bundle_root=root / "_internal", embedded_python=tmp_path / "python", app_root=tmp_path / "home/Ouroboros",
+        repo_dir=tmp_path / "home/Ouroboros/repo", data_dir=tmp_path / "home/Ouroboros/data", app_version="7.9.0")
+    launched = {}
+    monkeypatch.setattr(packaged_cli, "IS_MACOS", False)
+    monkeypatch.setattr(packaged_cli, "IS_WINDOWS", windows)
+    for name in ("APPIMAGE", "APPDIR"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("PYTHONPYCACHEPREFIX", str(tmp_path / "cli-cache"))
+    monkeypatch.setattr(packaged_cli.subprocess, "Popen", lambda args, **kwargs: launched.update(args=args, kwargs=kwargs))
+    packaged_cli._launch_desktop_app(runtime)
+    assert launched["args"] == [str(root / ("Ouroboros.exe" if windows else "Ouroboros"))]
+    assert "PYTHONPYCACHEPREFIX" not in launched["kwargs"].get("env", {"PYTHONPYCACHEPREFIX": "inherited"})
+
+
 def test_packaged_cli_linux_extract_relaunch_uses_private_temp_base(tmp_path, monkeypatch):
     from ouroboros import packaged_cli
 
@@ -202,7 +225,7 @@ def test_packaged_cli_normal_linux_relaunch_keeps_process_environment(tmp_path, 
     packaged_cli._launch_desktop_app(runtime)
 
     assert launched["args"] == [str(appimage)]
-    assert "env" not in launched["kwargs"]
+    assert launched["kwargs"]["env"] == {k: v for k, v in os.environ.items() if k != "PYTHONPYCACHEPREFIX"}
 
 
 def test_packaged_cli_does_not_treat_prompt_start_text_as_option(tmp_path, monkeypatch):

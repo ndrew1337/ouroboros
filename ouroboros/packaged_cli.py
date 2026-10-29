@@ -445,14 +445,10 @@ def _launch_desktop_app(runtime: PackagedRuntime) -> None:
         # running with other roots must not be activated instead. No global launchd variable is set.
         carried = [arg for key, value in _app_env(runtime).items() for arg in ("--env", f"{key}={value}")]
         subprocess.Popen(["open", "-n", *carried, str(app)])
-    elif IS_WINDOWS:
-        subprocess.Popen([str(app)], cwd=str(app.parent))
-    else:
-        relaunch_env = _linux_appimage_relaunch_env(app)
-        if relaunch_env is None:
-            subprocess.Popen([str(app)], cwd=str(app.parent))
-        else:
-            subprocess.Popen([str(app)], cwd=str(app.parent), env=relaunch_env)
+    else:  # never with the CLI shim's bytecode prefix: outside the data dir it leaves every worker boot recompiling
+        launch_env = (None if IS_WINDOWS else _linux_appimage_relaunch_env(app)) or os.environ
+        subprocess.Popen([str(app)], cwd=str(app.parent),
+                         env={key: value for key, value in launch_env.items() if key.upper() != "PYTHONPYCACHEPREFIX"})
 
 
 def _linux_appimage_relaunch_env(app: pathlib.Path) -> dict[str, str] | None:
