@@ -1,4 +1,4 @@
-import { escapeHtmlAttr as escapeHtml, lastAppVersion } from './utils.js';
+import { escapeHtmlAttr as escapeHtml, lastAppVersion, watchAppVersion } from './utils.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { showToast } from './toast.js';
 import { apiClient, apiFetch } from './api_client.js';
@@ -525,6 +525,12 @@ export function bindUpdateRefreshEvents({ ws, getPhase, reconcileRestart, loadSt
         beginRestarting() { restartReconnected = false; },
         dispose() { disposers.splice(0).forEach((dispose) => dispose()); },
     };
+}
+
+// The App chip follows the health read About uses: one that lands after a status rendered re-renders the panel;
+// a panel still loading keeps its loading line until its own status render. Returns the disposer.
+export function bindAppVersionRender({ getStatus, render }) {
+    return watchAppVersion(() => { if (getStatus()) render(); });
 }
 
 export function initUpdates({ mount, state, ws, openSettingsTab }) {
@@ -1254,6 +1260,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
         loadStatus,
         getRequestTaskId: () => requestView(latestStatus?.letter)?.taskId || '',
     });
+    bindAppVersionRender({ getStatus: () => latestStatus, render });  // same lifetime as the panel
     window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
         if (event.detail?.tab !== 'updates' || state.activePage !== 'dashboard') return;
         loadStatus({ fetchRemote: false });

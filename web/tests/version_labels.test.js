@@ -4,7 +4,7 @@ import test from 'node:test';
 import { readFileSync } from 'node:fs';
 
 import { lastAppVersion, loadVersion } from '../modules/utils.js';
-import { updateVerdict } from '../modules/updates.js';
+import { bindAppVersionRender, updateVerdict } from '../modules/updates.js';
 import { WS } from '../modules/ws.js';
 
 // The two version labels' one reader (utils.loadVersion, #2249) under a scripted /api/health:
@@ -212,4 +212,28 @@ test('the Updates page shows the app version About reads as one App chip, and no
     assert.deepEqual(updateVerdict({}, '', lastAppVersion()).chips, []);
     const source = readFileSync(new URL('../modules/updates.js', import.meta.url), 'utf8');
     assert.match(source, /updateVerdict\(latestStatus \|\| \{\}, phase, lastAppVersion\(\)\)/, 'the panel renders it');
+});
+
+test('a health read landing after the update status renders the App chip; one landing first waits for the status', async () => {
+    labels();
+    await readOnce({ runtime_version: '7.9.0' });  // no app version yet
+    let status = null;
+    const shown = [];
+    const render = () => shown.push(updateVerdict(status || {}, '', lastAppVersion()).chips);
+    const dispose = bindAppVersionRender({ getStatus: () => status, render });
+    try {
+        status = { managed: true };  // the status lands first and renders without a chip
+        render();
+        await readOnce({ runtime_version: '7.9.0', app_version: '7.10.0' });
+        assert.deepEqual(shown.at(-1), [{ label: 'App', value: '7.10.0' }], 'the chip waited for another status refresh');
+        status = null;
+        shown.length = 0;
+        await readOnce({ runtime_version: '7.9.0', app_version: '7.11.0' });  // health first: the loading line stays
+        assert.deepEqual(shown, []);
+        status = { managed: true };
+        render();  // the status's own render shows it
+        assert.deepEqual(shown, [[{ label: 'App', value: '7.11.0' }]]);
+    } finally {
+        dispose();
+    }
 });
