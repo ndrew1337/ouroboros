@@ -603,8 +603,11 @@ def test_widget_fault_status_wraps_inside_narrow_card():
     controls = style.split(".widgets-card-controls {", 1)[1].split("}", 1)[0]
     status = style.split(".widgets-card-controls .ui-status:not([hidden]) {", 1)[1].split("}", 1)[0]
     assert "--widget-fault-status-max-width: min(240px, 35vw);" in root
-    assert "flex-wrap: wrap;" in controls
-    assert "min-width: 0;" in controls
+    # The controls wrap; `wrap-reverse` keeps the menu-and-handle pair on the head's top line and drops the
+    # lifecycle controls under it (DESIGN §2), never the pair under them. The pair and its look are measured in a
+    # real browser (tests/test_secondary_hierarchy_browser.py), the title's lines never under it.
+    assert re.search(r"flex-wrap: wrap(-reverse)?;", controls)
+    assert "min-width: min-content;" in controls
     assert "min-width: 0;" in status
     assert "max-width: var(--widget-fault-status-max-width);" in status
     assert "white-space: normal;" in status

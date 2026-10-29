@@ -60,7 +60,7 @@ export function createTaskResumeButton(taskId, { canResume, onSettled = () => {}
     const button = document.createElement('button');
     button.type = 'button';
     // Resume is the one primary of a paused card (its Stop… beside it stays neutral).
-    button.className = 'btn btn-sm btn-primary';
+    button.className = 'btn btn-sm btn-primary ui-hit-area';
     button.dataset.resumeRun = '1';
     button.textContent = tr('task.control.resume', 'Resume');
     button.addEventListener('click', async (event) => {

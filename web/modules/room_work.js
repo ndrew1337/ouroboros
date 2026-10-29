@@ -717,14 +717,20 @@ export function createRoomWork({
     // mark stays and the control's name keeps the whole status. Measured again when the word, step, mark or available
     // width changes. Remember the capsule's width AFTER fitting, so observing its content-sized box does not feed a
     // hide/show cycle back into the ResizeObserver.
+    // A Project's name then takes a second line (room_work.css), and only a name still cut makes the consciousness chip
+    // show its brain alone (its name keeps the whole state); Panic never yields.
     let fittedWord = null, fittedWidth = null, fitNeeded = false;
+    const name = panel && bar?.querySelector('.app-page-title');
     function fitWord() {
         if (destroyed) return;
         delete trigger.dataset.word;
         delete trigger.dataset.step;
+        const chip = name && bar.querySelector('.cx-chip');
+        if (chip) delete chip.dataset.fit;
         const cut = () => statusBadge.scrollWidth > statusBadge.clientWidth + 1;
         if (statusBadge.dataset.step && cut()) trigger.dataset.step = 'off';
         if (cut()) trigger.dataset.word = 'off';
+        if (chip && name.scrollHeight > name.clientHeight + 1) chip.dataset.fit = 'mark';
         fittedWidth = titleRow?.clientWidth;
     }
 

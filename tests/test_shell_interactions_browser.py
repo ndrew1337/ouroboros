@@ -12,7 +12,8 @@ import pytest
 
 from ouroboros.launcher_window_chrome import DOCUMENT_SCRIPT
 from tests import test_subscription_setup_browser as setup_browser
-from tests.test_design_system_gate_browser import PROJECTS, rest, save_evidence, seed_page, settle, sidebar_metrics
+from tests.test_design_system_gate_browser import (PROJECTS, open_nav, rest, save_evidence, seed_page, settle,
+                                                   sidebar_metrics)
 from tests._work_projection_shared import work_fields
 from tests.ui_motion_samples import SAMPLE_TRANSITION
 
@@ -208,6 +209,81 @@ def test_back_closes_the_topmost_dialog_before_its_layer(shell_ui, tmp_path, cas
     if layer == 'project':
         assert facts['first_back']['result'] == 'false', facts
     assert facts['second_back']['layers'] == [] and not facts['second_back']['drawer'], facts
+
+
+FILES_BACK_FACTS = """() => {
+    const shown = el => Boolean(el && el.getClientRects().length);
+    const active = document.activeElement;
+    return {layers: window.__ouroLayers?.ids() ?? 'left the app', armed: window.__ouroLayers?.historyArmed() ?? null,
+        view: document.querySelector('.files-layout')?.dataset.filesView ?? null,
+        list: shown(document.querySelector('.files-sidebar')), file: shown(document.querySelector('.files-preview')),
+        editor: document.querySelector('.files-editor')?.value ?? null,
+        unsaved: [...document.querySelectorAll('.files-entry')].filter(row => shown(row.querySelector('.files-entry-unsaved')))
+            .map(row => row.dataset.path || ''),
+        focus: active?.closest?.('.files-entry')?.dataset.path ?? (active?.matches?.('[data-files-back]') ? 'back' : active?.tagName),
+        telegramBack: window.Telegram?.WebApp?.BackButton?.isVisible ?? null};
+}"""
+
+
+@pytest.mark.parametrize('via', ['history', 'telegram'])
+def test_back_returns_a_narrow_files_page_from_its_file_to_the_list(shell_ui, tmp_path, via):
+    """#7: a file shown alone on a phone is one dismissable layer, so the system Back and Telegram's Back close it the
+    way Back to folder does: the list, focus on the file's row, its unsaved draft kept for that row. Escape in the
+    editor closes it the same way; the desk split registers no layer, and a page narrow again registers it again."""
+    page = seed_page(shell_ui, 390, 844, telegram=via == 'telegram')
+    page.route('**/api/files/read*', lambda route: route.fulfill(json={
+        'path': 'notes.md', 'name': 'notes.md', 'size': 11, 'display_path': '/workspace/notes.md',
+        'is_text': True, 'content': 'Saved text\n', 'truncated': False}))
+    facts = {'engine': shell_ui['engine'], 'via': via}
+    try:
+        boot(page, shell_ui)
+        open_nav(page, 'files')
+        row = page.locator('.files-entry', has_text='project_notes_with_a_long_descriptive_name.md')
+        facts['list'] = page.evaluate(FILES_BACK_FACTS)
+        row.click()
+        page.locator('.files-editor').wait_for()
+        wait_quietly(page, 'window.__ouroLayers?.historyArmed()')
+        facts['open'] = page.evaluate(FILES_BACK_FACTS)
+        page.locator('.files-editor').fill('Draft kept by Back')
+        press_back(page, via)
+        wait_quietly(page, "() => document.querySelector('.files-layout').dataset.filesView === 'list'")
+        page.wait_for_timeout(200)
+        facts['back'] = page.evaluate(FILES_BACK_FACTS)
+        row.click()
+        wait_quietly(page, 'window.__ouroLayers?.historyArmed()')
+        facts['reopened'] = page.evaluate(FILES_BACK_FACTS)
+        page.locator('.files-editor').press('Escape')
+        wait_quietly(page, "() => document.querySelector('.files-layout').dataset.filesView === 'list'")
+        page.wait_for_timeout(200)
+        facts['escape'] = page.evaluate(FILES_BACK_FACTS)
+        row.click()
+        page.set_viewport_size({'width': 1280, 'height': 860})
+        wait_quietly(page, '() => !window.__ouroLayers?.size()')
+        page.wait_for_timeout(200)
+        facts['desk'] = page.evaluate(FILES_BACK_FACTS)
+        page.set_viewport_size({'width': 390, 'height': 844})
+        wait_quietly(page, '() => window.__ouroLayers?.size() === 1')
+        page.wait_for_timeout(200)
+        facts['narrow_again'] = page.evaluate(FILES_BACK_FACTS)
+    finally:
+        evidence(tmp_path, f'shell-files-back-{via}-{shell_ui["engine"]}', facts)
+        page.close()
+    assert facts['list']['layers'] == [] and facts['list']['view'] == 'list', facts
+    opened = facts['open']
+    assert opened['layers'] == ['files-file'] and opened['armed'] and opened['file'] and not opened['list'], facts
+    assert opened['focus'] == 'back', facts
+    back = facts['back']
+    assert back['layers'] == [] and back['view'] == 'list' and back['list'] and not back['file'], facts
+    assert back['focus'] == 'notes.md' and back['unsaved'] == ['notes.md'], facts
+    assert back['editor'] == 'Draft kept by Back', facts
+    assert facts['reopened']['layers'] == ['files-file'] and facts['reopened']['editor'] == 'Draft kept by Back', facts
+    escape = facts['escape']
+    assert escape['layers'] == [] and escape['view'] == 'list' and escape['focus'] == 'notes.md', facts
+    assert escape['editor'] == 'Draft kept by Back' and escape['unsaved'] == ['notes.md'], facts
+    assert facts['desk']['layers'] == [] and facts['desk']['list'] and facts['desk']['file'], facts
+    assert facts['narrow_again']['layers'] == ['files-file'] and facts['narrow_again']['view'] == 'file', facts
+    if via == 'telegram':
+        assert (opened['telegramBack'], back['telegramBack'], facts['desk']['telegramBack']) == (True, False, False), facts
 
 
 @pytest.mark.parametrize('width,height', [(1280, 860), (390, 844)])
