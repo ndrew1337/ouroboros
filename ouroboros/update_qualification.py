@@ -10,11 +10,12 @@ from __future__ import annotations
 import json
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 
 TRAILER = "Ouroboros-Qualification: "
 CHECKS = ("full_battery", "cost_contract")
 STATES = ("passed", "failed", "not_run", "unknown")
+RED_LABEL = "post-merge-red"  # scripts/post_merge_routing.py labels each red it hands over with it
 
 
 def merge_qualification(review: dict, checks: list | None = None) -> dict:
@@ -55,7 +56,13 @@ def commit_qualification(body: str) -> dict | None:
     return None
 
 
-def _get_json(url: str) -> dict:
+def _github_repo(repo_url: str) -> str | None:
+    parsed = urllib.parse.urlparse(repo_url)
+    parts = parsed.path.removesuffix(".git").strip("/").split("/")
+    return "/".join(parts) if parsed.hostname == "github.com" and len(parts) == 2 else None
+
+
+def _get_json(url: str):
     request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
                                                   "User-Agent": "Ouroboros-update-check"})
     with urllib.request.urlopen(request, timeout=15) as response:
@@ -103,9 +110,8 @@ def post_merge_checks(commits: list[dict], repo_url: str, *, get_json=None) -> d
     if not commits:
         return {"status": "observed", "runs": [], "missing_shas": []}
     get_json = get_json or _get_json
-    parsed = urllib.parse.urlparse(repo_url)
-    parts = parsed.path.removesuffix(".git").strip("/").split("/")
-    if parsed.hostname != "github.com" or len(parts) != 2:
+    repo = _github_repo(repo_url)
+    if repo is None:
         return {"status": "unavailable", "reason": "The update source has no supported GitHub check reader.",
                 "runs": [], "missing_shas": sorted(c["sha"] for c in commits)}
     wanted = {c["sha"] for c in commits}
@@ -114,7 +120,7 @@ def post_merge_checks(commits: list[dict], repo_url: str, *, get_json=None) -> d
     status, reason = "partial", "GitHub response page budget reached."
     try:
         for page in range(1, 11):
-            data = get_json(f"https://api.github.com/repos/{'/'.join(parts)}/actions/workflows/"
+            data = get_json(f"https://api.github.com/repos/{repo}/actions/workflows/"
                             f"post-merge.yml/runs?per_page=100&page={page}")
             rows = data["workflow_runs"]
             for row in rows:
@@ -133,6 +139,43 @@ def post_merge_checks(commits: list[dict], repo_url: str, *, get_json=None) -> d
     absent = wanted - runs.keys() if status == "observed" else set()
     return {"status": status, "reason": reason, "runs": list(runs.values()), "absent_shas": sorted(absent),
             "missing_shas": _missing_runs(commits, runs, absent)}
+
+
+def post_merge_reds(repo_url: str, *, get_json=None) -> dict:
+    """The update source's open ``post-merge-red`` issues, read by each completed update check (at boot
+    and on each manual check).
+
+    Each is a test or lint finding that stayed red after merges into the development branch, with the
+    merge it was bisected to when the bisection finished, and is still open: unfixed work on the body
+    this install runs or will run. One public page, no credential; a full page stays ``partial``. A
+    failed read is ``unavailable`` and lists nothing; ``kept_reds`` keeps the stored observation.
+    """
+    repo = _github_repo(repo_url)
+    if repo is None:
+        return {"read": "unavailable", "reason": "The update source has no supported GitHub issue reader.",
+                "issues": []}
+    try:
+        rows = (get_json or _get_json)(f"https://api.github.com/repos/{repo}/issues?labels={RED_LABEL}"
+                                       "&state=open&per_page=100")
+        issues = [{"number": row["number"], "title": str(row.get("title") or ""),
+                   "opened": str(row.get("created_at") or "")} for row in rows if "pull_request" not in row]
+    except Exception as exc:
+        return {"read": "unavailable", "reason": type(exc).__name__, "repository": repo, "issues": [],
+                "observed_at": ""}
+    return {"read": "partial" if len(rows) >= 100 else "observed", "repository": repo, "issues": issues,
+            "observed_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+
+
+def kept_reds(read: dict | None, stored: dict | None) -> dict | None:
+    """What a check records: its own read, or after a failed read the stored observation of the same
+    repository with its time, never "none open". Called under the letter lock with the record on disk,
+    so a late failure never replaces a fresher observation that another check wrote meanwhile."""
+    if read is None:
+        return stored
+    if (read.get("read") == "unavailable" and isinstance(stored, dict) and stored.get("observed_at")
+            and stored.get("repository") == read.get("repository")):
+        return {**read, "issues": stored.get("issues") or [], "observed_at": stored["observed_at"]}
+    return read
 
 
 def range_qualification(material: dict, repo_url: str) -> dict:

@@ -322,3 +322,12 @@ def test_a_label_the_other_leg_created_meanwhile_is_no_warning():
     routing.ensure_label(refused(422))  # already exists: the other leg won the race
     with pytest.raises(urllib.error.HTTPError):
         routing.ensure_label(refused(403))
+
+
+def test_the_update_reader_asks_for_the_label_the_hand_over_gives():
+    """The update check reads the issues this hand-over labels; renaming one side alone would make
+    every install read "none open" while reds stand."""
+    from ouroboros import update_qualification
+
+    assert update_qualification.RED_LABEL == routing.LABEL
+

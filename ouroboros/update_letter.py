@@ -511,6 +511,9 @@ def _record_check(status: Dict[str, Any], drive_root: Optional[pathlib.Path], gi
         "in_head": _target_in_head(shown_target, checkout_sha, git) if checkout_sha != running_sha else None,
     }
     target_version = _version_at(git, key["target_sha"] or key["base_sha"])
+    from ouroboros.update_qualification import post_merge_reds
+
+    facts["post_merge_reds"] = post_merge_reds(str(status.get("official_repo_url") or ""))
     with _record_lock(drive_root):
         current = read_record(drive_root)
         record = _with_check_facts(current, key, facts, running_sha=running_sha, checkout_sha=checkout_sha,
@@ -553,6 +556,10 @@ def _with_check_facts(current: Optional[Dict[str, Any]], key: Dict[str, str], fa
         record["target_version"] = target_version
     if facts.get("qualification") is not None:
         record["qualification"] = facts["qualification"]
+    from ouroboros.update_qualification import kept_reds
+
+    # A failed read keeps the observation the record holds under the lock, never "none open".
+    record["post_merge_reds"] = kept_reds(facts.get("post_merge_reds"), record.get("post_merge_reds"))
     if facts.get("material_error"):
         record["material_error"] = facts["material_error"]
     else:
@@ -1017,6 +1024,7 @@ def official_update_projection(
                 "update_channel": active_channel, "target": None, "behind": None, "ahead": None,
                 "local_changes": "unknown", "letter": runtime_letter(project_letter(
                     record, head_sha=head, latest_sha="", request=_request_view(record, drive_root, with_status=False))),
+                "post_merge_reds": (record or {}).get("post_merge_reds"),
             }
         latest = str(cache.get("latest_sha") or "")
         checked_head = str((record or {}).get("checked_head_sha") or "")
@@ -1055,6 +1063,7 @@ def official_update_projection(
             "local_changes": str(cache.get("local_changes") or "unknown")
             if head == str(cache.get("checked_head_sha") or "") else "unknown",
             "letter": letter,
+            "post_merge_reds": (record or {}).get("post_merge_reds"),
             # Where the range and the one writer are, for a mind that decides to describe it.
             **({"description_sources": DESCRIPTION_SOURCES} if status == "update_available" else {}),
         }
