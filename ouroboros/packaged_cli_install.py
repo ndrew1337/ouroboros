@@ -236,7 +236,7 @@ def _existing_action(target: pathlib.Path, source: pathlib.Path, *, force: bool)
                 return "refresh"
         except OSError:
             pass
-        if force:
+        if force or not target.exists():  # a dead link (its app moved or was removed) runs nothing
             return "replace"
     else:
         try:
@@ -245,7 +245,7 @@ def _existing_action(target: pathlib.Path, source: pathlib.Path, *, force: bool)
             text = ""
         if text == _windows_shim_text(source):
             return "refresh"
-        if force:
+        if force or _dead_own_shim(text):
             return "replace"
     raise PackagedCLIError(
         f"refusing to overwrite existing non-Ouroboros command: {target}; "
@@ -269,6 +269,13 @@ def _print_plan(plan: InstallPlan, *, dry_run: bool) -> None:
 
 def _windows_shim_text(source: pathlib.Path) -> str:
     return f"@echo off\r\nrem {MARKER}\r\ncall \"{source}\" %*\r\n"
+
+
+def _dead_own_shim(text: str) -> bool:
+    """A ``.cmd`` this installer wrote whose ``call`` target is gone: like a dead link, it runs nothing."""
+    lines = text.splitlines()
+    called = [line[len('call "'):].split('"', 1)[0] for line in lines if line.startswith('call "')]
+    return f"rem {MARKER}" in lines and len(called) == 1 and not pathlib.Path(called[0]).exists()
 
 
 def _resolve_for_compare(path: pathlib.Path) -> pathlib.Path:

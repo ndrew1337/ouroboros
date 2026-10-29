@@ -100,6 +100,20 @@ def autostart_state() -> AutostartState:
     return "on"
 
 
+def follow_moved_app(exe: pathlib.Path) -> bool:
+    """Point the Run entry at ``exe`` when the program it names is gone, keeping its arguments and the
+    StartupApproved switch (``set_autostart`` would clear it); a live other copy stays ``other_copy``."""
+    command = _read_value(RUN_KEY)
+    target, sep, args = command.strip().partition('" ') if isinstance(command, str) else ("", "", "")
+    program = target[1:] if target.startswith('"') else ""
+    if not sep or not program or ntpath.normcase(program) == ntpath.normcase(str(exe)) or os.path.exists(program):
+        return False
+    winreg = _winreg()
+    with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as key:
+        winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, f'"{exe}" {args}')
+    return True
+
+
 def set_autostart(enabled: bool) -> AutostartState:
     """Write or remove the entry; raises OSError when the registry refuses."""
     exe = launcher_path()

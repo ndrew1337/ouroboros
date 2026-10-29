@@ -480,6 +480,49 @@ def test_installer_refuses_unrelated_existing_command(tmp_path):
         plan_posix_install(root, target_dir=target_dir)
 
 
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink install")
+def test_installer_replaces_its_own_dead_link_and_still_refuses_a_live_other_copy(tmp_path):
+    """After the app moved, the earlier command is a dead link: running Install CLI again replaces it."""
+    from ouroboros.packaged_cli import PackagedCLIError
+    from ouroboros.packaged_cli_install import install_posix, plan_posix_install
+
+    root = _make_bundle_root(tmp_path)
+    target_dir = tmp_path / "bin"
+    target_dir.mkdir()
+    (target_dir / "ouroboros").symlink_to(tmp_path / "Desktop" / "Ouroboros.app" / "Contents" / "Resources" / "bin" / "ouroboros")
+    plan = plan_posix_install(root, target_dir=target_dir)
+    assert plan.action == "replace", "the old installer refused its own dead link without --force"
+    install_posix(plan)
+    assert (target_dir / "ouroboros").resolve() == (root / "bin" / "ouroboros").resolve()
+    other = _make_bundle_root(tmp_path, tmp_path / "Other")
+    (target_dir / "ouroboros").unlink()
+    (target_dir / "ouroboros").symlink_to(other / "bin" / "ouroboros")
+    with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
+        plan_posix_install(root, target_dir=target_dir)
+    assert plan_posix_install(root, target_dir=target_dir, force=True).action == "replace"
+
+
+def test_installer_replaces_its_own_cmd_whose_app_is_gone(tmp_path):
+    from ouroboros.packaged_cli import PackagedCLIError
+    from ouroboros.packaged_cli_install import _windows_shim_text, plan_windows_install
+
+    root = _make_bundle_root(tmp_path)
+    (root / "bin" / "ouroboros.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    target_dir = tmp_path / "bin"
+    target_dir.mkdir()
+    shim = target_dir / "ouroboros.cmd"
+    shim.write_text(_windows_shim_text(tmp_path / "Old" / "bin" / "ouroboros.cmd"), encoding="utf-8")
+    assert plan_windows_install(root, target_dir=target_dir).action == "replace"
+    live = _make_bundle_root(tmp_path, tmp_path / "Live")
+    (live / "bin" / "ouroboros.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    shim.write_text(_windows_shim_text(live / "bin" / "ouroboros.cmd"), encoding="utf-8")
+    with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
+        plan_windows_install(root, target_dir=target_dir)
+    shim.write_text('@echo off\r\ncall "C:\\gone\\tool.cmd" %*\r\n', encoding="utf-8")  # someone else's, unmarked
+    with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
+        plan_windows_install(root, target_dir=target_dir)
+
 def test_installer_rejects_macos_dmg_or_translocation_paths():
     from ouroboros.packaged_cli import PackagedCLIError
     from ouroboros.packaged_cli_install import reject_unstable_macos_path

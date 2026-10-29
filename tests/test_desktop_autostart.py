@@ -349,3 +349,44 @@ def test_a_sign_in_start_keeps_a_saved_pause(tmp_path, monkeypatch):
 def test_native_unit_uses_automatic_intent():
     """The unit new deb/rpm packages ship; the adapter enables it only once installed."""
     assert "ExecStart=/opt/ouroboros/Ouroboros --launch-intent automatic" in SHIPPED_UNIT
+
+
+def test_a_launchagent_whose_copy_is_gone_follows_this_one_without_enabling_anything(host, tmp_path):
+    """The app moved or was replaced: the owner's sign-in choice re-points; an OS switch-off and a live copy stay."""
+    package, os_state = host
+    exe = package("darwin")
+    path = tmp_path / "Library/LaunchAgents/com.ouroboros.agent.plist"
+    assert startup.follow_moved_app() is False and not path.exists(), "nothing registered: nothing is created"
+    other = tmp_path / "Desktop/Ouroboros.app/Contents/MacOS/Ouroboros"
+    other.parent.mkdir(parents=True)
+    other.touch()
+    path.parent.mkdir(parents=True)
+    path.write_bytes(plistlib.dumps({"Label": startup.LABEL, "ProgramArguments": [str(other), *startup.AUTOMATIC_ARGS],
+                                     "RunAtLoad": True}))
+    os_state.override = "disabled"
+    assert startup.follow_moved_app() is False and startup.autostart_status() == {"state": "other_copy"}
+    other.unlink()  # that copy went to the Trash
+    assert startup.follow_moved_app() is True
+    entry = plistlib.loads(path.read_bytes())
+    assert entry == {"Label": startup.LABEL, "ProgramArguments": [str(exe), *startup.AUTOMATIC_ARGS], "RunAtLoad": True}
+    assert not [argv for argv in os_state.calls if argv[1] == "enable"], "never launchctl enable"
+    assert startup.autostart_status() == {"state": "disabled_by_os"}, "the owner's OS switch-off stays"
+    assert startup.follow_moved_app() is False
+
+
+def test_an_xdg_entry_whose_appimage_is_gone_follows_the_new_file_and_keeps_its_switch(host, tmp_path, monkeypatch):
+    package, os_state = host
+    exe = package("linux", appimage=True)
+    monkeypatch.setenv("APPIMAGE_EXTRACT_AND_RUN", "1")  # this copy runs FUSE-less; the rewritten entry must too
+    path = tmp_path / ".config/autostart/ouroboros.desktop"
+    path.parent.mkdir(parents=True)
+    old = tmp_path / "Ouroboros-7.8.0 (old).AppImage"
+    path.write_text(f'[Desktop Entry]\nType=Application\nName=Ouroboros\nExec="{old}" --launch-intent automatic\n'
+                    "Terminal=false\nX-GNOME-Autostart-enabled=false\n", encoding="utf-8")
+    old.touch()
+    assert startup.follow_moved_app() is False, "a copy that still exists stays other_copy"
+    old.unlink()
+    assert startup.follow_moved_app() is True
+    assert _exec_argv(path) == [str(exe), "--appimage-extract-and-run", "--launch-intent", "automatic"]
+    assert "X-GNOME-Autostart-enabled=false" in path.read_text(encoding="utf-8")
+    assert startup.autostart_status() == {"state": "disabled_by_os"} and os_state.calls == []
