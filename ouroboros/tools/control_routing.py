@@ -474,7 +474,7 @@ def _close_project(ctx: ToolContext, project_id: str, note: str, reopen: bool = 
     if str(meta.get("delegation_role") or lineage.get("delegation_role") or "") == "subagent":
         return "⚠️ TOOL_ERROR (close_project): subagents inherit the parent's project scope."
     from ouroboros.project_facts import explicit_project_id_ok
-    from ouroboros.project_closure import change_project_closed
+    from ouroboros.projects_registry import update_project
     from supervisor import terminal_delivery as outbox
 
     if not explicit_project_id_ok(project_id) or not isinstance(note, str) or not note.strip() or type(reopen) is not bool:
@@ -485,8 +485,8 @@ def _close_project(ctx: ToolContext, project_id: str, note: str, reopen: bool = 
     root, at = canonical_data_root(ctx), utc_now_iso()
     by = f"ouroboros:{task_id}"
     try:
-        project, changed = change_project_closed(root, project_id,
-                                                None if reopen else {"at": at, "by": by, "note": note.strip()})
+        project, changed = update_project(root, project_id, return_changed=True,
+            closed=None if reopen else {"at": at, "by": by, "note": note.strip()}) or (None, False)
     except Exception as exc:
         return f"⚠️ PROJECTS_ERROR: {type(exc).__name__}: {exc}"
     if project is None:
@@ -495,7 +495,7 @@ def _close_project(ctx: ToolContext, project_id: str, note: str, reopen: bool = 
     if not changed:
         return f"OK: project {project['id']} is already {state}."
     action = "reopened" if reopen else "closed"
-    text = f"Ouroboros ({task_id}) {action} this project at {at}. {note.strip()}"
+    text = f"Ouroboros ({task_id}) {action} this project. {note.strip()}"
     if not reopen:
         text += " A message from you in this room or a new task will reopen it."
     try:

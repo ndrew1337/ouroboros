@@ -50,7 +50,10 @@ def test_closed_is_optional_reversible_metadata_without_a_routing_change(room):
 
 @pytest.mark.parametrize("value", [True, False, "closed", {}, [], {**CLOSED, "by": ""},
                                   {**CLOSED, "at": None}, {**CLOSED, "note": 1}, {**CLOSED, "extra": "x"}])
-def test_malformed_closure_refuses_the_whole_partial_update(room, value):
+@pytest.mark.parametrize("already_closed", [False, True])
+def test_malformed_closure_refuses_the_whole_partial_update(room, value, already_closed):
+    if already_closed:
+        registry.update_project(room, "alpha", closed=CLOSED)
     path = room / "state/projects.json"
     before = path.read_bytes()
     with pytest.raises(ValueError, match="closed"):
@@ -128,9 +131,38 @@ def test_mind_closes_and_reopens_with_one_durable_system_row_per_change(room):
         assert event["role"] == "system" and event["system_type"] == "project_closure"
         assert event["chat_id"] == before["chat_id"] and not event.get("task_id")
         assert "Ouroboros (one)" in event["text"]
-    assert closed["closed"]["at"] in events[0]["text"]
+    assert closed["closed"]["at"] not in events[0]["text"]
     assert "Finished." in events[0]["text"] and "message from you" in events[0]["text"]
     assert "reopened" in events[1]["text"] and "More work." in events[1]["text"]
+
+
+def test_owner_and_mind_share_one_idempotent_closure_transition(room, monkeypatch):
+    ctx = context(room)
+    _close_project(ctx, "alpha", "Finished.")
+    original = registry.get_project(room, "alpha")["closed"]
+    app = Starlette(routes=collect_routes(data_dir=room))
+    app.state.drive_root = room
+    saves, save = [], registry._save
+    monkeypatch.setattr(registry, "_save", lambda *args: (saves.append(True), save(*args))[1])
+    with TestClient(app) as client:
+        assert client.post("/api/projects/alpha/update", json={"closed": True}).json()["project"]["closed"] == original
+        assert "already closed" in _close_project(ctx, "alpha", "A later reason.")
+        assert not saves
+        assert "closed" not in client.post("/api/projects/alpha/update", json={"closed": False}).json()["project"]
+        assert len(saves) == 1
+        assert "already open" in _close_project(ctx, "alpha", "Again.", reopen=True)
+        client.post("/api/projects/alpha/update", json={"closed": False})
+        assert len(saves) == 1
+        saved = client.post("/api/projects/alpha/update", json={"closed": True}).json()["project"]["closed"]
+        assert saved["by"] == "owner"
+        assert "already closed" in _close_project(ctx, "alpha", "Again.")
+        assert registry.get_project(room, "alpha")["closed"] == saved and len(saves) == 2
+
+
+@pytest.mark.parametrize("chat_id", [1, 0, -1, 777, None, "invalid"])
+def test_nonproject_owner_messages_skip_the_registry(room, monkeypatch, chat_id):
+    monkeypatch.setattr(registry, "list_reserved_projects", lambda *a, **kw: pytest.fail("no registry census"))
+    message_ingress.reopen_for_owner_message(room, {"direction": "in", "source": "web", "user_id": 1, "chat_id": chat_id})
 
 
 def test_mind_refusal_and_notice_failure_keep_their_actual_effects(room, monkeypatch):

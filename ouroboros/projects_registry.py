@@ -1036,11 +1036,11 @@ def create_project(
 
 def update_project(
     drive_root: Any, project_id: str, *, only_if_empty: tuple = (),
-    admission_basis: Optional[dict] = None, **updates: Any,
-) -> Optional[Dict[str, Any]]:
+    admission_basis: Optional[dict] = None, return_changed: bool = False, **updates: Any,
+) -> Optional[Dict[str, Any] | tuple[Dict[str, Any], bool]]:
     """Update metadata, including ``closed={at, by, note}`` or None to reopen.
     Provenance/clone_url/trusted_at are historical attach facts, not live Git data.
-    ``only_if_empty`` compares under the writer lock; the caller reads the winner."""
+    ``only_if_empty`` compares under the writer lock; ``return_changed`` also returns whether it wrote."""
     pid = sanitize_project_id(project_id)
     if not pid:
         return None
@@ -1061,6 +1061,7 @@ def update_project(
         for entry in data["projects"]:
             if entry.get("id") != pid or entry.get("lifecycle") != PROJECT_ACTIVE:
                 continue
+            original = dict(entry)
             for key, value in updates.items():
                 if key not in allowed or (key in only_if_empty and str(entry.get(key) or "").strip()):
                     continue
@@ -1074,8 +1075,9 @@ def update_project(
                     apply_closed(entry, value)
                 else:
                     entry[key] = value
-            _save(drive_root, data)
-            return dict(entry)
+            if entry != original:
+                _save(drive_root, data)
+            return (dict(entry), entry != original) if return_changed else dict(entry)
     return None
 
 
