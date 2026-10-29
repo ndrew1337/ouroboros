@@ -208,6 +208,8 @@ class _Call:
         self.session_ended = asyncio.Event()  # set when the current connection is gone
         self.preparing = None
         self.preparing_options = None
+        self.failed_preparation_revision = None
+        self.deferred_tool_outputs = []
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -289,6 +291,7 @@ class _Call:
         self.connection_resumed = self.resume
         self.session_ended = asyncio.Event()
         if not self.resume:
+            self.deferred_tool_outputs.clear()  # completed effects are in this adopted fresh prefix
             if self.host.model.vision:
                 self.attention.seen.clear()  # pixels are transport state; blind frame facts are already in the fit
             self.refit_offers()
@@ -431,6 +434,9 @@ class _Call:
             record(phase)
 
     def request_renewal(self, *, resuming=False, within=None):
+        if (not resuming and self.failed_preparation_revision is not None
+                and self.failed_preparation_revision == getattr(self.host, '_history_version', 0)):
+            return  # only a changed canonical view earns another speculative fit
         if not self.renewing:
             self.timing("requested")
         # A fresh fit wins over a requested resume while the transport is live.
@@ -448,7 +454,39 @@ class _Call:
             self.renewal_deadline = min(self.renewal_deadline, deadline) if self.renewal_deadline else deadline
 
     def preparation_ready(self):
-        return self.preparing is None or self.preparing.done()
+        return self.preparing is None or (self.preparing.done() and not self.preparing.cancelled()
+                                         and self.preparing.exception() is None)
+
+    async def check_preparation(self):
+        task = self.preparing
+        if task is None or not task.done() or not task.cancelled() and task.exception() is None:
+            return
+        self.preparing = None
+        try:
+            await task
+        except RealtimeSetupError as exc:
+            if exc.code == 'prepared_stale':
+                return  # the existing sequential fallback can now take the quiet boundary
+            if exc.code != 'context_capacity':
+                raise  # credentials, quota and policy keep their terminal contract
+        except (OSError, ConnectionClosed) as exc:
+            from ouroboros.realtime_session import transport_loss
+            if transport_loss(exc):
+                return
+            raise
+        self.failed_preparation_revision = getattr(self.host, '_history_version', 0)
+        self.renewing = self.resume = False
+        self.renewal_deadline = None
+        self.host.state.pop('refit', None)
+        self.tool_refit.clear()
+        # Completed effects belong to the call. An unfittable declaration change
+        # still returns its result on the serving connection's existing catalog.
+        pending, self.deferred_tool_outputs = self.deferred_tool_outputs, []
+        for output, offers in pending:
+            if any(row.get('tool_call_id') not in output.silent for row in output.messages if row.get('role') == 'tool'):
+                self.response_open = True
+            await self.send(ToolOutputs(output.messages, tuple(self.session.tools), silent=output.silent))
+            self.pending_offers[:] = [row for row in self.pending_offers if all(row is not offer for offer in offers)]
 
     async def close_preparation(self):
         task, self.preparing = self.preparing, None
@@ -461,11 +499,14 @@ class _Call:
             await result[0].close()
 
     async def refit_boundary(self):
-        await self.tool_refit.wait()
-        # The old native tool obligation is deliberately withheld: it cannot be
-        # the quiet predicate. Actual speech, playback and running effects still are.
-        while not self.refit_ready():
-            await asyncio.sleep(.01)
+        while True:
+            await self.tool_refit.wait()
+            # A failed speculative fit can release the old tool obligation and
+            # clear this request. Its waiter then waits again, never ends the call.
+            while self.tool_refit.is_set() and not self.refit_ready():
+                await asyncio.sleep(.01)
+            if self.tool_refit.is_set():
+                return
 
     def refit_ready(self):
         return (self.preparation_ready() and not self.input_open and not (self.active_responses - self.tool_responses)
@@ -565,6 +606,8 @@ class _Call:
                 await self.rows.join()
                 changes = await self.host.tool_batch(calls)
                 images, silent = self.attention.tool_outputs(calls, changes)
+                for image in images:
+                    await self.host.observe_context(image)  # exact requested pixels survive a fresh engine projection
                 if not self.tool_refit.is_set():
                     await self.connected.wait()
                 # 28.10: Gemini cannot change a live session's declarations; a call that enabled desktop
@@ -575,13 +618,16 @@ class _Call:
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.
+                        offers = []
                         if any(call["id"] not in silent for call in calls):
-                            self.pending_offers.extend(images)
-                            self.pending_offers.append({"role": "user", "content":
+                            offers = [*images, {"role": "user", "content":
                                 "[Host fact; not owner words] The requested tool batch returned; its results are in the fitted history. "
-                                "You may continue from them, act or stay silent; completed effects stay done."})
+                                "You may continue from them, act or stay silent; completed effects stay done."}]
+                            self.pending_offers.extend(offers)
                         self.request_renewal()
                         self.tool_refit.set()
+                        self.deferred_tool_outputs.append((ToolOutputs(tuple(changes) + tuple(images),
+                            tuple(self.host.schemas), silent=silent), offers))
                     # A deliberate goodbye needs only playback, no further
                     # native result or connection that could cut it short.
                 else:
@@ -730,6 +776,7 @@ class _Call:
         # Awaiting those store reads here makes owner audio queue and overflow.
         while True:
             self.track_offer_wait()
+            await self.check_preparation()
             if self.hub.closed or self.hub.ended_by_owner:
                 return
             if self.provider_closed:

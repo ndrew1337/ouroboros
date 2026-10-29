@@ -32,7 +32,9 @@ def test_presence_selected_input_has_one_labelled_opening_across_connections(hos
         openings = [row for row in rows if turn.opening in str(row.get('content'))]
         assert len(openings) == 1
         assert "[Host fact: a live call opened; not the owner's words]" in openings[0]['content']
-        assert openings[0]['_host_context_kind'] == 'call_open'
+        assert '_host_context_kind' not in openings[0]
+        assert any(row.get('_host_context_kind') == 'call_open' and turn.opening in str(row.get('content'))
+                   for row in host.messages)
         assert any('[Observed Presence event]' in str(row.get('content')) and
                    'The meeting participant joined.' in str(row.get('content')) for row in rows)
     async def run():

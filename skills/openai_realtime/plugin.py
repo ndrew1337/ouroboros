@@ -34,12 +34,6 @@ CATALOG = ProviderCatalog(
         honours=frozenset({"pause", "interruptions", "languages", "thinking"}),
         notes=(("search", "OpenAI Realtime has no built-in search here."),)),))
 
-# Host bookkeeping is retained in RealtimeInput, not model text. Unknown fields
-# (including name/tool_calls) refuse instead of quietly losing their semantics.
-_MESSAGE_METADATA = {
-    "_stable_prefix_blocks", "_host_context_kind", "_host_text_sha256",
-    "_review_history_source", "_review_context_index",
-}
 # Session and response ``max_output_tokens`` accept an integer 1-4096 or "inf",
 # the model's maximum (API reference, Realtime, read 2026-10-20). That is field
 # encoding, not the model's output capability, which stays route evidence.
@@ -51,7 +45,9 @@ _ITEM_TEXT_MAX = 256000
 
 
 def _parts(message):
-    if not isinstance(message, dict) or set(message) - {"role", "content", *_MESSAGE_METADATA}:
+    from ouroboros.llm_messages import project_wire_messages
+    message = project_wire_messages([message])[0]
+    if not isinstance(message, dict) or set(message) - {"role", "content"}:
         raise RealtimeSetupError("message_shape", "unsupported message fields")
     role = message.get("role")
     if role not in {"system", "user", "assistant"}:

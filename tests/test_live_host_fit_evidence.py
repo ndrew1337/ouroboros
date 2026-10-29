@@ -44,8 +44,9 @@ def test_refused_fit_is_durable_before_error_and_fitting_candidate_stays_quiet(h
     assert measured['rendered_mode'] == 'nano'
     assert measured['capacity_total_tokens'] == raw + 9999
     assert measured['response_reserve_tokens'] == 10000
-    assert measured['estimated_input_tokens'] == measured['raw_input_tokens'] == raw
-    assert event['refusal']['free_tokens'] == -1 and event['deficit_tokens'] == 2
+    assert measured['estimated_input_tokens'] == measured['raw_input_tokens']
+    free = measured['capacity_total_tokens'] - measured['raw_input_tokens'] - 10000
+    assert free < 0 and event['refusal']['free_tokens'] == free and event['deficit_tokens'] == -free + 1
     assert host.trace['fit_refusal'] == event
     manifest, payload, _ = read_call_payload(host.ctx.drive_root, task_id=host.ctx.task_id,
                                             call_id=event['manifest_ref']['call_id'])
@@ -55,7 +56,10 @@ def test_refused_fit_is_durable_before_error_and_fitting_candidate_stays_quiet(h
     assert not any(session.opened for session in host_world.sessions)
     assert read_usage_records(host.ctx.drive_root) == []
 
-    host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=raw + 10001))
+    # The new passive row describes this candidate's window, so its own bytes
+    # vary with that window and must be included in the fitting control too.
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=measured['raw_input_tokens'] + 10000 + 500))
     async def allowed(session):
         assert session.opened
     asyncio.run(host.session(allowed, LiveOptions()))

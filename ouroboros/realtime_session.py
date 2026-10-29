@@ -7,6 +7,7 @@ a connection that was interrupted before it finished opening.
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import string
 
@@ -75,6 +76,21 @@ class JsonSession:
         self.connect, self.observe = connect, observe
         self.ws = self.connection = None
         self._send_lock = asyncio.Lock()
+        self.held_context_rows = json.loads(getattr(selected, "messages_json", "[]"))
+        self.response_context_rows = {}
+
+    def hold_context(self, rows):
+        """Adapter delivery boundary, after a successful native write, never on queueing."""
+        self.held_context_rows.extend(copy.deepcopy(list(rows)))
+
+    def capture_response_context(self, response_id):
+        # Snapshot before a turn-complete handler releases queued updates. Those
+        # later writes cannot borrow the answer that just ended as exposure.
+        self.response_context_rows[response_id] = list(self.held_context_rows)
+
+    def hold_tool_call(self, call_id, name, arguments):
+        self.hold_context([{'role': 'assistant', 'content': '', 'tool_calls': [
+            {'id': call_id, 'type': 'function', 'function': {'name': name, 'arguments': arguments}}]}])
 
     async def connect_wire(self):
         self.connection = self.connect(self.selected.model)

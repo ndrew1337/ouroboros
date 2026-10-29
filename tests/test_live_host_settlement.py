@@ -213,7 +213,7 @@ def test_response_reservation_survives_resumed_connection(host_world, abandonmen
     assert row['cost_evidence']['response_key'] == 'resumed-answer'
     assert row['state'] == 'settled' and row['cost_usd'] == pytest.approx(.012)
     assert not abandonments and not host.responses
-    assert host.connection_number == 2 and all(session.closed for session in host_world.sessions)
+    assert host.connection_number == 2 and all(session.closed for session in host_world.sessions if session.opened)
 
 
 def test_unfinished_response_is_abandoned_once_at_call_end(host_world, abandonments):
@@ -271,7 +271,9 @@ def test_failed_reopen_abandons_response_during_call_teardown(host_world, abando
     assert row['state'] == 'unresolved' and row['reason'] == 'call_ended_without_receipt'
     assert abandonments == [('unfinished-resume', 'call_ended_without_receipt')]
     assert not observed['port'].responses
-    assert all(session.closed for session in host_world.sessions)
+    assert all(session.closed for session in host_world.sessions if session.opened)
+    if failure_stage == 'open':
+        assert host_world.sessions[-1].closed  # failed open owns cleanup too
 
 
 @pytest.mark.parametrize('resumed', [False, True])

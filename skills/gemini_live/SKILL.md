@@ -1,7 +1,7 @@
 ---
 name: gemini_live
 description: Gemini native Live audio and image provider for Live Conversation.
-version: 0.1.13
+version: 0.1.14
 type: extension
 runtime: python3
 entry: plugin.py
@@ -69,3 +69,5 @@ necessary to verify the deployed dialect and the labelled retention hypotheses.
 
 This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
+
+Host-only bookkeeping is absent from the structured wire projection; content strings stay exact. Delivered setup and update rows become exposure evidence only at a usable response, before queued updates are released. Host fitting owns the shared remedies and exact physical-cut checkpoints; the provider does not choose a memory horizon.

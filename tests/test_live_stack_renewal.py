@@ -47,16 +47,23 @@ def test_full_stack_host_window_renews_with_pending_canonical_facts(host_world, 
     asyncio.run(scenario())
 
 
-def test_full_stack_oversized_canonical_input_refuses_physically_instead_of_reconnecting_forever(host_world, monkeypatch):
+def test_full_stack_unfit_speculative_successor_keeps_serving_without_reconnecting_forever(host_world, monkeypatch):
     async def scenario():
         async with stack(host_world, monkeypatch, 'grok') as run:
             text = 'Synthetic pending room evidence. ' * 12000
             run.mail.put({'text': text, 'msg_id': 'physical-overflow'})
-            await asyncio.wait_for(asyncio.shield(run.running), 15)
-        assert run.result[1]['reason_code'] == 'context_capacity'
-        assert run.result[1]['execution_status'] == 'infra_failed'
-        assert any(text in str(r) for r in run.host.messages), 'physical refusal may not shorten owner words'
-        assert len(run.provider.connections) == 1, 'overflow is refused before another provider connection'
+            await run.wait(lambda: run.call.failed_preparation_revision is not None and not run.call.renewing)
+            assert not run.running.done()
+            count = len(run.host.timing['connections'])
+            audio = len(run.wire.audio)
+            await run.wait(lambda: len(run.wire.audio) > audio + 4800)
+            assert len(run.host.timing['connections']) == count, 'an unchanged view cannot spin speculative fits'
+            run.provider.script.append(('say', 'The serving voice still answers.'))
+            await run.owner_says('I am still here.')
+            await run.wait(lambda: any(r.get('text') == 'The serving voice still answers.' for r in run.page.controls))
+        assert run.result[1]['execution_status'] == 'ok', run.result
+        assert any(text in str(r) for r in run.host.messages), 'a failed fit may not shorten the newest owner words'
+        assert len(run.provider.connections) == 1, 'an unfit successor never opens or retires the serving socket'
         assert run.result[2]['fit_refusal']['deficit_tokens'] > 0
     asyncio.run(scenario())
 

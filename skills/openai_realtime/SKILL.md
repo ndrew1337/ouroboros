@@ -1,7 +1,7 @@
 ---
 name: openai_realtime
 description: OpenAI native Realtime audio, images and tools over the host's ordinary selected context.
-version: 0.1.8
+version: 0.1.9
 type: extension
 runtime: python3
 entry: plugin.py
@@ -46,3 +46,5 @@ xhigh); the ten built-in voices remain available.
 
 This provider declares silent context updates: fitted catch-up history with
 `respond=False` does not open an answer, allowing the host to prepare a successor.
+
+Host-only bookkeeping is absent from the structured wire projection; content strings stay exact. Delivered setup and update rows become exposure evidence only at a usable response, before queued updates are released. Host fitting owns the shared remedies and exact physical-cut checkpoints; the provider does not choose a memory horizon.

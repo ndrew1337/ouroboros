@@ -101,7 +101,8 @@ class Attention:
                     images.append({'role': 'user', '_call_frame_source': source, '_call_frame_digest': digest, 'content': [
                         {'type': 'text', 'text': f'[attend result; peer {source}; exact frame: {path or "not saved"}]'},
                         {'type': 'image_url', 'image_url': {'url': 'data:' + frame.mime + ';base64,'
-                            + base64.b64encode(frame.data).decode()}, '_source_path': path}]})
+                            + base64.b64encode(frame.data).decode()}, '_source_path': path,
+                            '_capture_source': 'attend:' + source}]})
                     self.seen[source] = digest
                 elif self.host.model.vision:
                     frames[-1]['already_visible'] = True

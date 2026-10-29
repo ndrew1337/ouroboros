@@ -372,6 +372,7 @@ class GeminiSession(JsonSession):
                     await self.write({'toolResponse': {'functionResponses': [self.tool_results[cid]]}})
             else:
                 self.seen_calls[cid] = identity
+                self.hold_tool_call(cid, call['name'], canonical_json(call.get('args', {})))
                 calls.append(call)
         native_response = event.get('responseId', '')
         replayed_response = native_response and native_response in self.completed_responses
@@ -508,6 +509,7 @@ class GeminiSession(JsonSession):
                 self.last_done = {'response_id': self.response, 'usage': usage,
                     'raw_usage': dict(self.usage), 'status': 'interrupted' if self.interrupted else 'completed',
                     'continues': self.turn_busy}
+                self.capture_response_context(self.response)
                 result.append(LiveEvent('response_done', self.last_done))
                 result.extend(self.retention_renewal(usage))
                 self.response_complete = True
@@ -593,6 +595,9 @@ class GeminiSession(JsonSession):
                     other.append(message)
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
+                ids = {r['id'] for r in responses}
+                self.hold_context([row for row in command.messages if row.get('tool_call_id') in ids
+                                   or any(c.get('id') in ids for c in row.get('tool_calls', ()))])
                 # Committed once written: a write that met a closed socket leaves the call
                 # owed, and the resumed connection delivers the same result (R19-2).
                 for response in responses:
@@ -620,8 +625,8 @@ class GeminiSession(JsonSession):
                     # inline image part, as at setup; JSON text would carry its base64 as words (I1-gemini F1).
                     records = []
                     for message in command.messages:
-                        # Underscored keys are the host's own delivery marks, not conversation content.
-                        record = {key: value for key, value in message.items() if not str(key).startswith('_')}
+                        from ouroboros.llm_messages import project_wire_messages
+                        record = project_wire_messages([message])[0]
                         if isinstance(record.get('content'), list):
                             shaped = []
                             for part in record['content']:
@@ -637,6 +642,8 @@ class GeminiSession(JsonSession):
                         self.input_modalities.add('image')
                 await self.write({'clientContent': {'turns': [{'role': 'user', 'parts': [{'text': text}, *images]}],
                     'turnComplete': respond}})
+                if isinstance(command, ContextUpdate):
+                    self.hold_context(command.messages)
         else:
             raise RealtimeSetupError('command', 'unsupported Gemini live command')
 

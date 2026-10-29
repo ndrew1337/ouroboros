@@ -228,6 +228,7 @@ class OpenAISession(JsonSession):
                     if item["type"] == "function_call_output":
                         self.waiting_tools.discard(item["call_id"])
                     await self.create_host_item(item, source=source)
+                self.hold_context(command.messages)
                 self.want_response |= (not isinstance(command, ContextUpdate) or command.respond) and any(item["type"] != "function_call_output" or
                     not isinstance(command, ToolOutputs) or item["call_id"] not in command.silent for item, _ in outgoing)
             if (self.want_response and not self.context_queue and not self.outstanding
@@ -360,6 +361,7 @@ class OpenAISession(JsonSession):
                 for owned in [key for key, owner in self.item_responses.items() if owner == rid]:
                     self.output_transcripts.discard(owned)
                     del self.item_responses[owned]
+            self.capture_response_context(rid)
             events = [LiveEvent("response_done", {"usage": _usage(response), "raw_usage": response.get("usage") or {},
                 "response_id": rid, "status": status, "continues": False})]
             # A failed response still reports usage before the host stops it.
@@ -368,6 +370,7 @@ class OpenAISession(JsonSession):
             for output in response.get("output", []) if response.get("status") == "completed" else ():
                 if output.get("type") == "function_call":
                     self.waiting_tools.add(output["call_id"])
+                    self.hold_tool_call(output['call_id'], output['name'], output['arguments'])
                     events.append(LiveEvent("tool_call", {"call_id": output["call_id"], "name": output["name"],
                                                           "arguments": output["arguments"]}))
             return events

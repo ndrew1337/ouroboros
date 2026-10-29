@@ -25,6 +25,7 @@ def test_late_frame_gets_one_start_room_only_on_the_first_full_candidate(host_wo
     window = math.ceil((initial + 10000) / .94)
     host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=window))
     host._session_opened = not first
+    previous_system = host.messages[0]
     _, _, after = session_candidate(host, factory, options)
     measured, room = after['fit']['measurement'], after['work_room']
     assert room['first_send'] is first
@@ -35,7 +36,9 @@ def test_late_frame_gets_one_start_room_only_on_the_first_full_candidate(host_wo
         assert measured['estimated_input_tokens'] < initial
         assert room['remaining_tokens'] >= math.ceil(window / 8)
     else:
-        assert measured['estimated_input_tokens'] == initial
+        assert host.messages[0] == previous_system, 'renewal may not buy another start room by narrowing memory'
+        _, actual, _, _ = measure_session_wire(host, host.plan, host.messages, host.schemas, factory, options, _room_fact=False)
+        assert measured['estimated_input_tokens'] == actual.prompt_tokens_estimate
         assert room['remaining_tokens'] < math.ceil(window / 8)
 
 

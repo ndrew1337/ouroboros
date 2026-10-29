@@ -10,7 +10,7 @@ def pending_context_view(host):
 
 
 def record_session_view(host, evidence, manifest_ref):
-    """Only an opened connection exposes a new canonical prefix to the mind."""
+    """An opened connection supplies inspect; a usable response establishes exposure."""
     from ouroboros.tools.compact_context import record_context_view
 
     record_context_view(host.ctx, host.messages, host.schemas, fit_measurement=evidence['fit']['measurement'])
@@ -24,6 +24,31 @@ def record_session_view(host, evidence, manifest_ref):
     if receipt and receipt.get('status') == 'applied':
         receipt['sent_fit'] = {**evidence['fit']['measurement'], 'wire_sha256': evidence['wire_sha256']}
     host._session_opened = True
+
+
+def record_live_exposure(view, response_id):
+    """Usable answers expose only rows delivered by this adopted connection.
+
+    Native adapters add rows after their delivery boundary, never while commands
+    are queued behind speech. A speculative or retired connection cannot teach
+    the current observed view. Setup alone still supplies inspect, not exposure.
+    """
+    from ouroboros.context_compaction import exposed_context_units
+    from ouroboros.tools.compact_context import record_context_view
+    owner = getattr(view, '_connection_owner', view)
+    session = getattr(view, '_context_session', None)
+    if session is None or getattr(owner, '_connection_view', view) is not view:
+        return
+    held = getattr(session, 'response_context_rows', {}).pop(response_id, None)
+    if held is None:
+        return  # older plugins supply no delivery evidence; unknown stays unknown
+    previous = getattr(owner.ctx, '_last_context_observation', {}) or {}
+    record_context_view(owner.ctx, owner.messages, owner.schemas,
+                        fit_measurement=previous.get('fit_measurement'))
+    owner.ctx._last_context_observation.update(
+        exposed_units=list(exposed_context_units(owner.messages, held)), exposure_basis='live_delivered_rows',
+        **{key: previous[key] for key in ('work_room', 'physical_source_ref') if key in previous})
+    view.ctx._last_context_observation = copy.deepcopy(owner.ctx._last_context_observation)
 
 
 def apply_context_view(host):

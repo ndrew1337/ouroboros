@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.18
+version: 0.1.19
 type: extension
 runtime: python3
 entry: plugin.py
@@ -54,6 +54,8 @@ provider refusals still end typed, and repeated unanswered drops remain bounded.
 The waiting successor keeps reading and metering into the shared limit; its events
 wait for adoption. Overlap has no separate time bound and adds connected seconds
 at the captured route tariff. Current options and account scope are checked at
-the switch. Only transport failure or a stale fit falls back; typed refusals end
+the switch. Transport failure or a stale fit falls back; provider refusals end
 without another attempt. Committed room mail keeps its answer opportunity across
 a handoff, and an interrupted answer proves the connection just as a completed one does.
+
+Fresh candidates use the shared transcript remedies before the final physical window cut: oldest delivered whole rows move to exact checkpoint addresses; core, assignment, notes, newest owner turn and current tail stay. A failed speculative fit keeps the serving connection and retries only after canonical change. Owner Nano batches more than four images to two; Max/Low keep the ten-to-five batch. Earlier same-source frames are captioned by the fresh engine projection; canonical originals remain readable.

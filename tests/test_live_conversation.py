@@ -296,7 +296,8 @@ def test_real_books_call_uses_ordinary_owner_mode_and_window_ladder(host_world):
                                                 start_mode='max', select_mode='low')
         ordinary = ordinary.reproject_for_route(**{**args, 'current_messages': ordinary.reproject_transcript(projected, 'low')},
                                                 start_mode='low')
-    expected = ordinary.reproject_transcript(host.messages, ordinary.initial_mode)[0]
+    from ouroboros.llm_messages import project_wire_messages
+    expected = project_wire_messages(ordinary.reproject_transcript(host.messages, ordinary.initial_mode))[0]
     expected_tools = initial_tool_schemas(host.tools, context_mode=ordinary.initial_mode)
     expected_tools.extend(schema for schema in host.schemas if schema['function']['name'] in host.call_tools)
 
@@ -314,28 +315,24 @@ def test_real_books_call_uses_ordinary_owner_mode_and_window_ladder(host_world):
 
 
 def test_every_session_refits_current_canonical_rows_and_options(host_world, monkeypatch):
-    from ouroboros.context_fit import ContextFitPlan
     from ouroboros.contracts.live_conversation import LiveOptions
     host = host_world.host
-    refits = []
-    original = ContextFitPlan.reproject_for_route
-    def refit(plan, **kwargs):
-        refits.append(json.loads(json.dumps(kwargs['current_messages'])))
-        return original(plan, **kwargs)
-    monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', refit)
+    opened = []
     async def consume(session):
         assert session.opened
+        opened.append(session)
     async def run():
         await host.session(consume, LiveOptions(instructions='Feature then owner instructions', languages=('ru-RU',)))
         await host.observe_context({'content': 'NEW PEER FACT'})
         await host.session(consume, LiveOptions(instructions='Updated instructions'))
     asyncio.run(run())
-    assert len(refits) == 2
-    assert 'NEW PEER FACT' not in canonical(refits[0]) and 'NEW PEER FACT' in canonical(refits[1])
-    assert 'Feature then owner instructions' in canonical(refits[0])
-    assert all(session.closed for session in host_world.sessions)
-    assert host_world.sessions[0].options.languages == ('ru-RU',)
-    assert host.messages[-1]['_host_context_kind'] == 'call_observation'
+    assert len(opened) == 2
+    assert 'NEW PEER FACT' not in canonical(opened[0].wire) and 'NEW PEER FACT' in canonical(opened[1].wire)
+    assert 'Feature then owner instructions' in canonical(opened[0].wire)
+    assert 'Updated instructions' in canonical(opened[1].wire)
+    assert all(session.closed for session in opened)
+    assert opened[0].options.languages == ('ru-RU',)
+    assert any(row.get('_host_context_kind') == 'call_observation' for row in host.messages)
 
 
 def canonical(value):
@@ -349,6 +346,11 @@ def test_physical_dispatch_minus_one_refuses_and_positive_passes(host_world, mon
     from ouroboros.realtime_setup import session_candidate
     host = host_world.host
     host.model = replace(host.model, facts=replace(host.model.facts, basis='estimator'))
+    # Freeze the passive window sentence here so changing W alone tests the
+    # exact +/-1 guard, independently of the digits printed in the facts row.
+    from ouroboros.context_budget import bound_host_row
+    monkeypatch.setattr('ouroboros.context_measurement.room_fact',
+        lambda *a, **kw: bound_host_row('ouroboros_context_facts', 'Fixture room facts.'))
     # An irreducible ordinary projection: the physical guard must still refuse.
     monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', lambda plan, **kw: plan)
     _, request, _ = session_candidate(host, host_world.provider['session'], LiveOptions())

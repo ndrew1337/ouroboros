@@ -40,7 +40,8 @@ def test_first_nano_manifest_includes_frame_and_feature_tools_and_prices_them(ho
         assert added > 0
         async def inspect(session):
             rows = json.loads(session.selected.messages_json)
-            [notice] = [r['content'] for r in rows if r.get('_host_context_kind') == 'tool_manifest']
+            assert all('_host_context_kind' not in row for row in rows)
+            [notice] = [r['content'] for r in host.messages if r.get('_host_context_kind') == 'tool_manifest']
             assert f'Loaded now ({len(names)}):' in notice and 'Not loaded does not mean unavailable.' in notice
             assert all(name in notice for name in names)
             assert 'cover most tasks' not in notice and 'core tools' not in notice
@@ -54,7 +55,8 @@ def test_first_nano_manifest_includes_frame_and_feature_tools_and_prices_them(ho
                 'name': 'enable_tools', 'arguments': '{"tools":"read_file"}'}}])
         async def reloaded(session):
             rows = json.loads(session.selected.messages_json)
-            [notice] = [r['content'] for r in rows if r.get('_host_context_kind') == 'tool_manifest']
+            assert all('_host_context_kind' not in row for row in rows)
+            [notice] = [r['content'] for r in host.messages if r.get('_host_context_kind') == 'tool_manifest']
             sent = json.loads(session.selected.tools_json)
             assert len(sent) == len(names) + 1
             assert f'Loaded now ({len(sent)}):' in notice and 'read_file' in notice

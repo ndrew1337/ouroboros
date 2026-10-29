@@ -651,6 +651,9 @@ class ConversationHost:
         self.observe("response", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
         self._record_text_density(key, usage, raw_usage)
+        if status in {"completed", "interrupted"}:
+            from ouroboros.live_context_view import record_live_exposure
+            record_live_exposure(self, key)
         if status == "completed":
             from ouroboros.realtime_setup import observe_live_input
             observe_live_input(self, raw_usage)
@@ -731,7 +734,12 @@ class ConversationHost:
     async def observe_context(self, row):
         from ouroboros.context_budget import bound_host_row
         async with self._tools_lock:
-            self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
+            if isinstance(row.get('content'), list):
+                from ouroboros.loop_messages import _evict_stale_image_blocks
+                self.messages.append({**copy.deepcopy(row), '_host_context_kind': 'call_observation'})
+                _evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode)
+            else:
+                self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
             self._context_changed()
 
     def timing_event(self, event, *, at=None):
@@ -771,7 +779,7 @@ class ConversationHost:
             silent = [call["id"] for call in calls if (self.call_tools.get(call["function"]["name"]) is not None
                        and self.call_tools[call["function"]["name"]].silent)]
             if not fresh:
-                return ToolBatch(cached, silent=silent)
+                return ToolBatch(rows_for_engine(cached, vision=self.model.vision), silent=silent)
             await self.check()
 
             async def run():
@@ -811,14 +819,13 @@ class ConversationHost:
                     self.messages.append({"role": "tool", "tool_call_id": call["id"], "content": str(result)})
                     self._context_changed()
                     self.trace["tool_calls"].append({"name": tool.name, "call_id": call["id"], "result": str(result)})
-                changes = rows_for_engine([copy.deepcopy(row) for i, row in enumerate(self.messages)
-                                           if i >= len(before) or sha256(canonical_json(row)) != before[i]],
-                                          vision=self.model.vision)
+                changes = [copy.deepcopy(row) for i, row in enumerate(self.messages)
+                           if i >= len(before) or sha256(canonical_json(row)) != before[i]]
                 for call in fresh:
                     self.executed[call["id"]] = (canonical_json(call), [
                         row for row in changes if row.get("tool_call_id") == call["id"]])
                 await joined(asyncio.to_thread(self.checkpoint, "post_batch"))
-                return ToolBatch(cached + changes, silent=silent)
+                return ToolBatch(rows_for_engine(cached + changes, vision=self.model.vision), silent=silent)
 
             job = asyncio.create_task(run())
             self.tool_jobs.add(job)
@@ -919,6 +926,11 @@ class ConversationHost:
                 if speaker == "ouroboros" and not completed:
                     prefix = "[Generated speech; " + ("interrupted" if interrupted else "playback unconfirmed") + "] "
                 message = {"role": "assistant" if speaker == "ouroboros" else "user", "content": prefix + text}
+                from ouroboros.context_budget import HOST_CONTEXT_KIND_KEY
+                if speaker == "owner" and not heard:
+                    message[HOST_CONTEXT_KIND_KEY] = "owner_words"
+                elif speaker == "ouroboros" and completed:
+                    message[HOST_CONTEXT_KIND_KEY] = "owner_dialogue"
                 self.messages.append(message)
                 self.captioned[key] = dict(text=text, message=message, prefix=prefix, seq=retained["seq"],
                     stored_prefix="Heard in the call: " if heard and speaker != "ouroboros" and not self.turn.spec.presence_binding_id else "")

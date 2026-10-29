@@ -276,7 +276,8 @@ class GrokSession(JsonSession):
             while self.context_queue and not self.outstanding and self.session_update is None:
                 command = self.context_queue.pop(0)
                 update = {}
-                system_rows = [{'position': i, 'message': message} for i, message in enumerate(command.messages)
+                from ouroboros.llm_messages import project_wire_messages
+                system_rows = [{'position': i, 'message': message} for i, message in enumerate(project_wire_messages(command.messages))
                                if message.get('role') == 'system']
                 if system_rows:
                     for row in system_rows:
@@ -302,6 +303,7 @@ class GrokSession(JsonSession):
                         await self.write({'type': 'conversation.item.create', 'item': item})
                         self.want_response |= (not isinstance(command, ContextUpdate) or command.respond) and (item['type'] != 'function_call_output' or
                             not isinstance(command, ToolOutputs) or item['call_id'] not in command.silent)
+                self.hold_context(command.messages)
             if (self.want_response and not self.context_queue and not self.outstanding
                     and self.session_update is None and not self.speech_active and not self.waiting_tools):
                 self.want_response, self.response_requested = False, True
@@ -312,6 +314,7 @@ class GrokSession(JsonSession):
         if call_id in self.tool_calls:
             return []
         self.tool_calls.add(call_id)
+        self.hold_tool_call(call_id, call['name'], call['arguments'])
         self.waiting_tools.add(call_id)
         return [LiveEvent('tool_call', {'call_id': call_id, 'name': call['name'], 'arguments': call['arguments']})]
 
@@ -417,6 +420,7 @@ class GrokSession(JsonSession):
                 for owned in [key for key, owner in self.item_responses.items() if owner == rid]:
                     self.output_transcripts.discard(owned)
                     del self.item_responses[owned]
+            self.capture_response_context(rid)
             events = [LiveEvent('response_done', {'response_id': rid, 'usage': usage, 'raw_usage': raw,
                                                 'status': status, 'continues': False})]
             for call in response.get('output', []) if response.get('status') in {None, 'completed'} else ():

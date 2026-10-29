@@ -140,6 +140,11 @@ class PreparedConnection:
                 return session_candidate(view, self.provider['session'], self.options, observation_fp=credentials.scope)
         # The heavy ordinary ladder runs off the media loop on a private context.
         self.session, self.request, evidence = await joined(asyncio.to_thread(fit))
+        view._context_session = self.session
+        if self.options.resume_handle:
+            previous = getattr(getattr(self.host, '_connection_view', None), '_context_session', None)
+            if previous is not None and hasattr(previous, 'held_context_rows') and hasattr(self.session, 'held_context_rows'):
+                self.session.held_context_rows = copy.deepcopy(previous.held_context_rows)
         self.host.timing_event('fit_done')
         self.connection['context_ready_at'] = time.time()
         self.host.timing.setdefault('context_ready_at', self.connection['context_ready_at'])
@@ -172,7 +177,9 @@ class PreparedConnection:
             evidence, manifest = view._prepared_view
             if tail:
                 _, request, evidence, _ = await joined(asyncio.to_thread(measure_session_wire,
-                    view, view.plan, [*view.messages, *tail], view.schemas, self.provider['session'], self.options))
+                    view, view.plan, [*rows_for_engine(view.messages, vision=host.model.vision,
+                        fresh=not self.options.resume_handle), *tail], view.schemas, self.provider['session'], self.options,
+                    _room_fact=False, fresh=False))
                 if main_context_fit_refusal(request) is not None:
                     raise RealtimeSetupError('prepared_stale', 'new canonical rows need the ordinary ladder again')
                 measured = evidence['fit']['measurement']
@@ -233,6 +240,7 @@ class PreparedConnection:
                 view = self.view = copy.copy(host)
                 view._connection_owner, view._connection_view = host, None
                 view.ctx, view.tools = copy.copy(host.ctx), copy.copy(host.tools)
+                view.ctx._last_context_observation = copy.deepcopy(getattr(host.ctx, '_last_context_observation', None))
                 view.messages, view.schemas = copy.deepcopy(self.source), copy.deepcopy(self.source_schemas)
                 view.ctx.messages, view.tools._ctx = view.messages, view.ctx
                 view.tools._handler_overrides = dict(host.tools._handler_overrides)

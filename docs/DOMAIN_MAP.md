@@ -10,7 +10,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 |---|---|---:|---:|
 | D01 | Agent core & main loop | 62 | 0 |
 | D02 | LLM client, routing & providers | 47 | 0 |
-| D03 | Context assembly, fit & compaction | 30 | 0 |
+| D03 | Context assembly, fit & compaction | 31 | 0 |
 | D04 | Tool execution: registry, access & typed results | 24 | 0 |
 | D05 | Tool surfaces: files, code, shell, media, external | 46 | 0 |
 | D06 | Review stack | 95 | 0 |
@@ -28,7 +28,7 @@ The manifest is the SSOT of the module→domain assignment (1:1, complete over t
 | D18 | Launcher, packaging, platform & shared substrate | 37 | 0 |
 | D19 | Frozen contracts (ABI) | 16 | 0 |
 | D20 | Presence | 22 | 0 |
-| **total** | | **949** | **0** |
+| **total** | | **950** | **0** |
 
 ## Dependency direction matrix (strict, pinned)
 
@@ -324,6 +324,7 @@ No function body (≥ 10 normalized lines) is shared verbatim across domains. Ne
 - `ouroboros/context_compaction.py`
 - `ouroboros/context_fit.py`
 - `ouroboros/context_health.py`
+- `ouroboros/context_images.py`
 - `ouroboros/context_input_selection.py`
 - `ouroboros/context_layout.py`
 - `ouroboros/context_measurement.py`

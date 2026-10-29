@@ -1351,7 +1351,13 @@ def _maybe_auto_attach_image(
         observation = {"status": "unavailable"}
         from ouroboros.tools.vision import attach_local_image_to_context
 
-        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None), observation=observation)
+        # The producer's typed capture target, never the output filename or pixels.
+        target = parsed.get("auto_attach_source")
+        if target is None and isinstance(parsed.get("display"), dict):
+            target = parsed["display"].get("index")
+        source = json.dumps([exec_result["fn_name"], target], sort_keys=True) if target not in (None, "") else ""
+        ok, note = attach_local_image_to_context(ctx, path, stamp=getattr(tools, "_ctx", None),
+                                               observation=observation, **({"capture_source": source} if source else {}))
         observation["status"] = "attached" if ok else "unavailable"
         if not ok:
             observation["reason"] = note
