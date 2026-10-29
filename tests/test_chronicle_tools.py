@@ -738,11 +738,11 @@ def test_mark_view_and_release_including_an_imported_nomination(tmp_path):
     listed = _memory_read(ctx)
     assert "visibility meaning" in listed and "quote: verbatim words" not in listed
     assert "legacy-nomination-0123456789abcdef" in listed  # a global mark is in every room
-    released = json.loads(_memory_mark(ctx, release_id="legacy-nomination-0123456789abcdef",
+    released = json.loads(_memory_mark(ctx, release_ids=["legacy-nomination-0123456789abcdef"],
                                        reason="published the note myself"))
     assert released["ok"] and released["operation"] == "mark_release"
     assert [m["id"] for m in store.active_marks("1")] == [mark["mark_id"]]
-    assert json.loads(_memory_mark(ctx, release_id=mark["mark_id"]))["reason"] == "invalid"  # a reason is required
+    assert json.loads(_memory_mark(ctx, release_ids=[mark["mark_id"]]))["reason"] == "invalid"  # a reason is required
 
 
 # --- host facts helpers and boundaries ------------------------------------------------------------

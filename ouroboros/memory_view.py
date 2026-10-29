@@ -1113,7 +1113,7 @@ def _late_reviews_text(marks: List[Dict[str, Any]], role: str) -> str:
         if late.get("own_room") is False:
             lines.append(f"- [{mark['room']}] Late review of task {late['task_id']}: {late['source']}")
             continue
-        release = "" if helper else f"; memory_mark(release_id='{mark['id']}', reason=…)"
+        release = "" if helper else f"; memory_mark(release_ids=['{mark['id']}'], reason=…)"
         lines += [f"- [{mark['room']}; kept since {mark['date']}] " + _indented(mark["text"]).lstrip(),
                   f"{INDENT}full source (sha256 {late['sha256'][:12]}): {late['source']}{release}"]
     return "\n".join(lines)
@@ -1125,7 +1125,7 @@ def _marks_text(marks: List[Dict[str, Any]]) -> str:
         lines.append(f"- [{mark['scope']}; {mark['room']}] " + _indented(mark["text"]).lstrip()
                      + f" — marked by {mark['by']} on {mark['date']}; target {mark['target']}; "
                      + (f"meets me at {mark['anchor']}; " if mark.get("anchor") else "")
-                     + f"memory_mark(release_id='{mark['id']}', reason=…)")
+                     + f"memory_mark(release_ids=['{mark['id']}'], reason=…)")
         if mark.get("quote"):
             lines.append(f"{INDENT}quote: " + _indented(mark["quote"]).lstrip())
     return "\n".join(lines)

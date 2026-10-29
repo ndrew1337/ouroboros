@@ -995,17 +995,40 @@ def _mark_target(ctx: Any, root: Path, store: ChronicleStore, a: Dict[str, Any])
     return ref, None, ""
 
 
+def _release_marks(ctx: Any, store: ChronicleStore, author: Dict[str, Any], ids: Any, reason: str) -> str:
+    if (not isinstance(ids, list) or not ids or any(not isinstance(item, str) or not item.strip() for item in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError("release_ids is a non-empty array of distinct mark ids")
+    released, refused = [], []
+    for mark in ids:
+        try:
+            result = store.release_mark(mark, author, reason)
+        except (OSError, TimeoutError) as exc:
+            refused.append({"id": mark, "reason": "unavailable", "detail": str(exc)})
+            continue
+        if result.ok:
+            released.append(mark)
+        else:
+            refused.append({"id": mark, "reason": result.reason, "detail": result.detail})
+    return _reply(ctx, {"ok": not refused, "operation": "mark_release", "released_ids": released, "refused": refused,
+                        "reason": "saved" if not refused else "partial" if released else refused[0]["reason"]},
+                  code="TOOL_REPORTED_FAILURE" if refused else "OK",
+                  meta={"memory_mark_ids": released, "memory_mark_operation": "mark_release"})
+
+
 def _memory_mark(ctx: Any, text: str = "", node_id: str = "", address: str = "", task_id: str = "",
                  source_ref: Any = None, quote: Optional[str] = None, room_id: Any = None, scope: str = "room",
-                 mark_id: str = "", visibility: str = "", release_id: str = "", reason: str = "",
+                 mark_id: str = "", visibility: str = "", release_ids: Any = None, reason: str = "",
                  anchor: Any = None) -> str:
     try:
         root = _root(ctx)
         store, author = _activated(root), focus_signature(ctx)
+        if release_ids is not None:
+            if any((mark_id, visibility, node_id, address, task_id, source_ref, text, quote, anchor)):
+                return _arg_error(ctx, "release_ids takes only one reason, without a mark target or view change")
+            return _release_marks(ctx, store, author, release_ids, str(reason or ""))
         if mark_id:
             result = store.set_mark_view(str(mark_id), str(visibility or ""), author, str(reason or ""))
-        elif release_id:
-            result = store.release_mark(str(release_id), author, str(reason or ""))
         else:
             if sum(bool(target) for target in (node_id, address, task_id, source_ref)) != 1:
                 return _arg_error(ctx, "a mark names exactly one target: node_id, address, task_id or source_ref")
@@ -1095,7 +1118,8 @@ def chronicle_tools() -> List[ToolEntry]:
         "scope": {"type": "string", "enum": ["room", "global"]},
         "mark_id": {"type": "string", "description": "Change an active mark's visible detail with visibility and reason."},
         "visibility": {"type": "string", "enum": ["full", "meaning"]},
-        "release_id": {"type": "string", "description": "Release an active mark (with reason); its history stays."},
+        "release_ids": {"type": "array", "items": string, "minItems": 1, "uniqueItems": True,
+                        "description": "Release these active marks with one reason; returns released ids and each refusal. Their history stays."},
         "reason": string,
         "anchor": {"type": "object", "additionalProperties": False,
                    "description": "Optional action this mark meets me at: {tool, text?} is a tool name, optionally with text its call's arguments must contain; {path} is a file or directory path a call names. The host adds the mark's words to the result of the first such call in each task (a room mark: that room's work only); it compares literally and never refuses the call.",
@@ -1118,6 +1142,6 @@ def chronicle_tools() -> List[ToolEntry]:
             read, []), _memory_read),
         ToolEntry("memory_mark", schema(
             "memory_mark",
-            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target; an optional anchor ties the mark to an action, so its words also meet me in that action's result. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release it (release_id, reason) when it no longer holds.",
+            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target; an optional anchor ties the mark to an action, so its words also meet me in that action's result. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release marks (release_ids, one reason) when they no longer hold.",
             mark, []), _memory_mark),
     ]
