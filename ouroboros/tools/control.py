@@ -335,14 +335,15 @@ def get_tools() -> List[ToolEntry]:
                 "text": {"type": "string", "description": "Message text"},
                 "reason": {"type": "string", "description": "Why you're reaching out (logged, not sent)"},
                 "request_id": {"type": "string", "description": "Presence Main contact retry key (at most 128 characters). Reuse the same key and words after uncertain delivery; a new key permits a distinct identical report. Omitted: identical words from this work rejoin."},
-                "reply_to_relay": {"type": "string", "description": "Reply to a drained relay in its source room. Empty selects the single open relay; omit for an ordinary room message."},
+                "reply_to_relay": {"type": "string", "description": "Reply to a drained relay in its source room; this work's Project shows the same answer. Empty selects the single open relay; omit for an ordinary room message."},
                 "destination": {"type": "string", "enum": ["current", "main"], "default": "current",
-                                "description": "'current' (default): this conversation's room. 'main': the "
-                                               "owner's main chat, for a substantive message that belongs "
-                                               "there while this work lives in an owner-visible Project room. "
-                                               "It never appears in the Project thread and is not this task's "
-                                               "answer. A Presence root can report privately with host-bound source attribution, "
-                                               "including from Silent places. Delegated and agent-to-agent work cannot use it."},
+                                "description": "'current' (default): this conversation's room. 'main': also the "
+                                               "owner's main chat, for a substantive message that needs the owner "
+                                               "there while this work lives in an owner-visible Project room. One "
+                                               "message: the Project shows it too, and it is read once; it is not "
+                                               "this task's answer. A Presence root reports privately to Main only, "
+                                               "with host-bound source attribution, including from Silent places. "
+                                               "Delegated and agent-to-agent work cannot use it."},
             }, "required": ["text"]},
         }, _send_user_message),
         ToolEntry("update_identity", {

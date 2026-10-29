@@ -60,7 +60,8 @@ DISPATCH_STATES = ("none", "pending", "dispatched", "completed", "abandoned")
 # estimate -- without statistics SQLite walks the primary key (every newer row of every room) instead.
 _PROBE_INDEX = {"chat_id": "dialogue_room", "task_id": "dialogue_task", "parent_task_id": "dialogue_parent",
                 "root_task_id": "dialogue_root", "subagent_task_id": "dialogue_subagent", "origin": "dialogue_origin",
-                "client_message_id": "dialogue_named", "kind": "dialogue_kind"}
+                "client_message_id": "dialogue_named", "kind": "dialogue_kind",
+                "appearance": "room_appearances"}  # the derived index (``APPEARANCES_DDL``), not a dialogue column
 _TASK_KEYS = ("task_id", "parent_task_id", "root_task_id", "subagent_task_id")  # every identifier a task's row may carry
 SKIPPED_KINDS = ("invalid", "non_object")  # a line that is not JSON; valid JSON that is not an object
 _SCHEMA = """
@@ -255,7 +256,10 @@ def create(root: Any, *, tier: Optional[str] = None) -> pathlib.Path:
                     live = conn.execute("INSERT INTO import_ledger (stream, name, base, size, state) VALUES (?, ?, 0, 0, 'live')",
                                         (stream, LIVE_REL[stream].name)).lastrowid
                     conn.execute("INSERT INTO streams (stream, next_seq, live) VALUES (?, 0, ?)", (stream, live))
-                for key, value in (("schema_version", SCHEMA_VERSION), ("lock_tier", tier), ("created_at", utc_now_iso())):
+                # An empty store has nothing to derive: its appearance mark starts at the first row's start.
+                conn.execute(APPEARANCES_DDL)
+                for key, value in (("schema_version", SCHEMA_VERSION), ("lock_tier", tier), ("created_at", utc_now_iso()),
+                                   (APPEARANCES_MARK, 0)):
                     conn.execute("INSERT INTO meta (key, value) VALUES (?, ?)", (key, json.dumps(value)))
                 store.commit(conn)
             os.replace(tmp, target)
@@ -460,19 +464,44 @@ def _existing_named(conn: sqlite3.Connection, chat_id: Optional[int], client_mes
         "AND direction='in' ORDER BY seq DESC LIMIT 1", (client_message_id, chat_id)).fetchone()
 
 
+# The derived appearance index: a chat row some room shows outside its written chat, by the key
+# ``room_membership.appearance_keys`` names (``room:<chat>``, ``task:<id>``). A candidate superset
+# the room readers probe (``_probe``'s ``appearance`` column); ``room_membership.row_rooms`` decides.
+# Created on first use; an older body ignores it. ``room_appearances`` (a maintenance job) derives
+# the rows below its mark, which an append moves only from exactly its own start: rows an older
+# body appended (it never moves the mark) stay below it for the job.
+APPEARANCES_DDL = ("CREATE TABLE IF NOT EXISTS room_appearances (key TEXT NOT NULL, stream TEXT NOT NULL, "
+                   "seq INTEGER NOT NULL, PRIMARY KEY (key, stream, seq)) WITHOUT ROWID")
+APPEARANCES_MARK = "room_appearances_mark"
+# Chat import segments this body planned and has not derived yet (``dialogue_import``): one an older
+# body imports turns ``done`` while still listed, and the job derives exactly its rows.
+APPEARANCES_AWAITING = "room_appearances_awaiting"
+
+
+def _unstamped(row: Dict[str, Any]) -> Dict[str, Any]:
+    """A row's content identity without its in-transaction revision stamp (``room_revisions``)."""
+    return {key: value for key, value in row.items() if key != "room_revisions"}
+
+
 def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Dict[str, Any]] = None,
            feed: bool = False, wait_sec: float = WAIT_SEC, idempotent: bool = False,
-           emit_live: bool = True) -> Receipt:
+           emit_live: bool = True, also_feed: Iterable[int] = (), room_revisions: bool = False,
+           appearances: Optional[Iterable[str]] = ()) -> Receipt:
     """Store exact JSON, room facts and named dispatch in one transaction.
 
     Named inbound duplicates return the existing receipt (the UNIQUE index also
     settles concurrent writers). Dispatch input is JSON without bytes; presence
-    means pending, absence means none. Feed advances the unread revision. Optional
-    idempotence compares content identity under the existing room/time index.
+    means pending, absence means none. Feed advances the unread revision; ``also_feed``
+    advances the revision of each other room that shows the row (one message, unread
+    where it is shown), and ``room_revisions`` stamps the row with the revision it took in
+    every fed room, so one read can be recorded wherever it counted. ``appearances`` are
+    its derived index keys (``None``: unknown, left to the job). Optional idempotence
+    compares content identity, stamp aside, under the existing room/time index.
     Store failures propagate; append_quietly owns best-effort retry and live fallback.
     """
     if stream not in STREAMS:
         raise ValueError(f"unknown dialogue stream: {stream!r}")
+    row = _unstamped(row)
     body = encode(row)
     columns = facts(row)
     named = columns["direction"] == "in" and bool(columns["client_message_id"])
@@ -490,7 +519,7 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
                 f"{_SELECT} INDEXED BY dialogue_room_ts WHERE stream=? AND chat_id IS ? AND ts=?",
                 (stream, columns["chat_id"], columns["ts"]))
             for existing in candidates:
-                if source_row_id(decode(existing["body"])) == digest:
+                if source_row_id(_unstamped(decode(existing["body"]))) == digest:
                     return _receipt(existing)
         if named:
             existing = _existing_named(conn, columns["chat_id"], columns["client_message_id"])
@@ -498,6 +527,14 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
                 return _receipt(existing)
         marks = conn.execute("SELECT next_seq, live, next_ordinal, next_pos FROM streams WHERE stream=?", (stream,)).fetchone()
         seq = int(marks["next_seq"])
+        others = [int(chat) for chat in dict.fromkeys(also_feed) if feed and int(chat) != columns["chat_id"]]
+        if room_revisions and feed and columns["chat_id"] is not None:
+            fed = [columns["chat_id"], *others]
+            held = {record["chat_id"]: int(record["revision"]) for record in conn.execute(
+                f"SELECT chat_id, revision FROM rooms WHERE chat_id IN ({','.join('?' * len(fed))})", fed)}
+            row = {**row, "room_revisions": {str(chat): held.get(chat, 0) + 1 for chat in fed}}
+            body = encode(row)
+            length = len(body.encode("utf-8")) + 1
         try:
             insert_row(conn, stream, seq, row, body, length=length, segment=int(marks["live"]), ordinal=int(marks["next_ordinal"]),
                        pos=int(marks["next_pos"]) if counted else None, dispatch=state, dispatch_input=dispatch,
@@ -507,6 +544,16 @@ def append(root: Any, stream: str, row: Dict[str, Any], *, dispatch: Optional[Di
             if existing is None:
                 raise
             return _receipt(existing)
+        for chat in others:
+            touch_room(conn, chat, None, columns["ts"], 1)
+        keys = sorted(set(appearances)) if appearances is not None else []
+        if keys:
+            conn.execute(APPEARANCES_DDL)
+            conn.executemany("INSERT OR IGNORE INTO room_appearances (key, stream, seq) VALUES (?, ?, ?)",
+                             [(key, stream, seq) for key in keys])
+        if stream == "chat" and appearances is not None:
+            conn.execute("UPDATE meta SET value=? WHERE key=? AND value=?",
+                         (json.dumps(seq + length), APPEARANCES_MARK, json.dumps(seq)))
         conn.execute("UPDATE streams SET next_seq=?, next_ordinal=next_ordinal+1, next_pos=next_pos+? WHERE stream=?",
                      (seq + length, int(counted), stream))
     if stream == "progress" and emit_live:
@@ -533,7 +580,9 @@ def append_quietly(root: Any, stream: str, row: Dict[str, Any], **kwargs: Any) -
     except (StoreError, OSError, ValueError):
         if stream == "progress":
             _stream_live(row)
-        dialogue_retry.retain(root, stream, row, feed=kwargs.get("feed", False))
+        dialogue_retry.retain(root, stream, row, feed=kwargs.get("feed", False), **{
+            key: list(kwargs[key]) if key != "room_revisions" and kwargs[key] is not None else kwargs[key]
+            for key in ("also_feed", "room_revisions", "appearances") if key in kwargs})
         return None
 
 
@@ -760,6 +809,12 @@ def _probe(conn: sqlite3.Connection, stream: str, keys: Iterable[Tuple[str, Any]
         select = (f"SELECT json_group_array(seq) FROM (SELECT seq FROM dialogue INDEXED BY {_PROBE_INDEX[column]} "
                   f"WHERE stream=? AND {column} ")
         tail = f" AND seq<? AND seq>=? ORDER BY seq {order} LIMIT ?)"
+        if column == "appearance":  # one seek per key of the derived index; absent before its first row
+            if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='room_appearances'").fetchone():
+                found.update(json.loads(conn.execute(
+                    "SELECT json_group_array(seq) FROM (SELECT seq FROM room_appearances WHERE stream=? AND key IN "
+                    "(SELECT value FROM json_each(?))" + tail, (stream, json.dumps(listed), *bounds)).fetchone()[0]))
+            continue
         if None in listed:  # the chat-less rows, through the full room index
             found.update(json.loads(conn.execute(select + "IS NULL" + tail, (stream, *bounds)).fetchone()[0]))
         if any(value is not None for value in listed):

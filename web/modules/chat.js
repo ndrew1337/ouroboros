@@ -26,7 +26,8 @@ import { createChatReadingPosition } from './chat_reading_position.js';
 import { createRowSleep } from './chat_row_sleep.js';
 import { onRefit } from './text_fit.js';
 import { createChatHistoryPager, historyCoverage, historyIslandAtEdge } from './chat_history.js';
-import { createProjectReadReceipt, isAtNewestMessage, newestMessageOffset } from './project_read_state.js';
+import { createProjectReadReceipt, isAtNewestMessage, newestMessageOffset, readBand } from './project_read_state.js';
+import { createSharedReadTracker } from './read_ahead.js';
 import { mergeHistoricalTimelineItem, historyNodeIsProtected, historyRowIds, historyStamps, stampHistoryNode, compareHistoryPosition } from './chat_history_replay.js';
 import { apiClient, apiFetch, fetchTaskDetail, fetchTaskDetailStrict, isStoreMigrating } from './api_client.js';
 import { syncHistoryRetentionItem } from './history_retention.js';
@@ -2709,7 +2710,10 @@ export function createChatInstance({
     // joined; the sticky hydration answers a covered one (project_read_state.js).
     const newestFacts = { delivered: id => retainedHistoryIds().has(id), nodes: id => historyNodes(id),
         viewport: messagesDiv, header: pageHeader, composer: inputArea };
-    const readReceipt = createProjectReadReceipt({
+    // A message this room shares with another is read once wherever it was shown whole (read_ahead.js).
+    const sharedRead = createSharedReadTracker({ chatId, feed: messagesDiv, band: () => readBand(messagesDiv, pageHeader, inputArea),
+        shown: () => !destroyed && !leaving && !page.hidden && isInstanceVisible() });
+    const readReceipt = createProjectReadReceipt({ onNote: sharedRead.sample,
         read: async (fresh, whole) => {
             await (!fresh && initialHydrationPromise || historyPager.read({ whole }));
             return lastHistorySyncSucceeded;
@@ -2993,6 +2997,7 @@ export function createChatInstance({
 
     // One retirement path per message node: media, decision views and markdown go with it.
     function releaseMessageNode(node) {
+        sharedRead.release(node);
         chatMedia.release(node); chatDecision.releaseViews(node); destroyChatMarkdown(node); node.remove();
     }
 
@@ -3024,6 +3029,7 @@ export function createChatInstance({
                 const wrapper = node.closest('.chat-bubble');
                 releaseMessageNode(node);
                 if (wrapper && wrapper !== node && !wrapper.querySelector('.chat-gallery-item, .chat-file-item, .chat-quiz-card')) {
+                    sharedRead.release(wrapper);
                     chatMedia.release(wrapper); wrapper.remove();
                 }
             }
@@ -3617,6 +3623,7 @@ export function createChatInstance({
             unconfirmed.release();
             emptyWelcome?.dispose();
             readReceipt.cancel();
+            sharedRead.dispose();
             for (const dispose of wsDisposers) {
                 try { dispose(); } catch {}
             }

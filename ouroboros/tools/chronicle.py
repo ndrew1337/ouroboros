@@ -705,9 +705,10 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
         raise ValueError("rows are read from a chat room: room_id is its numeric chat id") from exc
     lineage = row_lineage(root)
     task_id = str(bounds.get("task_id") or "")
+    gaps: set = set()  # what a Project's rows read so may lack (``chat_chain.room_rows``): never "complete" unsaid
     source = chat_chain.iter_room_rows(root, room, from_addr=bounds.get("from") or None,
                                        to_addr=bounds.get("to") or None, task_ids=[task_id] if task_id else None,
-                                       period=bounds.get("period") or None)
+                                       period=bounds.get("period") or None, gaps=gaps)
     filters = [f"{key} {bounds[key]}" for key in ("from", "to", "task_id") if bounds.get(key)]
     if bounds.get("period"):
         filters.append(f"period {_span({'start': bounds['period'].get('from'), 'end': bounds['period'].get('to')})}")
@@ -723,6 +724,10 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
         return header + " " + body
 
     kept, texts, exhausted = _collect(source, render, limit)
+    if gaps:
+        from ouroboros.room_appearances import GAP_DETAILS
+
+        head += "".join(f"; incomplete: {GAP_DETAILS[kind]}" for kind in sorted(gaps))
 
     def continuation(k: int, done: bool) -> str:
         if done:
