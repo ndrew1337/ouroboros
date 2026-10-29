@@ -918,13 +918,6 @@ def _memory_read(ctx: Any, node_id: str = "", room_id: Any = None, after_seq: in
             text = _read_source(root, source_ref, start, limit)
         elif str(room_id) == "*":
             text = _read_rooms(root, store, start, limit)
-        elif str(room_id) == "candidates":
-            candidates = store.pending_candidates()
-            body = "\n".join(f"- {r['id']}; room {r['room_id']}; signed by {draft_signer(r['author'])}; "
-                f"memory_read(node_id='{r['id']}'); chronicle_write(kind='decision', target_id='{r['id']}', accepted=true/false, reason='...')"
-                for r in candidates)
-            text = _window(f"Drafts awaiting a decision: {len(candidates)}", body, start, limit,
-                           lambda n: f"memory_read(room_id='candidates', start={n})")
         elif node_id:
             text = _read_node(root, str(node_id), start, limit, str(revision or ""))
         elif rows:
@@ -1080,7 +1073,7 @@ def chronicle_tools() -> List[ToolEntry]:
     }
     read = {
         "node_id": {"type": "string", "description": "One record: as it acts now, its host stamp, coverage, original text, corrections and decisions."},
-        "room_id": {**room, "description": room["description"] + " '*' lists every live room as one directory line (label, period, counts, reader); 'candidates' lists the helper drafts awaiting my decision."},
+        "room_id": {**room, "description": room["description"] + " '*' lists rooms as directory lines (label, period, counts, reader)."},
         "after_seq": {"type": "integer", "minimum": 0, "description": "Room records and active marks after this sequence (the previous page's next_after_seq)."},
         "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period, in stored order (the order from/to and next: from= follow). A room holding imported earlier messages reads by send time in its view and chat_history; here each stands where it was stored."},
         "from": address, "to": address,

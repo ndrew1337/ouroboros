@@ -35,7 +35,7 @@ def test_memory_line_names_the_memory_for_every_integrating_focus_and_none_for_h
         assert memory_facts(replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(helper))), "max") == ""
     wake = replace(snap, spec=replace(snap.spec, role="consciousness"), live_rooms=(live_room(1),))
     p = replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(wake)))
-    assert "drafts awaiting a decision 0" in memory_facts(p, "max")
+    assert "drafts awaiting" not in memory_facts(p, "max")
 
 
 def test_memory_line_names_where_unfolded_pages_pile_up_what_is_addressed_and_the_marks():

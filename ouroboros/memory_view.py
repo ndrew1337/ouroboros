@@ -276,14 +276,13 @@ class MemoryViewSnapshot:
     legacy_blocks: Dict[str, Any] = dataclasses.field(default_factory=dict)  # the story status facts
     fallback_refusals: Tuple[Dict[str, Any], ...] = ()
     owner_words: str = ""  # the rendered block of the owner's words that caused a helper's work
-    candidates: Tuple[Dict[str, Any], ...] = ()
 
     @property
     def active(self) -> bool:
         return self.store_status.get("state") == "active"
 
 
-_TUPLES = ("story", "live_rooms", "marks", "fallback_refusals", "candidates")
+_TUPLES = ("story", "live_rooms", "marks", "fallback_refusals")
 
 
 def snapshot_json(snapshot: MemoryViewSnapshot) -> str:
@@ -300,6 +299,7 @@ def snapshot_from_json(text: str) -> MemoryViewSnapshot:
 @functools.lru_cache(maxsize=4)  # a memory bound, not a policy: a miss parses again
 def _parsed_view(text: str) -> MemoryViewSnapshot:
     data = json.loads(text)
+    data.pop("candidates", None)  # a saved view from before candidates stopped being produced
     data["spec"] = ViewSpec(**data["spec"])
     for name in _TUPLES:
         data[name] = tuple(data.get(name) or ())
@@ -850,8 +850,6 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
             frontier = legacy_frontier(store)
             story, story_status, refusals = capture_story(store, root, label) if spec.story else ([], {}, [])
             room, live, marks = _capture_live(store, root, spec, label, story)
-            candidates = tuple({"id": row["id"], "room_id": row["room_id"]} for row in store.pending_candidates()
-                               ) if spec.role == "consciousness" else ()
         if room:
             from ouroboros.owner_words import task_governing_words
 
@@ -874,8 +872,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
                               story=tuple(story), room=room, live_rooms=tuple(live), marks=tuple(marks),
-                              legacy_blocks=story_status, fallback_refusals=tuple(refusals), owner_words=owner_words,
-                              candidates=candidates)
+                              legacy_blocks=story_status, fallback_refusals=tuple(refusals), owner_words=owner_words)
 
 
 # --- rendering ------------------------------------------------------------------------------------
@@ -1201,9 +1198,6 @@ def render_room(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW, *, 
         parts.append(_late_reviews_text(late, snapshot.spec.role))
     if len(late) < len(snapshot.marks):
         parts.append(_marks_text([mark for mark in snapshot.marks if not mark.get("late_review")]))
-    if snapshot.spec.role == "consciousness":
-        parts.append(f"## Memory drafts\n\nDrafts awaiting a decision: {len(snapshot.candidates)}; memory_read(room_id='candidates'). "
-                     "Candidates do not act until adopted by a chronicle_write decision.")
     if snapshot.live_rooms:
         parts.append(_live_text(snapshot.live_rooms, gone))
     if room:

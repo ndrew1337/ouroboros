@@ -47,7 +47,7 @@ def test_a_roomy_window_holds_max_and_names_the_measured_parts(monkeypatch):
     assert f"(books {dict(fact['parts'])['books']:,}, " in line and f"tool schemas {fact['schemas']:,}; " in line
     assert f"story {fact['story']:,} (40 pages no part or account holds yet, {fact['unfolded']:,} tokens, most in " in line
     assert f"beside a Max room of {fact['allowance']:,}; Max held;" in line
-    assert "; marks in view 0" in line and "drafts awaiting a decision 0" in line and "shown only by address" not in line
+    assert "; marks in view 0" in line and "drafts awaiting" not in line and "shown only by address" not in line
 
 
 def test_memory_or_schemas_that_take_the_books_room_are_measured_without_advice(monkeypatch):

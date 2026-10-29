@@ -28,8 +28,8 @@ def memory_facts(plan, mode):
     on the owner's Max with a known window, the host's measure of the start's Max room part by part (books, core,
     knowledge and runtime facts, assignment, reply reserve, work room, tool schemas) and how the start settled;
     my memory: the story with its pages no part or account holds yet (how many, their tokens, the rooms holding
-    most of them) and the rooms' lines; what this view shows only by address; the marks in view; the drafts
-    awaiting a decision. Counted from the captured snapshot and its receipt; measures only, no advice and no
+    most of them) and the rooms' lines; what this view shows only by address; the marks in view.
+    Counted from the captured snapshot and its receipt; measures only, no advice and no
     threshold. Without a Max room fact (the owner's Low or Nano, an unknown window) it names the memory alone."""
     snapshot = memory_snapshot(plan)
     if snapshot is None or snapshot.spec.role in DELEGATED_FOCUS_ROLES:
@@ -46,9 +46,7 @@ def memory_facts(plan, mode):
             "route": "; Low, a disclosed fact of this route: folding memory or dropping tool schemas cannot make room here",
         }[room["cause"]]
     shown = floor.addressed_text((receipt.get("floor") or {}).get("steps") or {})
-    drafts = len(snapshot.candidates)
-    return (line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
-            + (f"; drafts awaiting a decision {drafts}" if drafts or snapshot.spec.role == "consciousness" else ""))
+    return line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
 
 
 def low_start_line(plan, mode, task_id):

@@ -1,4 +1,4 @@
-"""One signed Light draft: with consciousness on, a candidate from unsealed failed/cancelled work's own rows.
+"""One signed Light draft only while consciousness is off (or unknown).
 
 With consciousness off (or unknown), a root whose own start memory lowered to Low while everything
 else fit the window (``crowded_start``: its view fact's Max room, ``memory_floor.crowded_by_memory``)
@@ -175,12 +175,9 @@ class FallbackUnit:
     record_id: str = ""  # a legacy unit's record: its retelling is a hint, never a source
     member_ids: Tuple[str, ...] = ()
     head_sequence: int = 0  # the room head at selection (a part's ``expected_sequence``)
-    candidate_task: str = ""
 
     def describe(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {"kind": self.kind, "room_id": self.room_id, "key": self.key}
-        if self.candidate_task:
-            out["candidate_task"] = self.candidate_task
         if self.record_id:
             out["record_id"] = self.record_id
         if self.member_ids:
@@ -451,7 +448,7 @@ class _Row:
 
 
 def _rows(root: pathlib.Path, read_rows: List[Tuple[Dict[str, Any], Dict[str, Any]]],
-          positions: Dict[str, int], *, verbatim: bool = False) -> List[_Row]:
+          positions: Dict[str, int]) -> List[_Row]:
     lineage = row_lineage(root)  # one lineage lookup for the pass
     items = []
     for address, row in read_rows:
@@ -462,7 +459,7 @@ def _rows(root: pathlib.Path, read_rows: List[Tuple[Dict[str, Any], Dict[str, An
         author = {"label": f"{cls['author'].get('kind')}: {cls['author'].get('label')}"}
         task = str(row.get("task_id") or "")
         spoken = cls["lane"] == 1
-        line = render_memory_row(address, row, author=author, indent=INDENT) if verbatim or spoken or not task else ""
+        line = render_memory_row(address, row, author=author, indent=INDENT) if spoken or not task else ""
         pointer = (f"{memory_row_header(address, row, author=author)} (words, {len(render_row_text(row))} chars — "
                    "read by address)") if spoken and cls["author"].get("kind") != "human" else ""
         items.append(_Row((address, row, pos), task, line, pointer))
@@ -585,11 +582,8 @@ def _page_input(root: pathlib.Path, store: ChronicleStore, unit: FallbackUnit, b
     except (LookupError, ValueError):
         return None
     positions = {entry[0]["row_sha256"]: entry[2] for entry in segment.rows}
-    if unit.candidate_task:
-        read["rows"] = [(address, row) for address, row in read["rows"]
-                        if address["row_sha256"] in positions and str(row.get("task_id") or "") == unit.candidate_task]
-    items = _rows(root, read["rows"], positions, verbatim=bool(unit.candidate_task))
-    owners = {} if unit.candidate_task else _owner_words(root, items)
+    items = _rows(root, read["rows"], positions)
+    owners = _owner_words(root, items)
     tail = ""
     if unit.record_id:
         retold = next((record for record in store.room_records(unit.room_id) if record["id"] == unit.record_id), {})
@@ -597,7 +591,7 @@ def _page_input(root: pathlib.Path, store: ChronicleStore, unit: FallbackUnit, b
             tail = ("## Earlier helper retelling of this period, not a source, may be wrong\n"
                     + _indented(retold["current_text"]))
     head, label = _head(root, _PAGE, _QUOTES), _room_label(root, unit.room_id)
-    full = host_stamp(root, [unit.candidate_task] if unit.candidate_task else read["covers"]["task_ids"], rows=read["rows"])
+    full = host_stamp(root, read["covers"]["task_ids"], rows=read["rows"])
     stamps = {entry["task_id"]: entry for entry in full["tasks"]}
     n, addressed, refs = _floor(items, budget, measure,
                                 lambda k, a, r: _compose(head, label, items, k, a, owners, r, stamps, tail))
@@ -730,8 +724,6 @@ def _publish(root: pathlib.Path, store: ChronicleStore, unit: FallbackUnit, draf
               "route": observed_route_stamp(usage), "attribution": "helper draft, not lived"}
     metadata = {"unit": unit.describe(), "input_sha256": draft.input_sha256, "light_binding": binding,
                 "addressed_rows": list(draft.addressed_rows)}
-    if unit.candidate_task:
-        metadata.update(candidate=True, own_task_id=unit.candidate_task)
     resolver = _quote_resolver(root, row_lineage(root), draft.positions)
     if unit.kind == "part":
         return store.publish_part(room_id=unit.room_id, text=answer["text"], member_ids=list(draft.member_ids),
@@ -763,14 +755,12 @@ def _refuse(root: pathlib.Path, store: ChronicleStore, run: FallbackRun, draft: 
 
 def run_fallback_draft(env: Any, task: Mapping[str, Any], llm: Any, drive_logs: Any, trace: Any) -> FallbackRun:
     """At most one Light call: draft the chosen unit and publish it, or record why it was refused."""
-    candidate = not fallback_active()
+    if not fallback_active():
+        return FallbackRun("consciousness_on")
     root = pathlib.Path(task.get("budget_drive_root") or pathlib.Path(drive_logs).parent)
     store = ChronicleStore(root)
     if not store.log_path.exists() or not store.activation():
         return FallbackRun("not_activated")  # the writer reads the chronicle, it never creates it
-    from ouroboros.memory_sealing import failed_work_units
-    if candidate and not failed_work_units(root, store):
-        return FallbackRun("consciousness_on")
     from ouroboros.platform_layer import acquire_exclusive_file_lock, release_exclusive_file_lock
 
     # The unit is chosen under the lock: a choice made outside it could pay again for an input
@@ -788,7 +778,7 @@ def run_fallback_draft(env: Any, task: Mapping[str, Any], llm: Any, drive_logs: 
             return fitted[0]
 
         shortage, allow_legacy = shortage_from_trace(trace), not task.get("_is_direct_chat")
-        units = (failed_work_units(root, store) if candidate else itertools.chain(
+        units = (itertools.chain(
             max_room_units(store), candidate_units(root, store, shortage, allow_legacy=allow_legacy))
             if crowded_start(trace) else None)
         chosen = select_unit(root, store, shortage, allow_legacy=allow_legacy, binding=binding, fit=fit, units=units)
