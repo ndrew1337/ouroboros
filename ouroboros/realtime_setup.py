@@ -24,7 +24,8 @@ def rows_for_engine(rows: list[dict], *, vision: bool) -> list[dict]:
     The ordinary history keeps the image for the text model.
     """
     if vision:
-        return rows
+        from ouroboros.live_upload import replay_frames
+        return replay_frames(rows)
     out = []
     for row in rows:
         content = row.get("content")

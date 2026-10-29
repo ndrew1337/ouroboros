@@ -104,6 +104,8 @@ class JsonSession:
             # control/PCM messages are application-limited, not bandwidth probes.
             self.upload.note(self.wire_bytes(raw), calibrate=not audio and (image or self.upload.rate is None))
             await self.ws.send(raw)
+            if asyncio.current_task() is not self.upload.frame_task:
+                self.upload.written(payload)
         if image or asyncio.current_task() is self.upload.frame_task:
             # Native asyncio websockets supports concurrent unfragmented sends.
             # A bounded image must never own the microphone's application lock.

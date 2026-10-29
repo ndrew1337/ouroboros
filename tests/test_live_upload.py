@@ -57,7 +57,13 @@ def test_delivery_copy_obeys_bytes_and_preserves_original(metadata):
 
 
 @pytest.mark.parametrize('engine,rate', [('gemini', 50_000), ('openai', 80_000)])
-def test_minute_sharing_keeps_microphone_and_reports_recovery(host_world, monkeypatch, engine, rate):
+@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only'])
+def test_minute_sharing_keeps_microphone_and_reports_recovery(host_world, monkeypatch, engine, rate, measurement):
+    if measurement != 'native':
+        from ouroboros.live_upload import WireMeter
+        monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
+        if measurement == 'no_kernel':
+            monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
     asyncio.run(sharing(host_world, monkeypatch, engine, rate))
 
 
@@ -120,6 +126,7 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
             await asyncio.sleep(1)
             if len(sizes) > before and sizes[-1] == len(recovery):
                 break
+        print('RECOVERY', engine, dict(rate=run.call.session.upload.rate, audio_rate=run.call.session.upload.audio_rate, backlog=run.call.session.upload.backlog(), sizes=sizes))
         await run.wait(lambda: len(sizes) > before and sizes[-1] == len(recovery))
         await run.wait(lambda: sum(RECOVERED in str(r) for r in run.host.messages) == 1)
         assert sum(SLOW in str(r) for r in run.host.messages) == 1
@@ -130,7 +137,13 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
 
 
 @pytest.mark.parametrize('engine', ['gemini', 'openai'])
-def test_fast_upload_keeps_full_frame_and_stays_quiet(host_world, monkeypatch, engine):
+@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only'])
+def test_fast_upload_keeps_full_frame_and_stays_quiet(host_world, monkeypatch, engine, measurement):
+    if measurement != 'native':
+        from ouroboros.live_upload import WireMeter
+        monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
+        if measurement == 'no_kernel':
+            monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
     async def scenario():
         limit_connector(monkeypatch, 10_000_000)
         original = screen()

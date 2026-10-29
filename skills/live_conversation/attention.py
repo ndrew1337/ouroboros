@@ -1,7 +1,6 @@
 """The mind chooses when live sources are delivered; a frame never offers a turn."""
 from __future__ import annotations
 
-import asyncio
 import base64
 import json
 import math
@@ -138,45 +137,13 @@ class Attention:
         upload = getattr(session, 'upload', None)
         if upload is None or not callable(getattr(session, 'video_payload', None)):
             return rows
-        from ouroboros.live_upload import smaller_frame
-        from ouroboros.realtime_session import joined
-        output = []
-        for row in rows:
-            if not row.get('_call_frame_source'):
-                output.append(row)
-                continue
-            parts = []
-            deferred = False
-            for part in row.get('content', []):
-                if part.get('type') != 'image_url':
-                    parts.append(part)
-                    continue
-                url = part['image_url']['url']
-                prefix, encoded = url.split(',', 1)
-                frame = Video(base64.b64decode(encoded), prefix[5:].split(';')[0], row['_call_frame_source'])
-                limit = session.frame_byte_limit(frame, int(upload.capacity()))
-                copy = await joined(asyncio.to_thread(smaller_frame, frame, limit))
-                if (copy is not None and upload.backlog() == 0 and not upload.audio_waiters
-                        and len(copy.data) <= session.frame_byte_limit(copy, upload.budget())):
-                    parts.append({**part, 'image_url': {'url': 'data:' + copy.mime + ';base64,'
-                        + base64.b64encode(copy.data).decode()}})
-                    from ouroboros.contracts.realtime import canonical_json
-                    upload.credit = max(0, upload.credit - session.wire_bytes(canonical_json(session.video_payload(copy))))
-                    if copy is not frame:
-                        upload.notice(True)
-                else:
-                    deferred = True
-                    self.seen.pop(frame.source, None)
-                    latest = self.frames.get(frame.source)
-                    if latest is not None:
-                        session.offer_video(latest, lambda source=latest.source, digest=sha256(latest.data).hexdigest():
-                                            self.delivered(source, digest),
-                            lambda latest=latest: self.frames.get(latest.source) is latest)
-                    parts.append({'type': 'text', 'text': 'These pixels have not been delivered. Live frames wait for '
-                                  'upload room, with newer frames replacing older ones. This exact file remains '
-                                  'available to the image reader.'})
-            output.append({**row, 'content': parts, **({'_deferred_frame': True} if deferred else {})})
-        return output
+        def deferred(source):
+            self.seen.pop(source, None)
+            latest = self.frames.get(source)
+            if latest is not None:
+                session.offer_video(latest, lambda: self.delivered(source, sha256(latest.data).hexdigest()),
+                                    lambda: self.frames.get(source) is latest)
+        return await upload.image_rows(rows, deferred)
 
     def revisit_due(self):
         return self.revisit_at is not None and monotonic() >= self.revisit_at
@@ -200,7 +167,7 @@ class Attention:
                 looked = False
             if looked:
                 continue_ids.add(call['id'])
-                images.extend(self.looks.pop(call['id'], []))
+                images.extend({**row, '_call_tool_id': call['id']} for row in self.looks.pop(call['id'], []))
         return images, tuple(cid for cid in changes.silent if cid not in continue_ids)
 
 

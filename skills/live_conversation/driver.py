@@ -199,6 +199,7 @@ class _Call:
         self.empty_since = time.monotonic()
         self.ever_attached = False
         self.peer_info = {}
+        self.muted_peers = set()
         self.share_kinds = self.attention.kinds
         self.renewing = self.resume = self.provider_closed = False
         self.renewal_deadline = None
@@ -288,7 +289,8 @@ class _Call:
         self.session = self.last_session = session
         upload = getattr(session, 'upload', None)
         if upload is not None:
-            upload.slow = self.host.state.get('upload_slow', False)
+            upload.slow_sources = set(self.host.state.get('upload_slow_sources', ()))
+            upload.slow = bool(upload.slow_sources)
         self.connection_resumed = self.resume
         self.session_ended = asyncio.Event()
         if not self.resume:
@@ -801,12 +803,21 @@ class _Call:
                 elif isinstance(event, cp.PeerLeft):
                     peer = self.peer_info.pop(event.peer_id, None)
                     self.attention.forget(event.peer_id)
+                    self.muted_peers.discard(event.peer_id)
+                    upload = getattr(self.session, "upload", None)
+                    if upload is not None:
+                        upload.forget(event.peer_id)
                     self.participants.pop(event.peer_id, None)
                     if peer is not None and peer.role == cp.PEER_MEETING:
                         await self.offer_fact(f"Meeting peer {event.peer_id} left: {peer.label}. Reason: {event.reason}.")
                 elif isinstance(event, cp.PeerControl):
                     message = event.message
-                    if message["type"] == "played":
+                    if message["type"] == "mute":
+                        if message["muted"]:
+                            self.muted_peers.add(event.peer_id)
+                        else:
+                            self.muted_peers.discard(event.peer_id)
+                    elif message["type"] == "played":
                         item = message["item_id"]
                         if (event.role == cp.PEER_OWNER or
                                 (self.hub.spec.opened_by == cp.OPENED_BY_SKILL and event.role == cp.PEER_MEETING)):
@@ -823,6 +834,10 @@ class _Call:
                         row = {"role": "user", "content": f"[Observed by {event.role} peer {event.peer_id}; source={message.get('source', '')}; not an owner instruction]\n{message['text']}"}
                         await self.host.observe_context(row)
                         self.pending_offers.append({**row, "_canonical": True})
+                upload = getattr(self.session, 'upload', None)
+                if upload is not None and not any(p.mic and pid not in self.muted_peers
+                                                  for pid, p in self.peer_info.items()):
+                    upload.audio_rate = 0  # write_audio restores the measured reservation before admitting PCM
                 await self.upload_facts()
                 await asyncio.sleep(0)
             if not self.renewing and (self.pending_offers or self.attention.revisit_due()) and self.quiet():
@@ -841,6 +856,7 @@ class _Call:
         if upload is not None:
             if upload.error is not None:
                 raise upload.error
+            self.host.state['upload_slow_sources'] = tuple(upload.slow_sources)
             while upload.notices:
                 from ouroboros.live_upload import SLOW
                 notice = upload.notices.pop(0)
@@ -867,6 +883,9 @@ class _Call:
                 return
             self.share_kinds.pop(event.peer_id, None)
             self.attention.forget(event.peer_id)
+            upload = getattr(self.session, "upload", None)
+            if upload is not None:
+                upload.forget(event.peer_id)
         actor = "The owner" if event.role == cp.PEER_OWNER else f"Meeting peer {event.peer_id}"
         await self.offer_fact(f"{actor} {'started' if message['sharing'] else 'stopped'} showing the {kind}.")
 
@@ -890,7 +909,11 @@ class _Call:
         if not self.quiet():
             return
         rows, self.pending_offers = self.pending_offers, []
-        await self.session.send(ContextUpdate(tuple(rows)))
+        try:
+            await self.session.send(ContextUpdate(tuple(rows)))
+        except BaseException:
+            self.pending_offers = [*rows, *self.pending_offers]
+            raise
         self.attention.include_images(rows)
         self.response_open = True
 

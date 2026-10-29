@@ -166,7 +166,15 @@ def test_waiting_grok_connection_cost_participates_in_shared_limit(host_world, p
             await ready.wait()
             prepared = await host.prepare_session(LiveOptions())
             now[0] = 160.0  # both sockets have accrued 60 seconds, $0.60 each
-            await asyncio.sleep(1.1)  # existing adapter's accounting observation tick, no policy timer
+            async def both_receipts():
+                while sum(row.get('cost_usd') or 0 for row in ua.read_usage_records(host.ctx.drive_root)) != pytest.approx(1.2):
+                    await asyncio.sleep(.01)
+            # The ledger is the boundary, not one tick plus 100 ms of scheduler
+            # slack on the loaded test host. A missing waiting meter still fails.
+            try:
+                await asyncio.wait_for(both_receipts(), 120)
+            except asyncio.TimeoutError:
+                pass  # close both leases below, then assert the unchanged budget obligation
             before = ua.read_usage_records(host.ctx.drive_root)
             refused = False
             try:

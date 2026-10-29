@@ -594,6 +594,12 @@ class GeminiSession(JsonSession):
                             await self.write({'realtimeInput': {'video': inline}}, image=True)
                 elif not message.get('tool_calls'):
                     other.append(message)
+            for message in command.messages:
+                if message.get('_deferred_frame'):
+                    response = next((r for r in responses if r['id'] == message.get('_call_tool_id')), None)
+                    if response is not None:
+                        response['response'].setdefault('frame_delivery', []).extend(
+                            p['text'] for p in message.get('content', []) if p.get('type') == 'text')
             if responses:
                 await self.write({'toolResponse': {'functionResponses': responses}})
                 # Committed once written: a write that met a closed socket leaves the call
