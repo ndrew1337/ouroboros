@@ -73,35 +73,47 @@ _CLOSED_DETACHED: Dict[str, str] = {}
 
 
 def controller_identity() -> Dict[str, Any]:
-    """This process as a review controller: pid, its birth token and custody session."""
+    """This process as a review controller: pid, birth (the ps spelling every release
+    reads), validated ``kernel_birth`` (``process_identity``) and custody session."""
     from ouroboros.platform_layer import process_start_time
     from ouroboros.process_custody import current_custody_session_id
+    from ouroboros.process_identity import process_kernel_birth
 
     pid = os.getpid()
     if pid not in _SELF:
         _SELF.clear()
-        _SELF[pid] = {"pid": pid, "birth": process_start_time(pid)}
+        _SELF[pid] = {"pid": pid, "birth": process_start_time(pid), "kernel_birth": process_kernel_birth(pid) or ""}
     return {**_SELF[pid], "session": str(current_custody_session_id() or "")}
 
 
 def controller_state(identity: Any) -> str:
     """Return proven ``local``, ``alive``, ``dead`` or ``unknown``.
-    No live pid (including zombies) or a changed birth proves the controller gone;
-    a live pid with missing/unreadable birth is unknown. For our own pid/birth,
-    distinct nonempty custody sessions prove the pre-exec controller gone;
-    another process's session cannot prove that."""
+    No live pid (including zombies) proves the controller gone. Kernel births of one
+    validated kind decide (``process_identity.same_birth``); without them an equal
+    ``birth`` spelling proves it alive and a different one proves it gone only when both
+    are one validated kind. Another zone or locale spells one live process's ``ps`` start
+    differently, so that difference, like a missing or unreadable birth, is unknown: an old
+    record on a reused pid stays unknown until that process ends. For our own pid
+    (pid and birth survive exec; this process mints its identity
+    once), a different birth names another holder, and distinct nonempty custody sessions
+    prove the pre-exec controller gone; another process's session cannot prove that."""
+    from ouroboros.process_identity import process_kernel_birth, same_birth
+
     try:
         pid = int(identity.get("pid") or 0) if isinstance(identity, dict) else 0
     except (TypeError, ValueError):
         pid = 0
     if pid <= 0:
         return "unknown"
-    birth = str(identity.get("birth") or "")
+    birth, kernel = str(identity.get("birth") or ""), str(identity.get("kernel_birth") or "")
     if pid == os.getpid():
         own = controller_identity()
-        if not birth or not own["birth"]:
-            return "unknown"
-        if birth != own["birth"]:
+        same = same_birth(own.get("kernel_birth"), kernel)
+        if same is None:
+            if not birth or not own["birth"]:
+                return "unknown"
+            same = birth == own["birth"]
+        if not same:
             return "dead"
         session = str(identity.get("session") or "")
         if not session or not own["session"]:
@@ -112,10 +124,11 @@ def controller_state(identity: Any) -> str:
 
     if not pid_is_alive(pid) or pid_is_zombie(pid):
         return "dead"
-    live_birth = process_start_time(pid) if birth else ""
-    if not live_birth:
-        return "unknown"
-    return "alive" if live_birth == birth else "dead"
+    same = same_birth(process_kernel_birth(pid), kernel) if kernel else None
+    if same is None and birth:
+        live_birth = process_start_time(pid)
+        same = True if live_birth and live_birth == birth else same_birth(live_birth, birth)
+    return "unknown" if same is None else "alive" if same else "dead"
 
 
 def operation_stop_state(root: pathlib.Path, task_id: str) -> str:

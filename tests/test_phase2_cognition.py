@@ -70,7 +70,6 @@ def test_root_checkpoint_prevents_a_second_facts_row_and_buys_no_summary(tmp_pat
     llm = Llm()
     monkeypatch.setattr(llm_mod, "LLMClient", lambda: llm)
     monkeypatch.setattr(memory_mod, "Memory", lambda **_kwargs: object())
-    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", lambda *_a, **_k: None)
     monkeypatch.setattr(evolution, "maybe_promote", lambda *_a, **_k: None)
     env = SimpleNamespace(
         repo_dir=tmp_path / "repo", drive_root=tmp_path,

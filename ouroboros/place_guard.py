@@ -139,8 +139,9 @@ def call_place_facts(ctx: Any, name: str, args: Mapping[str, Any], *, ext_tool: 
                      is_mcp: bool = False) -> dict[str, Any]:
     """Host facts about where a call lands, for the Supervisor's bundle.
 
-    ``{"effect", "declared", "targets": {arg: [values]}, "place_id", "place_label",
-    "place_state", "conversation_key"}``; ``{}`` when no place is involved.
+    ``{"effect", "declared", "targets": {arg: [values]}, "attributable", "places": [{"place_id",
+    "place_label", "place_state", "conversation_key", ...}]}``; ``{}`` when no place is involved.
+    A place's notes are standing delegation: the bundle carries them once, beside the owner's rules.
     """
     try:
         effect, targets, resolved, siblings, attributable = _call_destinations(ctx, name, args, ext_tool, is_mcp)
@@ -150,7 +151,9 @@ def call_place_facts(ctx: Any, name: str, args: Mapping[str, Any], *, ext_tool: 
     if name == "place_reply":
         effect = ToolEffect(EFFECT_MESSAGE, targets=("account_id", "conversation_id"),
                             conversation="conversation_id", thread="thread_id", declared=True, source="builtin")
-        targets = target_values(effect, args)
+        # The reply's route is its retained destination (``place_reply.reply_carrier``), thread included.
+        destination = args.get("destination")
+        targets = target_values(effect, destination if isinstance(destination, Mapping) else args)
         root = _drive_root(ctx)
         resolved = [place for place in places.load_places(root) if place.place_id == args.get("place_id")] if root else []
     if not resolved and not siblings:
@@ -167,8 +170,6 @@ def call_place_facts(ctx: Any, name: str, args: Mapping[str, Any], *, ext_tool: 
         rows.append({"place_id": place.place_id, "place_label": place.label, "place_state": place.state,
                      **({"sends_as": dict(sending), "sends_as_owner": sending["kind"] == "user" and (bool(focus.get("identity_owner")) if same_focus
                          else places.is_owner_account(place, sending["id"], account))} if sending else {}),
-                     "conversation_key": keys[0] if len(keys) == 1 else "", "conversation_keys": keys,
-                     "notes": [{"text": note.text, "author": note.author} for note in place.notes]})
+                     "conversation_key": keys[0] if len(keys) == 1 else "", "conversation_keys": keys})
     return {"effect": effect.effect, "declared": effect.declared, "targets": targets,
-            "attributable": attributable, "places": rows,
-            **(rows[0] if len(rows) == 1 else {})}
+            "attributable": attributable, "places": rows}

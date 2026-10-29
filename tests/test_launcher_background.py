@@ -176,9 +176,9 @@ def wait_for(predicate, timeout=5.0):
 def test_close_with_background_off_quits(settings, monkeypatch, make):
     choose(settings, "false")
     background, window = make()
-    assert close(background, window) is None
-    assert background.events == ["exit"]
-    assert window.calls == []
+    assert close(background, window) is False  # the window and its loop stay until the closer exits
+    wait_for(lambda: background.events == ["exit"])
+    assert background.shutdown.is_set() and window.calls == []
 
 
 def test_first_close_asks_once_and_stores_the_answer(settings, monkeypatch, make):
@@ -245,7 +245,8 @@ def test_the_window_is_hidden_outside_the_indicators_state_lock(settings, monkey
 
     window.hide = hide_while_the_icon_dies
     close(background, window)
-    assert background.events == ["exit"] and not background.indicator.hidden, "no hidden window without its icon"
+    wait_for(lambda: background.events == ["exit"])
+    assert not background.indicator.hidden, "no hidden window without its icon"
 
 
 def test_no_indicator_means_close_quits_even_when_background_is_on(settings, monkeypatch, make):
@@ -256,13 +257,15 @@ def test_no_indicator_means_close_quits_even_when_background_is_on(settings, mon
 
     background, window = make(indicator=NoIcon)
     close(background, window)
-    assert background.events == ["exit"] and window.calls == []
+    wait_for(lambda: background.events == ["exit"])
+    assert window.calls == []
 
 
 def test_without_an_adapter_or_native_hooks_closing_quits_and_never_asks(settings, monkeypatch, make):
     background, window = make(indicator=None)  # Linux
     close(background, window)
-    assert background.events == ["exit"] and window.calls == []
+    wait_for(lambda: background.events == ["exit"])
+    assert window.calls == []
 
     class Broken(FakeIndicator):
         def attach_native(self, window):
@@ -270,15 +273,16 @@ def test_without_an_adapter_or_native_hooks_closing_quits_and_never_asks(setting
 
     background, window = make(indicator=Broken)
     close(background, window)
-    assert background.events == ["exit"] and window.calls == []
+    wait_for(lambda: background.events == ["exit"])
+    assert window.calls == []
 
 
 def test_quit_requests_bypass_the_question_and_are_never_cancelled(settings, monkeypatch, make):
     background, window = make(answer=True)
     background.quit.set()  # Cmd+Q / Dock Quit / logout (macOS delegate) or a tray Quit
-    assert close(background, window) is None
-    assert background.events == ["exit"] and window.calls == []
-    assert not settings.exists()
+    assert close(background, window) is False  # handed to the closer, never asked
+    wait_for(lambda: background.events == ["exit"])
+    assert window.calls == [] and not settings.exists()
 
 
 def test_tray_quit_is_a_plain_exit_without_panic(settings, monkeypatch, tmp_path, make):
@@ -288,7 +292,8 @@ def test_tray_quit_is_a_plain_exit_without_panic(settings, monkeypatch, tmp_path
     monkeypatch.setattr(lb.urllib.request, "urlopen", no_http)
     background, window = make()
     background.request_quit()
-    assert background.shutdown.is_set() and background.quit.is_set() and background.events == ["exit"]
+    assert background.shutdown.is_set() and background.quit.is_set()  # latched before the call returns
+    wait_for(lambda: background.events == ["exit"])
     assert not (tmp_path / "state" / "panic_stop.flag").exists()
 
 
@@ -691,7 +696,8 @@ def test_windows_keeps_its_one_icon_for_the_whole_run_and_background_decides_onl
                                                            if isinstance(event, tuple))
     outcome = close(background, window)
     if value == "false":
-        assert outcome is None and background.events[-1] == "exit", "background off: closing quits, icon or not"
+        assert outcome is False, "background off: closing quits, icon or not, through the closer"
+        wait_for(lambda: background.events[-1:] == ["exit"])
     else:
         assert outcome is False and window.visible, "undecided: the one question, the window stays meanwhile"
 
@@ -776,7 +782,9 @@ def test_windows_form_closing_decides_with_the_close_reason(settings, monkeypatc
 
     shutdown = SimpleNamespace(CloseReason="shutdown", Cancel=False)
     form_closing(None, shutdown)  # sign-out with the question never answered
-    assert background.events == ["exit"] and shutdown.Cancel is False and window.calls == []
+    # The quit is never cancelled: only the form's own close is, so its loop stays until the closer exits.
+    assert shutdown.Cancel is True and background.quit.is_set() and window.calls == []
+    wait_for(lambda: background.events == ["exit"])
 
     background.events.clear()
     background.quit.clear()
@@ -792,16 +800,17 @@ def test_macos_quit_requests_are_marked_before_pywebviews_closing_runs(monkeypat
     objc = types.ModuleType("objc")
     objc.super = lambda cls, obj: super(cls, obj)
     appkit = types.ModuleType("AppKit")
-    appkit.NSObject = object
+    appkit.NSObject, appkit.NSTerminateLater = object, 2
     monkeypatch.setitem(sys.modules, "objc", objc)
     monkeypatch.setitem(sys.modules, "AppKit", appkit)
     from ouroboros import launcher_tray_macos as mac
 
     monkeypatch.setattr(mac, "_shared", {})
+    answers = ["pywebview decides"]
 
     class PywebviewDelegate:
         def applicationShouldTerminate_(self, sender):
-            return "pywebview decides" if background.quit.is_set() else "asked as a close"
+            return answers[-1] if background.quit.is_set() else "asked as a close"
 
     background = SimpleNamespace(quit=threading.Event(), shown=[])
     background.show_window = lambda: background.shown.append(True)
@@ -809,6 +818,8 @@ def test_macos_quit_requests_are_marked_before_pywebviews_closing_runs(monkeypat
     delegate_class, _target = mac._classes(PywebviewDelegate)
     delegate = delegate_class()
     assert delegate.applicationShouldTerminate_(None) == "pywebview decides"
+    answers.append(False)  # pywebview's NO: closing kept the window because the quit's closer owns the exit
+    assert delegate.applicationShouldTerminate_(None) == 2, "NSTerminateLater: a logout waits, never cancelled"
     assert delegate.applicationShouldHandleReopen_hasVisibleWindows_(None, False) is False
     assert background.shown == [True]
 

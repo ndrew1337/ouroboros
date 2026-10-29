@@ -143,9 +143,10 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "depth/cap limits. Children scheduled in one round run concurrently; on cache-write-priced routes each "
     "sibling started before the first responds pays a full prefix write. Native children can address you, "
     "siblings or any task in their tree; ongoing addressed turns need "
-    "objective/constraints stating what is interim, whom to address and what ends participation. Settled "
-    "sessions continue as new runs via delegate_start(continue_from=run_id): same session where possible, "
-    "else a new one with retained evidence; work may repeat. Retrieve the handoff with get_task_result, "
+    "objective/constraints stating what is interim, whom to address and what ends participation. Continue "
+    "settled sessions via delegate_start(subagent_id=id, continue_from=run_id, prompt=''): new run, "
+    "same session if possible, else a new one with retained evidence; work may repeat. "
+    "Retrieve the handoff with get_task_result, "
     "wait_task or wait_tasks before relying on it."
 )
 
@@ -333,14 +334,17 @@ def get_tools() -> List[ToolEntry]:
         }, _chat_history),
         ToolEntry("update_scratchpad", {
             "name": "update_scratchpad",
-            "description": "Append a block to your working memory (scratchpad). Each call adds a "
-                           "timestamped block; oldest blocks are auto-evicted when either cap is reached "
-                           "(10 blocks, 60000 characters of content). "
-                           "Write what matters NOW — active tasks, decisions, observations. "
-                           "Persists across sessions, read at every task start. "
-                           "Project rooms included — the scratchpad is the same working memory in every room.",
+            "description": "Write working memory (scratchpad): append a timestamped block, or with replaces fold the "
+                           "named blocks (the sha256 after each heading; an earlier fold too) into one text you "
+                           "accept, placed where the oldest was. Originals are journaled first, unnamed blocks stay, a "
+                           "stale or ambiguous selection changes nothing; nothing leaves by count, size or age. Write "
+                           "what matters NOW — active tasks, decisions, observations. Persists across sessions, read "
+                           "whole at every task start. Project rooms included: one working memory in every room.",
             "parameters": {"type": "object", "properties": {
-                "content": {"type": "string", "description": "Content for this scratchpad block"},
+                "content": {"type": "string", "description": "The new block, or the accepted text of a fold"},
+                "replaces": {"type": "array", "items": {"type": "string"}, "description": "Fold: sha256 of each "
+                             "active block this text replaces (a byte-identical block once per copy); omit to append"},
+                "draft_source": {"type": "string", "description": "Source of a helper draft you accept (its task id)"},
             }, "required": ["content"]},
         }, _update_scratchpad),
         ToolEntry("send_user_message", {

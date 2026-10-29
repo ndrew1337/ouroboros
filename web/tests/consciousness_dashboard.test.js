@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { setup, NodeStub } from './dashboard_dom_fixture.js';
+import { clock, observe } from './state_read_fixture.js';
+import * as api from '../modules/api_client.js';
 
 import { normalizeConsciousness, normalizePlacesResponse, normalizeWake } from '../modules/consciousness_api.js';
 import { createContributionsStore } from '../modules/contributions.js';
@@ -13,6 +15,7 @@ import { noteLeadText, wakeCheckText, wakeCostText } from '../modules/consciousn
 import { applyPayload, setMissTransport } from '../modules/i18n.js';
 
 const FIXTURE = JSON.parse(fs.readFileSync(new URL('./fixtures/consciousness_contract.json', import.meta.url), 'utf8'));
+const STATE_LIFETIME = api.STATE_READ_LIFETIME_MS ?? 60_000;  // a namespace read keeps base trees loadable
 const full = () => normalizeConsciousness(FIXTURE.consciousness);
 const fromState = () => normalizeConsciousness(FIXTURE.state.bg_consciousness_state, { enabled: true });
 const wake = (id) => full().recentWakes.find((row) => row.taskId === id);
@@ -340,6 +343,41 @@ test('while the full snapshot is not served, /api/state and /api/places still gi
         globalThis.document = priorDocument;
     }
 });
+
+for (const hang of ['fetch', 'body']) {
+    test(`a /api/state fallback whose ${hang} never answers ends the Dashboard's read at its lifetime and says so`, async (t) => {
+        const advance = clock(t);
+        const priorWindow = globalThis.window;
+        const priorDocument = globalThis.document;
+        const priorFetch = globalThis.fetch;
+        const signals = [];
+        globalThis.window = { addEventListener() {}, removeEventListener() {}, dispatchEvent() {} };
+        globalThis.document = { hidden: false, addEventListener() {}, removeEventListener() {} };
+        globalThis.fetch = async (_url, init = {}) => {  // the real fallback reads /api/state; it never answers here
+            signals.push(init.signal);
+            return hang === 'fetch' ? new Promise(() => {}) : { ok: true, status: 200, json: () => new Promise(() => {}) };
+        };
+        const mount = fakeMount();
+        const controller = initConsciousnessDashboard({
+            mount, ws: { send() {} }, state: { activePage: 'dashboard', dashboardActiveSubtab: 'other' },
+            read: async () => { throw Object.assign(new Error('HTTP 404'), { status: 404 }); },
+            readPlacesFn: async () => normalizePlacesResponse(FIXTURE.places),
+        });
+        try {
+            const refreshed = observe(controller.refresh());
+            await advance(STATE_LIFETIME - 1000);
+            assert.equal(refreshed.settled, false);
+            assert.equal(mount.regions.get('[data-cx-status]').textContent, 'Reading…');
+            await advance(1000);
+            assert.equal(refreshed.settled, true, 'the expired fallback ends the read');
+            assert.match(mount.regions.get('[data-cx-status]').textContent, /^Could not read consciousness: state read expired\./);
+            assert.equal(signals[0].aborted, true);
+        } finally {
+            controller.destroy();
+            Object.assign(globalThis, { window: priorWindow, document: priorDocument, fetch: priorFetch });
+        }
+    });
+}
 
 test('a failed read keeps the earlier values and says so', async () => {
     const priorWindow = globalThis.window;

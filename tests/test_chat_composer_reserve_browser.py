@@ -1,4 +1,8 @@
-"""Main/Project composer clearance and wizard checkbox geometry in real UI flows."""
+"""Main/Project composer clearance and wizard checkbox geometry in real UI flows.
+
+Playwright's WebKit did not reproduce the system WKWebView defect behind the transcript's spacer; that engine has its
+own optional check on macOS (devtools/macos_wkwebview/README.md).
+"""
 from __future__ import annotations
 
 import json

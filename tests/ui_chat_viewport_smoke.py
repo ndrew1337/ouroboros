@@ -15,7 +15,7 @@ from tests.ui_failure_evidence import FailureEvidence
 
 def state_reads(url: str) -> bool:
     """Every shared state read of the page: the first `/api/state` and each `?bindings_since=` read after it
-    (#2307, chat_activity.js createStateSnapshotSequencer). A `**/api/state` glob matches the first alone."""
+    (#2307, state_snapshots.js createStateSnapshotSequencer). A `**/api/state` glob matches the first alone."""
     return urlsplit(url).path == "/api/state"
 
 _CAPTURE_TEST_SOCKET = """() => {
@@ -28,10 +28,10 @@ _CAPTURE_TEST_SOCKET = """() => {
         }
     };
 }"""
-# One page-wide /api/state read is in flight at a time (chat_activity.js
+# One page-wide /api/state read is in flight at a time (state_snapshots.js
 # createStateSnapshotSequencer.gate): a forced refresh that lands behind an
-# in-flight read starts only after that read settles, so the socket-open census
-# can still be reading after the socket reports OPEN. A frame emitted on the test
+# in-flight read starts once that read settles, or at once when a socket change
+# retires it, so the socket-open census can still be reading after OPEN. A frame emitted on the test
 # socket exists nowhere on the server; a complete census whose request started
 # after that frame concludes its card by absence, exactly as it would a task the
 # queue really lost. Tests that emit such frames wait for the reads to land first.

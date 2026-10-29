@@ -101,7 +101,7 @@ Host `routing_action`/`routing_tool_calls` (`tool_capabilities.ROUTING_VERBS`) a
 
 #### Liveness census and the chat header
 
-`GET /api/state` lists `active_chat_activities` (§11.1): direct turns and physical root actors, plus distinct late work. Parked direct turns keep their ID and `kind="direct_chat"`; `pause_cause` names why, never execution authority. Census alone inserts live entries; finals/census remove them. Only complete, supervisor-ready absence clears entries; partial reads keep positives. `chat_activity.js::createStateSnapshotSequencer` serves Main's short poll and `app.js`'s longer one.
+`GET /api/state` lists `active_chat_activities` (§11.1): direct turns and physical root actors, plus distinct late work. Parked direct turns keep their ID and `kind="direct_chat"`; `pause_cause` names why, never execution authority. Census alone inserts live entries; finals/census remove them. Only complete, supervisor-ready absence clears entries; partial reads keep positives. `state_snapshots.js` serves Main's short poll, `app.js`'s longer one and Evolution, each read bounded.
 
 The same body carries the work projection (§11.1; vocabulary and grouping: `gateway/work_status.py`, observations: `work_projection.py`): one status per work (a request, its Continue episodes, live members) and per room, with the controls its doors accept now at exact targets. Room surfaces word it through `work_status.js` and derive no status, mark or control (Activity takes its controls); only the socket, an unconfirmed send, readiness and the owner's own Stop press overlay it. Until a complete ready body, omitted works stay unconfirmed without controls; facts (typing, an unlisted member's card, terminal/helper/model-wait/question frames, control acknowledgements), never narration, re-read it.
 
@@ -109,7 +109,7 @@ The same body carries the work projection (§11.1; vocabulary and grouping: `gat
 
 Optional `model_activity` carries the current call's observations (§6) through this census only: no new poller or durable phase log. A work's `call` is the operation its working members share; `task_phase_chip.js` words it on card, header and sidebar alike. Dispatch reads Sending (exact phase in details), never provider thinking. Queue/rejoin/unknown stay static; missing facts invent no cause or ETA. Brief phases may end before a census read.
 
-Room-matched typing/System `client_message_id` retires its `Sending...`. Same-room `initialization_notice` offers retry for the named send, or all kept sends if unnamed. System voice ends no turn. `ingress_accepted` means `Input saved`, not admission. `ingress_pending` (dispatch still owed: §4) keeps the frame retained without an automatic retry; `ingress_dispatched` settles it, and a saved row from an ended host is an explicit delivery doubt. `Starting…` stays until reconnect proves readiness (`Online`); the host's `boot` phases refine it (words: DESIGN §4) without ever claiming `Online`. Unreadable question detail (`required_question_unavailable`) stays static unknown.
+Room-matched typing/System `client_message_id` retires its `Sending...`. Same-room `initialization_notice` offers retry for the named send, or all kept sends if unnamed. System voice ends no turn. `ingress_accepted` means `Input saved`, not admission. `ingress_pending` (dispatch still owed: §4) keeps the frame without an automatic retry; `ingress_dispatched` settles it, and a saved row from an ended host is an explicit delivery doubt. `Starting…` stays until reconnect proves readiness (`Online`); the host's `boot` phases refine it (words: DESIGN §4), never claiming `Online`. Unreadable question detail (`required_question_unavailable`) stays static unknown.
 
 Owner rows/routing annotations stay in the bounded local journal until history confirms `client_message_id`. Early root answers carry `task_phase="finalizing"`, derived on replay from the open checkpoint. `task_cost_finalized` never closes a card; `log_events.taskTerminalSummary` projects settled task-scope `observedOutcome` into the chip, with quieter `Finalizing…` from `task_phase_chip.paintTaskPhase`.
 
@@ -159,7 +159,7 @@ History adds an inert `task_evidence` carrier for represented tasks or unanswere
 
 ### Files
 
-Files offers navigation, image/sandboxed-PDF/text preview (explicit binary/unsupported state), editing, create/upload/download, OS open, copy/move/paste and recursive delete. Desktop/web share one download contract. Save needs writable complete text; selection, directory changes, navigation and unload guard unsaved edits. Backend root/symlink policy (§4) owns paths; UI strings/disabled controls grant no authority.
+Files browses, previews (image, sandboxed PDF, text; binary/unsupported said), edits, creates, uploads, downloads (one desktop/web contract), OS-opens, copies/moves/pastes, deletes recursively; a narrow page's lone file is a layer. Save needs writable complete text; selection, folder changes, navigation and unload guard unsaved edits. Backend root/symlink policy (§4) owns paths; UI strings/disabled controls grant no authority.
 
 ### Skills and Widgets
 
