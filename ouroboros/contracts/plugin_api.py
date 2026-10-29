@@ -15,7 +15,7 @@ import json
 import pathlib
 import re
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Dict, List, Optional, Protocol, Sequence, TypedDict, runtime_checkable
+from typing import Any, Awaitable, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, TypedDict, runtime_checkable
 
 from ouroboros.contracts.skill_manifest import VALID_SKILL_PERMISSIONS
 from ouroboros.skill_token import SkillToken
@@ -27,7 +27,8 @@ from ouroboros.skill_token import SkillToken
 # refused a NEW PASS at issuance (``extension_new_pass_admission_error``).
 # 2.0 absorbs 1.4's presence capability (reviewed transport skills may submit
 # authenticated non-owner presence events through the Host Service ceiling).
-PLUGIN_API_VERSION = "2.0"
+# 2.1 adds ``read_memory``; a payload declaring 2.0 negotiates unchanged.
+PLUGIN_API_VERSION = "2.1"
 # The generation an extension WITHOUT the manifest field binds against —
 # "absent ≡ 1.3 by construction" (owner-ratified §6.1-Δ; deliberately NOT 1.4).
 LEGACY_PLUGIN_API_GENERATION = "1.3"
@@ -80,7 +81,7 @@ MATRIX_CAPABILITIES: frozenset[str] = frozenset({
 # (the complement of MATRIX_CAPABILITIES over the PluginAPI surface).
 ALWAYS_AVAILABLE_CAPABILITIES: frozenset[str] = frozenset({
     "log", "get_settings", "get_state_dir", "skill_job_dir",
-    "get_skill_token", "get_runtime_info",
+    "get_skill_token", "get_runtime_info", "read_memory",
 })
 
 # Capabilities a short-lived OUT_OF_PROCESS child cannot use directly: a persistent
@@ -199,6 +200,7 @@ def plugin_api_surface_fingerprint() -> str:
 # bumped and the new fingerprint recorded here.
 PLUGIN_API_SURFACE_FINGERPRINTS: Dict[str, str] = {
     "2.0": "03fabdf4334e6b2bde217b4cb83a80faaebc773ddce870546dd2108b75de17ca",
+    "2.1": "7e288212fd5bcaaa5de961bde9180ca8669e45c00bbfa8d59ffbccccf9442cdb",
 }
 
 
@@ -483,9 +485,31 @@ class PluginAPI(Protocol):
         """Return a read-only runtime snapshot; additive within schema v1."""
         ...
 
+    def read_memory(self, operation: str, parameters: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+        """Read this installation's whole memory (2.1) with host authority, never a calling task's view; contract
+        ``ouroboros.memory/1`` (``ouroboros/memory_reader.py``).
+
+        ``catalog`` pages one ``area`` (``rooms``, ``records``, ``story``, ``marks``, ``shelves``, ``shelf``,
+        ``documents``, ``history``, ``relations``) by an opaque ``cursor``; ``document`` reads one ``address``
+        (``record``, ``note``, ``file``, ``entry``) by code-point ``start``/``length`` bound to a ``revision``;
+        ``changes`` returns chronicle records after a ``position``. The host names the data root; no memory
+        source is written, activated or created, though the chronicle's derived index may catch up. Synchronous
+        I/O: call it off the event loop (a sync handler or ``asyncio.to_thread``). A refusal raises ``MemoryReadError``.
+        """
+        ...
+
 
 class ExtensionRegistrationError(Exception):
     """Raised when a registration violates namespace, permission, or schema."""
+
+
+class MemoryReadError(Exception):
+    """A refused ``read_memory`` call: ``code`` is ``invalid_parameter``, ``not_found``, ``revision_mismatch``,
+    ``position_mismatch`` or ``unavailable``; a mismatch names the source's ``current_revision``."""
+
+    def __init__(self, code: str, message: str, *, current_revision: Optional[str] = None) -> None:
+        super().__init__(f"{code}: {message}")
+        self.code, self.message, self.current_revision = code, message, current_revision
 
 
 def normalize_extension_route_methods(methods: Any, *, subject: str) -> tuple[str, ...]:
@@ -513,7 +537,7 @@ def normalize_extension_route_methods(methods: Any, *, subject: str) -> tuple[st
 
 
 __all__ = [
-    "PluginAPI", "ExtensionRegistrationError", "FORBIDDEN_SKILL_SETTINGS",
+    "PluginAPI", "ExtensionRegistrationError", "MemoryReadError", "FORBIDDEN_SKILL_SETTINGS",
     "PLUGIN_API_VERSION", "LEGACY_PLUGIN_API_GENERATION",
     "PLUGIN_API_SURFACE_FINGERPRINTS", "PluginAPINegotiation", "RuntimeInfo",
     "VALID_EXTENSION_PERMISSIONS", "VALID_EXTENSION_ROUTE_METHODS",

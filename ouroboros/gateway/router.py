@@ -139,6 +139,7 @@ def collect_routes(
         api_reset,
         api_update_apply,
         api_update_check,
+        api_update_description,
         api_update_preflight,
         api_update_status,
     )
@@ -288,6 +289,7 @@ def collect_routes(
         Route("/api/update/status", endpoint=api_update_status),
         Route("/api/update/check", endpoint=api_update_check, methods=["POST"]),
         Route("/api/update/preflight", endpoint=api_update_preflight, methods=["POST"]),
+        Route("/api/update/description", endpoint=api_update_description, methods=["POST"]),
         Route("/api/update/apply", endpoint=api_update_apply, methods=["POST"]),
         Route("/api/cost-breakdown", endpoint=make_cost_breakdown_endpoint(data_dir)),
         *storage_routes(data_dir),

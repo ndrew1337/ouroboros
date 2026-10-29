@@ -264,9 +264,12 @@ def _process_root_candidates(
         ])
 
     if hasattr(ctx, "drive_root"):
+        from ouroboros.tool_access_user_files import deliverables_process_roots
+
         for drive in _task_root_drives(ctx):
             _add_task_roots(drive)
         candidates.append(("user_files", resource_root_path(ctx, "user_files"), "user_files", ""))
+        candidates += [("user_files", root, "user_files", "") for root in deliverables_process_roots(ctx)]
     if include_skill:
         base, source, selected_name = _skill_payload_base(
             ctx,
@@ -350,9 +353,9 @@ def filesystem_affordance_map(ctx: Any, *, runtime_mode: str = "") -> dict[str, 
         "invisible_roots": sorted(_ALL_ROOTS - set(policy)),
         "root_paths": root_paths,
         "default_shell_cwd": shell_roots[0][0] if shell_roots else "",
-        "allowed_shell_cwd_roots": [label for label, _root in shell_roots],
+        "allowed_shell_cwd_roots": list(dict.fromkeys(label for label, _root in shell_roots)),
         "default_service_cwd": service_roots[0][0] if service_roots else "",
-        "allowed_service_cwd_roots": [label for label, _root in service_roots],
+        "allowed_service_cwd_roots": list(dict.fromkeys(label for label, _root in service_roots)),
         "git_readonly_subcommands": git_readonly_subcommands,
         "light_gated_roots": sorted(light_gated_roots),
     }

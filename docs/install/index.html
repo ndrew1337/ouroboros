@@ -11,10 +11,10 @@
   <meta property="og:title" content="Install Ouroboros">
   <meta property="og:description" content="Desktop downloads, headless CLI setup, source installation, and verified release metadata for Ouroboros.">
   <meta property="og:url" content="https://ouroboros-agent.ai/install/">
-  <meta property="og:image" content="https://ouroboros-agent.ai/assets/og-preview.png?v=44a9e298f8">
+  <meta property="og:image" content="https://ouroboros-agent.ai/assets/og-preview.png?v=65964f9506">
   <meta property="og:image:alt" content="Ouroboros install and release downloads">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:image" content="https://ouroboros-agent.ai/assets/og-preview.png?v=44a9e298f8">
+  <meta name="twitter:image" content="https://ouroboros-agent.ai/assets/og-preview.png?v=65964f9506">
   <meta name="twitter:image:alt" content="Ouroboros install and release downloads">
   <title>Install Ouroboros</title>
   <link rel="icon" href="/assets/icon_1024.png" type="image/png">
@@ -86,8 +86,16 @@
 
     <p class="install-requirement"><strong>Model access:</strong> choose a connected Codex account as the Main model source, configure a supported remote provider API key, or use a local GGUF model. Claude Code and Cursor subscriptions can run delegated coding and review; they are not Main model sources. The first-run wizard guides model access, review policy, and budget setup.</p>
 
+    <h2 id="homebrew">Homebrew on macOS</h2>
+    <p>Homebrew can install and update the same notarized app. This repository is its own tap:</p>
+    <pre><code>brew tap razzant/ouroboros https://github.com/razzant/ouroboros.git
+brew install --cask razzant/ouroboros/ouroboros
+# Optional CLI, as Install CLI.command does from the DMG:
+/Applications/Ouroboros.app/Contents/Resources/bin/install-ouroboros-cli</code></pre>
+    <p>What an upgrade replaces and what it keeps, an app already in Applications, custom data roots and uninstalling are covered in the <a href="https://github.com/razzant/ouroboros#homebrew-on-macos">README</a>.</p>
+
     <h2>Optional CLI included with the app</h2>
-    <p>The desktop downloads already contain an optional CLI installer. On macOS, after copying the app to Applications, double-click <code>Install CLI.command</code> in the mounted DMG. On Linux use <code>./Ouroboros/bin/install-ouroboros-cli</code>; on Windows use <code>Ouroboros\bin\install-ouroboros-cli.cmd</code>. The installer creates a user-local <code>ouroboros</code> command without sudo.</p>
+    <p>The desktop downloads already contain an optional CLI installer. On macOS, after copying the app to Applications, double-click <code>Install CLI.command</code> in the mounted DMG; after a Homebrew install, run the last command under <a href="#homebrew">Homebrew on macOS</a>. On Linux use <code>./Ouroboros/bin/install-ouroboros-cli</code>; on Windows use <code>Ouroboros\bin\install-ouroboros-cli.cmd</code>. The installer creates a user-local <code>ouroboros</code> command without sudo.</p>
 
     <h2>Advanced: packaged Linux setup</h2>
     <p>Install the downloaded Debian package with <code>sudo apt install ./ouroboros_*_amd64.deb</code>, or an RPM with <code>sudo dnf install ./ouroboros-*.x86_64.rpm</code>. Native packages install to <code>/opt/ouroboros</code>, put <code>ouroboros</code> on <code>PATH</code>, and add a desktop entry plus an opt-in systemd user unit. They never enable or start that service during installation.</p>

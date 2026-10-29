@@ -1527,13 +1527,13 @@ The frozen ABI is documented in
 This section shows the practical shape.
 
 Extensions declare the PluginAPI generation they bind against in the manifest
-(PluginAPI 2.0, ABI 7.0):
+(PluginAPI 2.1, ABI 7.0; a payload declaring "2.0" still loads):
 
 ```yaml
-plugin_api: "2.0"            # major strict; minor = required minimum
+plugin_api: "2.1"            # major strict; minor = required minimum
 # or, with required capabilities (closed set, validated per execution mode):
 # plugin_api:
-#   version: "2.0"
+#   version: "2.1"
 #   capabilities: [register_tool, subscribe_event]
 ```
 
@@ -1577,7 +1577,7 @@ def register(api):
         },
     )
 
-    # Settings sub-section on the Settings page (v5.7.0+).
+    # Settings sub-section on the Settings page.
     # Settings sections use a narrow declarative subset: form/action for
     # configuration writes and markdown/json for explanatory diagnostics.
     # Rich widget-only components (media, stream, map, kanban, module JS)
@@ -1605,7 +1605,7 @@ def register(api):
     # Cleanup callback when the extension is unloaded / disabled.
     api.on_unload(close_pool)
 
-    # Read-only runtime info (v5.7.0+).
+    # Read-only runtime info.
     info = api.get_runtime_info()
     # {runtime_mode, app_version, data_dir, server_port, skill_dir, state_dir,
     #  execution_mode, capabilities}  # execution_mode/capabilities: negotiate OOP availability
@@ -1614,14 +1614,30 @@ def register(api):
     keys = api.get_settings(["OPENROUTER_API_KEY"])
 ```
 
-### Async tool handlers (v5.7.0+)
+### Reading memory
+
+With `plugin_api: "2.1"`, `api.read_memory(operation, parameters)` is the supported memory read
+(contract `ouroboros.memory/1`, shapes in `ouroboros/memory_reader.py`) in both execution modes.
+It answers with the installation's whole memory under host authority, never the calling task's
+view: a tool or route that passes answers on hands that memory to its caller. No memory source is
+written or activated (the chronicle's derived index may catch up); a refusal raises
+`MemoryReadError` with a `code`. It is synchronous I/O: call it from a sync handler or through
+`asyncio.to_thread`, never inside an `async` handler, which runs on the server loop. `catalog`
+pages an `area` (pass `next` as `cursor` until `complete`; a filtered page may be short) and
+`document` reads an address by code-point range; a `next` bound to a revision or fingerprint (a
+note, file, the story, a note's links, nested changes) is refused once its source changed, never
+mixed. `changes` advances only through returned chronicle records. Long strings, lists and
+objects are `ref`s whose `address` and `field` read the stored value whole; a long composed string
+(a title, a label) is a preview whose `derived_from` names its source. Search and inbound
+links are the skill's work over these reads, stating the coverage read.
+
+### Async tool handlers
 
 Tool handlers can be plain functions OR `async def` coroutines —
 the registry detects coroutines and runs them on a helper thread with
 a fresh event loop under `asyncio.wait_for(timeout_sec)`. They do not
 execute on the server's main event loop, so do not rely on loop-local
-state captured at registration time. HTTP routes and WS handlers have
-always supported async; v5.7.0 closes the asymmetry for tools.
+state captured at registration time, as for HTTP routes and WS handlers.
 
 ```python
 async def do_search(ctx, query: str = ""):
@@ -1632,7 +1648,7 @@ async def do_search(ctx, query: str = ""):
 api.register_tool("search", handler=do_search, description=..., schema=...)
 ```
 
-### `kind: "module"` widgets (v5.7.0+)
+### `kind: "module"` widgets
 
 For surfaces the declarative components cannot express, ship a `widget.js`
 mounted inside a sandboxed `<iframe srcdoc>`:
@@ -2146,7 +2162,7 @@ unknown/non-finite values as `null`, use `spanGaps=false`, and expose an ARIA
 label plus an expandable same-data semantic table (also the Chart.js fallback).
 Kanban drag/drop and the native `Move to` control call the same `on_move` route
 with `{card_id, column_id}` and share busy/error state. A `status` component can
-also observe `refreshing` (v6.71.0): a background poll refetch that already has
+also observe `refreshing`: a background poll refetch that already has
 data keeps the content and shows a thin indicator instead of a loading swap —
 your declared `loading` label is reused unless you declare a `refreshing` one.
 

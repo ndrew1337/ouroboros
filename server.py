@@ -10,8 +10,10 @@ import sys
 import threading
 import time
 import uuid
-# The executing checkout is the implicit repository before any import resolves REPO_DIR; an explicit one wins.
-os.environ.setdefault("OUROBOROS_REPO_DIR", os.path.dirname(os.path.abspath(__file__)))
+# Before any import resolves a path: the executing checkout is the implicit repository and the data root is
+# settled; an explicit value wins, and APP_ROOT alone never silently leaves historical memory (#1239).
+from ouroboros.launch_roots import enter_direct, same_location  # noqa: E402 — standard library only
+os.environ.update(enter_direct(os.path.dirname(os.path.abspath(__file__))))
 from ouroboros.utils import read_json_dict as read_json_dict, utc_now_iso  # noqa: E402
 from typing import Any, Dict, Optional
 
@@ -132,7 +134,7 @@ if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
 _pytest_default_real_data_dir = (
     "pytest" in sys.modules
     and not os.environ.get("OUROBOROS_DATA_DIR")
-    and DATA_DIR == pathlib.Path.home() / "Ouroboros" / "data"
+    and same_location(DATA_DIR, pathlib.Path.home() / "Ouroboros" / "data")
 )
 
 RESTART_EXIT_CODE = 42
@@ -1107,7 +1109,7 @@ async def lifespan(app):
     default_real_data_dir = pathlib.Path.home() / "Ouroboros" / "data"
     pytest_default_real_data_dir = (
         (bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules)
-        and lifespan_drive_root == default_real_data_dir
+        and same_location(lifespan_drive_root, default_real_data_dir)
         and not os.environ.get("OUROBOROS_DATA_DIR")
     )
     if not pytest_default_real_data_dir:  # an imported ASGI app is admitted here; main() already was

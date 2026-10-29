@@ -169,6 +169,19 @@ test('rows carry their size, growth, reason and the largest parts; growth never 
     assert.doesNotMatch(renderStorage(response({ count: count() }), { now: NOW }).summary, AVOIDED);
 });
 
+test('a work folder whose default could not be chosen stays listed as unknown with the server\'s reason', () => {
+    const reason = 'the default projects folder is undecided: this data root\'s work-root basis is unknown. Set OUROBOROS_SUBAGENT_PROJECTS_ROOT to the folder to use; nothing was created or moved.';
+    const undecided = place('project_folders', 'work', null, { roots: [], unreadable: 1, logical_bytes: 0, files: 0, undecided: reason });
+    const saved = count({ unreadable: 1, places: [place('task_results', 'work', 48 * GB), undecided] });
+    assert.deepEqual(placeRows(saved, 7).map((row) => [row.id, row.bytes]), [['task_results', 48 * GB], ['project_folders', null]]);
+    const view = renderStorage(response({ count: saved }), { now: NOW });
+    const row = view.places.split(/(?=data-storage-place=")/).find((chunk) => chunk.startsWith('data-storage-place="project_folders"'));
+    assert.match(row, /storage-place-size is-unknown"[^>]*><\/span>[\s\S]*Your project files\. Not deleted here\. · Not counted: the default projects folder is undecided/);
+    assert.match(row, /Set OUROBOROS_SUBAGENT_PROJECTS_ROOT to the folder to use/);
+    assert.doesNotMatch(row, /Could not be read\.|0 bytes/);
+    assert.match(view.summary, /1 item could not be read/);
+});
+
 test('a running count shows its progress sentence, Stop and the measure action busy; a first count lists finished places', () => {
     const first = renderStorage(response({ counting: counting() }), { now: NOW });
     assert.match(first.summary, /Not counted yet/);
