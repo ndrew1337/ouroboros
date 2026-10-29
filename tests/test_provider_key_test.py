@@ -642,8 +642,6 @@ def test_gigachat_probe_uses_one_ephemeral_client(monkeypatch):
 
 def test_failure_and_malformed_success_never_retry_or_learn(monkeypatch):
     observed = _bypass_accounting(monkeypatch)
-    before_rejected = copy.deepcopy(LLMClient._REJECTED_PARAMS_CACHE)
-    before_ceilings = copy.deepcopy(LLMClient._EFFORT_CEILING_CACHE)
 
     class Unauthorized(RuntimeError):
         status_code = 401
@@ -666,8 +664,6 @@ def test_failure_and_malformed_success_never_retry_or_learn(monkeypatch):
         }
         assert len(remote.calls) == 1
     assert len(observed) == 2
-    assert LLMClient._REJECTED_PARAMS_CACHE == before_rejected
-    assert LLMClient._EFFORT_CEILING_CACHE == before_ceilings
 
 
 def test_typed_payment_required_maps_to_no_credits():

@@ -111,8 +111,6 @@ _PARENT_OWNED = (
     "check_worktree_readiness",
     "emit_review_event",
     "emit_review_usage",
-    "format_advisory_error",
-    "get_advisory_runtime_diagnostics",
     "load_governance_doc",
     "resolve_intent",
     "review_drive_root",

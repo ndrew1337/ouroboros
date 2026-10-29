@@ -122,15 +122,7 @@ def test_an_unknown_start_retry_replays_the_rules_it_was_prepared_with(tmp_path,
     assert payload["status"] == "started" and retry == original
 
 
-def test_supervisor_prompt_keeps_owner_scope_before_defaults_and_its_verdicts():
-    """The boundary this prompt holds: scoped owner rules first both ways, disclosure includes confirmation
-    and linking, ordinary speech and attestation-free scoped consent stay allowed, the doubt default and
-    the verdict format stay."""
+def test_supervisor_prompt_keeps_machine_read_verdict_format():
+    """The parser's verdict vocabulary is structural; prompt meaning belongs to review."""
     text = (Path(__file__).resolve().parents[1] / "prompts" / "SAFETY.md").read_text(encoding="utf-8")
-    for anchor in ("precede the lists and defaults here", "breaking their restriction is DANGEROUS even if listed SAFE",
-                   "where they say how to act in doubt, follow them over the SAFE default",
-                   "Words reveal what they state, confirm or link for their audience",
-                   "which a name or hypothetical alone is not", "demanding no attestation it does not require",
-                   "attestation lifts no separate boundary", "Otherwise, when in doubt → SAFE.",
-                   '"status": "SAFE" | "SUSPICIOUS" | "DANGEROUS"'):
-        assert anchor in text, anchor
+    assert '"status": "SAFE" | "SUSPICIOUS" | "DANGEROUS"' in text

@@ -250,27 +250,40 @@ class PresenceTurnGate:
     def _acquisition(self, conversation_key: str):
         """Take what ``run`` takes, in the same order, without ever blocking.
 
-        A generator that yields while a resource is busy and returns the ExitStack holding
-        everything; closing it early releases whatever was already taken. The coroutine and
-        the thread admissions differ only in how they sleep between attempts.
+        A generator that yields the busy resource (``conversation`` or ``capacity``) and returns
+        the ExitStack holding everything; closing it early releases whatever was already taken.
+        The admissions differ only in how they wait between attempts, or (``try_admit``) not at all.
         """
         from ouroboros.platform_layer import file_unlock
 
         key, conversation_lock = self._conversation(conversation_key)
         with ExitStack() as held:
             while not conversation_lock.acquire(blocking=False):
-                yield
+                yield "conversation"
             held.callback(conversation_lock.release)
             if self._state_root is not None:
                 fd = os.open(self._conversation_file(key), os.O_CREAT | os.O_RDWR, 0o600)
                 held.callback(os.close, fd)
                 while not _try_exclusive(fd):
-                    yield
+                    yield "conversation"
                 held.callback(file_unlock, fd)
             while (release_slot := self._try_slot()) is None:
-                yield
+                yield "capacity"
             held.callback(release_slot)
             return held.pop_all()
+
+    def try_admit(self, conversation_key: str) -> tuple[PresenceTurnLease | None, str]:
+        """One non-blocking pass of ``admit``: ``(lease, "")``, or ``(None, busy)`` naming the first
+        busy resource after releasing everything this pass took. Nothing waits or survives it."""
+        key, _lock = self._conversation(conversation_key)
+        steps = self._acquisition(key)
+        try:
+            busy = next(steps)
+        except StopIteration as done:
+            return PresenceTurnLease(key, done.value, self), ""
+        finally:
+            steps.close()
+        return None, busy
 
     async def admit(self, conversation_key: str) -> PresenceTurnLease:
         """Take what ``run`` takes, in the same order, as a coroutine.

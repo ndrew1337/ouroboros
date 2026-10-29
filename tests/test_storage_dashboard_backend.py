@@ -59,6 +59,20 @@ def _write(path: Path, size: int) -> Path:
     return path
 
 
+def test_first_count_progress_does_not_call_an_undecided_folder_zero(tmp_path):
+    progress = []
+    known = tmp_path / "known"
+    known.mkdir()
+    _write(known / "result", 3)
+    unknown = {"id": "project_folders", "group": "work", "roots": [], "undecided": "Choose the project folder"}
+    ticks = iter(range(1000))  # every traversal tick crosses the reporting interval
+    count = measure(tmp_path, places=[unknown, _place("task_results", known)], progress=progress.append,
+                    clock=lambda: float(next(ticks)))
+    assert _row(count, "project_folders")["bytes"] is None
+    assert progress and any(row["places_done"] == 1 for row in progress)
+    assert all(part["name"] != "project_folders" for row in progress for part in row["done"])
+
+
 @pytest.fixture(params=["openat", "by-path"])
 def walk(request, monkeypatch):
     """Both traversals: directory-relative no-follow opens, and the by-path fallback a platform

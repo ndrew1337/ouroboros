@@ -427,7 +427,7 @@ def _compact_annotations_locked(drive_root: Any, path: pathlib.Path) -> None:
     rows.sort(key=lambda row: str(row.get("ts") or ""))
     tmp = path.with_name(f".{path.name}.tmp.{uuid.uuid4().hex}")
     data = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows).encode("utf-8")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o644)
     try:
         view = memoryview(data)
         while view:
@@ -533,7 +533,7 @@ def append_chat_annotation(
                 if require_latest_token is not None and latest_token not in set(require_latest_token):
                     return False  # a NEWER routing attempt owns the card now
         data = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_BINARY", 0), 0o644)
         try:
             view = memoryview(data)
             while view:
@@ -634,22 +634,24 @@ ROUTING_REFUSAL_CAUSES: Dict[str, str] = {
     "target_not_found": "that project does not exist",
 }
 
-# Host routing refusals stay in the issuing chat regardless of the target's
-# Project binding (room_membership); they are never terminal task facts.
+# Rows that stand alone in the chat that issued them, whatever the named task's room: host
+# routing refusals and a relay's answer (also its work's speech: WORK_SPEECH_ELSEWHERE_TYPES).
+# Never terminal task facts.
 ORIGIN_ADDRESSED_NOTICE_TYPES = frozenset({"task_not_started", "task_start_unconfirmed", "steer_not_delivered", "relay_reply"})
 
-# A root's deliberate plain-text notice to Main (send_user_message
-# destination="main"); never a task's final answer.
+# A root's deliberate notice to Main (send_user_message destination="main"); never a task's final answer.
 MAIN_NOTICE_TYPE = "main_notice"
-# Rows pinned to Main whatever the sender's Project binding: the supervisor
-# send handler and room_membership replay read this one set.
-MAIN_PINNED_ROW_TYPES = frozenset({"project_started", "project_handoff", "project_completion_summary", MAIN_NOTICE_TYPE})
-# Rows whose address is the producer's, never their task's room: Main pins, the
-# origin-addressed refusals and the Main question pointer. The bus write seam
-# (``message_bus.send_with_budget``) reads this one set; the readers above keep
-# each component's own reading.
-ROOM_FIXED_ROW_TYPES = MAIN_PINNED_ROW_TYPES | ORIGIN_ADDRESSED_NOTICE_TYPES | frozenset({
-    "project_question_pointer", "relay_reply"})
+# Host rows about an act in Main, pinned there whatever the task's Project binding.
+MAIN_PINNED_ROW_TYPES = frozenset({"project_started", "project_handoff", "project_completion_summary"})
+# Model-authored work speech written to a fixed address (Main, a relay's source room): one row,
+# also a member of its work's room (``room_membership.row_rooms``), so a Project keeps its whole
+# conversation. Presence private contact stays Main-only.
+WORK_SPEECH_ELSEWHERE_TYPES = frozenset({MAIN_NOTICE_TYPE, "relay_reply"})
+# Rows whose written address is the producer's, never their task's room. The bus write seam
+# (``message_bus.send_with_budget``) and the supervisor send handler read this one set;
+# membership is ``room_membership.row_rooms``.
+ROOM_FIXED_ROW_TYPES = (MAIN_PINNED_ROW_TYPES | ORIGIN_ADDRESSED_NOTICE_TYPES | WORK_SPEECH_ELSEWHERE_TYPES
+                        | frozenset({"project_question_pointer"}))
 
 # Statuses of an act that LANDED (or is still in flight): no cause sentence.
 _LANDED_ROUTING_STATUSES = frozenset({"scheduled", "delivered", "read", "pending", "dispatch_pending", "accepted"})

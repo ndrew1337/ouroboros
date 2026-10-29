@@ -14,7 +14,6 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -650,19 +649,6 @@ def build_scope_section(scope: str = "") -> str:
     )
 
 
-def get_advisory_runtime_diagnostics(model: str, prompt_chars: int,
-                                     touched_paths: list) -> dict:
-    """Best-effort advisory dispatch diagnostics; never raises. (The retired
-    Claude-SDK/CLI version probes died with that transport.)"""
-    return {
-        "model": model,
-        "prompt_chars": prompt_chars,
-        "prompt_tokens_approx": max(1, prompt_chars // 4),
-        "touched_paths": touched_paths,
-        "python": sys.executable,
-    }
-
-
 def check_worktree_readiness(
     repo_dir: "Path",
     paths: "list[str] | None" = None,
@@ -778,27 +764,6 @@ def _run_review_preflight_tests(ctx: "Any", timeout: Optional[int] = None, *, fo
     except Exception as exc:
         logger.warning("_run_review_preflight_tests failed: %s", exc, exc_info=True)
         return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ERROR", text=(f"⚠️ Unexpected error running tests: {exc}")))
-
-
-def format_advisory_error(prefix: str, result_error: str, stderr_tail: str,
-                          session_id: str, diag: dict) -> str:
-    """Format advisory delivery diagnostics with the ADVISORY_ERROR sentinel."""
-    lines = [
-        f"⚠️ ADVISORY_ERROR: {prefix}",
-        f"  error          : {result_error}",
-        f"  model          : {diag.get('model', '?')}",
-        f"  python         : {diag.get('python', '?')}",
-        f"  prompt_chars   : {diag.get('prompt_chars', '?')}",
-        f"  prompt_tokens  : ~{diag.get('prompt_tokens_approx', '?')}",
-        f"  touched_paths  : {diag.get('touched_paths', [])}",
-    ]
-    if session_id:
-        lines.append(f"  session_id     : {session_id}")
-    if stderr_tail:
-        lines.append("  stderr_tail    :")
-        for ln in stderr_tail.strip().splitlines()[-30:]:
-            lines.append(f"    {ln}")
-    return "\n".join(lines)
 
 
 # v7next F2.3a (D06): moved spans live in their owner leaves; re-exported

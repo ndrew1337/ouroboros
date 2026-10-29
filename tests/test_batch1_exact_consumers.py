@@ -84,7 +84,7 @@ def test_context_uses_the_addressed_witness_authority(root):
     from ouroboros.context import _drive_state_section
 
     state.save_state(_prior())
-    witness = root / state_initialization.WITNESS_REL
+    witness = state_initialization.witness_path(root)
     raw = json.loads(witness.read_bytes())
     raw["phase"] = "pending"
     _write(witness, raw)

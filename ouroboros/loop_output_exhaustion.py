@@ -223,9 +223,10 @@ def finish(ctx: Any, *, reason: str = REASON) -> tuple:
     notice += " Saved work remains available; choose whether and how to continue."
     candidate = _loop()._live_delivery_candidate(ctx)
     saved = candidate.full_text if candidate is not None else _loop()._last_assistant_text(ctx.messages)
+    # Stamped before composing: the composer may end this rail on the owner's Stop now.
+    usage.update(execution_status="infra_failed" if reason == REASON else "failed", reason_code=reason)
     text, usage, trace = _loop()._forced_fallback_result(
         ctx, ctx.llm_trace, saved or notice, reason, source="output_exhaustion_no_recap", host_words=not saved)
-    usage.update(execution_status="infra_failed" if reason == REASON else "failed", reason_code=reason)
     trace["output_recovery"] = copy.deepcopy(record)
     set_terminal_host_notice(usage, str(usage.get("terminal_host_notice") or ""), notice)
     return text, usage, trace

@@ -123,6 +123,7 @@ class StoragePlace(TypedDict):
     rest: StorageRest
     growth_bytes: NotRequired[Optional[int]]  # against the previous finished count, when both have it
     growth_flag: NotRequired[Literal["unreadable"]]  # either count had unreadable items here
+    undecided: NotRequired[str]  # why its default folder cannot be chosen (launch_roots): unknown, never empty
 
 
 class StorageVolume(TypedDict):
@@ -153,7 +154,7 @@ class StorageCount(TypedDict):
 
 
 class StorageCounting(TypedDict):
-    """A running count: where it is, and the places already finished in this run."""
+    """A running count: where it is; ``done`` lists only finished places with a known size."""
 
     started_at: str
     place: str
@@ -422,19 +423,25 @@ def _walk_roots(roots: List[Tuple[str, Tuple[str, ...]]], walk: _Walk, named: Tu
 
 def place_roots(data_root: Any) -> List[Dict[str, Any]]:
     """The place table resolved for DATA_ROOT: ``{"id", "group", "roots": [(base, parts)]}`` in
-    walk order; configured roots come from ``config`` getters, never from the client."""
+    walk order; configured roots come from ``config`` getters, never from the client. A default
+    work root that cannot be chosen carries the refusal as ``undecided`` and no root to walk."""
     from ouroboros import config
+    from ouroboros.launch_roots import WorkRootUnavailable
 
     data = os.path.realpath(os.fspath(data_root))
     rows = []
     for place_id, group, spec in PLACES:
+        undecided = ""
         if isinstance(spec, str):
             configured = getattr(config, spec)
-            configured = configured() if callable(configured) else configured
+            try:
+                configured = configured() if callable(configured) else configured
+            except WorkRootUnavailable as refusal:  # counted as unknown, never guessed
+                configured, undecided = None, str(refusal)
             roots = [(os.path.realpath(os.fspath(configured)), ())] if configured else []
         else:
             roots = [(data, tuple(parts)) for parts in spec]
-        rows.append({"id": place_id, "group": group, "roots": roots})
+        rows.append({"id": place_id, "group": group, "roots": roots, **({"undecided": undecided} if undecided else {})})
     return rows
 
 
@@ -486,7 +493,7 @@ def measure(data_root: Any, *, places: Optional[List[Dict[str, Any]]] = None, io
         def send(current: str, counted: int, files: int) -> None:
             if progress is not None:
                 progress({"started_at": started_at, "place": place_id, "current": current,
-                          "places_done": len(done), "places_total": len(table),
+                          "places_done": len(results), "places_total": len(table),
                           "bytes": totals[0] + counted, "files": totals[1] + files, "done": list(done)})
         return send
 
@@ -499,8 +506,11 @@ def measure(data_root: Any, *, places: Optional[List[Dict[str, Any]]] = None, io
         place: StoragePlace = {"id": row["id"], "group": row["group"],
                                "roots": [os.path.join(base, *parts) for base, parts in roots],
                                "same_volume": same_volume, **counted}
+        if row.get("undecided"):  # a root that could not be chosen: one unread item of unknown size
+            place.update(present=True, bytes=None, unreadable=place["unreadable"] + 1, undecided=row["undecided"])
         results.append(place)
-        done.append({"name": row["id"], "bytes": counted["bytes"] or 0, "files": counted["files"]})
+        if place["bytes"] is not None:
+            done.append({"name": row["id"], "bytes": place["bytes"], "files": place["files"]})
         totals[0] += counted["bytes"] or 0
         totals[1] += counted["files"]
     return {

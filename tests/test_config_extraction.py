@@ -30,6 +30,9 @@ _ADDED_OWNERS = {
     "_resolved_safety_configuration": safety_config,
     "safety_configuration_requires_owner": safety_config,
     "normalize_consciousness_safety": safety_config,
+    "OWNER_RULES_KEY": safety_config,
+    "_RULES_ADDRESS": safety_config,
+    "owner_rules_section": safety_config,
     "WORKER_READY_CEILING_SEC": runtime_limits,
     # A spawned direct-Restart successor's bounded wait for its exiting parent's data-root admission.
     "SERVER_ADMISSION_WAIT_SEC": runtime_limits,
@@ -257,7 +260,6 @@ _MOVED_OWNERS = {
     "get_task_abs_ceiling_sec": runtime_limits,
     "get_task_idle_timeout_sec": runtime_limits,
     "get_vision_caption_timeout_sec": runtime_limits,
-    "get_update_letter_timeout_sec": runtime_limits,
     "get_ui_translation_timeout_sec": runtime_limits,
     "get_websearch_timeout_sec": runtime_limits,
 }

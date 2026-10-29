@@ -702,6 +702,9 @@ def enqueue_assisted_resolution_task(tx: Dict[str, Any]) -> str:
             # honors this key first): the resolver's own id, or after a fresh-id re-enqueue the
             # ORIGINAL id, so the money ceiling never resets across resume chains of one update.
             "root_task_id": str(tx.get("original_root_task_id") or task_id),
+            # The staged merge sits in the system repository itself; a follow-up it schedules
+            # keeps that resource instead of waiting as intent-unknown (#1799).
+            "resource_intent": {"kind": "system_repo"},
             "managed_update": {
                 "target_sha": str(tx.get("target_sha") or ""),
                 "conflict_paths": list(tx.get("conflict_paths") or []),

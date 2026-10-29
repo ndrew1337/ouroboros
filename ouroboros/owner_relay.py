@@ -142,19 +142,21 @@ def owner_quote(root, row: dict, *, address: str = "") -> dict:
                         "address": address or format_address(row_address(row)),
                         "client_message_id": str(row.get("client_message_id") or "")},
              "owner_row": copy.deepcopy(row)}
+    if isinstance(row.get("reply_to"), dict) and row["reply_to"]:  # what the owner was replying to, as the host resolved it
+        quote["reply_to"] = copy.deepcopy(row["reply_to"])
     if row.get("type") == "quiz_answer":
         from ouroboros.owner_quiz import recorded_answer_frame
         quote["question_frame"] = recorded_answer_frame(row["quiz"])
     return quote
 
 
-def relay_envelope(relay_id: str, quotes: list, *, chat_id: int, summary: str = "") -> dict:
+def relay_envelope(relay_id: str, quotes: list, *, chat_id: int, summary: str = "", label: str = "Main") -> dict:
     # The singular UI shape carries the first quote; the additive list retains
     # every selected source independently (never splice different owner rows).
     # `summary` is the teller's one line for the owner, which the room shows in place of the note.
     visible = [{k: copy.deepcopy(v) for k, v in q.items() if k != "owner_row"} for q in quotes]
     first = visible[0] if visible else {"text": "", "attachments": [], "source": {
-        "chat_id": chat_id, "label": "Main", "ts": "", "client_message_id": "", "address": ""}}
+        "chat_id": chat_id, "label": label, "ts": "", "client_message_id": "", "address": ""}}
     return {"relay_id": relay_id, **first, "quotes": visible, **({"summary": summary} if summary else {})}
 
 
@@ -170,6 +172,20 @@ def relay_sender_facts(root, teller_task_id: str) -> dict:
     return {"task_id": teller_task_id, "chat_id": facts["project_chat_id"], "name": name}
 
 
+def _source_label(root, chat_id: int) -> str:
+    """The room a note without owner quotes came from, for its card: Main, else that Project's name. A registry
+    that cannot be read names no Project ("Project"): presentation never refuses the owner's words."""
+    if int(chat_id) == 1:
+        return "Main"
+    from ouroboros.projects_registry import list_reserved_projects
+    try:
+        return next((str(p.get("name") or "Project") for p in list_reserved_projects(root) if p.get("chat_id") == chat_id),
+                    "Main")
+    except Exception:
+        logging.getLogger(__name__).debug("Relay source label of chat %s unreadable", chat_id, exc_info=True)
+        return "Project"
+
+
 def write_relay(root, task_id: str, *, relay_id: str, note: str, quotes: list, chat_id: int,
                 teller_task_id: str, canonical_root=None, sender_origin=None, client_surface=None,
                 summary: str = "") -> tuple[dict, bool]:
@@ -179,8 +195,9 @@ def write_relay(root, task_id: str, *, relay_id: str, note: str, quotes: list, c
     from ouroboros.utils import append_jsonl, utc_now_iso
     path = _mailbox_path(Path(root), task_id)
     path.parent.mkdir(parents=True, exist_ok=True)
+    label = {} if quotes else {"label": _source_label(canonical_root or root, chat_id)}
     entry = {"kind": KIND_RELAY, "msg_id": f"relay:{relay_id}:{task_id}", "ts": utc_now_iso(),
-             "text": note, "relay": relay_envelope(relay_id, quotes, chat_id=chat_id, summary=summary),
+             "text": note, "relay": relay_envelope(relay_id, quotes, chat_id=chat_id, summary=summary, **label),
              "owner_rows": [q["owner_row"] for q in quotes], "source_task_id": teller_task_id,
              "relay_canonical_root": str(canonical_root or root)}
     if client_surface:
@@ -210,6 +227,9 @@ def inject_relay(ctx, entry: dict, messages: list) -> None:
         address = format_address(row_address(row))
         loop._record_owner_directive(ctx, source="owner_mailbox", content=owner_text(row), msg_id=address)
         body = f"[Owner words quoted verbatim; handle {address}]\n{owner_text(row)}"
+        if isinstance(row.get("reply_to"), dict) and row["reply_to"]:
+            body += ("\n[Host reference: the message these owner words reply to; context, not the owner's words]\n"
+                     + json.dumps(row["reply_to"], ensure_ascii=False))
         if row.get("type") == "quiz_answer":
             from ouroboros.owner_quiz import recorded_answer_frame
             body += "\n[Host question frame]\n" + recorded_answer_frame(row["quiz"])

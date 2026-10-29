@@ -84,6 +84,7 @@ HTTP_ENDPOINTS: tuple[str, ...] = (
     "GET /api/update/status",
     "POST /api/update/check",
     "POST /api/update/preflight",
+    "POST /api/update/description",
     "POST /api/update/apply",
     "GET /api/cost-breakdown",
     "GET /api/storage",
@@ -461,8 +462,12 @@ HTTP_SHAPES: dict[str, Shape] = {
     "GET /api/update/status": Shape("200:UpdateStatusResponse 500:ErrorResponse",
                                     note="no network; running_sha is the executing core"),
     "POST /api/update/check": Shape("200:UpdateStatusResponse 500:ErrorResponse",
-                                    note="reads no body; fetches, may write the update letter; broadcasts update_progress_changed"),
+                                    note="reads no body; fetches and records range facts, never prose; broadcasts update_progress_changed"),
     "POST /api/update/preflight": Shape("200:UpdatePreflightResponse 500:ErrorResponse", "UpdatePreflightRequest"),
+    "POST /api/update/description": Shape(
+        "200:UpdateDescriptionResponse 400,409,503:UpdateDescriptionErrorResponse 500:ErrorResponse",
+        "UpdateDescriptionRequest",
+        note="admits one ordinary Main task that writes the description; 409 while a requested one runs; never repeats on its own"),
     "POST /api/update/apply": Shape(
         "200:UpdateApplySuccessResponse 400:ErrorResponse 409,500:UpdateApplyErrorResponse", "UpdateApplyRequest",
         note="200: inspect status (manual, assisted_started, restart_required, or ok with restarting); adoption requires the landed transaction/merge identity and running_sha after startup"),

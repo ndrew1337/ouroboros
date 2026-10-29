@@ -491,10 +491,12 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name (a relay's); client_message_id here names the owner's submission
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions  // a row shown in several rooms: the revision it took in each room it counted in
+ * @property {number[]=} also_rooms  // the other Projects that show this row: the frame is theirs too, one message
  */
 /** @typedef {Object} TypingOutbound
  * @property {"typing"} type
@@ -527,10 +529,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 /** @typedef {Object} VideoOutbound
  * @property {"video"} type
@@ -552,10 +555,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 /** @typedef {Object} LinkAction
  * @property {string} label
@@ -574,10 +578,11 @@
  * @property {Object=} transport
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /** @typedef {Object} QuizOption
@@ -615,10 +620,11 @@
  * @property {Object=} transport
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /**
@@ -671,10 +677,11 @@
  * @property {boolean=} project_thread  // server-stamped: chat_id is a reserved Project thread; Main never adopts it even before projectChatIds learns the project
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {import('./client_contract_types.js').ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind
+ * @property {Object.<string,number>=} room_revisions
  */
 
 /** @typedef {Object} LogOutbound
@@ -1461,6 +1468,7 @@
  * @property {number} project_panel_width  // px; 0 = CSS default
  * @property {Object.<string,number>} project_seen_revision  // monotonic paint ACK
  * @property {?number} main_seen_revision  // Main's monotonic paint ACK; null until a client first reads Main
+ * @property {Object.<string,number[][]>} read_ahead_revisions  // per chat id: revisions read in full in another room (host-owned)
  * @property {{mode:'default'|'hidden'|'custom',text:string}} welcome  // install-wide empty-Main UI copy, not chat history
  * @property {boolean=} ok
  */
@@ -1476,30 +1484,40 @@
 /** @typedef {import('./update_types.js').UpdateApplyRequest} UpdateApplyRequest */
 /** @typedef {import('./update_types.js').UpdateApplySuccessResponse} UpdateApplySuccessResponse */
 /** @typedef {import('./update_types.js').UpdateApplyErrorResponse} UpdateApplyErrorResponse */
+/** @typedef {import('./update_types.js').UpdateDescriptionRequest} UpdateDescriptionRequest */
+/** @typedef {import('./update_types.js').UpdateDescriptionResponse} UpdateDescriptionResponse */
+/** @typedef {import('./update_types.js').UpdateDescriptionErrorResponse} UpdateDescriptionErrorResponse */
 /** @typedef {import('./management_contract_types.js').UpdateProgress} UpdateProgress */
 /** @typedef {import('./update_types.js').UpdateProgressChangedOutbound} UpdateProgressChangedOutbound */
 /** @typedef {import('./update_types.js').UpdateStatusReadyOutbound} UpdateStatusReadyOutbound */
 
 /**
- * LLM-written update letter in `/api/update/status` and `/api/update/check`.
- * The additive `letter` is absent/null without a stored letter. It outlives its update;
- * `relation` compares startup source to target so the panel can relabel it instead of deleting it.
+ * The update description in `/api/update/status` and `/api/update/check`, written by Ouroboros as ordinary
+ * work (an owner request from Updates, or its own initiative) and never by a check. The additive `letter` is
+ * absent/null without a stored record, or with neither a description, an offered range nor a request.
+ * It outlives its update; `relation` compares startup source to the description's own range so the panel can
+ * relabel it instead of deleting it.
  *
  * @typedef {Object} UpdateLetter
- * @property {'ready'|'failed'} state
- * @property {'pending'|'applied'|'superseded'|'other'} relation  offered now / included in running source / newer target appeared / source moved elsewhere
- * @property {string} text  markdown; may be empty when a failed write has no previous good letter
+ * @property {'ready'|'failed'|'none'} state  `none`: no description saved; `failed` only on records from before descriptions became ordinary work
+ * @property {''|'pending'|'applied'|'superseded'|'other'} relation  offered now / included in running source / newer target appeared / source moved elsewhere; '' without text
+ * @property {string} text  markdown; empty when nothing is saved
  * @property {string} author_version  the Ouroboros version that wrote it
  * @property {string} target_version  the version it describes
  * @property {string} written_at  ISO 8601
- * @property {''|'no_credentials'|'budget_exhausted'|'context_overflow'|'timeout'|'material_unavailable'|'output_truncated'|'provider_unavailable'|'empty_response'|'runtime_source_unavailable'} error_kind
- * @property {string} error_text  short, secret-free; empty when state is ready
- * @property {{base_sha: string, target_sha: string, update_channel: string, target_ref: string}} key  the exact range the letter was written for
- * @property {boolean} has_last_good  `text` is the previous good letter kept through a failed rewrite; `relation`, `key` and the provenance describe THAT letter, not the range that failed
- * @property {boolean} description_current  successful shown text covers the exact running-source to checked-target range
- * @property {string} failed_at  ISO 8601 time of the failed attempt, independent of the shown text's written_at
- * @property {({base_sha: string, target_sha: string, update_channel: string, target_ref: string}|null)} latest_failed_key  the failed attempt's range, never the provenance of retained text
- * @property {?Object=} qualification - Exact-range commit receipts and observed GitHub checks, including missing evidence.
+ * @property {string} error_kind  a retained old failure, or the last check's `material_unavailable`/`runtime_source_unavailable`
+ * @property {string} error_text  short, secret-free
+ * @property {{base_sha: string, target_sha: string, update_channel: string, target_ref: string}} key  the exact range the text describes ({} without text)
+ * @property {boolean} has_last_good  `text` is an old previous good letter kept through a failed rewrite; `relation`, `key` and the provenance describe THAT letter
+ * @property {boolean} description_current  the shown text covers exactly the running-source to checked-target range; a newer post-merge run never clears it
+ * @property {string} failed_at  ISO 8601 of the retained failure or the check's material error
+ * @property {({base_sha: string, target_sha: string, update_channel: string, target_ref: string}|null)} latest_failed_key  that failure's range, never the provenance of retained text
+ * @property {?Object=} qualification - Exact-range commit receipts and observed GitHub checks of the last check's range (self-keyed by base_sha/target_sha), including missing evidence.
+ * @property {number} revision  compared by every writer; 0 before the first save
+ * @property {{task_id: string, model: string, requested: boolean}|{}} author  host-derived: the task that saved it, its model, whether it was the owner's request
+ * @property {?{base_sha: string, target_sha: string, update_channel: string, target_ref: string}} checked_key  the range the last fetching check offered
+ * @property {?{key: Object, collected_at: string, text_bytes: number, commits: number, bodies_read: number, bodies_omitted: number}} material  the range material beside the record (query_data kind update_material; text_bytes is the max_bytes reading its text whole)
+ * @property {?{task_id: string, current_task_id?: string, mode: 'write'|'rewrite', key: Object, requested_at: string, status: string, saved: boolean}} request  original request, current retry/admitted Continue and whether its own work saved
  */
 
 export const MAX_LINK_ACTIONS = 12;
@@ -1507,7 +1525,7 @@ export const MAX_QUIZ_OPTIONS = 6;
 // Mirror task_decision._COMMENT_MAX: ingress refuses longer comments, never
 // truncates; cards must offer only comments the ingress can deliver verbatim.
 export const MAX_DECISION_COMMENT = 2000;
-export const GATEWAY_CONTRACT_VERSION = '7.8.1';
+export const GATEWAY_CONTRACT_VERSION = '7.9.0';
 /** @typedef {import('./client_contract_types.js').ChatHistoryPosition} ChatHistoryPosition */
 /** @typedef {import('./client_contract_types.js').ChatHistoryResponse} ChatHistoryResponse */
 

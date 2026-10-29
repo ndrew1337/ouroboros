@@ -31,6 +31,7 @@ from ouroboros.observability import timed_phase
 from ouroboros.settings_integrity import copy_task_settings_context
 from ouroboros.cost_projection import cost_projection, resolve_cost_pair
 from ouroboros.task_results import (
+    STATUS_CANCELLED,
     STATUS_COMPLETED,
     STATUS_FAILED,
     lifecycle_named,
@@ -859,15 +860,6 @@ def emit_task_results(
     outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
     loop_rounds = (loop_outcome.get("usage") or {}).get("total_rounds")
     execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
-    # Pre-store carriers state the status observed now, as the outbox stamp does (a later race may differ).
-    terminal_status = _durable_terminal_status(env, task, execution_status)
-    outcome_axes = lifecycle_named(outcome_axes, terminal_status)
-    failed_or_forced = (
-        execution_status in {EXECUTION_FAILED, EXECUTION_INFRA_FAILED, EXECUTION_BEST_EFFORT}
-        or str(usage.get("execution_status") or usage.get("result_status") or "") in {EXECUTION_FAILED, EXECUTION_INFRA_FAILED}
-    )
-    if ctx is not None and failed_or_forced:
-        ctx._presence_completion_accepted = False
     reason_code = str(loop_outcome.get("reason_code") or "")
     if reason_code == REASON_OWNER_REQUESTED_FINALIZATION:
         # Which stop the owner pressed rides the terminal it ended: this frame, the stored result
@@ -876,6 +868,15 @@ def emit_task_results(
 
         if stop_origin := owner_stop_origin(custody_root, str(task.get("id") or "")):
             usage["cancel_origin"] = stop_origin
+    # Pre-store carriers state the status observed now, as the outbox stamp does (a later race may differ).
+    terminal_status = _durable_terminal_status(env, task, execution_status, usage=usage, reason_code=reason_code)
+    outcome_axes = lifecycle_named(outcome_axes, terminal_status)
+    failed_or_forced = (
+        execution_status in {EXECUTION_FAILED, EXECUTION_INFRA_FAILED, EXECUTION_BEST_EFFORT}
+        or str(usage.get("execution_status") or usage.get("result_status") or "") in {EXECUTION_FAILED, EXECUTION_INFRA_FAILED}
+    )
+    if ctx is not None and failed_or_forced:
+        ctx._presence_completion_accepted = False
     if is_presence_task(task):
         _stamp_presence_terminal_facts(task, usage, llm_trace, ctx, reason_code)
     # A Stop marker already on the task suppresses paid synthesis, not the durable outbox or free facts.
@@ -1142,13 +1143,19 @@ def _dispatch_root_post_task(
 
 def _durable_terminal_status(
     env: Any, task: Dict[str, Any], execution_status: str, *, existing: Dict[str, Any] | None = None,
+    usage: Dict[str, Any] | None = None, reason_code: str = "",
 ) -> str:
     """The status the durable task row settles to (ONE rule for the row and its outbox stamp).
 
     A failed execution axis — including the owner's "Stop now", whose forced
     finalization stamps ``execution_status="failed"`` under
     ``owner_requested_finalization`` — and an already-failed row both settle
-    ``failed``; everything else settles ``completed``.
+    ``failed``; everything else settles ``completed``. One exception: an inline
+    Presence turn that Stop now ended (the rail's reason with the immediate ``cancel_origin``
+    read from the still-open intent) settles ``cancelled``, also with a retained answer (a
+    ``best_effort`` axis), kept and never sent. No cancel custody can write that row (no
+    supervisor map holds the turn), so its runner's own terminal is the Stop's settlement
+    (#2012); Wrap up keeps ``failed``/``completed`` and other in-process turns keep their reading.
     """
     if existing is None:
         existing = load_task_result(env.drive_root, str(task.get("id") or "")) or {}
@@ -1156,6 +1163,10 @@ def _durable_terminal_status(
         str(existing.get("status") or "") == STATUS_FAILED
         or execution_status in {EXECUTION_FAILED, EXECUTION_INFRA_FAILED}
     )
+    origin = (usage or {}).get("cancel_origin")
+    if (task.get("_presence_turn") and reason_code == REASON_OWNER_REQUESTED_FINALIZATION
+            and isinstance(origin, dict) and origin.get("stop_policy") == "immediate"):
+        return STATUS_CANCELLED
     return STATUS_FAILED if failed else STATUS_COMPLETED
 
 
@@ -1196,7 +1207,8 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
         outcome_axes = normalize_outcome_axes({"outcome_axes": loop_outcome.get("outcome_axes")})
         execution_status = str((outcome_axes.get("execution") or {}).get("status") or "")
         reason_code = str(loop_outcome.get("reason_code") or "")
-        status = _durable_terminal_status(env, task, execution_status, existing=existing)
+        status = _durable_terminal_status(env, task, execution_status, existing=existing,
+                                          usage=usage, reason_code=reason_code)
         from ouroboros.task_finalization import build_completion_observations
 
         observations = build_completion_observations(
@@ -1369,6 +1381,7 @@ def build_review_context(env: Any) -> str:
             format_status_section,
             load_state,
             make_repo_key,
+            stale_marker_status,
         )
         from ouroboros.task_continuation import (
             list_review_continuations,
@@ -1385,8 +1398,7 @@ def build_review_context(env: Any) -> str:
         open_obs = state.get_open_obligations(repo_key=repo_key)
         open_debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
         if (
-            not state.advisory_runs
-            and not state.latest_attempt()
+            not state.latest_attempt()
             and not continuations
             and not corrupt
             and not open_obs
@@ -1399,13 +1411,15 @@ def build_review_context(env: Any) -> str:
         # the panel, tests, custody and binding, none of which this section decides.
         lines: List[str] = ["## Review Continuity", f"- repo_key={repo_key}"]
 
-        stale_matches_repo = not state.last_stale_repo_key or state.last_stale_repo_key == repo_key
-        if state.last_stale_from_edit_ts and stale_matches_repo:
+        marker_current, look_unreadable = stale_marker_status(state, pathlib.Path(env.drive_root), repo_key)
+        if marker_current:
             lines.append(
                 f"- stale_marker={state.last_stale_from_edit_ts[:19]}: "
                 f"{_truncate_with_notice(state.last_stale_reason or 'worktree edit invalidated advisory freshness', 220)}"
             )
             lines.append(f"  invalidated_by={state.stale_marker_attribution_note()}")
+            if look_unreadable:
+                lines.append(f"  preflight_unreadable={_truncate_with_notice(look_unreadable, 220)} (marker unverified)")
 
         if open_debts:
             lines.append("- retry_anchor=commit_readiness_debt")

@@ -4,7 +4,8 @@ One subject of the one review machinery. This module composes the subject — wh
 reply, what the task produced and the host-attested verification — and the result brief; the wave
 itself (the panel, custody, the paid stamp, $0 reuse, a rejoin, leaving on an addressed message,
 settlement and the ledger record) is ``review_change``'s own. Every seat answers one question,
-judged on the result, never on the method: the work trace is not part of the subject.
+judged on the result, and on the method only where the owner's words or explicit choice fixed
+it: the work trace is not part of the subject.
 
 The subject is frozen once, at the call: its exact text is retained in the task's artifact store
 and its sha is the wave's identity, so a second call over the same reply, material and request
@@ -158,9 +159,10 @@ def _declared_effects(ctx: Any, root: Any, task_id: str, issues: List[str]) -> L
 
 
 def _ask(ctx: Any) -> str:
-    """What was asked, host-attested: the task's own request fields, the claims it is held to
-    (an ingress contract's, else the latest plan revision's) and its owner's words."""
-    from ouroboros.owner_words import owner_words_text
+    """What was asked, host-attested: the task's own request fields (the objective with its author,
+    ``owner_words.objective_author_line``), the claims it is held to (an ingress contract's, else the
+    latest plan revision's) and its owner's words."""
+    from ouroboros.owner_words import objective_author_text, owner_words_text
     from ouroboros.review_evidence_sections import _accept_effective_claims, _accept_task_contract
 
     contract = _accept_task_contract(ctx)
@@ -169,6 +171,8 @@ def _ask(ctx: Any) -> str:
         value = contract.get(key)
         if value not in (None, "", [], {}):
             lines.append(f"{key}: {value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)}")
+            if key == "objective":
+                lines.append(f"The objective above: {objective_author_text(ctx)}.")
     try:
         claims, source, _exhibit = _accept_effective_claims(
             ctx, contract, getattr(ctx, "drive_root", None), str(getattr(ctx, "task_id", "") or ""))
@@ -582,6 +586,7 @@ def _hold_refused(ctx: Any, record_id: str, hold: Any) -> bool:
         record = ledger.load_record(ledger.ledger_root(ctx), record_id) if record_id else None
     except ValueError:
         record = None
+    ctx._completion_hold_cause = "blocking_refusal"  # each hold names its cause to the delivery owner
     hold(_findings_text(record or {"verdict": {"aggregate": "NOT_DISPATCHED"}, "dispatch_refusal": {}}, blocking=True))
     return True
 
@@ -712,6 +717,7 @@ def result_review_at_delivery(ctx: Any, content: str, llm_trace: Dict[str, Any],
             if (pending_review_choice_offered(ctx)
                     and str(getattr(ctx, "_acceptance_pending_review_choice", "") or "") == "finish"):
                 return False  # the mind chose to finish; the reviewers settle later and leave a mark
+            ctx._completion_hold_cause = "pending"
             hold("[Result review] The review of your result is still running (an addressed message or a seat "
                  "still answering). Read what reached you; your next delivery collects the same review at $0."
                  + (" You may instead finish with pending_review=finish; the reviewers then settle later."
@@ -736,6 +742,7 @@ def result_review_at_delivery(ctx: Any, content: str, llm_trace: Dict[str, Any],
             ctx._result_review_request_asked = asked
         if (str(record.get("record_id") or ""), subject.diff_sha) not in asked:
             asked.add((str(record.get("record_id") or ""), subject.diff_sha))
+            ctx._completion_hold_cause = "earlier_request"
             hold(_request_changed_text(ctx, record))
             return True
         # Delivered again: the mind judged the new words leave what was asked as it was.
@@ -754,6 +761,7 @@ def result_review_at_delivery(ctx: Any, content: str, llm_trace: Dict[str, Any],
         ctx._result_review_shown = shown
     if str(record.get("record_id") or "") not in shown or blocking:
         shown.add(str(record.get("record_id") or ""))
+        ctx._completion_hold_cause = "findings"
         hold(_findings_text(record, blocking=blocking))
         return True
     if enforcement == "advisory":

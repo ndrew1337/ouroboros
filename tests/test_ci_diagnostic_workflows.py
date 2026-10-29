@@ -19,8 +19,10 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 UPLOAD_ACTION = "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02"
 CANARY, CANARY_PUSH = "provider-canary.yml", "provider-canary-push.yml"
+# OPENROUTER_PROVIDER_ROUTES_API_KEY: the OpenRouter routes to Google, Anthropic and OpenAI (tests/provider_contract_ci.py).
 PROVIDER_SECRETS = (
-    "OPENROUTER_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "MINIMAX_API_KEY", "DEEPSEEK_API_KEY",
+    "OPENROUTER_API_KEY", "OPENROUTER_PROVIDER_ROUTES_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY",
+    "MINIMAX_API_KEY", "DEEPSEEK_API_KEY",
     "CLOUDRU_FOUNDATION_MODELS_API_KEY", "CLOUDRU_FOUNDATION_MODELS_BASE_URL", "GIGACHAT_CREDENTIALS",
 )
 DOWNLOAD_ACTION = "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093"
@@ -113,7 +115,7 @@ def _canary_wiring_faults(ci, shared, push):
         if caller.get("uses") != f"./.github/workflows/{CANARY}":
             faults.append(f"{label} does not call the shared job")
         if caller.get("secrets") != passed:
-            faults.append(f"{label} does not pass exactly the eight provider secrets by name")
+            faults.append(f"{label} does not pass exactly the nine provider secrets by name")
         if caller.get("permissions") != {"contents": "read"}:
             faults.append(f"{label} widens the called job's permissions")
         if caller.get("with", {}) != scope:
@@ -131,7 +133,10 @@ def _canary_wiring_faults(ci, shared, push):
     inputs = {"scope": {"description": "Canary subset: all, required or optional; failures remain visible",
                         "type": "string", "default": "all"}}
     if _triggers(shared) != {"workflow_call": {"secrets": declared, "inputs": inputs}}:
-        faults.append("the shared job is not call-only with scoped input and eight optional secrets")
+        faults.append("the shared job is not call-only with scoped input and nine optional secrets")
+    producer = next((step for step in shared["jobs"]["integration-test"]["steps"] if step.get("id") == "provider_tests"), {})
+    if {name: (producer.get("env") or {}).get(name) for name in PROVIDER_SECRETS} != passed:
+        faults.append("the pytest step does not receive every declared secret under its own name")
     if _triggers(push) != {"workflow_dispatch": None}:
         faults.append("the standalone provider wrapper must be manual-only")
     # Tags-only is not an unfiltered push: GitHub excludes the undefined branch ref type.
@@ -200,7 +205,12 @@ CANARY_DRIFTS = {
     "caller drops a secret": lambda w: w.push["jobs"]["integration-test"]["secrets"].pop("OPENAI_API_KEY"),
     "required secret": lambda w: _triggers(w.shared)["workflow_call"]["secrets"]["OPENAI_API_KEY"].update(
         required=True),
-    "undeclared ninth secret": lambda w: _triggers(w.shared)["workflow_call"]["secrets"].update(EXTRA={}),
+    "undeclared tenth secret": lambda w: _triggers(w.shared)["workflow_call"]["secrets"].update(EXTRA={}),
+    "pytest step drops the routes key": lambda w: next(step for step in w.shared["jobs"]["integration-test"]["steps"]
+                                                   if step.get("id") == "provider_tests")["env"].pop(
+                                                       "OPENROUTER_PROVIDER_ROUTES_API_KEY"),
+    "caller drops the routes key": lambda w: w.ci["jobs"]["integration-test"]["secrets"].pop(
+        "OPENROUTER_PROVIDER_ROUTES_API_KEY"),
     "shared job self-triggers": lambda w: _triggers(w.shared).update(push=None),
     "caller leaves the shared job": lambda w: w.ci["jobs"]["integration-test"].update(uses="./other.yml"),
     "shared job loses its read-only default": lambda w: w.shared.pop("permissions"),

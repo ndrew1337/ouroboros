@@ -27,7 +27,7 @@ from ouroboros.finalization_timing import finalization_child_scope
 from ouroboros._usage_wait import receiver_abandonable
 from ouroboros.loop_llm_call import TIMEOUT_REPEAT_KEY, forced_response_is_incomplete, forced_response_parts, timeout_repeat_blocked
 from ouroboros.model_wait import ModelWaitInterrupted
-from ouroboros.outcomes import REASON_DELIVERY_CONTROL_DEGRADED
+from ouroboros.outcomes import REASON_DELIVERY_CONTROL_DEGRADED, REASON_OWNER_REQUESTED_FINALIZATION
 from ouroboros.task_finalization import TERMINAL_ORIGIN_HOST_NOTICE, TERMINAL_ORIGIN_HOST_SALVAGE, TERMINAL_ORIGIN_MODEL_FINAL, set_terminal_host_notice
 from ouroboros.tools.registry import ToolRegistry
 from ouroboros.usage_accounting import BillingAuthorityUnavailable, BudgetExceeded, ControlAuthorityUnavailable, PhysicalAttemptPreconditionFailed
@@ -1102,8 +1102,19 @@ def _forced_fallback_result(
 ) -> Tuple[str, Dict[str, Any], Dict[str, Any]]:
     """Compose fallback. ``host_words`` is the caller's fact about ``fallback_text`` on the
     provider-death rail: the host's own notice (``host_notice``) or retained model bytes
-    (``host_salvage``); ``None`` keeps the rail's previous provenance."""
+    (``host_salvage``); ``None`` keeps the rail's previous provenance.
+
+    Every no-call exit is admitted here, so a rail stamps its own reason before calling:
+    while Stop now holds an inline Presence turn (``presence_stop_now``), any rail ends on
+    the hard stop's terminal instead, its retained answer kept on the row and never sent.
+    The hard stop and Wrap up compose here under the owner's own reason, not read again."""
     tool_ctx = getattr(getattr(ctx, "tools", None), "_ctx", None)
+    from supervisor.owner_stop import presence_stop_now
+
+    if reason_code != REASON_OWNER_REQUESTED_FINALIZATION and presence_stop_now(tool_ctx):
+        from ouroboros.loop_round_limits import _handle_direct_turn_hard_stop
+
+        return _handle_direct_turn_hard_stop(ctx)
     plan_suffix = (
         _loop()._plan_gate_disclosure(tool_ctx, llm_trace, forced_reason=reason_code)
         if tool_ctx is not None else ""
@@ -1357,11 +1368,13 @@ def _forced_final_answer(
         _deliver_forced_late_results(ctx, llm_trace)
     _loop()._append_or_merge_user_message(ctx.messages, prompt)
     from ouroboros.transcript_prefix import append_reasoning_retirement_fact
+    from supervisor.owner_stop import presence_stop_now
     append_reasoning_retirement_fact(ctx.accumulated_usage, getattr(ctx, "round_idx", None), ctx.messages)
     extracted = ""
     response_meta: Dict[str, Any] = {}
     attempt = 0
     refresh_late = False
+    stop_now = False
     while attempt < (1 if single_semantic_turn else 2):
         try:
             if refresh_late and _deliver_forced_late_results(ctx, llm_trace) and _admitted_request is not None:
@@ -1418,7 +1431,9 @@ def _forced_final_answer(
             return _timeout_repeat_final(ctx, llm_trace, fallback_text, reason_code, provider_terminal)
         ctx.accumulated_usage["execution_status"] = "failed"
         ctx.accumulated_usage["reason_code"] = reason_code
-        if not _loop()._drain_forced_owner_directives(ctx, llm_trace):
+        late = _loop()._drain_forced_owner_directives(ctx, llm_trace)
+        # The closing admission reads Stop now as an ordinary answer's does; it outranks a late directive.
+        if (stop_now := presence_stop_now(tools_ctx)) or not late:
             break
         if str(ctx.accumulated_usage.get("_last_llm_error_kind") or "") == "provider_outcome_unknown":
             return _loop()._forced_fallback_result(
@@ -1453,17 +1468,21 @@ def _forced_final_answer(
         tools_ctx, extracted, ctx=ctx, llm_trace=llm_trace,
     )
     current = _loop()._current_delivery_candidate(ctx, llm_trace)
+    # A reply that still asks for a tool is a preamble on every rail, replace
+    # control or not; other incompleteness may still be resolved by a replace.
+    preamble = incomplete and (bool(response_meta.get("tool_call_count")) or current is not None or not replaced)
+    if stop_now:  # kept on the row, never sent: this answer, unless a preamble or stale selection answers nothing
+        if extracted and not preamble and not (retained and current is None):
+            _publish_model_forced_candidate(ctx, llm_trace, extracted, reason_code, degraded_reason=control_degraded)
+        from ouroboros.loop_round_limits import _handle_direct_turn_hard_stop
+        return _handle_direct_turn_hard_stop(ctx)
     if retained and current is None:
         return _loop()._forced_fallback_result(
             ctx, llm_trace, extracted, reason_code,
             source="model_control_retained", candidate_reason=control_degraded,
             provider_terminal=provider_terminal,
         )
-    # A reply that still asks for a tool is a preamble on every rail, replace
-    # control or not; other incompleteness may still be resolved by a replace.
-    if incomplete and (
-        bool(response_meta.get("tool_call_count")) or current is not None or not replaced
-    ):
+    if preamble:
         return _loop()._forced_fallback_result(
             ctx, llm_trace, extracted or fallback_text, reason_code,
             source="forced_model_incomplete", candidate_reason=control_degraded,

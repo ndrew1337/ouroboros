@@ -84,6 +84,7 @@ D20 = "Presence"
 "ouroboros/room_reader.py" = "D11"
 "ouroboros/tools/control_relay.py" = "D05"
 "ouroboros/tools/control_ui_translation.py" = "D05"
+"ouroboros/tools/control_update_description.py" = "D05"
 "ouroboros/openrouter_cost.py" = "D02"
 "ouroboros/obligations.py" = "D11"
 "ouroboros/startup_migrations.py" = "D11"
@@ -173,6 +174,7 @@ D20 = "Presence"
 "ouroboros/colab_bootstrap.py" = "D12"
 "ouroboros/commit_admission.py" = "D06"
 "ouroboros/config.py" = "D12"
+"ouroboros/launch_roots.py" = "D12"  # the stdlib launch tuple and work-root basis config derives from
 "ouroboros/composer_cognition.py" = "D12"
 "ouroboros/confined_files.py" = "D18"
 "ouroboros/model_slots.py" = "D12"
@@ -189,10 +191,13 @@ D20 = "Presence"
 "ouroboros/consciousness_wake.py" = "D15"
 "ouroboros/chat_chain.py" = "D15"
 "ouroboros/chronicle_store.py" = "D15"
+"ouroboros/chronicle_quotes.py" = "D15"
+"ouroboros/memory_reader.py" = "D15"  # the extensions' supported memory read (PluginAPI read_memory)
 "ouroboros/chronicle_import.py" = "D15"
 "ouroboros/late_review_marks.py" = "D15"  # late reviewer feedback kept in view as a host mark in its owning room
 "ouroboros/plan_collection_job.py" = "D15"
 "ouroboros/mark_anchors.py" = "D15"  # a mark the mind ties to an action trails that call's result once per task
+"ouroboros/delegation_knowledge_index.py" = "D03"  # a helper that started without knowledge meets the knowledge index with its first delegation
 "ouroboros/consolidator.py" = "D15"
 "ouroboros/knowledge.py" = "D15"
 "ouroboros/memory_publication.py" = "D15"
@@ -516,6 +521,7 @@ D20 = "Presence"
 "ouroboros/project_dialogue.py" = "D17"
 "ouroboros/tool_error_words.py" = "D17"
 "ouroboros/room_membership.py" = "D17"
+"ouroboros/room_appearances.py" = "D17"  # the dialogue store's derived appearance index: writer facts and catch-up job
 "ouroboros/project_completion_facts.py" = "D17"
 "ouroboros/project_handoff.py" = "D17"
 "ouroboros/project_facts.py" = "D15"
@@ -942,7 +948,6 @@ D20 = "Presence"
 "supervisor/task_dispatch.py" = "D08"
 "supervisor/task_lifecycle.py" = "D09"
 "supervisor/task_reaper.py" = "D09"
-"supervisor/task_reaper_cancel_handoff.py" = "D09"
 "supervisor/terminal_cascade.py" = "D09"
 "supervisor/terminal_delivery.py" = "D09"
 "supervisor/terminal_supersession.py" = "D09"
@@ -1133,6 +1138,7 @@ allowed = [
   "D12->D02",
   "D12->D03",
   "D12->D07",
+  "D12->D08",
   "D12->D11",
   "D12->D13",
   "D12->D18",
@@ -1267,7 +1273,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D12->D01",
   "D12->D05",
   "D12->D06",
   "D12->D09",

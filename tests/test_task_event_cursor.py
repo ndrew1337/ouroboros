@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -60,6 +61,47 @@ def stream(root, cursor=None, wait=0, on_event=None):
 
 def content(events):
     return [row["data"]["content"] for row in events if row.get("data", {}).get("content")]
+
+
+class _AfterAppendClock:
+    """The ``time`` the v2 stream reads: its monotonic clock stands still until a read pass that
+    began after the test's append has run to its end, then passes any deadline. ``HANG_SEC`` of
+    real time passes it all the same, so a stream that never makes that pass still ends."""
+
+    HANG_SEC = 30.0
+
+    def __init__(self) -> None:
+        self.started = time.monotonic()
+        self.appended = False
+        self.read_after_append = False
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+    def monotonic(self) -> float:
+        if self.read_after_append or time.monotonic() - self.started > self.HANG_SEC:
+            return self.started + 10**6
+        return self.started
+
+
+@pytest.fixture()
+def after_append_clock(monkeypatch):
+    """A stream deadline driven by its reads: the test sets ``appended`` once its row is stored, and the
+    first read pass that began after that and ran to its end releases the clock."""
+    from ouroboros.gateway import task_events
+
+    clock = _AfterAppendClock()
+    real_read = task_events._TaskEventCursorFollower.read_events
+
+    def read_events(follower):
+        began_after_append = clock.appended
+        yield from real_read(follower)
+        if began_after_append:
+            clock.read_after_append = True
+
+    monkeypatch.setattr(task_events, "time", clock)
+    monkeypatch.setattr(task_events._TaskEventCursorFollower, "read_events", read_events)
+    return clock
 
 
 def test_reconnect_resumes_after_exact_row_and_keeps_backdated_append(tmp_path):
@@ -135,9 +177,11 @@ def test_a_row_written_to_both_planes_streams_once_and_a_drive_only_row_still_st
     assert sorted(row["data"]["llm_call_id"] for row in events if row.get("type") == "llm_api_error") == ["c0", "c1"]
 
 
-def test_a_pass_that_skips_a_replica_acknowledges_it_before_the_stream_idles(tmp_path):
+def test_a_pass_that_skips_a_replica_acknowledges_it_before_the_stream_idles(tmp_path, after_append_clock):
     """The replica lands after the drive copy was delivered; the pass that skips it sends a cursor checkpoint,
-    so a cut in the idle window that follows resumes past the replica instead of delivering it again."""
+    so a cut in the idle window that follows resumes past the replica instead of delivering it again. The
+    deadline waits for that pass (``after_append_clock``), so a slow first pass cannot spend it."""
+    clock = after_append_clock
     root = seed(tmp_path / "data")
     child = tmp_path / "child"
     (child / "logs").mkdir(parents=True)
@@ -149,10 +193,12 @@ def test_a_pass_that_skips_a_replica_acknowledges_it_before_the_stream_idles(tmp
 
     def on_event(frame):
         frames.append(frame)
-        if frame.get("type") == "task_result" and len(frames) <= 3:
+        if frame.get("type") == "task_result" and not clock.appended:
             append(root, "replica", **error)  # after the first pass, before the second
+            clock.appended = True
 
     stream(root, wait=2, on_event=on_event)
+    assert clock.read_after_append, f"no read pass after the append ended within {clock.HANG_SEC} s"
     assert frames[-1]["type"] == "cursor_checkpoint"  # the deadline's
     resumed = stream(root, frames[-2]["cursor"])  # a cut just before the deadline checkpoint
     errors = [frame for frame in frames + resumed if frame.get("type") == "llm_api_error"]
@@ -235,16 +281,21 @@ def test_unreadable_chain_is_explicit(tmp_path, monkeypatch):
     assert events[-1]["reason"] == "cursor_unavailable"
 
 
-def test_checkpoint_advances_unmatched_bytes_without_progress_or_sequence(tmp_path):
+def test_checkpoint_advances_unmatched_bytes_without_progress_or_sequence(tmp_path, after_append_clock):
+    """The deadline checkpoint steps over an unrelated append without delivering it. The deadline
+    waits for a read pass that began after the append (``after_append_clock``), so a slow first pass
+    cannot spend it before any read could see the row."""
+    clock = after_append_clock
     root = seed(tmp_path / "data")
     first = stream(root)
-    appended = False
+
     def after_initial(event):
-        nonlocal appended
-        if event["type"] == "task_result" and not appended:
+        if event["type"] == "task_result" and not clock.appended:
             append(root, "unrelated", task_id="other")
-            appended = True
+            clock.appended = True
+
     events = stream(root, first[-1]["cursor"], wait=1, on_event=after_initial)
+    assert clock.read_after_append, f"no read pass after the append ended within {clock.HANG_SEC} s"
     assert content(events) == []
     assert events[-1]["type"] == "cursor_checkpoint"
     assert events[-1]["seq"] == events[0]["seq"]

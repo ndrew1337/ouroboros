@@ -185,7 +185,7 @@ need a new desktop app on older frozen launchers; source-handoff shells can take
 this through source updates. Login and Telegram change with an ordinary update.
 
 **Interface size** (Settings → Appearance, under Theme) is one slider that makes
-everything larger or smaller, per device like the theme (owner 23.10). Whoever
+everything larger or smaller, per device (owner 23.10). Whoever
 owns the viewport applies it, never the page by scaling itself: the desktop app
 zooms its own window as a browser's Cmd+ does (50–200 %, ⌘/Ctrl + − 0 in tens
 and, on a Mac, the View menu; its next window opens at the same size); a touch screen lays the page out at
@@ -193,21 +193,33 @@ another width (from 75 % up to the size that still leaves 320 CSS px); a browser
 on a computer keeps its own zoom, which no page can set, and the control names
 its keys; where neither exists (a Mini App in Telegram for Android, Telegram
 Desktop) the size stays 100 % and the control says so. A size applies when the
-slider is let go; a size the device cannot keep lasts until the page closes. Ouroboros
-sees the size in the owner's surface fact and can say where to change it, never changes it.
+slider is let go; a size the device cannot keep lasts until the page closes, and one the
+desktop window has not taken (on its way, refused or unanswered) stays the owner's choice on
+the slider, which says so and can be chosen again. Ouroboros sees the size in the owner's
+surface fact (the desktop window's once it took it) and can say where to change it, never changes it.
 
-Appearance belongs to a browser profile or desktop client, not an account or
-server setting. Existing saved Light/Dark choices keep their meaning. Storage
-failures are visible; clearing site data returns the choice to System. Switching
-repaints mounted charts and diagrams without rebuilding views or losing drafts.
-Independent iframe interiors remain author-owned, not automatically recoloured.
-Desktop persistence requires a desktop app (launcher) built with persistent
-WebView storage, 7.2.0 or later; in-app updates replace the core, never that app.
-An older app opens its WebView in private mode, which erases website data each
-time its window opens, so Settings → Appearance names that app by its own version
-and says the choices reset at restart, instead of presenting them as kept. Server
-restart alone cannot verify survival across full quit/relaunch. Mechanism and
-deployment limits: ARCHITECTURE §3 “Navigation and shared UI contracts”.
+Appearance belongs to one installation in one browser profile or desktop client on
+one host name, never an account or server, and stays when the server moves to another
+port (owner 27.10, #1111 A); another installation, profile or device keeps its own;
+`localhost` and `127.0.0.1` are two host names, and the Telegram Mini App keeps the
+choice of its own address. A choice an address saved before this rule carries over
+once, when that address next opens, unless the installation already keeps one, and is
+then removed there: an interface directory or an older build on that address, as after
+a rollback, reads System until the owner chooses again (owner 28.10). Clearing site
+data returns the choice to System; clearing only cookies does too, except at an
+address whose older choice has not carried over yet. A browser that refuses cookies
+keeps the choice for its address only and says so; refusing storage as well, it lasts
+until the window reloads. The installation scope is the theme's alone: a touch screen's
+Interface size and the notification choices (§9) stay with each address. Switching repaints
+mounted charts and diagrams without rebuilding views or losing drafts. A chart the host
+draws (widgets, living cards) gives its series four default colours in one order,
+deeper in Light (#474); Markdown charts and iframe interiors keep their author's
+colours. Keeping the choice through a desktop quit needs an app (launcher) from
+7.2.0, whose WebView storage persists; in-app updates replace the core, never that
+app, so Settings → Appearance names an older app by its version and says its choices
+reset at restart. Only a full quit and relaunch proves survival, never a server
+restart. Mechanism and deployment limits: ARCHITECTURE §3 “Navigation and shared UI
+contracts”.
 
 ---
 
@@ -248,7 +260,7 @@ Rules:
   document in the reader (§5 "Document reading"). Nothing else changes
   size: controls, labels, cards and page chrome keep the four sizes, and so
   do the compact surfaces (a Skill Review report, a task timeline) and the
-  other rich-content cards (the question card, the update letter).
+  other rich-content cards (the question card, the update description).
 
 ## 2. Hierarchy rule
 
@@ -265,7 +277,7 @@ steps down. Concretely:
   browser default is a defect: it lands at bold 16px full white and ties with,
   or beats, the content it introduces.
 - A Markdown heading is a subsection heading too — a `--type-body` semibold
-  label in a Skill Review report, the question card and the update letter,
+  label in a Skill Review report, the question card and the update description,
   and its row's own size in a task timeline — except inside a full rich chat
   answer, which is reading text and follows the §1 ladder instead.
 
@@ -340,12 +352,11 @@ outline: 2px solid var(--focus-accent-border);
 outline-offset: 2px;
 ```
 
-`outline-offset: -2px` is the only sanctioned variant, for a control that sits
-flush inside a strip that clips an outer ring (sidebar rows, header buttons).
-Nothing else: not a blue ring, not a green one, not a `box-shadow` standing in
-for an outline, and not a colour picked to match the control it is on. A focus
-ring is the reader's cursor; if it changes colour per surface, it stops
-reading as one thing.
+`outline-offset: -2px` serves a control in a strip clipping an outer ring.
+A Project transcript uses two gutter corners (owner 28.10), quiet after a
+pointer until a key; forced colours use an inset system-colour ring. No blue
+or green ring in ordinary themes, no `box-shadow` outline or colour matched
+to the control: a focus ring is the reader's cursor, consistent across surfaces.
 
 **Hover paint is not a focus ring.** A rule written as
 `.x:hover, .x:focus-visible { background: … }` gives a keyboard user exactly
@@ -353,7 +364,7 @@ what a mouse user gets by accident and nothing that says "you are here". Where
 a control wants both, the shared paint stays in the hybrid rule and the ring
 goes in a `:focus-visible`-only rule of its own.
 
-Text fields are the exception, and they keep their own established idiom:
+Text fields keep their own idiom:
 `border-color: var(--focus-accent-border)` plus
 `box-shadow: 0 0 0 3px var(--focus-accent-ring)`. A field already has a border
 to recolour, so an outline outside it would be a second frame.
@@ -853,7 +864,7 @@ status sentence's or a composer chip's dot is its tone, §4).
   Settings and onboarding notes, warnings inside task timelines, reviews and Logs
   events, account quota; (3) the System voice (a pale tint in the light theme, its name
   in the dark one), a voice, not a status; (4) a few data categories that are not statuses (Logs and Storage
-  categories). What goes on by itself or what someone chose — queued, waiting,
+  categories, the fourth default chart series). What goes on by itself or what someone chose — queued, waiting,
   paused, pausing, stopped, unconfirmed, work in flight, a mode, a level, a setting
   value — is never amber.
 
@@ -936,6 +947,12 @@ revision, so this counter guarantees no delivery durability.
 - **Several clients** share one read cursor that only moves forward: a room read
   on one client stops showing the crimson mark on the others at their next state
   refresh, and nothing read is shown unread again.
+- **One message in two rooms** counts in each until read, then is read in both
+  (owner 28.10, A): shown whole in either room, every part on screen at some moment
+  (a long one by scrolling, a wide block by panning it; a folded or hidden part, or
+  rows under a notice, a menu or the Project sheet, do not count). Only it: no
+  cursor moves, so the other room's unseen messages stay unread and its opening
+  lands on its newest unread message instead. Read is not an answer or done.
 
 ### References and actions
 
@@ -1129,7 +1146,7 @@ preference when it opens and on every reconnect; there is no file watcher.
   label, and in a task card's timeline a heading renders inline, without
   block margins, at its row's own size, with a copyable line break before
   the following paragraph. Other rich-content cards (the question card, the
-  update letter) keep `--type-body` semibold labels. Bold text in chat
+  update description) keep `--type-body` semibold labels. Bold text in chat
   Markdown and rich-content cards is semibold, so a bold lead sentence never
   outweighs a heading. The page-size `md-h1` belongs to non-chat surfaces
   only.
@@ -1595,6 +1612,8 @@ A confirmed answer/closure shows its result for five seconds, then retires only 
 
 Unavailable canonical refresh retains text, references and drafts but disables affected controls. Missing, failed or wrong-Project reads say `Status unavailable`; absent form text says `Open the original question for its text.` The chip opens the original; owned refresh retries.
 
+**One message in two rooms.** A Project room is the whole conversation of its work. What its work says to the owner in Main, or answers in the room a note came from, also stands in the Project at its time: the same words, address, Reply and Copy, never a copy or a link, and one notification. Presence's private contact, host refusals and move receipts stay where they were issued; ordinary Project speech stays in the Project.
+
 **Work portal.** A work living in a Project room keeps its one Main card at the
 request's place, whoever moved it (Turn into project, the mind's move, a
 binding); a Project start or transfer row only says where it went, never a
@@ -1728,7 +1747,9 @@ file (owner choice 1C/2A/3A/4A/5A/6A with mobile first-class).
 
 ### Replies
 
-A reply names the row meant; Ouroboros decides what to do, routing nothing by it. Saved rows offer Reply beside
+A reply names the row meant; Ouroboros decides what to do, routing nothing by it. A direct Reply in Main to a
+Project's message also stands in that Project at its time, the one Main message (owner 28.10, A): it tells,
+wakes and resumes nothing there, and a Reply to it, like other Main talk, stays in Main. Saved rows offer Reply beside
 Copy on bubbles and in row menus, a work card in its row menu only; never on hover only. Reply stages one
 strip, the composer field's first line (`Replying to`, quoted author, one line, ×; Esc cancels). Send
 carries only the address; the host makes the snippet. Answerable questions use their own field.
@@ -2365,8 +2386,8 @@ not previously selected starts without another source's pin.
 The wizard has five steps: Accounts, Models, Review, Budget, Summary. Agent
 connection is inside Accounts; Codex is the recommended connection for starting
 without an API key. Other existing agent connections describe their actual agent
-capability. Connected reports sign-in, independently of the model-source and
-suggestion reads. Accounts names pending, failed or partial reads and offers a
+capability. Signed in reports authentication, not execution, independently of
+the model-source and suggestion reads. Accounts names pending, failed or partial reads and offers a
 contextual Retry that preserves the current fields. A known model source allows
 Continue and manual model entry even when its inventory or automatic suggestions
 cannot be read; an unknown source explains why Continue is unavailable. New
@@ -2566,9 +2587,9 @@ the desktop runs one. Not yet allowed, denied, unavailable or failed is a typed
 answer, never silence (an error the system returns instead of asking is that
 error, not a denial): that alert falls back to the browser banner or the in-app
 toast. One the system took without answering in time may still appear, so
-nothing else is shown; its click opens the newest accepted source on that icon. In-app
-updates do not replace the desktop app, so an app built before this capability
-falls back and Settings says that system notifications need the current app.
+nothing else is shown; its click opens the newest accepted source on that icon.
+A window without the system-notification method falls back; Settings names that
+missing method, without inferring the app's age or an update remedy.
 Android's host keeps its own channel for its own service; its page has no system
 notifications and says so.
 
@@ -2625,8 +2646,8 @@ Attention cues prove no system delivery; unsupported and legacy launchers fall
 back as described above.
 
 **Settings.** The controls live on **Settings → Appearance**, under the theme
-block, and are stored per client exactly like the appearance choice: the desktop
-window and each browser keep their own, nothing reaches the server. Under Sound,
+block, and are stored per address: the desktop window and each browser keep their
+own, another port starts from the defaults, and nothing reaches the server. Under Sound,
 **App tone volume** controls only the app tone, never system volume. Automatic
 fallback requires a client that can report positive system permission and sound
 settings (currently macOS); elsewhere the control affects Preview only. Moving
@@ -2638,8 +2659,8 @@ notification, including a denied permission, and in the desktop app it is the
 gesture that lets the system ask. The status line names the surface this client
 is using — the system's notifications, a browser banner or the in-app toast —
 keeps the system's permission apart from what became of the last alert (taken,
-unconfirmed or fallen back), and, in an older desktop app, says that system
-notifications need the current app.
+unconfirmed or fallen back), and names a missing desktop method without
+prescribing an update or reinstall.
 
 **Known limits of this version**, stated rather than discovered later:
 
@@ -2804,8 +2825,8 @@ what is on top: a dialog over a layer first, then the layer. While a layer is
 open the page holds exactly one same-address history entry, so Back closes it
 instead of leaving the app; navigation itself is still never written into the
 address. A modal layer makes the rest of the shell inert (never what opens over
-it) and returns focus to its opener on close. The shell draws one close glyph and
-one More glyph (`web/modules/page_icons.js`).
+it); closing refocuses the opener unless focus moved somewhere live. The shell
+draws one close glyph and one More glyph (`web/modules/page_icons.js`).
 
 **Page header.** One component (`web/modules/page_header.js`) draws every page's
 header and the Project panel's, as one row except the narrow toolbar below. No decorative icon.

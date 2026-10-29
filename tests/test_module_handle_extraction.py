@@ -95,7 +95,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     # tree did not bear it out, so the three invariants below were not running on
     # them. Sets are the tool-derived exact read sets on these bytes.
     "supervisor/queue_snapshot.py": ("supervisor/queue.py", "_queue", frozenset({
-        "ACCEPTANCE_FENCES", "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "PENDING", "PRIOR_DIRECT_ROOTS",
+        "ACCEPTANCE_FENCES", "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "INITIALIZED", "PENDING", "PRIOR_DIRECT_ROOTS",
         "QUEUE_PUBLICATION", "QUEUE_SEQ_COUNTER_REF", "QUEUE_SNAPSHOT_PATH", "RUNNING", "_queue_lock",
         "append_jsonl", "atomic_write_text", "enqueue_task", "parse_iso_to_ts",
         "persist_queue_snapshot", "restore_invalid_depth_admission", "sort_pending",
@@ -103,7 +103,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     "supervisor/queue_timeouts.py": ("supervisor/queue.py", "_queue", frozenset({
         "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "FINALIZATION_GRACE_SEC", "HEARTBEAT_STALE_SEC", "PENDING",
         "RUNNING", "_enforce_task_timeouts_locked", "_expire_pending_deadlines_locked",
-        "_ensure_reaper_started", "_has_live_descendant", "_has_pending_descendant",
+        "_ensure_reaper_started", "_has_pending_descendant",
         "_is_descendant_of", "_queue_lock", "_reap_queue",
         "_request_finalization_grace", "_subtree_progressing", "_task_deadline_ts",
         "_task_drive_for_task", "coerce_chat_identity", "get_per_call_timeout_ceiling_sec",
@@ -335,7 +335,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         '_append_or_merge_user_message', '_arm_delivery_control', '_begin_task_acceptance_fence',
         '_child_disposition_state', '_compute_subagent_handoff', '_current_delivery_candidate',
         '_delivery_evidence_state', '_disclose_service_finalization',
-        '_drain_incoming_messages',
+        '_drain_incoming_messages', '_emit_checkpoint_event',  # a held completion's diagnostic row
         '_end_task_acceptance_fence', '_enforce_plan_gate', '_extract_plain_text_from_content',
         '_finalize_forced_services', '_finalize_task_services', '_plan_gate_disclosure',
         '_forced_fallback_result', '_forced_orphan_note', '_handle_text_response',
