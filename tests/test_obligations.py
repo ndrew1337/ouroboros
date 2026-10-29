@@ -300,13 +300,17 @@ def test_an_old_body_writing_a_legacy_latch_file_is_reconciled_into_an_intent(tm
     assert cancel_pending(tmp_path, "old-task", strict=True)
 
 
-def test_a_retired_sets_rows_leave_at_boot_and_its_owed_lines_stay_owed(tmp_path):
-    """The lost-Max episode left with its producer (29.10): the boot removes the row an older body kept, and a
-    line that producer queued stays owed to the terminal outbox, which delivers it; nothing counts it delivered."""
+def test_a_retired_sets_rows_leave_once_and_its_owed_lines_stay_owed(tmp_path, monkeypatch):
+    """The lost-Max episode left with its producer (29.10): the first boot of this generation removes the row an
+    older body kept and stamps it, a stamped boot reads no row, the explicit rebuild repeats it, and a line that
+    producer queued stays owed to the terminal outbox, which delivers it; nothing counts it delivered."""
     from ouroboros import startup_migrations as m
     from supervisor import terminal_delivery as outbox
 
     m.prepare_startup_state(tmp_path)
+    marks = m.watermarks(tmp_path)
+    assert marks.pop("retired_sets_generation") == m.RETIRED_SETS_GENERATION  # a fresh install stamps it at once
+    (tmp_path / "state" / "migrations.json").write_text(json.dumps(marks), encoding="utf-8")  # an older body's file
     o.add(tmp_path, "memory_max", "episode", {"id": "e1", "notices": {"open": {"id": "memory_max:e1:open"}}})
     o.add(tmp_path, "unknowns", "kept", {"reason": "another set"})
     assert outbox.register_pending_delivery(tmp_path, {
@@ -314,6 +318,11 @@ def test_a_retired_sets_rows_leave_at_boot_and_its_owed_lines_stay_owed(tmp_path
         "role": "system", "system_type": "memory_max_notice", "delivery_id": "memory_max:e1:open"})
     assert m.prepare_startup_state(tmp_path)["retired_rows"] == 1
     assert o.members(tmp_path, "memory_max") == {} and set(o.members(tmp_path, "unknowns")) == {"kept"}
-    assert "retired_rows" not in m.prepare_startup_state(tmp_path)  # nothing left: one read, no write
+    assert m.watermarks(tmp_path)["retired_sets_generation"] == m.RETIRED_SETS_GENERATION
+    o.add(tmp_path, "memory_max", "episode", {"id": "e2"})  # an older body's run after the stamp
+    with monkeypatch.context() as patch:
+        patch.setattr(o, "members", lambda *_a: pytest.fail("a stamped generation reads no row"))
+        assert "retired_rows" not in m.prepare_startup_state(tmp_path)
+    assert m.prepare_startup_state(tmp_path, rebuild=True)["retired_rows"] == 1  # the explicit rebuild repeats it
     assert [row["delivery_id"] for row in outbox.pending_deliveries(tmp_path)] == ["memory_max:e1:open"]
     assert not outbox.already_delivered(tmp_path, "memory_max:e1:open")

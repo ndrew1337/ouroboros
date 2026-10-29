@@ -6,12 +6,13 @@ Run before producers on every startup door: ``ensure_current_store`` opens or cr
 boot admissions no document derives (drives present on disk, the one-time upgrade
 receipts) join the owner-held rows, and legacy questions bind their publication
 address once. ``state/migrations.json`` keeps the watermarks: the store, the
-cancel-latch and the question-publication generations.
+cancel-latch, the question-publication and the retired-set generations.
 ``python -m ouroboros.startup_migrations`` is the explicit rebuild job, including
 its historical seal audit (no audit watermark). An owner-held obligation set whose producer
-this body retired (``RETIRED_SETS``) has no reader or remover left, so every boot deletes the
-rows an older body kept there; the lines such a producer queued stay with the terminal outbox,
-which delivers or gives them up like any owed row and never counts them delivered unsent.
+this body retired (``RETIRED_SETS``) has no reader or remover left, so the first boot of its
+generation deletes the rows an older body kept there; the lines such a producer queued stay with
+the terminal outbox, which delivers or gives them up like any owed row and never counts them
+delivered unsent.
 """
 from __future__ import annotations
 
@@ -28,6 +29,7 @@ log = logging.getLogger(__name__)
 SCHEMA_GENERATION = 7
 QUESTION_PUBLICATIONS_GENERATION = 1
 RETIRED_SETS = ("memory_max",)  # the lost-Max episode's one row, retired 29.10 with its producer
+RETIRED_SETS_GENERATION = 1  # a set joining RETIRED_SETS raises it: the next boot removes its rows once
 
 
 def watermarks(root) -> dict:
@@ -149,16 +151,20 @@ def migrate_question_publications(root, *, rebuild=False, legacy=False):
     return {"bound": len(publications), "unknown": len(unknowns)}
 
 
-def retire_sets(root) -> int:
+def retire_sets(root, *, rebuild=False) -> int:
     """Delete the rows an older body kept in ``RETIRED_SETS``: the remover their gone producer was.
-    One read per set when nothing is left; returns the rows removed."""
+    Once per generation, stamped after success; a current stamp reads no row (the explicit rebuild
+    repeats it, as after a return from an older body that kept such a row again). Returns the rows removed."""
     from ouroboros import obligations
 
+    if not rebuild and watermarks(root).get("retired_sets_generation") == RETIRED_SETS_GENERATION:
+        return 0
     removed = 0
     for name in RETIRED_SETS:
         for identity in obligations.members(root, name):
             obligations.remove(root, name, identity)
             removed += 1
+    stamp(root, retired_sets_generation=RETIRED_SETS_GENERATION)
     return removed
 
 
@@ -228,8 +234,8 @@ def _prepare_startup_state(root, *, rebuild, repo_dir=None, initialize_journal=F
         except Exception as exc:
             log.warning("Legacy question publication import failed; it reruns at the next start", exc_info=True)
             report["question_publications"] = {"error": type(exc).__name__}
-        try:  # a failure leaves the rows for the next boot
-            if removed := retire_sets(root):
+        try:  # unstamped on failure: the next boot repeats it
+            if removed := retire_sets(root, rebuild=rebuild):
                 report["retired_rows"] = removed
         except Exception:
             log.warning("Retired obligation rows not removed; the next start repeats it", exc_info=True)
