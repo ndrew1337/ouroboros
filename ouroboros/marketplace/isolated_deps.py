@@ -430,6 +430,13 @@ def _reviewed_install_binding(drive_root: pathlib.Path, skill_name: str, skill_d
     return loaded.content_hash
 
 
+def spec_applies_here(spec: Dict[str, Any]) -> bool:
+    """An install spec applies on this host unless its ``platforms`` names neither ``sys.platform`` nor
+    ``<sys.platform>-<machine>``; the installer records an inapplicable one as ``not_applicable``."""
+    platforms = spec.get("platforms") or []
+    return not platforms or bool({sys.platform, f"{sys.platform}-{platform.machine().lower()}"}.intersection(platforms))
+
+
 def install_isolated_dependencies(
     drive_root: pathlib.Path,
     skill_name: str,
@@ -473,12 +480,10 @@ def install_isolated_dependencies(
         pending_python.clear()
 
     try:
-        platform_names = {sys.platform, f"{sys.platform}-{platform.machine().lower()}"}
         for spec in specs:
-            platforms = spec.get("platforms") or []
-            if platforms and not platform_names.intersection(platforms):
-                installed.append({"kind": spec["kind"], "package": spec.get("package", ""),
-                                  "installed": False, "status": "not_applicable", "platforms": platforms})
+            if not spec_applies_here(spec):
+                installed.append({"kind": spec["kind"], "package": spec.get("package", ""), "installed": False,
+                                  "status": "not_applicable", "platforms": spec.get("platforms") or []})
                 continue
             kind = str(spec.get("kind") or "").lower()
             if kind in {"pip", "pipx", "uv"}:

@@ -174,12 +174,13 @@ def skill_deps_not_ready(drive_root: pathlib.Path, loaded: Any, *, strict: bool 
 
 
 def unusable_python_env(drive_root: pathlib.Path, loaded: Any) -> str:
-    """The binding (``moved``, ``absent``, ...) when ``loaded`` declares Python packages and its env python
-    cannot run them on this interpreter, else ``""``: such a skill never runs on another interpreter
-    (``skill_exec`` and the process-tool resolver refuse); a skill without Python packages is unaffected."""
-    from ouroboros.marketplace.isolated_deps import python_env_binding
+    """The binding (``moved``, ``absent``, ...) when ``loaded`` declares Python packages that apply on this host
+    and its env python cannot run them on this interpreter, else ``""``: such a skill never runs on another
+    interpreter (``skill_exec`` and the process-tool resolver refuse); a skill whose Python packages are all
+    for other platforms, or that has none, is unaffected (the installer skips the former, ``spec_applies_here``)."""
+    from ouroboros.marketplace.isolated_deps import python_env_binding, spec_applies_here
 
-    if not any(str(spec.get("kind") or "").strip().lower() in {"pip", "pipx", "uv"}
+    if not any(str(spec.get("kind") or "").strip().lower() in {"pip", "pipx", "uv"} and spec_applies_here(spec)
                for spec in auto_install_specs_for_skill(drive_root, loaded) if isinstance(spec, dict)):
         return ""
     binding = python_env_binding(loaded.skill_dir)

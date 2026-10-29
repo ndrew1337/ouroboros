@@ -223,3 +223,25 @@ def test_skill_exec_never_runs_a_package_skill_on_another_python(tmp_path, monke
     monkeypatch.setattr(skill_exec_mod, "unusable_python_env", unreadable, raising=False)
     with pytest.raises(RuntimeError):  # a failed check runs nothing; the old one fell through to PATH python
         skill_exec_mod._handle_skill_exec(ctx, skill="alpha", script="hello.py")
+
+
+def test_python_packages_for_other_platforms_never_block_a_skill(tmp_path, monkeypatch):
+    """The installer skips a spec whose ``platforms`` excludes this host; the refusal counts it the same way."""
+    from ouroboros.skill_loader import find_skill
+    from ouroboros.tools import skill_exec as skill_exec_mod
+    from tests.test_skill_exec import _build_skill, _make_ctx, _mark_reviewed_and_enabled, _valid_script_manifest
+
+    ctx, skills_root = _make_ctx(tmp_path), tmp_path / "skills"
+    elsewhere = "darwin" if sys.platform == "win32" else "win32"
+    for name, where in (("portable", elsewhere), ("native", sys.platform)):
+        spec = f"install_specs:\n  - kind: pip\n    package: wheel\n    platforms: [{where}]\nscripts:\n"
+        manifest = _valid_script_manifest(name).replace("scripts:\n", spec)
+        _mark_reviewed_and_enabled(ctx.drive_root, _build_skill(skills_root, name, manifest=manifest), name)
+    monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(skills_root))
+    portable = find_skill(ctx.drive_root, "portable")
+    assert ensure_skill_dependencies(ctx.drive_root, portable) == ("installed", "")
+    assert isolated_deps.read_deps_state(ctx.drive_root, "portable")["installed"][0]["status"] == "not_applicable"
+    ran = skill_exec_mod._handle_skill_exec(ctx, skill="portable", script="hello.py")
+    assert "hello from skill" in ran, "refused forever: enabling again installs nothing"
+    monkeypatch.setattr(skill_exec_mod, "_skill_deps_not_ready", lambda *_args, **_kwargs: ("", ""))
+    assert "(absent)" in skill_exec_mod._handle_skill_exec(ctx, skill="native", script="hello.py")
