@@ -424,16 +424,13 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "truncate_review_artifact",
     })),
     "ouroboros/tools/review_file_pack.py": ("ouroboros/tools/review_helpers.py", "_rh", frozenset({
-        "logger", "redact_prompt_secrets",
+        "logger",
     })),
     "ouroboros/tools/review_multi_model.py": ("ouroboros/tools/review.py", "_rev", frozenset({
         "LLMClient", "REVIEW_JSON_ARRAY_CONTRACT", "TYPED_FAILURE_FACT_KEYS", "_REPO_ROOT",
         "_cfg", "_parse_model_response", "_review_operation_fields",
         "_owner_deadline_at", "_review_query_error_payload", "load_governance_doc",
         "review_drive_root", "slot_id_for_row",
-    })),
-    "ouroboros/tools/review_prompt_text.py": ("ouroboros/tools/review_helpers.py", "_rh", frozenset({
-        "sanitize_tool_result_for_log",
     })),
     "ouroboros/loop_round_limits.py": ("ouroboros/loop.py", "_loop", frozenset({
         "DeliveryCandidate", "_append_or_merge_user_content",
