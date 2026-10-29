@@ -827,7 +827,6 @@ def _dependency_fingerprint(req_path, cmd):
     moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs. Paths
     outside that root (a container's venv) stay absolute; a run without a manifest hashes as before."""
     import hashlib
-    import importlib.metadata
     import json
     import platform
     import site
@@ -856,13 +855,22 @@ def _dependency_fingerprint(req_path, cmd):
              "target": [site.getuserbase(), at(purelib)],
              "environment": {key: os.environ.get(key, "") for key in
                              ("PYTHONUSERBASE", "PIP_TARGET", "PIP_PREFIX", "PIP_USER", "PIP_CONFIG_FILE", "VIRTUAL_ENV")}}
+
+    def distributions():
+        """``name==version`` of the bundle's own packages, from their metadata folder names: no file is
+        parsed, and a venv the sync itself writes (outside the bundle) is never listed."""
+        if at(purelib) == purelib:
+            return []
+        try:
+            names = [entry.rsplit(".", 1)[0] for entry in os.listdir(purelib) if entry.endswith((".dist-info", ".egg-info"))]
+        except OSError:
+            return []
+        return sorted("==".join(name.rsplit("-", 1)) for name in names)
+
     if manifest:
-        bundled = at(purelib) != purelib  # the bundle's own packages, never a venv the sync itself writes
         facts["host"] = {"app_version": os.environ.get("OUROBOROS_APP_VERSION", ""), "cache_tag": sys.implementation.cache_tag,
                          "machine": platform.machine(), "source_sha": manifest.get("source_sha", ""),
-                         "bundle_sha256": manifest.get("bundle_sha256", ""),
-                         "distributions": sorted(f"{dist.metadata['Name']}=={dist.version}" for dist in
-                                                 importlib.metadata.distributions(path=[purelib])) if bundled else []}
+                         "bundle_sha256": manifest.get("bundle_sha256", ""), "distributions": distributions()}
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode("utf-8")).hexdigest()
 
 
