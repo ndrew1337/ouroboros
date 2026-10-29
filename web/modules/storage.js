@@ -142,6 +142,7 @@ export function placeRows(count, days = 7, removers = {}, now = new Date()) {
             unreadable: isSize(place.unreadable) ? place.unreadable : 0,
             growth: isSize(place.growth_bytes) ? place.growth_bytes : null,
             caveat: place.growth_flag === 'unreadable',
+            undecided: typeof place.undecided === 'string' ? place.undecided : '',
             otherDisk: place.same_volume === false,
             split: said.split && parts.length ? engineSplit({ ...place, parts }) : '',
             remover: removerLine(removers?.[place.id], now),
@@ -289,10 +290,11 @@ function sizeCells(row) {
         <span class="storage-place-delta" data-i18n-fmt="storage.growth">${text(growth)}</span>`;
 }
 
-/** The reason, then what qualifies the row: unreadable, on another disk, a growth some items escaped. */
+/** The reason, then what qualifies the row: unreadable (or a folder not chosen yet, with the server's
+ *  sentence naming the setting), on another disk, a growth some items escaped. */
 function whyLine(row) {
     const notes = [row.why];
-    if (row.bytes === null) notes.push(fmt('Could not be read.'));
+    if (row.bytes === null) notes.push(row.undecided ? fmt('Not counted: {reason}', { reason: row.undecided }) : fmt('Could not be read.'));
     if (row.otherDisk) notes.push(fmt('on another disk'));
     if (row.caveat && row.growth) notes.push(fmt('(some items could not be read)'));
     return `<span class="storage-place-why" data-i18n-fmt="storage.why">${text(notes.filter(Boolean).join(' · '))}</span>`;

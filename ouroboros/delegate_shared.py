@@ -422,6 +422,7 @@ def orphan_apply_target_ok(target: Any, active_root: Any) -> bool:
     through ``workspace_copies.copy_apply_refusal``; this predicate grants none.
     """
     from ouroboros.config import get_subagent_projects_root, get_subagent_worktree_root
+    from ouroboros.launch_roots import WorkRootUnavailable
     from ouroboros.tool_access import path_is_relative_to
 
     try:
@@ -433,8 +434,14 @@ def orphan_apply_target_ok(target: Any, active_root: Any) -> bool:
         return False
     if target_path == root_path:
         return True
-    return any(path_is_relative_to(target_path, pathlib.Path(root()).expanduser().resolve(strict=False))
-               for root in (get_subagent_projects_root, get_subagent_worktree_root))
+
+    def inside(root) -> bool:
+        try:
+            return path_is_relative_to(target_path, pathlib.Path(root()).expanduser().resolve(strict=False))
+        except WorkRootUnavailable:  # an undecided default root contains nothing
+            return False
+
+    return any(inside(root) for root in (get_subagent_projects_root, get_subagent_worktree_root))
 
 
 def orphan_capture_read_target(

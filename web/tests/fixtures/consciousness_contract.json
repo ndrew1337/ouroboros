@@ -59,7 +59,9 @@
           "state": "silent",
           "unanswered": 0
         }
-      ]
+      ],
+      "appointment_at": "2026-10-24T09:30:00+00:00",
+      "live_wake_held": false
     }
   },
   "places": {
@@ -330,6 +332,8 @@
         "unanswered": 0
       }
     ],
+    "appointment_at": "2026-10-24T09:30:00+00:00",
+    "live_wake_held": false,
     "recent_wakes": [
       {
         "task_id": "w-unknown",
@@ -995,6 +999,7 @@
         "tool_calls": 16,
         "_is_direct_chat": true,
         "initiator": "consciousness",
+        "wake_summary": "Проверил состояние системы и сохранил наблюдения; нового решения от тебя не требуется.",
         "rounds": 9,
         "continuation_offer": {
           "eligible": false,

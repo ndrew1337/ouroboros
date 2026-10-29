@@ -1198,19 +1198,15 @@ def _live_retry_target_locked(q: Any, task_id: str, *, results) -> Tuple[str, st
 
 
 def task_has_live_ownership(task_id: str, *, ignore_review_operation: str = '', ownership=None) -> bool:
-    """Whether executable or paused custody remains for this task: a RUNNING row,
-    busy worker, direct turn, still-billing synthesis or a retained late review.
-
-    The pipeline persists the durable terminal result BEFORE post-task
-    cognition ends, so "the status is settled" and "the worker is dead" are
-    two different facts — ``already_settled`` is a terminal answer ONLY when
-    this predicate is False. Cancel INGRESSES consult it and pass
-    ``allow_settled_target=True`` to ``request_cancel`` while ownership is
-    live, so custody kills the still-spending worker instead of no-oping;
-    completion-wins keeps the stored result either way. (The worker-process
-    twin — the agent tool cannot see the live maps — is
-    ``ouroboros.task_status.task_has_live_queue_ownership`` over the queue
-    snapshot.)
+    """Whether executable or paused custody remains for this task: a RUNNING row, busy worker, direct
+    turn, still-billing synthesis, a retained late review, or an unsettled inline Presence turn whose
+    runner the author census witnesses or cannot rule out (``presence_turn_owned``). The pipeline
+    persists the durable terminal result BEFORE post-task cognition ends, so "the status is settled"
+    and "the worker is dead" are two different facts — ``already_settled`` is a terminal answer ONLY
+    when this predicate is False. Cancel INGRESSES consult it and pass ``allow_settled_target=True``
+    to ``request_cancel`` while ownership is live, so custody kills the still-spending worker instead
+    of no-oping; completion-wins keeps the stored result either way. (The worker-process twin — the
+    agent tool cannot see the live maps — is ``ouroboros.task_status.task_has_live_queue_ownership``.)
     """
     q = _queue_module()
     from supervisor import workers
@@ -1219,6 +1215,7 @@ def task_has_live_ownership(task_id: str, *, ignore_review_operation: str = '', 
     if not task_id:
         return False
     from supervisor.task_ownership import TaskOwnershipRead, prepare_retry_chain
+    from ouroboros.presence_runner import presence_turn_owned
     from ouroboros.review_operation import task_has_live_review_operation
     from ouroboros.owner_pause import FENCE_REQUESTED, FENCE_PAUSED, FENCE_RELEASED
 
@@ -1233,6 +1230,8 @@ def task_has_live_ownership(task_id: str, *, ignore_review_operation: str = '', 
         if task_has_live_review_operation(q.DRIVE_ROOT, task_id, exclude_owner_id=ignore_review_operation,
                                           result_loader=read):
             return True
+        if presence_turn_owned(current, task_id, drive_root=q.DRIVE_ROOT):
+            return True  # no queue map holds it; its runner reads the intent (#2012)
         fence = current.get("owner_pause") or {}
         if not isinstance(fence, dict) or (fence and fence.get("state") not in
                                            {FENCE_REQUESTED, FENCE_PAUSED, FENCE_RELEASED}):

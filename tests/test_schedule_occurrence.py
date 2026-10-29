@@ -62,7 +62,9 @@ def _project(q, pid="proj", folder=None):
     return create_project(q.root, pid, name="Room", working_dir=str(folder or ""))
 
 
-def test_one_occurrence_one_receipt_with_the_room_address(q):
+def test_one_occurrence_one_receipt_with_the_room_address(q, monkeypatch):
+    frames = []
+    monkeypatch.setattr("supervisor.worker_chat_lane._broadcast_task_named", frames.append)
     _row(q, intent={"kind": "system_repo"})
     q.queue.check_scheduled_tasks()
     q.queue.check_scheduled_tasks()
@@ -70,6 +72,9 @@ def test_one_occurrence_one_receipt_with_the_room_address(q):
     receipt = load_task_result(q.root, task["id"])
     admission = receipt["schedule_admission"]
     assert receipt["status"] == "scheduled" and receipt["chat_id"] == 42  # never the hidden chat 0
+    # The schedule's name is the run's authored name from admission on: history and the task API read it here.
+    assert receipt["title"] == receipt["suggested_name"] == task["title"] == "Follow-up"
+    assert frames == [{"type": "task_named", "task_id": task["id"], "suggested_name": "Follow-up"}]  # the live card is born named
     assert (admission["status"], admission["dispatch"]) == ("accepted", "none")
     assert task["metadata"]["schedule_occurrence"]["token"] == admission["token"]
     row = _rows(q)["s1"]
@@ -157,19 +162,20 @@ def test_resource_intent_is_resolved_at_admission(q, tmp_path, case):
         (q.root / "state" / "projects.json").write_text("{not json", encoding="utf-8")
     q.queue.check_scheduled_tasks()
     row = _rows(q)["s1"]
-    if case in {"explicit_gone", "registry_unreadable"}:
-        assert q.pending == [] and row["hold"]["reason"] == (
-            "workspace_unusable" if case == "explicit_gone" else "registry_unreadable")
+    if case == "registry_unreadable":
+        assert q.pending == [] and row["hold"]["reason"] == "registry_unreadable"
         assert not list((q.root / "task_results").glob("*.json"))
         return
     [task] = q.pending
-    expected = {"room_current": new, "explicit_kept": old}.get(case)
+    expected = {"room_current": new, "explicit_kept": old, "explicit_gone": old}.get(case)
     assert task.get("workspace_root", "") == (str(expected.resolve()) if expected else "")
     if expected:
         assert task["workspace_mode"] == "external" and task["memory_mode"] == "forked"
         assert pathlib.Path(task["drive_root"]).is_dir()
+    # A known folder that is merely gone starts as the same address and says so (#1799).
+    assert ("workspace_availability" in task["metadata"]) == (case == "explicit_gone")
     assert task["metadata"]["resource_intent"]["kind"] == {
-        "room_current": "room_default", "room_folderless": "room_default",
+        "room_current": "room_default", "room_folderless": "room_default", "explicit_gone": "explicit_resource",
         "explicit_kept": "explicit_resource", "explicit_none": "explicit_none"}[case]
 
 

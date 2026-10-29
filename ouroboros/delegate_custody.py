@@ -225,6 +225,10 @@ class RunCustody:
     # or a successor continues in the snapshot (``SUPERSEDED``: its capture is the one).
     patch_captured: bool = False
     patch_disposed: str = ""
+    # #1651: the PATCH_DISPOSED row's own facts, so readers never replay the chain: the task that recorded
+    # it ("" = not recorded, as on rows reduced before this field) and a reject over a result proven lost.
+    patch_disposed_by: str = ""
+    patch_result_lost: bool = False
     # CR1-3: an apply-intent row exists with no resolution and no disposition —
     # the target tree MAY carry the patch (crash between apply and the disposition
     # row), so any later disposition over this run is ambiguous until inspected.
@@ -675,6 +679,8 @@ def _apply(state: Dict[str, RunCustody], row: Dict[str, Any]) -> None:
         disposition = str(row.get("disposition") or "")
         if disposition:
             custody.patch_disposed = disposition
+            custody.patch_disposed_by = str(row.get("disposed_by_task_id") or "")
+            custody.patch_result_lost = bool(row.get("result_lost"))
             custody.patch_apply_pending = False  # a recorded disposition completes the apply-intent story
     elif kind == SETTLED:
         # A RUN-level fact: it no longer clears the registration obligation -
@@ -820,6 +826,8 @@ def record_patch_disposed(drive_root: Any, custody: RunCustody, *, disposition: 
     lands, the snapshot and the captured patch persist as conflict material.
     """
     custody.patch_disposed = str(disposition or "")
+    custody.patch_disposed_by = str(payload.get("disposed_by_task_id") or "")
+    custody.patch_result_lost = bool(payload.get("result_lost"))
     custody.patch_apply_pending = False  # a disposition completes the intent story
     return emit(drive_root, PATCH_DISPOSED, {
         "run_id": custody.run_id, "task_id": custody.task_id,
@@ -873,10 +881,10 @@ def open_snapshot_ids(drive_root: Any) -> set:
     have bound a live run the worker died before recording). At boot and each
     custody pass, GC may remove other ids only once their owning task is proven over.
     """
-    from ouroboros.delegate_custody_current import runs as current_runs
+    from ouroboros.delegate_custody_current import held_runs
 
     ids: set = set()
-    for custody in current_runs(drive_root, "state=?", ("held",)).values():  # a settled, disposed run is closed: never here
+    for custody in held_runs(drive_root).values():  # a settled, disposed run is closed: never here
         # A terminal plan has no patch duty. GC still requires its owning task
         # to be proven over; active starters can keep answering or implement it.
         if custody.snapshot_id and not (custody.settled and (custody.patch_disposed or custody.mode == "plan")):
@@ -1200,9 +1208,9 @@ def open_containment_faults(drive_root: Any) -> List[Dict[str, Any]]:
     scan, which is why a separate projection file once existed). Unavailable store:
     no answer, never an empty one — the caller treats the exception as unknown.
     """
-    from ouroboros.delegate_custody_current import runs as current_runs
+    from ouroboros.delegate_custody_current import held_runs
 
-    return [dict(custody.containment_fault) for custody in current_runs(drive_root, "state=?", ("held",)).values()
+    return [dict(custody.containment_fault) for custody in held_runs(drive_root).values()
             if custody.containment_fault]
 
 
@@ -1400,9 +1408,9 @@ def owned_project_registrations(drive_root: Any, state: Optional[Dict[str, RunCu
     """Runs whose registration is still owned - settled or not (``open_runs``
     cannot see registrations that outlive their runs)."""
     if state is None:
-        from ouroboros.delegate_custody_current import runs as current_runs
+        from ouroboros.delegate_custody_current import held_runs
 
-        state = current_runs(drive_root, "state=?", ("held",))  # an owned registration is a held row
+        state = held_runs(drive_root)  # an owned registration is a held row
     return [custody for custody in state.values() if custody.project_owned and custody.project_id]
 
 
@@ -1411,10 +1419,10 @@ def retire_settled_registrations(drive_root: Any, gateway: Any, *, live_task_ids
     """Retire projects every sharer has settled; a LIVE sharer (owned or not
     - only the creator carries the registration, but any live sibling makes
     the daemon refuse) defers the attempt. Idempotent, fail-soft."""
-    from ouroboros.delegate_custody_current import runs as current_runs
+    from ouroboros.delegate_custody_current import held_runs, runs as current_runs
 
     by_project: Dict[str, List[RunCustody]] = {}
-    for row in current_runs(drive_root, "state=?", ("held",)).values():  # owned registrations and unsettled runs are held rows
+    for row in held_runs(drive_root).values():  # owned registrations and unsettled runs are held rows
         if row.project_id and row.run_id:
             by_project.setdefault(row.project_id, []).append(row)
     for project_id, rows in by_project.items():

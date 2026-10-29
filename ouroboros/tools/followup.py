@@ -36,6 +36,7 @@ from __future__ import annotations
 
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result, publish_no_effect
 
+import functools
 import json
 import uuid
 from typing import Any, Dict, List
@@ -62,20 +63,27 @@ def _manage_schedules(
 
     The authority is argument-aware rather than name-wide: READING is allowed to any
     member of the tree, while CHANGING the owner's schedules stays with
-    the root turn. A Presence conversation gets neither — an admitted guest room
-    is not a place from which this mind's own schedule table is read or rewritten.
+    the root turn. A Presence conversation sees only the follow-ups its own binding
+    scheduled, from any of its conversations, and may withdraw one (``delete``):
+    an admitted guest room never reads or rewrites the rest of this mind's table
+    (``queue_schedules.presence_promise``, rechecked on the stored row under the
+    write's transaction).
     """
     from supervisor.queue import (
         SCHEDULE_ACTIONS, ScheduleRefused, ScheduleStoreUnreadable, load_schedule_store,
         mutate_scheduled_task, schedule_tool_projection,
     )
+    from supervisor.queue_schedules import presence_promise, presence_promise_store
 
     operation = str(action or "list").strip().lower()
-    if presence_caller_binding(ctx) is not None:  # a speaker, or work acting for its binding
+    binding = presence_caller_binding(ctx)  # a speaker, or work acting for its binding
+    if binding is not None and (not binding or operation not in {"list", "get", "delete"}):
         return publish_no_effect(ctx, ToolResult(
             status="blocked", code="RESOURCE_CONSTRAINT_BLOCKED",
-            text="⚠️ RESOURCE_CONSTRAINT_BLOCKED: a Presence conversation cannot read or change owner schedules.",
+            text=("⚠️ RESOURCE_CONSTRAINT_BLOCKED: a Presence conversation lists, reads and withdraws (delete) "
+                  "only the follow-ups its place scheduled; owner schedules and other changes stay out of reach."),
         ))
+    owned_by = functools.partial(presence_promise, binding) if binding is not None else None
     if operation not in {"list", "get"} and not _root_schedule_mutation_authorized(ctx):
         return publish_no_effect(ctx, ToolResult(
             status="blocked", code="RESOURCE_CONSTRAINT_BLOCKED",
@@ -91,7 +99,9 @@ def _manage_schedules(
         result_limit = tool_result_limit("manage_schedules")
         if operation == "list":
             from supervisor.followup_policy import observed_store
-            return json.dumps(schedule_tool_projection(observed_store(root, load_schedule_store(root)),
+            store = load_schedule_store(root)
+            return json.dumps(schedule_tool_projection(observed_store(root, store if binding is None else
+                                                                      presence_promise_store(store, binding)),
                                                        offset=offset, limit=limit,
                                                        result_limit=result_limit),
                               ensure_ascii=False, sort_keys=True,
@@ -101,7 +111,7 @@ def _manage_schedules(
 
             row = next((row for row in load_schedule_store(root)["tasks"]
                         if str(row.get("id") or "") == str(schedule_id or "").strip()), None)
-            if row is None:
+            if row is None or (owned_by is not None and not owned_by(row)):
                 return publish_no_effect(ctx, json.dumps({"ok": False, "status": "not_found",
                                          "schedule_id": schedule_id}), tool_name="manage_schedules")
             row = observed_store(root, {"tasks": [row]})["tasks"][0]
@@ -123,7 +133,8 @@ def _manage_schedules(
             task_id=str(getattr(ctx, "task_id", "") or ""), drive_root=root,
             expected_hold_id=expected_hold_id, relation=relation,
             writer_kind=work_kind(getattr(ctx, "task_metadata", None)),
-            writer_metadata={**(getattr(ctx, "task_metadata", None) or {}), "task_id": str(getattr(ctx, "task_id", "") or "")})
+            writer_metadata={**(getattr(ctx, "task_metadata", None) or {}), "task_id": str(getattr(ctx, "task_id", "") or "")},
+            owned_by=owned_by)
     except ScheduleRefused as exc:
         # Same typed marker the sibling refusals carry: the text channel is the
         # registered ABI, so a refusal must be legible there and not only in the
@@ -356,7 +367,8 @@ def get_tools() -> List[ToolEntry]:
                 "be resolved. Exact hold release preserves enabled/deletion state, pending task identity, "
                 "money/deadline and other holds. Changes belong to a root turn; delegated tasks may "
                 "list/get only; Observe cannot update; "
-                "Presence cannot use this tool. Schedules fire only while Ouroboros runs, with one late "
+                "a Presence conversation lists, gets and deletes only the follow-ups its place scheduled. "
+                "Schedules fire only while Ouroboros runs, with one late "
                 "catch-up after downtime rather than replaying missed cron ticks."
             ),
             "parameters": {"type": "object", "properties": {

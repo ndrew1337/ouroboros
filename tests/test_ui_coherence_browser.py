@@ -40,10 +40,11 @@ def test_chat_header_decoration_does_not_clip_its_shade_and_system_actions_keep_
     ui = subscription_ui
     page = ui["page"]
     page.set_viewport_size({"width": width, "height": 600})
+    page.add_init_script("Date.now = () => Date.parse('2026-10-25T12:00:00Z')")
     # Consciousness sleeps until its next wake: the bar's chip says it and opens its Shade.
     page.route("**/api/state", lambda route: route.fulfill(json={
         "supervisor_ready": True, "active_chat_activities": [], "projects": [], "bg_consciousness_enabled": True,
-        "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00+00:00",
+        "bg_consciousness_state": {"status": "sleeping", "detail": "Sleeping until 14:20.", "next_wake_at": "2026-10-25T14:20:00+00:00",
                                    "spent_24h_usd": 1.5, "daily_usd": 20}}))
     page.route("**/api/consciousness", lambda route: route.fulfill(json={"enabled": True, "recent_wakes": []}))
     rows = [{"role": "system", "text": text, "markdown": markdown,
@@ -758,6 +759,7 @@ def test_question_mirrors_full_form_settle_and_reload(subscription_ui, width, he
     mode['stale'] = False
     activities[0]['required_question'] = pointer('waiting', blocks['waiting'])
     activities[1]['required_question'].update(quiz_state='answered', answered_index=1, owner_wait_state='resumed')
+    ui['errors'].watch(page)  # the reload may cut off the page's own reads; the reconnect above stays strict
     page.reload()
     page.wait_for_selector('#chat-input', state='attached')
     card('replaced').wait_for()

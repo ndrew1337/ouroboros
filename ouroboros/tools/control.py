@@ -118,45 +118,67 @@ _ROOT_EFFORT_PARAM = {"type": "string", "enum": list(EFFORT_SCALE), "description
     "task starts at my human's recommended level and the result says so. Omit for that level.")}
 
 
+# The direct-OpenAI custom projection drops parameter prose and keeps this lead only as far as it fits
+# beside the compact schema; tests/test_openai_chat_custom_contract.py holds every actual profile whole.
 _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "Start a child task on one objective; it reports its result back to you (start_task starts separate "
-    "independent work instead). Returns task_id. Default native READ-ONLY children inspect "
-    "local repo/data/history and web/browser. Each returns findings; apart from knowledge notes, memory marks "
-    "and chronicle drafts in its own name, it cannot write local state, commit, grant itself tools, or run "
-    "shell/review/runtime/skills. write_surface selects a MUTATIVE (acting) child; you alone commit "
-    "the live Ouroboros body. workspace_root selects the starting folder or inherits yours. "
-    "self_worktree copies that Git source's current eligible files, including uncommitted work, into an isolated tree; "
-    "use integrate_subagent_patch for its parallel/best-of-N patch. Native children on "
-    "external_workspace write directly to the SHARED external directory (write_root or parent workspace); "
-    "integrate_subagent_patch verifies those files without reapplying. For several builders of ONE "
-    "new deliverable, use external_workspace and OMIT write_root: the host creates one shared Git "
-    "tree, inherited by descendants; integrate_subagent_patch verifies their combined files. "
-    "genesis gives EACH child a separate empty Git repo under the durable projects root, for a new "
-    "game/site/app/Ouroboros or independent best-of-N builds; the project directory IS the deliverable, "
-    "never integrated into this repo. Acting harness work uses a private snapshot and integrate_delegated_patch. "
+    "independent work instead). Returns task_id. Children may write knowledge notes, memory marks and "
+    "chronicle drafts in their own name (the integrating mind accepts or rejects drafts: chronicle_write "
+    "kind=decision); no child commits, grants itself tools or writes identity/scratchpad. Default native "
+    "READ-ONLY children inspect local repo/data/history and web/browser and return findings, writing no other "
+    "local state and running no shell/review/runtime/skills. write_surface selects a MUTATIVE (acting) child. "
+    "workspace_root selects the starting folder or inherits yours. self_worktree copies that Git source's "
+    "current eligible files, including uncommitted work, into an isolated tree for integrate_subagent_patch. "
+    "Native children on external_workspace write directly to the SHARED directory (write_root, else the "
+    "selected/inherited workspace_root, else one new Git tree for all such descendants), "
+    "which integrate_subagent_patch verifies without reapplying. genesis gives EACH child its own empty Git "
+    "repo under the durable projects root: the project directory IS the deliverable. Acting harness work "
+    "uses a private snapshot and integrate_delegated_patch. "
     # Custom-tool projection strips parameter prose; this choice must survive in the tool lead.
-    "A non-acting Agent session keeps configured access in an evidence-only private checking copy; "
-    "access='readonly' selects read-only session execution. Its "
-    "captured changes are retained as evidence, not product patches: do not call integrate_delegated_patch "
-    "to apply or reject them. "
-    "Runtime data, including installed skill payloads, is never a write_surface. For skill mutation, "
-    "call delegate_start(subagent_id=..., prompt=..., root='skill_payload', bucket=..., skill_name=...) "
-    "yourself; children cannot open payload delegation and may only design/review it read-only. "
-    "Mutative children cannot commit or grant themselves tools; children may write knowledge notes and memory marks "
-    "in their own name and publish chronicle pages and parts only as drafts, which the integrating mind "
-    "accepts or rejects (chronicle_write kind=decision); identity and scratchpad stay with the parent. Cyber-effective "
-    "children inherit selected review/skill/runtime tools, subject to explicit task restrictions. "
-    "Nested delegation obeys configured depth/cap limits. Independent children scheduled "
-    "in one round run concurrently; wait_tasks(any_terminal) absorbs whichever finishes first. On "
-    "cache-write-priced routes, each sibling launched before the first sibling's first response pays "
-    "a full prefix write: choose burst latency or spaced cost savings. For ongoing addressed turns, "
-    "state in objective/constraints what is interim, whom to address and what ends participation. "
-    "Native children use forward_to_worker for you, siblings or any task in their tree, await_messages "
-    "to wait, and a final answer to end participation. For sessions, answer mid-run questions with "
-    "delegate_answer; after settlement, delegate_start(subagent_id=..., continue_from=run_id, prompt=...) starts another "
-    "run, reusing the session where possible or retained evidence in a new session; repetition may be "
-    "needed. Retrieve the handoff with get_task_result, wait_task or wait_tasks before relying on it."
+    "A non-acting Agent session keeps configured access in an evidence-only private checking copy (do not "
+    "call integrate_delegated_patch to apply or reject its changes); access='readonly' selects read-only "
+    "session execution. Runtime data, including installed skill payloads, is never a write_surface. "
+    "Cyber-effective children inherit "
+    "selected review/skill/runtime tools within explicit task restrictions. Nesting obeys configured "
+    "depth/cap limits. Children scheduled in one round run concurrently; on cache-write-priced routes each "
+    "sibling started before the first responds pays a full prefix write. Native children can address you, "
+    "siblings or any task in their tree; ongoing addressed turns need "
+    "objective/constraints stating what is interim, whom to address and what ends participation. Continue "
+    "settled sessions via delegate_start(subagent_id=id, continue_from=run_id, prompt=''): new run, "
+    "same session if possible, else a new one with retained evidence; work may repeat. "
+    "Retrieve the handoff with get_task_result, "
+    "wait_task or wait_tasks before relying on it."
 )
+
+
+def _project_tool_entries() -> List[ToolEntry]:
+    """Reversible project decisions and their paginated reader, beside work placement."""
+    return [
+        ToolEntry("close_project", {
+            "name": "close_project",
+            "description": "Close a finished project with a note, or reopen it. Its room and history stay; a new owner message or task reopens it.",
+            "parameters": {"type": "object", "properties": {
+                "project_id": {"type": "string"},
+                "note": {"type": "string", "description": "Why I close or reopen this project."},
+                "reopen": {"type": "boolean", "default": False},
+            }, "required": ["project_id", "note"], "additionalProperties": False},
+        }, _close_project, safety_policy="skip"),
+        ToolEntry("list_projects", {
+            "name": "list_projects",
+            "description": (
+                "List projects with id, name, last_active_at, closed record and activity — read-only. "
+                "Follow the next-page call to enumerate every match. "
+                "Use it in a main-chat turn to decide whether a message belongs to an existing "
+                "project, then place this work there with move_to_project."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
+                "start": {"type": "integer", "minimum": 0, "default": 0, "description": "Offset in the filtered, sorted list; use the returned next-page call."},
+                "closed": {"type": "boolean", "description": "False: open projects; true: closed projects; omit for both."},
+                "oldest_first": {"type": "boolean", "default": False, "description": "List by last_active_at from oldest to newest."},
+            }},
+        }, _list_projects),
+    ]
 
 
 def get_tools() -> List[ToolEntry]:
@@ -164,11 +186,13 @@ def get_tools() -> List[ToolEntry]:
     from ouroboros.tools.control_maintenance import maintenance_tool_entries
     from ouroboros.tools.control_mind import mind_tool_entries
     from ouroboros.tools.control_ui_translation import ui_translation_tool_entries
+    from ouroboros.tools.control_update_description import update_description_tool_entries
 
     return [
         *maintenance_tool_entries(),
         *mind_tool_entries(),
         *ui_translation_tool_entries(),
+        *update_description_tool_entries(),
         ToolEntry("inspect_subagent", {
             "name": "inspect_subagent",
             "description": "Inspect one configured actor from this task's captured catalog: exact route, model, account pin and access, with dated passive engine quota/resource facts. Works without Quotas. Never starts or refreshes an engine/provider, changes accounts, or chooses an executor. Missing/stale facts and unhonored model/request selectors remain unknown; availability is not an execution guarantee.",
@@ -180,7 +204,7 @@ def get_tools() -> List[ToolEntry]:
         ToolEntry("finish_task", {"name": "finish_task",
             "description": "Select the complete answer and request completion of your current task. "
                 "Use finish after considering the observed work, or stop with a rationale naming unfinished work. "
-                "Select exactly one of answer or a host-offered answer_sha256. Successful page, note, mark and addressed-message writes may ride in the same response; any other result is read before the finish. On a consciousness wake's own turn or a schedule-born root without a Presence binding, silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
+                "Select exactly one of answer or a host-offered answer_sha256. Successful page, note, mark and addressed-message writes may ride in the same response; any other result is read before the finish. On a self-started run (a consciousness wake's own turn, or a schedule-born root without a Presence binding) silent=true sends no message (any answer stays your internal note), refused while your human awaits a reply. No answer is needed. The run records no message unless a host notice is owed. This grants no success, cancels no children, and retains all configured review and owner controls.",
             "parameters": {"type": "object", "properties": {
                 "action": {"type": "string", "enum": ["finish", "stop"]}, "answer": {"type": "string", "description": "The complete answer, including a short correction; a root's owner reads it as your reply, a child's parent as your report."},
                 "answer_sha256": {"type": "string", "description": "Exact offered retained or whole held response hash."},
@@ -189,8 +213,8 @@ def get_tools() -> List[ToolEntry]:
                 }, "required": ["owner_source_sha256"]},
                 "pending_review": {"type": "string", "enum": ["wait", "finish"], "default": "wait"},
                 "swarm_comparison": {"type": "string", "description": "Optional solo-versus-swarm comparison in your own words, attributed to you separately from measured tree facts."},
-                "silent": {"type": "boolean", "default": False, "description": "A consciousness wake or a schedule-born root without a Presence binding may finish without a message when no human reply is owed; any answer stays in the durable result as internal text (wake_silent)."},
-                "summary": {"type": "string", "default": "", "description": "On a consciousness wake's own turn: one plain sentence for your human, in their language: what this wake did or decided. It titles the wake's card and its row on the Consciousness page; your answer or note stays as written."},
+                "silent": {"type": "boolean", "default": False, "description": "A self-started run may finish without a message when no human reply is owed; any answer stays in the durable result as internal text (wake_silent)."},
+                "summary": {"type": "string", "default": "", "description": "On a self-started run: one short plain sentence for your human, in their language: what this run did, found or decided. When you finish silently it is what they see instead of a message: on the run's card (a wake's title; a scheduled run's line under the schedule's name) and first in its Details, as the schedule's last-run line in Activity or the wake's row on the Consciousness page; the next run of the same schedule, or the next wake, reads it. Your answer or note stays as written."},
             }, "required": ["action"]}}, _finish_task),
         ToolEntry("set_tool_timeout", {
             "name": "set_tool_timeout",
@@ -252,17 +276,7 @@ def get_tools() -> List[ToolEntry]:
                 "required": [],
             },
         }, _move_to_project),
-        ToolEntry("list_projects", {
-            "name": "list_projects",
-            "description": (
-                "List the owner's projects (id, name, recency, running flag) — read-only. "
-                "Use it in a main-chat turn to decide whether a message belongs to an existing "
-                "project, then place this work there with move_to_project."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
-            }},
-        }, _list_projects),
+        *_project_tool_entries(),
         ToolEntry("tell_task", {
             "name": "tell_task",
             "description": "Send a note to another work, with optional exact owner quotes selected from "
@@ -320,14 +334,17 @@ def get_tools() -> List[ToolEntry]:
         }, _chat_history),
         ToolEntry("update_scratchpad", {
             "name": "update_scratchpad",
-            "description": "Append a block to your working memory (scratchpad). Each call adds a "
-                           "timestamped block; oldest blocks are auto-evicted when either cap is reached "
-                           "(10 blocks, 60000 characters of content). "
-                           "Write what matters NOW — active tasks, decisions, observations. "
-                           "Persists across sessions, read at every task start. "
-                           "Project rooms included — the scratchpad is the same working memory in every room.",
+            "description": "Write working memory (scratchpad): append a timestamped block, or with replaces fold the "
+                           "named blocks (the sha256 after each heading; an earlier fold too) into one text you "
+                           "accept, placed where the oldest was. Originals are journaled first, unnamed blocks stay, a "
+                           "stale or ambiguous selection changes nothing; nothing leaves by count, size or age. Write "
+                           "what matters NOW — active tasks, decisions, observations. Persists across sessions, read "
+                           "whole at every task start. Project rooms included: one working memory in every room.",
             "parameters": {"type": "object", "properties": {
-                "content": {"type": "string", "description": "Content for this scratchpad block"},
+                "content": {"type": "string", "description": "The new block, or the accepted text of a fold"},
+                "replaces": {"type": "array", "items": {"type": "string"}, "description": "Fold: sha256 of each "
+                             "active block this text replaces (a byte-identical block once per copy); omit to append"},
+                "draft_source": {"type": "string", "description": "Source of a helper draft you accept (its task id)"},
             }, "required": ["content"]},
         }, _update_scratchpad),
         ToolEntry("send_user_message", {
@@ -342,14 +359,15 @@ def get_tools() -> List[ToolEntry]:
                 "text": {"type": "string", "description": "Message text"},
                 "reason": {"type": "string", "description": "Why you're reaching out (logged, not sent)"},
                 "request_id": {"type": "string", "description": "Presence Main contact retry key (at most 128 characters). Reuse the same key and words after uncertain delivery; a new key permits a distinct identical report. Omitted: identical words from this work rejoin."},
-                "reply_to_relay": {"type": "string", "description": "Reply to a drained relay in its source room. Empty selects the single open relay; omit for an ordinary room message."},
+                "reply_to_relay": {"type": "string", "description": "Reply to a drained relay in its source room; this work's Project shows the same answer. Empty selects the single open relay; omit for an ordinary room message."},
                 "destination": {"type": "string", "enum": ["current", "main"], "default": "current",
-                                "description": "'current' (default): this conversation's room. 'main': the "
-                                               "owner's main chat, for a substantive message that belongs "
-                                               "there while this work lives in an owner-visible Project room. "
-                                               "It never appears in the Project thread and is not this task's "
-                                               "answer. A Presence root can report privately with host-bound source attribution, "
-                                               "including from Silent places. Delegated and agent-to-agent work cannot use it."},
+                                "description": "'current' (default): this conversation's room. 'main': also the "
+                                               "owner's main chat, for a substantive message that needs the owner "
+                                               "there while this work lives in an owner-visible Project room. One "
+                                               "message: the Project shows it too, and it is read once; it is not "
+                                               "this task's answer. A Presence root reports privately to Main only, "
+                                               "with host-bound source attribution, including from Silent places. "
+                                               "Delegated and agent-to-agent work cannot use it."},
             }, "required": ["text"]},
         }, _send_user_message),
         ToolEntry("update_identity", {
@@ -472,6 +490,7 @@ from ouroboros.tools.control_routing import (  # noqa: E402, F401 -- intentional
     _attach_client_surface,
     _attach_origin_from_metadata,
     _finish_swarm_handoff,
+    _close_project,
     _list_projects,
     _start_task,
 )

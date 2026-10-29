@@ -45,7 +45,7 @@ from typing import Any, Dict, List, Optional
 from ouroboros.config import get_finalization_grace_sec
 from ouroboros.deadline_utils import caller_deadline_arguments, owner_deadline_exhausted, review_transport_timeout
 from ouroboros.event_usage import event_token_counts
-from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_review_paid_stamp
+from ouroboros.review_dispatch import bind_api_review_paid_stamp, invoke_late_review_paid_stamp
 from ouroboros.review_verdict_extraction import canonicalize_session_verdict
 from ouroboros.review_native_images import NativeReviewImages, staged_image_registry
 from ouroboros.triad_review import request_output_shape
@@ -201,6 +201,11 @@ _NATIVE_REVIEW_INSTRUCTIONS = (
     "must follow the output contract in the task EXACTLY; your host parses it "
     "structurally, and prose around the verdict is a non-response."
 )
+# A tool reply's own guidance on handling evidence (its errors, results and unsupported options are facts).
+_FOCUS_GUIDANCE = ("Native review focus uses your own working_note; inspect is optional. Select complete units or use "
+                   "keep_last_n with your note.")
+_CONTINUE_READING = (". Continue reading the remainder in bounded chunks (read_file supports start_line/max_lines and "
+                     "start_char for long lines).")
 
 # Bounded retrieval pages keep exact full sources and continuation cursors.
 # This is a per-result projection, never a cumulative reading or send limit.
@@ -246,22 +251,40 @@ def native_episode_prompt(surface: str, role_hint: str, task: str, output_contra
     ])
 
 
-def native_first_send_messages(prompt: str, required_sources_ref: Any = None) -> List[Dict[str, Any]]:
-    """Cache the completed assignment, stable throughout this review episode: the
-    task plus the required-manifest reference when the surface declared one
-    (``None``: no manifest). ``_open_episode`` and every pre-dispatch measure
-    build the opening here."""
-    from ouroboros.tools.review_helpers import cached_prompt_blocks
-
-    task = prompt if required_sources_ref is None else prompt + (
+def native_first_send_task(prompt: str, required_sources_ref: Any = None) -> str:
+    """The opening's user text: the work order, plus the required-manifest reference the surface declared."""
+    return prompt if required_sources_ref is None else prompt + (
         "\nRequired source manifest: " + json.dumps(required_sources_ref, ensure_ascii=False)
         + "\nSources marked delivered_inline are already included in full. Read the other required "
         "sources through their exact physical addresses, using multiple working views as needed. "
         "Observed read coverage remains diagnostic evidence beside your findings.")
-    return [
-        {"role": "system", "content": _NATIVE_REVIEW_INSTRUCTIONS},
-        {"role": "user", "content": cached_prompt_blocks(task)},
-    ]
+
+
+def native_first_send_messages(prompt: str, required_sources_ref: Any = None) -> List[Dict[str, Any]]:
+    """Cache the completed assignment, stable throughout this review episode (``native_first_send_task``;
+    ``None``: no manifest). ``_open_episode`` and every pre-dispatch measure build the opening here."""
+    from ouroboros.tools.review_helpers import cached_prompt_blocks
+
+    return [{"role": "system", "content": _NATIVE_REVIEW_INSTRUCTIONS},
+            {"role": "user", "content": cached_prompt_blocks(native_first_send_task(prompt, required_sources_ref))}]
+
+
+def native_paged_prompt(pointer: str, output_contract: str) -> str:
+    """The opening of an episode whose work order is paged: the pointer, then the contract again."""
+    return pointer + "\nOUTPUT CONTRACT:\n" + output_contract
+
+
+def native_material(surface: str, output_contract: str) -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): a native episode's opening over
+    a placeholder task, inline and paged, with and without a required-source manifest, its tool replies' evidence
+    guidance and its inspection tool set."""
+    from ouroboros.tools.review_brief_coupling import paged_review_text
+    from ouroboros.tools.review_multi_model import TRIAD_ROLE_HINT
+
+    pointer = paged_review_text("⟨text⟩", {"path": "⟨path⟩", "sha256": "⟨sha⟩"}, label="review brief", delegated=False)
+    return [_NATIVE_REVIEW_INSTRUCTIONS, *(native_first_send_task(prompt, ref) for ref in (None, {"⟨ref⟩": 1}) for prompt in (
+        native_episode_prompt(surface, TRIAD_ROLE_HINT, "⟨task⟩", output_contract, "⟨slot⟩"),
+        native_paged_prompt(pointer, output_contract))), _FOCUS_GUIDANCE, _CONTINUE_READING, *_INSPECTION_TOOL_NAMES]
 
 
 def inspection_registry(root: str, drive_root: Any, task_id: str = "") -> tuple[Any, Any, List[Dict[str, Any]]]:
@@ -779,6 +802,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                         capture = getattr(exc, "physical_attempt_capture", None)
                         sent = self._images.sent_messages
                         transcript_chars = _wire_size(sent, schemas)
+                        stamp_failed = False  # a strict stamp that failed after this send ends the episode here
                         if str(getattr(capture, "state", "") or "") in POSITIVE_PHYSICAL_ATTEMPT_STATES:
                             # A send that was physically dispatched IS a round
                             # of this episode, even when its response never
@@ -786,9 +810,9 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                             # read as a zero-send refusal.
                             self._rounds_used, last_send_chars = round_idx, transcript_chars  # a dispatched send IS the last one
                             self._observe_sent_view(messages, schemas, confirmed=False)
-                            invoke_review_paid_stamp(self.assignment.dispatch_stamp)
+                            stamp_failed = invoke_late_review_paid_stamp(self.assignment.dispatch_stamp)
                         observe_failed_review_send(self.usage_observer, exc)
-                        if self._images.refuse_send(exc, self.assignment.slot, round_idx, transcript_chars):
+                        if not stamp_failed and self._images.refuse_send(exc, self.assignment.slot, round_idx, transcript_chars):
                             end_reason = "running"
                             continue  # Same episode, explicit gap; no estimate suppresses an image send.
                         if isinstance(exc, (BudgetExceeded, BillingAuthorityUnavailable, ControlAuthorityUnavailable)) and shape == "report" and last_content:
@@ -986,9 +1010,8 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                 policy["native_required_sources"] = required
                 ref = self._store_source("required-sources", required)
                 policy["native_required_sources_ref"] = ref
-                prompt = paged_review_text(self.episode_prompt, source, label="review brief", delegated=False)
-                prompt += "\nOUTPUT CONTRACT:\n" + self._output_contract()
-                messages = native_first_send_messages(prompt, ref)
+                messages = native_first_send_messages(native_paged_prompt(paged_review_text(
+                    self.episode_prompt, source, label="review brief", delegated=False), self._output_contract()), ref)
         return registry, schemas, messages, _wire_size(messages, schemas)
 
     def _chat_kwargs(self, messages: List[Dict[str, Any]], schemas: List[Dict[str, Any]], max_tokens: int) -> Dict[str, Any]:
@@ -1123,7 +1146,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                         # call that can wedge on anything outside it.
                         from ouroboros.tools.compact_context import _compact_context
                         if not args.get("inspect") and args.get("working_note") is None:
-                            result = "Native review focus uses your own working_note; inspect is optional. Select complete units or use keep_last_n with your note."
+                            result = _FOCUS_GUIDANCE
                         else:
                             unsupported = [key for key in ("schema_names", "review_notes", "review_transfers")
                                            if key in args and args[key] is not None]
@@ -1161,10 +1184,7 @@ class NativeToolRoundReviewExecutor(ReviewSlotExecutor):
                 # cap, and the cut is measured on the SERIALIZED message (JSON
                 # escaping inflates real text) until it fits the room — a raw
                 # result under the cap can still overshoot the room on the wire.
-                marker = (
-                    ". Continue reading the remainder in bounded"
-                    " chunks (read_file supports start_line/max_lines and start_char for long lines)."
-                )
+                marker = _CONTINUE_READING
                 full = result
                 source_ref = {}
                 oversized = (len(full) > result_cap or len(json.dumps({"role": "tool", "tool_call_id": call_id,

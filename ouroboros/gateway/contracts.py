@@ -7,7 +7,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 from ouroboros.cost_projection import CostPresentation
 from ouroboros.delegate_custody_usage import CostCustody
-from ouroboros.gateway.reference_contracts import ChatReferenceFields
+from ouroboros.gateway.reference_contracts import ChatReferenceFields, SharedRowFrame
 from ouroboros.storage import (  # noqa: F401 -- public re-exports
     StorageCount, StorageCounting, StorageError, StoragePart, StoragePlace, StorageResponse, StorageRest,
     StorageVolume, StorageRemover,
@@ -33,7 +33,8 @@ from ouroboros.gateway.widgets import (
 from ouroboros.gateway.decision_contracts import DecisionRequest, DecisionResponse  # noqa: F401 -- public re-exports
 from ouroboros.gateway.card_contracts import CardOutbound, CardStateOutbound  # noqa: F401 -- public re-exports
 from ouroboros.gateway.update_contracts import (  # noqa: F401 -- public re-exports
-    UpdateApplyErrorResponse, UpdateApplyRequest, UpdateApplySuccessResponse, UpdateMergePlan,
+    UpdateApplyErrorResponse, UpdateApplyRequest, UpdateApplySuccessResponse, UpdateDescriptionErrorResponse,
+    UpdateDescriptionRequest, UpdateDescriptionResponse, UpdateMergePlan,
     UpdatePreflightRequest, UpdatePreflightResponse, UpdateProgressChangedOutbound, UpdateStatusReadyOutbound,
 )
 from ouroboros.gateway.management_contracts import (  # noqa: F401 -- public re-exports
@@ -119,7 +120,7 @@ class TransportMetadata(TypedDict, total=False):
     sender_label: str
 
 
-class ChatOutbound(ChatReferenceFields):
+class ChatOutbound(ChatReferenceFields, SharedRowFrame):
     """Outbound WS chat frame."""
 
     presence_contact: NotRequired[PresenceContact]
@@ -275,6 +276,7 @@ class ChatOutbound(ChatReferenceFields):
     # dict failure_details and current source selectors. gaps name failed records;
     # review_records_omitted is 0|"1+"|"unknown", never proof of a review by itself.
     review_projection: NotRequired[Dict[str, Any]]
+    body_adoptions: NotRequired[List[Dict[str, Any]]]  # the task's settled adoptions (TaskDetailResponse), on its summary
     worker_saturation_warning: NotRequired[bool]
     source: NotRequired[str]
     sender_label: NotRequired[str]
@@ -311,87 +313,55 @@ class ChatOutbound(ChatReferenceFields):
     project_thread: NotRequired[bool]
 
 
-class PhotoOutbound(ChatReferenceFields):
+class _MediaOutbound(ChatReferenceFields):
+    """The fields the photo, video and document frames share; each frame adds its type, payload and own keys."""
+
+    role: Literal["user", "assistant"]
+    mime: str
+    ts: str
+    caption: NotRequired[str]
+    # Canonical durable task-artifact URL of the stored media (a document's captured file), replayed by chat history:
+    # the live frame carries the bytes inline, so replay never needs to persist them.
+    download_url: NotRequired[str]
+    # Second address for the SAME bytes on the long-shipped /api/files/download route, non-empty only when the stored
+    # file resolves inside the current file-browser root. Packaged desktop launchers gate their file bridge to a URL
+    # allowlist that predates the artifact route, so the browser uses download_url and the host bridge prefers this one.
+    download_url_compat: NotRequired[str]
+    content: NotRequired[str]
+    source: NotRequired[str]
+    sender_label: NotRequired[str]
+    sender_session_id: NotRequired[str]
+    client_message_id: NotRequired[str]
+    transport: NotRequired[TransportMetadata]
+    chat_id: NotRequired[int]
+    task_id: NotRequired[str]
+    # Server-stamped when chat_id is a reserved Project thread: Main never adopts it, even before the browser learns it.
+    project_thread: NotRequired[bool]
+
+
+class PhotoOutbound(_MediaOutbound):
     """Outbound WS photo frame."""
 
     type: Literal["photo"]
-    role: Literal["user", "assistant"]
     image_base64: str
-    mime: str
-    ts: str
-    caption: NotRequired[str]
-    # Durable task-artifact URL for the stored media, replayed by chat history
-    # (the live frame carries the bytes inline instead).
-    download_url: NotRequired[str]
-    # Second address for the SAME bytes on the long-shipped
-    # /api/files/download route, present only when the stored file resolves
-    # inside the current file-browser root. Packaged desktop launchers gate
-    # their file bridge to a URL allowlist that predates the artifact route,
-    # so the browser uses download_url and the host bridge prefers this one.
-    download_url_compat: NotRequired[str]
-    content: NotRequired[str]
-    source: NotRequired[str]
-    sender_label: NotRequired[str]
-    sender_session_id: NotRequired[str]
-    client_message_id: NotRequired[str]
     subagents_mode: NotRequired[Literal["swarm"]]  # Accepted owner message, never a client claim.
-    transport: NotRequired[TransportMetadata]
-    chat_id: NotRequired[int]
-    task_id: NotRequired[str]
-    # Server-stamped when chat_id is a reserved Project thread: Main never adopts it, even before the browser learns it.
-    project_thread: NotRequired[bool]
 
 
-class VideoOutbound(ChatReferenceFields):
+class VideoOutbound(_MediaOutbound):
     """Outbound WS video frame."""
 
     type: Literal["video"]
-    role: Literal["user", "assistant"]
     video_base64: str
-    mime: str
-    ts: str
-    caption: NotRequired[str]
-    # Same as PhotoOutbound.download_url above.
-    download_url: NotRequired[str]
-    # Same dual-address contract as PhotoOutbound.download_url_compat above.
-    download_url_compat: NotRequired[str]
-    content: NotRequired[str]
-    source: NotRequired[str]
-    sender_label: NotRequired[str]
-    sender_session_id: NotRequired[str]
-    client_message_id: NotRequired[str]
-    transport: NotRequired[TransportMetadata]
-    chat_id: NotRequired[int]
-    task_id: NotRequired[str]
-    # Same Project-thread stamp contract as PhotoOutbound.project_thread.
-    project_thread: NotRequired[bool]
 
 
-class DocumentOutbound(ChatReferenceFields):
+class DocumentOutbound(_MediaOutbound):
     """Outbound WS document/file frame."""
 
     type: Literal["document"]
-    role: Literal["user", "assistant"]
     file_base64: str
-    mime: str
     filename: str
-    ts: str
-    caption: NotRequired[str]
-    # Canonical captured-file URL; replay never needs to persist inline bytes.
-    download_url: NotRequired[str]
-    download_url_compat: NotRequired[str]
     file_ref: NotRequired[Dict[str, Any]]
-    content: NotRequired[str]
-    source: NotRequired[str]
-    sender_label: NotRequired[str]
-    sender_session_id: NotRequired[str]
-    client_message_id: NotRequired[str]
-    transport: NotRequired[TransportMetadata]
-    chat_id: NotRequired[int]
-    task_id: NotRequired[str]
     size_bytes: NotRequired[int]
-    # Server-stamped when chat_id is a reserved Project thread: Main never adopts it, even before the browser learns it.
-    project_thread: NotRequired[bool]
 
 
 class LinkAction(TypedDict):
@@ -499,9 +469,8 @@ class TypingOutbound(TypedDict):
     activity_id: NotRequired[str]
     client_message_id: NotRequired[str]
     phase: NotRequired[str]
-    # Stamped for a registry-tracked turn ("direct_chat") or a RUNNING queue
-    # root ("managed_task"); empty for children. No in-repo client reads it
-    # (wire compatibility): only the census inserts into the header live-set.
+    # Stamped for a registry-tracked turn ("direct_chat") or a RUNNING queue root ("managed_task"); empty for children.
+    # No in-repo client reads it (wire compatibility): only the census inserts into the header live-set.
     kind: NotRequired[str]
 
 
@@ -590,6 +559,14 @@ class ProjectCreateRequest(TypedDict, total=False):
     with_workspace: bool
 
 
+class ProjectClosure(TypedDict):
+    """A reversible decision; absent ``ProjectEntry.closed`` means open."""
+
+    at: str
+    by: str  # owner or ouroboros:<focus task id>
+    note: str
+
+
 class ProjectEntry(TypedDict, total=False):
     """A registry project row. ``provenance`` (attached|cloned|genesis|none) and ``clone_url``
     are historical facts; operational git data is read live from ``.git``. List rows are a
@@ -609,6 +586,7 @@ class ProjectEntry(TypedDict, total=False):
     created_at: str
     last_active_at: str
     lifecycle: Literal["active", "deleting", "tombstoned"]
+    closed: ProjectClosure  # independent of lifecycle; room, history and routing stay available
     routing_generation: int
     routing_incarnation: str
     visible_revision: int
@@ -808,9 +786,8 @@ class StateResponse(WorkStateFields):
     task_bindings_revision: str
     task_bindings_unchanged: bool
     active_direct_turns: NotRequired[List[ActiveDirectTurn]]
-    # Combined activity snapshot (direct/ephemeral turns + root managed queue
-    # tasks). Additive beside active_direct_turns, which stays unchanged for
-    # compatibility; new clients hydrate from this field.
+    # Combined activity snapshot (direct/ephemeral turns + root managed queue tasks). Additive beside
+    # active_direct_turns, which stays unchanged for compatibility; new clients hydrate from this field.
     active_chat_activities: NotRequired[List[ActiveChatActivity]]
     active_chat_activities_complete: NotRequired[bool]
     current_questions: NotRequired[List[Dict[str, Any]]]  # canonical forms independent of history window
@@ -886,9 +863,8 @@ class SettingsSaveResponse(TypedDict, total=False):
     next_task_changed: bool
     warnings: list[str]
     ignored_keys: Dict[str, str]
-    # True when the save landed while an agent task was already STARTED: that
-    # task keeps its start-time reviewers, subagents, context and effort; models,
-    # accounts and keys reach work that follows them at its next call.
+    # True when the save landed while an agent task was already STARTED: that task keeps its start-time reviewers,
+    # subagents, context and effort; models, accounts and keys reach work that follows them at its next call.
     agent_task_running: bool
     connection_references: list[Dict[str, str]]  # rows naming a connection that cannot serve them (they refuse)
 
@@ -1078,9 +1054,8 @@ class _TaskCreateRequestRequired(TypedDict):
 class TaskCreateRequest(_TaskCreateRequestRequired, total=False):
     task_id: str
     type: str
-    # v6.115.0: the run's owner-facing name. Supplied, it fills both name slots
-    # like a promoted chat turn; omitted, admission derives a display-only name
-    # from the request's first line. `metadata.title` is refused (400).
+    # v6.115.0: the run's owner-facing name. Supplied, it fills both name slots like a promoted chat turn; omitted,
+    # admission derives a display-only name from the request's first line. `metadata.title` is refused (400).
     title: str
     chat_id: int
     depth: int
@@ -1195,6 +1170,9 @@ class TaskDetailResponse(TypedDict, total=False):
     owner_hurry_history: list[OwnerHurryProjection]
     # While the queue snapshot lists a non-final row: its hold {reason, detail, label} or {}.
     project_admission_hold: Dict[str, Any]
+    # Every adoption this task authorized, as boot settled them: {adoption_id, outcome, commit_sha, previous_sha, branch,
+    # note, settled_at, revision, commits?, commits_complete?, commits_omitted?}; commits (newest first) only when adopted.
+    body_adoptions: List[Dict[str, Any]]
     error: str
 
 
@@ -1526,19 +1504,13 @@ __all__ = [
     "QuizOption", "QuizOutbound", "QuizStateOutbound",
     "CardOutbound", "CardStateOutbound",
     "DecisionRequest", "DecisionResponse",
-    "TypingOutbound",
-    "LogOutbound",
-    "HeartbeatOutbound",
-    "ExtensionLifecycleOutbound",
-    "ProjectsChangedOutbound",
-    "MessageAnnotationOutbound",
-    "UpdateMergePlan",
-    "UpdatePreflightRequest", "UpdatePreflightResponse",
-    "UpdateApplyRequest",
+    "TypingOutbound", "LogOutbound", "HeartbeatOutbound", "ExtensionLifecycleOutbound",
+    "ProjectsChangedOutbound", "MessageAnnotationOutbound",
+    "UpdateMergePlan", "UpdatePreflightRequest", "UpdatePreflightResponse", "UpdateApplyRequest",
     "UpdateApplySuccessResponse", "UpdateApplyErrorResponse",
-    "UpdateStatusReadyOutbound",
-    "UpdateProgressChangedOutbound",
-    "ProjectCreateRequest", "ProjectEntry", "ProjectDeleteResponse", "ProjectCognition",
+    "UpdateDescriptionRequest", "UpdateDescriptionResponse", "UpdateDescriptionErrorResponse",
+    "UpdateStatusReadyOutbound", "UpdateProgressChangedOutbound",
+    "ProjectCreateRequest", "ProjectEntry", "ProjectClosure", "ProjectDeleteResponse", "ProjectCognition",
     "FsDirsEntry", "FsDirsResponse",
     "TaskNamedOutbound",
     "ErrorResponse", "StatusResponse", "HealthResponse", "StateResponse",

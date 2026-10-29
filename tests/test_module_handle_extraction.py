@@ -95,7 +95,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     # tree did not bear it out, so the three invariants below were not running on
     # them. Sets are the tool-derived exact read sets on these bytes.
     "supervisor/queue_snapshot.py": ("supervisor/queue.py", "_queue", frozenset({
-        "ACCEPTANCE_FENCES", "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "PENDING", "PRIOR_DIRECT_ROOTS",
+        "ACCEPTANCE_FENCES", "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "INITIALIZED", "PENDING", "PRIOR_DIRECT_ROOTS",
         "QUEUE_PUBLICATION", "QUEUE_SEQ_COUNTER_REF", "QUEUE_SNAPSHOT_PATH", "RUNNING", "_queue_lock",
         "append_jsonl", "atomic_write_text", "enqueue_task", "parse_iso_to_ts",
         "persist_queue_snapshot", "restore_invalid_depth_admission", "sort_pending",
@@ -103,7 +103,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
     "supervisor/queue_timeouts.py": ("supervisor/queue.py", "_queue", frozenset({
         "BUDGET_ROOT_FENCES", "DRIVE_ROOT", "FINALIZATION_GRACE_SEC", "HEARTBEAT_STALE_SEC", "PENDING",
         "RUNNING", "_enforce_task_timeouts_locked", "_expire_pending_deadlines_locked",
-        "_ensure_reaper_started", "_has_live_descendant", "_has_pending_descendant",
+        "_ensure_reaper_started", "_has_pending_descendant",
         "_is_descendant_of", "_queue_lock", "_reap_queue",
         "_request_finalization_grace", "_subtree_progressing", "_task_deadline_ts",
         "_task_drive_for_task", "coerce_chat_identity", "get_per_call_timeout_ceiling_sec",
@@ -183,7 +183,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "write_text",
     })),
     "ouroboros/tools/git_review_cycle.py": ("ouroboros/tools/git.py", "_git", frozenset({
-        "_DOC_ONLY_EXTENSIONS", "_acquire_git_lock",
+        "_acquire_git_lock",
         "_aggregate_review_verdict",
         "_authorized_managed_update_resolver", "_check_overlapping_review_attempt",
         "_current_runtime_mode", "_ensure_gitignore", "_finalize_blocked_review",
@@ -202,7 +202,8 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "protected_paths_in", "run_cmd", "safe_relpath",
     })),
     "ouroboros/tools/git_vcs_ops.py": ("ouroboros/tools/git.py", "_git", frozenset({
-        "_acquire_git_lock", "_binding_relative_path", "_ff_pull",
+        "_acquire_git_lock", "_authorized_managed_update_resolver",
+        "_binding_relative_path", "_current_runtime_mode", "_ff_pull",
         "_limit_git_output", "_release_git_lock",
         "_run_git_network_cmd", "_vcs_binding", "_vcs_result",
         "binding_targets_system_repo", "build_resolved_resource_binding",
@@ -231,7 +232,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_clear_bootstrap_pin_marker", "_clear_update_intent",
         "_collect_repo_sync_state", "_compute_ref_ahead_count",
         "_create_rescue_snapshot", "_git_dir", "_guard_live_repo_destructive_git",
-        "_has_remote", "_maybe_repair_git_index", "_pin_to_bundle_sha_on_bootstrap",
+        "_has_remote", "_is_launcher_managed_repo", "_maybe_repair_git_index", "_pin_to_bundle_sha_on_bootstrap",
         "_preserve_branch_for_official_reset", "_read_managed_repo_meta",
         "_read_update_intent", "_ref_points_at_ref", "_rescue_untracked_incomplete",
         "_run_git_resilient", "_update_source", "append_jsonl", "git_capture",
@@ -334,7 +335,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         '_append_or_merge_user_message', '_arm_delivery_control', '_begin_task_acceptance_fence',
         '_child_disposition_state', '_compute_subagent_handoff', '_current_delivery_candidate',
         '_delivery_evidence_state', '_disclose_service_finalization',
-        '_drain_incoming_messages',
+        '_drain_incoming_messages', '_emit_checkpoint_event',  # a held completion's diagnostic row
         '_end_task_acceptance_fence', '_enforce_plan_gate', '_extract_plain_text_from_content',
         '_finalize_forced_services', '_finalize_task_services', '_plan_gate_disclosure',
         '_forced_fallback_result', '_forced_orphan_note', '_handle_text_response',

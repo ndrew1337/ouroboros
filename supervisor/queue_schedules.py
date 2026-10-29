@@ -229,7 +229,7 @@ def load_schedule_store(drive_root: pathlib.Path | None = None) -> Dict[str, Any
     filtered list back, which is how a mutation about ONE schedule silently
     dropped another.
     """
-    from supervisor.state_initialization import confirm_absent
+    from ouroboros.installation_stop import confirm_absent
 
     path = _scheduled_tasks_path(drive_root)
     try:
@@ -366,6 +366,26 @@ def _schedule_projection_row(raw: Dict[str, Any]) -> Dict[str, Any]:
             row[key] = facts[key]
     row["display_name"] = _bounded_projection_text(row["display_name"])
     return row
+
+
+def presence_promise(binding: Any, row: Any) -> bool:
+    """Whether ``row`` is a follow-up the exact nonempty Presence ``binding`` scheduled (#1589).
+
+    The one ownership predicate behind a Presence caller's schedule reads, its context
+    listing and its withdrawal: the binding carrier ``tools/followup.py`` copies by value
+    onto the row's task template. An owner or skill row, a note, another binding and an
+    empty or malformed carrier never match; objective text, room or writer kind decide nothing.
+    """
+    wanted = str(binding or "").strip()
+    template = row.get("task") if isinstance(row, dict) else None
+    return bool(wanted and isinstance(template, dict) and row.get("source") == "task_followup"
+                and row.get("kind") not in {"notify", "note"}
+                and presence_metadata_binding(template.get("metadata")) == wanted)
+
+
+def presence_promise_store(data: Dict[str, Any], binding: Any) -> Dict[str, Any]:
+    """The store narrowed to ``binding``'s own follow-ups, filtered BEFORE any page is cut."""
+    return {**data, "tasks": [row for row in data.get("tasks") or [] if presence_promise(binding, row)]}
 
 
 def schedule_tool_projection(
@@ -652,7 +672,7 @@ def _scan_outcomes(root, snapshot):
     """
     from ouroboros.task_results import load_task_result
     from ouroboros.task_status import SETTLED_STATUSES
-    from ouroboros.task_finalization import terminal_host_notice_text
+    from ouroboros.task_finalization import quiet_finish, terminal_host_notice_text
     from ouroboros.terminal_time import terminal_time_fact
     from ouroboros.store import acquisition_budget
 
@@ -667,13 +687,14 @@ def _scan_outcomes(root, snapshot):
             if not result or result.get("status") not in SETTLED_STATUSES:
                 continue
             notice = terminal_host_notice_text(result)
-            silent = result.get("wake_silent") is True
-            # A host notice is the run's public line; a quiet run's own words never are.
-            text = str(notice or ("" if silent else result.get("result")) or "").strip()
+            words = str(result.get("wake_summary") or "").strip()
+            # A host notice is the run's public line, else the sentence it wrote for its human (whole),
+            # else the end of a spoken answer; a quiet run's internal note never is.
+            text = str(notice or ("" if words or result.get("wake_silent") is True else result.get("result")) or "").strip()
             observed[str(row.get("id") or "")] = {
-                "task_id": task_id, "state": result["status"], "quiet": silent and not bool(notice),
+                "task_id": task_id, "state": result["status"], "quiet": quiet_finish(result),
                 "notice": bool(notice), "ended_at": terminal_time_fact(result)["occurred_at"],
-                "line": text.splitlines()[-1][:160] if text else "",
+                "line": text.splitlines()[-1][:160] if text else words,
             }
         except Exception:
             log.debug("schedule result %s not observed this pass", task_id, exc_info=True)

@@ -10,8 +10,10 @@ import sys
 import threading
 import time
 import uuid
-# The executing checkout is the implicit repository before any import resolves REPO_DIR; an explicit one wins.
-os.environ.setdefault("OUROBOROS_REPO_DIR", os.path.dirname(os.path.abspath(__file__)))
+# Before any import resolves a path: the executing checkout is the implicit repository and the data root is
+# settled; an explicit value wins, and APP_ROOT alone never silently leaves historical memory (#1239).
+from ouroboros.launch_roots import enter_direct, same_location  # noqa: E402 — standard library only
+os.environ.update(enter_direct(os.path.dirname(os.path.abspath(__file__))))
 from ouroboros.utils import read_json_dict as read_json_dict, utc_now_iso  # noqa: E402
 from typing import Any, Dict, Optional
 
@@ -121,10 +123,8 @@ DEFAULT_PORT = int(os.environ.get("OUROBOROS_SERVER_PORT", "8765"))
 PORT_FILE = resolve_port_file(DATA_DIR, hosting_data_dir=DATA_DIR)
 
 sys.path.insert(0, str(REPO_DIR))
-if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
-    _agent_python = sys.executable
-    if isinstance(_agent_python, str) and _agent_python:
-        os.environ["OUROBOROS_AGENT_PYTHON"] = _agent_python
+if isinstance(sys.executable, str) and sys.executable:  # this host's interpreter, never an inherited (moved-app) one
+    os.environ["OUROBOROS_AGENT_PYTHON"] = sys.executable
 
 # Logging is configured in main(), not at import: a spawn/forkserver worker re-imports
 # this module as ``__mp_main__`` and configures itself in ``worker_main``
@@ -132,7 +132,7 @@ if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
 _pytest_default_real_data_dir = (
     "pytest" in sys.modules
     and not os.environ.get("OUROBOROS_DATA_DIR")
-    and DATA_DIR == pathlib.Path.home() / "Ouroboros" / "data"
+    and same_location(DATA_DIR, pathlib.Path.home() / "Ouroboros" / "data")
 )
 
 RESTART_EXIT_CODE = 42
@@ -941,7 +941,7 @@ def _boot_managed_update_tasks() -> None:
     """Finalize a pending update, restart after rollback, then refresh its feed."""
     try:
         from ouroboros.gateway.update_progress import observe_boot
-        from supervisor.git_ops import compute_managed_update_status
+        from supervisor.git_ops import advance_recovery_point, compute_managed_update_status
         from supervisor.update_merge import active_update_tx, finalize_managed_update_on_boot
 
         ready = _wait_for_supervisor_update_finalize()
@@ -973,6 +973,7 @@ def _boot_managed_update_tasks() -> None:
             close_repo_writer_admission("managed_update:rollback_restart")
             _request_restart_exit()
             return
+        advance_recovery_point(ready and _bootstrap_ok is True and result.get("rolled_back") is not True)
         update_status = compute_managed_update_status(fetch=True)
         try:
             from ouroboros.update_letter import refresh_after_check, runtime_status
@@ -1107,7 +1108,7 @@ async def lifespan(app):
     default_real_data_dir = pathlib.Path.home() / "Ouroboros" / "data"
     pytest_default_real_data_dir = (
         (bool(os.environ.get("PYTEST_CURRENT_TEST")) or "pytest" in sys.modules)
-        and lifespan_drive_root == default_real_data_dir
+        and same_location(lifespan_drive_root, default_real_data_dir)
         and not os.environ.get("OUROBOROS_DATA_DIR")
     )
     if not pytest_default_real_data_dir:  # an imported ASGI app is admitted here; main() already was

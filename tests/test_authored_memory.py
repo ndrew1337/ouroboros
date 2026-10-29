@@ -181,21 +181,24 @@ def test_a_delegated_child_still_authors_an_explicit_note_on_the_canonical_shelf
     assert not (fork / "memory" / "knowledge").exists()
 
 
-def test_the_pressure_path_compresses_and_ignores_old_shaped_nominations(tmp_path):
+def test_the_mind_folds_its_scratchpad_and_old_shaped_nominations_write_nothing(tmp_path):
+    """The Light pressure path is retired (#918): the integrating mind folds through its own tool;
+    a fold text shaped like an old answer is kept as written and writes no note."""
     from ouroboros import consolidator
-    from ouroboros.memory import Memory
+    from ouroboros.memory import Memory, scratchpad_block_sha256
 
+    assert not hasattr(consolidator, "consolidate_scratchpad")
     memory = Memory(tmp_path)
     for index in range(2):
         memory.append_scratchpad_block(f"block-{index} " + "z" * 500, source=f"source-{index}")
-
-    class Answer:
-        def chat(self, **_kwargs):
-            return {"content": json.dumps({"knowledge_entries": [{"topic": "lessons/pressure", "content": "Nominated."}],
-                                           "compressed_block": "Short."})}, {"cost": 0.01}
-
-    consolidator.consolidate_scratchpad(memory, Answer(), pressure=True)
-    assert [block["content"] for block in memory.load_scratchpad_blocks()] == ["Short."]
+    text = json.dumps({"knowledge_entries": [{"topic": "lessons/pressure", "content": "Nominated."}],
+                       "compressed_block": "Short."})
+    registry = ToolRegistry(repo_dir=tmp_path, drive_root=tmp_path)
+    registry.set_context(ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id="mind-turn"))
+    reply = registry.execute("update_scratchpad", {"content": text, "replaces": [
+        scratchpad_block_sha256(block) for block in memory.load_scratchpad_blocks()]})
+    assert reply.startswith("OK: scratchpad fold applied: 2 blocks"), reply
+    assert [block["content"] for block in memory.load_scratchpad_blocks()] == [text]
     assert not (tmp_path / "memory" / "knowledge").exists()
     assert not (tmp_path / "memory" / "knowledge_history.jsonl").exists()
 
@@ -212,8 +215,6 @@ class _Transport:
     def chat(self, *, messages, **_kwargs):
         prompt = str(messages[0]["content"])
         usage = {"prompt_tokens": 3, "completion_tokens": 2, "cost": 0.0}
-        if "scratchpad working memory" in prompt:
-            return {"content": json.dumps({"compressed_block": "Compressed working notes."})}, usage
         if "You decide whether Ouroboros should run ONE reviewed self-improvement" in prompt:
             return {"content": json.dumps({"promote": False, "objective": ""})}, usage
         return {"content": "ok"}, usage
@@ -273,8 +274,9 @@ def test_no_task_shape_buys_a_lesson_or_writes_a_note(tmp_path, monkeypatch, sha
     fields, usage, errored = _SHAPES[shape]
     (tmp_path / "logs").mkdir()
     memory = Memory(tmp_path)
-    for index in range(4):  # past the compression threshold: the one paid upkeep every root keeps
+    for index in range(4):  # past the retired compression threshold: no root buys a scratchpad call (#918)
         memory.append_scratchpad_block(f"note-{index}-" + chr(97 + index) * 8_000, source=f"task-{index}")
+    blocks_before = memory.load_scratchpad_blocks()
     trace = {"tool_calls": [{"tool": "run_command", "status": "error", "is_error": True,
                              "result": "TOOL_ERROR: boom"}] * (3 if errored else 0), "reasoning_notes": []}
     task = {"id": f"root-{shape}", "type": "task", "chat_id": 1, "drive_root": str(tmp_path), **fields}
@@ -284,11 +286,11 @@ def test_no_task_shape_buys_a_lesson_or_writes_a_note(tmp_path, monkeypatch, sha
 
     # A workspace binds a project; Project, Presence and evolution tasks never reach the global chooser.
     chooser = opted_in and shape in {"failed_costly", "clean"}
-    assert call_types == ["scratchpad_consolidation"] + (["post_task_evolution_decision"] if chooser else []), call_types
+    assert call_types == (["post_task_evolution_decision"] if chooser else []), call_types
     assert not (tmp_path / "memory" / "knowledge_history.jsonl").exists()  # no note, register or backlog write
     assert not (tmp_path / "memory" / "knowledge").exists()
     assert not (tmp_path / "logs" / "task_reflections.jsonl").exists()
-    assert memory.load_scratchpad_blocks()[0]["content"] == "Compressed working notes."
+    assert memory.load_scratchpad_blocks() == blocks_before  # only the mind's fold replaces blocks
     rows = dialogue_test.log_rows(tmp_path / "logs" / "chat.jsonl")
     assert [row.get("summary_kind") for row in rows if row.get("task_id") == task["id"]].count("host_task_facts") == 1
     checkpoint = pipeline.load_task_result(tmp_path, task["id"])["root_phase_checkpoint"]

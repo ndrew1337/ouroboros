@@ -365,7 +365,7 @@ def _event_line(kind: str, row: Dict[str, Any], results: Dict[str, Dict[str, Any
     parent = str(row.get("parent_task_id") or result.get("parent_task_id") or "")
     role = str(row.get("delegation_role") or result.get("delegation_role") or "")
     noun = f"child task {task_id} of {parent}" if role == "subagent" and parent else f"task {task_id}"
-    return f"- {noun} {status}{cost_text}{where}, {when}: {title}".rstrip(": ")
+    return f"- {noun} {status}{cost_text}{where}, {when}: {title}".rstrip(": ") + summary
 
 
 # --- canonical transitions: identities in the task results, not chat rows or stamps --------
@@ -592,7 +592,7 @@ def _task_window(root, prior, chat_rows):
             "SELECT task_id FROM tasks WHERE has_owner_questions=1 OR has_owner_questions IS NULL"))
         fetched = task_store._fetch(txn, "t.task_id IN (SELECT value FROM json_each(?))",
                                    (json.dumps(sorted(selected)),))
-    rows = task_store._decode(*fetched)
+    rows = task_store._decode(fetched)
     retained = {tid: {key: None for key in prior["inventory"][tid]}
                 for tid in signatures if complete and tid not in selected}
     return rows, signatures, retained
@@ -773,16 +773,23 @@ def bind_wake_observation(drive_root: Any, task: Dict[str, Any], observation: Wa
 def render_wake_message(repo_dir: Any, *, drive_root: Any, reason: str, last_wake_at: float, now: float, level: Any,
                         disabled_tools: List[str], spent_usd: Any, daily_usd: Any, running: int,
                         max_tasks: int, interval: int, events: str, spent_is_floor: bool = False,
-                        spend_by_cause=None, counted_roots=None, places=None, previous_wake: str = "none") -> str:
-    """Fill ``prompts/CONSCIOUSNESS.md`` for one wake; every placeholder is substituted."""
+                        spend_by_cause=None, counted_roots=None, places=None, previous_wake: str = "none",
+                        appointment_at: float = 0.0) -> str:
+    """Fill ``prompts/CONSCIOUSNESS.md`` for one wake; every placeholder is substituted.
+
+    "On time" is lateness below ``_ago``'s one-minute display granularity, not a new scheduling threshold.
+    """
     template = safe_read(pathlib.Path(repo_dir) / PROMPT_REL) or _FALLBACK_TEMPLATE
     from ouroboros.consciousness_view import places_text, roots_text, spend_text
     normalized = normalize_level(level)
     spent = f"{float(spent_usd):.2f}" if isinstance(spent_usd, (int, float)) else "unknown"
     if spent_is_floor and spent != "unknown":
         spent = f"at least {spent}"  # unmetered rows in the window: the number is a floor
+    reason_text = str(reason or "heartbeat")
+    if appointment_at:
+        reason_text += f" ({'on time' if now - appointment_at < 60 else 'due ' + _ago(now - appointment_at)})"
     facts = {
-        "reason": str(reason or "heartbeat"),
+        "reason": reason_text,
         "last_wake_ago": _ago(now - last_wake_at) if last_wake_at else "no wake since this process started",
         "previous_wake": previous_wake,
         "events": events or "nothing new",

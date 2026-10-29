@@ -702,6 +702,9 @@ def enqueue_assisted_resolution_task(tx: Dict[str, Any]) -> str:
             # honors this key first): the resolver's own id, or after a fresh-id re-enqueue the
             # ORIGINAL id, so the money ceiling never resets across resume chains of one update.
             "root_task_id": str(tx.get("original_root_task_id") or task_id),
+            # The staged merge sits in the system repository itself; a follow-up it schedules
+            # keeps that resource instead of waiting as intent-unknown (#1799).
+            "resource_intent": {"kind": "system_repo"},
             "managed_update": {
                 "target_sha": str(tx.get("target_sha") or ""),
                 "conflict_paths": list(tx.get("conflict_paths") or []),
@@ -771,18 +774,17 @@ def enqueue_assisted_resolution_task(tx: Dict[str, Any]) -> str:
 
 def _run_update_smoke(cmd: List[str], timeout_sec: float = 120.0) -> Dict[str, Any]:
     from ouroboros.platform_layer import kill_process_tree, subprocess_new_group_kwargs
-    from ouroboros.tools.shell import _active_subprocesses, _subprocess_lock
+    from ouroboros.tools.shell_process import _active_subprocesses, _subprocess_lock, tracked_start
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=str(_g.REPO_DIR),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        **subprocess_new_group_kwargs(),
-    )
-    with _subprocess_lock:
-        _active_subprocesses.add(proc)
+    with tracked_start() as publish:
+        proc = publish(subprocess.Popen(
+            cmd,
+            cwd=str(_g.REPO_DIR),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            **subprocess_new_group_kwargs(),
+        ))
     try:
         try:
             stdout, stderr = proc.communicate(timeout=timeout_sec)

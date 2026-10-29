@@ -4,7 +4,7 @@ Settings have one home and default; the table projects `config.SETTINGS_DEFAULTS
 
 `ouroboros/config.py` re-exports paths, loaders/writers, environment projection, normalization, runtime mode, skills location and PID lock. Vocabularies/defaults belong to its leaves (§10 invariant 3). `settings_scales.IMMEDIATE_SETTINGS` applies live; `RESTART_REQUIRED_SETTINGS` awaits restart; other keys apply from the next task, a route key from the next model call. `update_channels.py` owns update defaults.
 
-Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`); a direct server's implicit `REPO_DIR` is its executing checkout; `resolve_port_file` relocates only the hosting root's port file. Retained exception: a server given only `APP_ROOT` keeps `~/Ouroboros/data` (`server_process.DATA_DIR`), since deriving it would start a fresh brain. The document is `data/settings.json` under the data root. Writes need the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential never reads as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
+Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`) in `launch_roots` before imports; a direct server's implicit `REPO_DIR` is its executing checkout, and given only `APP_ROOT` it refuses while `~/Ouroboros/data` may hold memory; `resolve_port_file` relocates only the hosting root's port file. Unset work roots follow the witness basis: `~/Ouroboros` for older data, else `APP_ROOT`; unknown refuses. The document is `settings.json` under the data root. Writes need the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential never reads as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
 
 `openrouter_attribution.py` is the app-identity SSOT of every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL, never renaming one app record.
 
@@ -30,10 +30,9 @@ OpenRouter/Anthropic-compatible output budgets use `max_tokens`; direct OpenAI C
 | Main task loop (`loop_llm_call.MAIN_LOOP_MAX_TOKENS`) | 65,536 |
 | `LLMClient.vision_query()` and VLM tools (`analyze_screenshot`, `vlm_query`) | 32,768 |
 | Review synthesis dedup | 16,384 |
-| Scratchpad consolidation, Light memory drafts (`consolidator.LIGHT_ANSWER_CEILING_TOKENS`) | 16,384 |
+| Light memory drafts (`consolidator.LIGHT_ANSWER_CEILING_TOKENS`) | 16,384 |
 | Post-task evolution promotion decision (`post_task_evolution`) | 8,192 |
 | Skill publish PR body generation | 8,192 |
-| Update letter LIGHT one-shot (`update_letter.UPDATE_LETTER_MAX_TOKENS`) | 1,024 |
 | Project naming LIGHT one-shot (`project_naming.llm_project_name`) | 256 |
 | Provider Test (`llm_probe.PROVIDER_TEST_MAX_TOKENS`) | 16 |
 
@@ -92,7 +91,6 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MODEL_SLOT_MAX_WAIT_SEC | 180 | Concurrency-slot wait bound |
 | OUROBOROS_PROJECT_NAMING_TIMEOUT_SEC | 60 | Project-naming operation ceiling |
 | OUROBOROS_PROJECT_NAMING_ASYNC_TIMEOUT_SEC | 8 | Inline naming bound when a card becomes a project (`gateway/projects.py`) |
-| OUROBOROS_UPDATE_LETTER_TIMEOUT_SEC | 120 | Update-letter calendar ceiling over slot wait and every send (`update_letter.py`) |
 | OUROBOROS_UI_TRANSLATION_TIMEOUT_SEC | 120 | One translation batch, slot wait and call together (`ui_translation.py`) |
 | OUROBOROS_UI_LANGUAGE | "" | Owner interface language (BCP-47 tag; `""` = not chosen); written only by `POST /api/ui/i18n/language` (`ENDPOINT_WRITTEN_SETTINGS`), read live (§3 Settings) |
 | OUROBOROS_FALLBACK_COOLDOWN_ENABLED | true | 429-aware per-process model cooldown |
@@ -104,15 +102,15 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MAX_SUBAGENT_DEPTH | 3 | Subagent tree depth |
 | OUROBOROS_DISABLE_MANAGED_UPDATES | unset | Env-only: `1` disables managed updates (`git_ops.py`) |
 | OUROBOROS_ALLOW_MUTATIVE_SUBAGENTS | "" | Mutative-subagent Auto override |
-| OUROBOROS_SUBAGENT_WORKTREE_ROOT | "" | Acting-worktree root (empty derives `~/Ouroboros/subagent_worktrees`) |
-| OUROBOROS_SUBAGENT_PROJECTS_ROOT | "" | Projects root (empty derives `~/Ouroboros/projects`) |
+| OUROBOROS_SUBAGENT_WORKTREE_ROOT | "" | Acting-worktree root (empty: basis default) |
+| OUROBOROS_SUBAGENT_PROJECTS_ROOT | "" | Projects root (empty: basis default) |
 | OUROBOROS_SUBAGENTS_MODE | auto | Live room delegation choice: `off`, `auto`, `swarm`; project cognition is independent (§6) |
 | OUROBOROS_SUBAGENTS | "" | Configured-subagent roster (`configured_subagents.py`; §6 Delegated subagents) |
 | OUROBOROS_SUBAGENT_HARNESS | "" | Narrow harness input, read for migration |
 | OUROBOROS_SUBAGENT_PROFILE | "" | Narrow profile input, read for migration |
 | OUROBOROS_DELEGATE_WAIT_SEC | 120 | Default `delegate_wait` window |
 | OUROBOROS_DELEGATE_WAIT_MAX_SEC | 1800 | `delegate_wait` ceiling |
-| OUROBOROS_DELIVERABLES_ROOT | "" | Deliverables root (empty derives `~/Ouroboros/Deliverables`; `tool_access.py`) |
+| OUROBOROS_DELIVERABLES_ROOT | "" | Deliverables root (empty: basis default; `tool_access.py`) |
 | OUROBOROS_GC_RETENTION_DAYS | 7 | Unified GC retention (`retention.py`) |
 | OUROBOROS_RESTART_DRAIN_MAX_SEC | 120 | Restart drain bound |
 | TOTAL_BUDGET | 200.0 | Global USD budget, reached by known spend; non-positive = no finite limit; resolved live at every model call (`resolve_total_budget_usd`) |
@@ -143,7 +141,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_TASK_REVIEW_MODE | auto | Result review mode: `auto` forces nothing, `required` runs the host's result review at a root delivery with produced material, `off` refuses `review_change(subject="result")` (§6 Result review) |
 | OUROBOROS_SAFETY_MODE | full | Safety supervision mode; a fresh desktop wizard may author `light`; lowering is owner-guarded (§6 Safety and runtime mode) |
 | OUROBOROS_CONSCIOUSNESS_SAFETY_MODE | full | Coverage for consciousness work (own wakes, places, what they start); existing installs copy the saved Safety level once |
-| OUROBOROS_SAFETY_OWNER_RULES | (empty) | The owner's standing rules, read by the Safety Supervisor on every check; owner-only |
+| OUROBOROS_SAFETY_OWNER_RULES | (empty) | The owner's standing rules for every mind and check; owner-only |
 | OUROBOROS_SAFETY_MAX_TOKENS | 2000 | Safety-check output budget |
 | OUROBOROS_SAFETY_CALL_TIMEOUT_SEC | 60 | Safety-check call ceiling |
 | OUROBOROS_WEBSEARCH_TIMEOUT_SEC | 480 | `web_search` ceiling |

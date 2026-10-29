@@ -441,6 +441,42 @@ test('on a phone-width bar a preparing room drops its start step before its word
     } finally { work?.destroy(); restoreDom(prior); }
 });
 
+// DESIGN "Shell": a Project's name wins its bar. A name its two lines would still cut makes the consciousness chip show
+// its brain alone (the chip's name keeps the whole state); a name that fits leaves the chip whole.
+test('a Project bar gives its name the chip\'s words only while the name would be cut, and gives them back', () => {
+    const { prior, mount } = installDom(async () => ({ ok: true, json: async () => ({}) }));
+    let work, resized = null;
+    try {
+        globalThis.ResizeObserver = class { constructor(fn) { resized = fn; } observe() {} disconnect() {} };
+        const node = (tag, cls, parent) => {
+            const el = document.createElement(tag); el.className = cls; parent.appendChild(el); return el;
+        };
+        const panel = node('div', 'project-panel', mount);
+        const bar = node('div', 'project-panel-bar', panel);
+        const titleRow = node('div', 'app-page-title-row', node('div', 'app-page-title-block', bar));
+        const name = node('h2', 'app-page-title', titleRow);
+        const chip = node('button', 'cx-chip', bar);
+        const page = node('div', 'chat-instance-panel', node('div', 'project-panel-body', panel));
+        page.closest = (selector) => (selector === '.project-panel' ? panel : null);
+        const badge = node('span', 'status-badge online', node('div', 'chat-panel-statusbar', page));
+        // The name's two lines hold 30 characters beside the whole chip, 40 beside its brain alone.
+        let length = 20, width = 200;
+        Object.defineProperty(name, 'clientHeight', { get: () => 40 });
+        Object.defineProperty(name, 'scrollHeight', { get: () => (length > (chip.dataset.fit === 'mark' ? 40 : 30) ? 60 : 40) });
+        Object.defineProperty(badge, 'scrollWidth', { get: () => 0 });
+        Object.defineProperty(badge, 'clientWidth', { get: () => 0 });
+        Object.defineProperty(titleRow, 'clientWidth', { get: () => width });
+        work = createRoomWork({ page, asPanel: true, statusBadge: badge, messagesDiv: node('div', 'chat-messages', page),
+            ws: { isConnected: () => true }, reading: { cancel() {}, scroll() {} },
+            works: () => workState(), liveCardRecords: new Map(), pendingSubmissions: new Map() });
+        const named = (chars) => { length = chars; width += 1; resized([{ target: bar }]); return chip.dataset.fit || 'whole'; };
+        assert.equal(named(20), 'whole', 'a name that fits leaves the chip whole');
+        assert.equal(named(36), 'mark', 'a name two lines would cut: the chip shows its brain alone');
+        assert.equal(named(60), 'mark', 'still cut there: the name ends its second line with an ellipsis, the chip stays small');
+        assert.equal(named(12), 'whole', 'a short name gives the chip its words back');
+    } finally { work?.destroy(); restoreDom(prior); }
+});
+
 // DESIGN "Room work status": a row goes to its message wherever it lies in the room's history.
 test('an unloaded row reads the page around its task and lands on its card; one with no message says so', async () => {
     const { prior, mount } = installDom(async () => ({ ok: true, json: async () => ({}) }));

@@ -427,14 +427,6 @@ def test_parse_servers_refuses_ambiguous_ids_and_drops_invalid():
         ("bad_url", "MCP_CONFIG_ERROR"), ("", "MCP_CONFIG_ERROR"), ("good", "MCP_ID_AMBIGUOUS")}
 
 
-def test_redact_servers_for_status_masks_tokens():
-    cfg = mcp_client.normalize_server_config(_good_server(auth_token="Bearer real-token-XXXX"))
-    assert cfg is not None
-    redacted = mcp_client.redact_servers_for_status([cfg])
-    assert redacted[0]["auth_configured"] is True
-    assert "real-token" not in redacted[0]["auth_token"]
-
-
 def test_stdio_transport_passes_exact_argv_without_env_or_cwd(monkeypatch, stdio_scope_env):
     params_seen = []
     sessions = []

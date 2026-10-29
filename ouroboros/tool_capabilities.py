@@ -63,7 +63,7 @@ CORE_TOOL_NAMES: frozenset[str] = frozenset({
     # enable_tools detour to route — though initial_tool_schemas exposes the full
     # set today, this makes the coupling explicit).
     "list_projects", "start_task", "tell_task",
-    "move_to_project",
+    "move_to_project", "close_project",
     *COGNITIVE_MEMORY_TOOL_NAMES,
     "chronicle_write",
     "recent_tasks", "live_roots", "update_focus",
@@ -464,7 +464,7 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     "maintain_harness",
     # starting or steering work (tell_task stays: the nanny of a running campaign)
     "start_task", "schedule_subagent", "schedule_followup", "plan_task",
-    "move_to_project", "delegate_start", "initiate_presence",
+    "move_to_project", "close_project", "delegate_start", "initiate_presence",
     "cancel_task", "resume_child_task", "override_delegation_constraint", "request_deep_self_review",
     # writing files, running processes, integrating patches
     "write_file", "edit_text", "apply_patch", "edit_batch",
@@ -482,9 +482,10 @@ OBSERVE_WORLD_MUTATION_TOOLS: frozenset[str] = frozenset({
     # writes a local task artifact; Observe does not grant general file writes
     "generate_evolution_stats",
     # the world beyond the repository: forms, skills, project notes, the owner's interface wording
+    # and the update description shown to the owner
     "browser_action", "submit_skill_to_hub", "toggle_skill", "skill_owner_action",
     "skill_install", "skill_update",
-    "journal_write", "workpad_write", "pin_ui_translation",
+    "journal_write", "workpad_write", "pin_ui_translation", "record_update_description",
     "github_write", "pr_merge",
 })
 

@@ -5,7 +5,8 @@ result and the queue snapshot — never a second ledger or scheduler:
 
 - row ``occurrence``: ``{token, task_id, due_at, fingerprint, phase: claimed|admitted}``;
 - row ``hold``: ``{reason, detail, since, retry_after}`` — a typed WAIT (capacity,
-  a missing or broken folder, an unknown fact). A wait mints no failed root, no
+  a broken or protected folder, an unknown fact; a known folder that is only absent
+  starts instead, with ``workspace_availability``). A wait mints no failed root, no
   ``failure_count`` and no room message; ``manage_schedules`` and the Activity
   schedule list show it, and the mind decides whether to say anything;
 - task result ``schedule_admission``: ``{schedule_id, token, due_at, status,
@@ -527,12 +528,21 @@ def resolve_resource(task: Dict[str, Any], record: Dict[str, Any]) -> tuple[Opti
 
     ``room_default``: the room's CURRENT folder (a folderless room stays folderless:
     task scratch is only its default cwd). ``explicit_resource``: the recorded folder,
-    revalidated; if gone the row waits — another folder is never substituted.
+    revalidated. A known folder that is merely absent now is still bound: the ordinary
+    occurrence starts with that address and its availability fact (#1799, owner choice
+    A), so another folder is never substituted; a broken or forbidden address waits.
     ``explicit_none``: folderless even if the room has a folder now. ``system_repo``
     and owner/skill templates: unchanged. Returns ``(hold, binding_basis)``."""
     from ouroboros.dialogue_provenance import presence_metadata_binding
-    from ouroboros.workspace_admission import resolve_room_workspace
+    from ouroboros.workspace_admission import resolve_room_workspace, unavailable_workspace_address
     from supervisor import workers
+
+    def bind_or_hold(root: str, error: str, address: str) -> Optional[tuple]:
+        missing = unavailable_workspace_address(address, system_repo_dir=workers.REPO_DIR,
+                                                drive_root=_queue().DRIVE_ROOT) if error else ""
+        if error and not missing:
+            return ("workspace_unusable", error)
+        return _bind(task, missing or root, unavailable=error if missing else "")
 
     template = record.get("task") if isinstance(record.get("task"), dict) else {}
     meta = task["metadata"]
@@ -541,7 +551,7 @@ def resolve_resource(task: Dict[str, Any], record: Dict[str, Any]) -> tuple[Opti
     intent = template.get("metadata", {}).get("resource_intent") if isinstance(template.get("metadata"), dict) else None
     intent = dict(intent) if isinstance(intent, dict) and intent.get("kind") else _origin_intent(template, record)
     if intent is None:
-        return ("resource_intent_unknown", "the follow-up predates recorded resource intent and its "
+        return ("resource_intent_unknown", "the follow-up carries no recorded resource intent and its "
                 "origin record does not prove one; reschedule it from the work it continues"), None
     meta["resource_intent"] = intent
     kind = str(intent.get("kind") or "")
@@ -565,18 +575,22 @@ def resolve_resource(task: Dict[str, Any], record: Dict[str, Any]) -> tuple[Opti
             return None, ""  # folderless (task scratch as default cwd); a closed room meets the admission fence
         root, error = resolve_room_workspace(drive_root=_queue().DRIVE_ROOT, system_repo_dir=workers.REPO_DIR,
                                              project_id=project_id, project_admission=task["_project_admission"])
-        return (("workspace_unusable", error), basis) if error else (_bind(task, root), basis)
+        return bind_or_hold(root, error, basis), basis
     if kind == "explicit_resource":
+        address = str(intent.get("root") or "")
+        if not address:
+            return ("workspace_unusable", "the recorded explicit_resource intent names no folder"), None
         root, error = resolve_room_workspace(drive_root=_queue().DRIVE_ROOT, system_repo_dir=workers.REPO_DIR,
-                                             project_id="", explicit_workspace=str(intent.get("root") or ""))
-        return (("workspace_unusable", error), None) if error or not intent.get("root") else (_bind(task, root), None)
+                                             project_id="", explicit_workspace=address)
+        return bind_or_hold(root, error, address), None
     return None, None  # explicit_none, system_repo, template: nothing to bind
 
 
-def _bind(task: Dict[str, Any], root: str) -> None:
+def _bind(task: Dict[str, Any], root: str, *, unavailable: str = "") -> None:
     """The same external-workspace admission promotion performs (folder, forked
     memory drive, bounded preflight, the workspace block). This occurrence's deferred
-    preparation (``_DEFERRED``) lends its existing fork only to the same folder and Project."""
+    preparation (``_DEFERRED``) lends its existing fork only to the same folder and Project.
+    ``unavailable`` is why a kept address is absent: it rides the metadata and the block."""
     if not root:
         return None
     from ouroboros.headless import prepare_task_drive
@@ -601,9 +615,13 @@ def _bind(task: Dict[str, Any], root: str) -> None:
         task.update(drive_root=str(child), budget_drive_root=str(q.DRIVE_ROOT))
     preflight = bounded_workspace_preflight(root)
     task["metadata"].update(workspace_root=root, workspace_preflight=preflight)
+    if unavailable:
+        task["metadata"]["workspace_availability"] = {"state": "missing", "observed_at": utc_now_iso(),
+                                                      "detail": unavailable[:500]}
     task["text"] = (f"{task['text']}\n\n[HEADLESS_WORKSPACE]\n"
                     + compose_workspace_block(workspace_root=root, workspace_mode="external",
-                                              memory_mode="forked", workspace_preflight=preflight)
+                                              memory_mode="forked", workspace_preflight=preflight,
+                                              unavailable=unavailable)
                     + "[END_HEADLESS_WORKSPACE]")
     return None
 
@@ -829,6 +847,7 @@ def _write_receipt(item: Dict[str, Any], record: Dict[str, Any]) -> bool:
             result="Scheduled task queued.", metadata=dict(task.get("metadata") or {}),
             schedule_id=item["schedule_id"], schedule_name=str(record.get("name") or ""),
             schedule_admission=receipt,
+            **{key: task[key] for key in ("title", "suggested_name") if task.get(key)},
             **({"reasoning_effort": task["reasoning_effort"]} if task.get("reasoning_effort") else {}),
             **({"billing_group": task["metadata"]["billing_group"]}
                if (task.get("metadata") or {}).get("billing_group") else {}),
@@ -841,8 +860,14 @@ def _write_receipt(item: Dict[str, Any], record: Dict[str, Any]) -> bool:
         log.warning("Scheduled admission receipt failed for %s", task.get("id"), exc_info=True)
         return False
     got = stored.get("schedule_admission") if isinstance(stored.get("schedule_admission"), dict) else {}
-    return (stored.get("task_id") == task["id"] and str(stored.get("status") or "") == STATUS_SCHEDULED
-            and got == receipt)
+    landed = (stored.get("task_id") == task["id"] and str(stored.get("status") or "") == STATUS_SCHEDULED
+              and got == receipt)
+    if landed and task.get("suggested_name"):
+        from supervisor.worker_chat_lane import _broadcast_task_named
+
+        # The live card is born named (pooled progress frames carry no name); replay reads the document.
+        _broadcast_task_named({"type": "task_named", "task_id": str(task["id"]), "suggested_name": str(task["suggested_name"])})
+    return landed
 
 
 class ReceiptChanged(ValueError):

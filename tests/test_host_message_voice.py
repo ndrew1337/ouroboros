@@ -162,6 +162,7 @@ def test_exceptions_are_counted_and_stale_rows_fail():
 # `skill_repair` also the host's automatic repair after a marketplace install. Nothing produces an
 # `acceptance_late_settlement` row since the review fold; the old rows still render as card rows.
 HOST_ROW_CLASSES = {
+    "body_adoption": ("card_row", 1),  # the authorizing task's settled adoption; a task-unbound one stays restart_notice
     "budget_notice": ("runtime_state", 1),
     "cancel_receipt": ("owner_act_receipt", 2),
     "command_reply": ("owner_act_receipt", 2),
@@ -173,11 +174,12 @@ HOST_ROW_CLASSES = {
     "finalization_notice": ("card_row", 2),
     "host_progress": ("card_row", 1),
     "initialization_notice": ("not_started", 1),
+    "low_start_notice": ("runtime_state", 1),  # a fresh start memory lowered to Low (owner 1B, 29.10)
     "managed_update_notice": ("runtime_state", 2),
-    "memory_max_notice": ("runtime_state", 1),  # the lost-Max episode opened or closed (memory_max)
     "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),
     "project_completion_summary": ("main_lifecycle", 1),
+    "project_closure": ("runtime_state", 1),  # the mind's reversible project decision, in its room
     "project_handoff": ("main_lifecycle", 1),
     "project_started": ("main_lifecycle", 1),
     "promotion_notice": ("runtime_state", 4),
@@ -202,7 +204,7 @@ HOST_ROW_CLASSES = {
     "task_error": ("no_mind", 1),
     "task_not_started": ("not_started", 5),  # also the two worker_chat_lane Restart-intake refusals
     "task_pause_notice": ("card_row", 1),
-    "task_reaper_notice": ("card_row", 4),
+    "task_reaper_notice": ("card_row", 2),  # wedged hold and stop; the two idle-retry notices are gone
     "task_scheduled": ("card_row", 1),
     "task_start_unconfirmed": ("not_started", 1),
     "terminal_incident": ("no_mind", 2),

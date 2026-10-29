@@ -663,6 +663,7 @@ class OpenAICompatibleModelsRequest(TypedDict):
 
     baseUrl: str
     apiKey: NotRequired[str]
+    connection: NotRequired[str]  # named compatible row; omitted = the built-in pair
 
 
 class LocalModelStartRequest(TypedDict):
@@ -855,10 +856,11 @@ class UpdateProgress(TypedDict, total=False):
 
 
 class UpdateLetter(TypedDict):
-    """The written description of an update, kept through a failed rewrite (``has_last_good``).
-    ``relation``: pending, applied, superseded or other."""
+    """The update description, written by Ouroboros as ordinary work and never by a check.
+    ``relation``: pending, applied, superseded, other, or '' without text. ``state`` none: nothing
+    saved yet (the projection still carries the offered range and the owner's request)."""
 
-    state: str  # ready | failed
+    state: str  # ready | failed (old records only) | none
     relation: str
     text: str
     author_version: str
@@ -872,6 +874,11 @@ class UpdateLetter(TypedDict):
     failed_at: str
     latest_failed_key: Optional[Dict[str, Any]]
     qualification: NotRequired[Optional[Dict[str, Any]]]
+    revision: int
+    author: Dict[str, Any]  # {task_id, model, requested} — host-derived
+    checked_key: Optional[Dict[str, Any]]
+    material: Optional[Dict[str, Any]]  # {key, collected_at, text_bytes (query_data's count), commits, bodies_read, bodies_omitted}
+    request: Optional[Dict[str, Any]]  # {task_id, current_task_id, mode, key, requested_at, status (retry/Continue), saved}
 
 
 class UpdateTransactionState(TypedDict, total=False):
@@ -885,8 +892,8 @@ class UpdateTransactionState(TypedDict, total=False):
 
 
 class UpdateStatusResponse(TypedDict, total=False):
-    """``GET /api/update/status`` (no network) and ``POST /api/update/check`` (fetches first, may write
-    the update letter and broadcasts ``update_progress_changed``). ``running_sha`` is the commit the
+    """``GET /api/update/status`` (no network) and ``POST /api/update/check`` (fetches first, records range
+    facts but never prose, and broadcasts ``update_progress_changed``). ``running_sha`` is the commit the
     running core started from; ``current_sha`` is the checkout's. ``check_ok`` is null on status.
     ``ahead``/``behind`` count commits (history); ``local_changes`` says whether the checkout holds
     content of its own, omitted when no comparison was attempted: ``present`` is a tree delta since

@@ -141,6 +141,7 @@
  * The wizard's starting values; besides these keys it carries one key per `contract.providerFields[].stateKey`
  * (a configured secret reads as `secretPlaceholder`), `contract.budgetFields[].stateKey` and `contract.modelSlots[].stateKey`.
  * @typedef {Object} SetupInitialState
+ * @property {Object[]} connections Masked OUROBOROS_CONNECTIONS rows, keyed by kind/name.
  * @property {string} safetyModel
  * @property {string} providerProfile
  * @property {string} reviewEnforcement
@@ -316,6 +317,21 @@
  */
 
 /**
+ * A `reply_to` reference as the host resolved it; an unresolved one is `{address, unresolved: true}`.
+ * @typedef {Object} ChatReplyReference
+ * @property {string=} address
+ * @property {number=} chat_id
+ * @property {'user'|'assistant'|'system'=} role
+ * @property {string=} author_label
+ * @property {string=} kind
+ * @property {string=} snippet
+ * @property {string=} ts
+ * @property {string=} task_id
+ * @property {'work'|'room'|'none'=} target_home  // what decides the quoted row's room; an older reference lacks it
+ * @property {boolean=} unresolved
+ */
+
+/**
  * One `GET /api/chat/history` row (live frames call `text` `content`). A row may also carry the
  * task-progress and outcome fields of a live `chat` frame (`ChatOutbound`). Replay-evidence rows
  * (`quiz_answer`, `quiz_closed`, `task_evidence`, or `summary_kind` + `historical_terminal`) are never shown.
@@ -325,9 +341,10 @@
  * @property {string=} wait_ended_at
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // an outgoing row's own saved name, the same as its client_message_id
- * @property {Object=} reply_to
+ * @property {ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
+ * @property {Object.<string,number>=} room_revisions  // a row shown in several rooms: the revision it took in each room it counted in
  * @property {string} text
  * @property {'user'|'assistant'|'system'} role
  * @property {string} ts  // the stored row's time: the same string its live frame carried
@@ -645,10 +662,12 @@
  */
 
 /**
- * `POST /api/projects/{project_id}/update`: name and/or pin; at least one.
+ * `POST /api/projects/{project_id}/update`: name, pin or closure; at least one.
+ * `closed`: true closes as owner; false reopens.
  * @typedef {Object} ProjectUpdateRequest
  * @property {string=} name
  * @property {boolean=} pinned
+ * @property {boolean=} closed
  */
 
 /**
@@ -867,10 +886,11 @@
  * @typedef {Object} CardOutbound
  * @property {string=} row_address
  * @property {string=} row_client_message_id  // the saved row's own name, when it has one
- * @property {Object=} reply_to
+ * @property {ChatReplyReference=} reply_to
  * @property {Object=} relay
  * @property {string=} reply_to_relay
  * @property {string=} kind  // ChatReferenceFields' row kind; the card's own kind is card.kind
+ * @property {Object.<string,number>=} room_revisions
  * @property {'card'} type
  * @property {'assistant'} role
  * @property {ChatHistoryCard} card

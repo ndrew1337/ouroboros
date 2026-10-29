@@ -84,6 +84,7 @@ D20 = "Presence"
 "ouroboros/room_reader.py" = "D11"
 "ouroboros/tools/control_relay.py" = "D05"
 "ouroboros/tools/control_ui_translation.py" = "D05"
+"ouroboros/tools/control_update_description.py" = "D05"
 "ouroboros/openrouter_cost.py" = "D02"
 "ouroboros/obligations.py" = "D11"
 "ouroboros/startup_migrations.py" = "D11"
@@ -156,9 +157,11 @@ D20 = "Presence"
 "ouroboros/density_probe.py" = "D03"
 "ouroboros/response_limits.py" = "D03"
 "ouroboros/claudexor_daemon.py" = "D07"
+"ouroboros/claudexor_harness_install.py" = "D07"
 "ouroboros/claudexor_exit_facts.py" = "D07"
 "ouroboros/claudexor_runtime.py" = "D07"
 "ouroboros/claudexor_runtime_retention.py" = "D07"
+"ouroboros/claudexor_node_seed.py" = "D07"  # the daemon's kept copy of the bundled Node
 "ouroboros/engine_pin_policy.py" = "D07"  # one engine pin rule shared by update preflight and restart
 "ouroboros/claudexor_startup_failure.py" = "D07"
 "ouroboros/cli.py" = "D18"
@@ -172,6 +175,7 @@ D20 = "Presence"
 "ouroboros/colab_bootstrap.py" = "D12"
 "ouroboros/commit_admission.py" = "D06"
 "ouroboros/config.py" = "D12"
+"ouroboros/launch_roots.py" = "D12"  # the stdlib launch tuple and work-root basis config derives from
 "ouroboros/composer_cognition.py" = "D12"
 "ouroboros/confined_files.py" = "D18"
 "ouroboros/model_slots.py" = "D12"
@@ -188,10 +192,13 @@ D20 = "Presence"
 "ouroboros/consciousness_wake.py" = "D15"
 "ouroboros/chat_chain.py" = "D15"
 "ouroboros/chronicle_store.py" = "D15"
+"ouroboros/chronicle_quotes.py" = "D15"
+"ouroboros/memory_reader.py" = "D15"  # the extensions' supported memory read (PluginAPI read_memory)
 "ouroboros/chronicle_import.py" = "D15"
 "ouroboros/late_review_marks.py" = "D15"  # late reviewer feedback kept in view as a host mark in its owning room
 "ouroboros/plan_collection_job.py" = "D15"
 "ouroboros/mark_anchors.py" = "D15"  # a mark the mind ties to an action trails that call's result once per task
+"ouroboros/delegation_knowledge_index.py" = "D03"  # a helper that started without knowledge meets the knowledge index with its first delegation
 "ouroboros/consolidator.py" = "D15"
 "ouroboros/knowledge.py" = "D15"
 "ouroboros/memory_publication.py" = "D15"
@@ -213,8 +220,9 @@ D20 = "Presence"
 "ouroboros/context_layout.py" = "D03"
 "ouroboros/context_mode_compat.py" = "D03"
 "ouroboros/memory_view.py" = "D03"  # the acting mind's resident memory view: roles, capture, story and live part
+"ouroboros/memory_room_activity.py" = "D03"  # captured room liveness, without page coverage
+"ouroboros/memory_waiting.py" = "D03"  # waiting measures and their closure acts
 "ouroboros/memory_floor.py" = "D03"  # the memory view's physical floor: what a window shows only by address
-"ouroboros/memory_max.py" = "D03"  # the lost-Max episode: one obligation row, its two Main lines and a Health line
 "ouroboros/memory_view_legacy.py" = "D03"  # how my story names a retold old record: what its address holds
 "ouroboros/memory_view_account.py" = "D03"  # common-view account rendering and retained source addresses
 "ouroboros/contracts/__init__.py" = "D19"
@@ -233,6 +241,7 @@ D20 = "Presence"
 "ouroboros/deadline_utils.py" = "D01"
 "ouroboros/deep_self_review.py" = "D06"
 "ouroboros/delegate_activity.py" = "D07"
+"ouroboros/delegate_observe.py" = "D07"
 "ouroboros/delegate_containment.py" = "D07"
 "ouroboros/delegate_continuation.py" = "D07"
 "ouroboros/delegate_plan.py" = "D07"
@@ -364,6 +373,7 @@ D20 = "Presence"
 "ouroboros/gateway/ws.py" = "D11"
 "ouroboros/gateways/__init__.py" = "D07"
 "ouroboros/gateways/claudexor.py" = "D07"
+"ouroboros/gateways/claudexor_identity.py" = "D07"
 "ouroboros/gateways/claudexor_metadata.py" = "D07"
 "ouroboros/gateways/claudexor_images.py" = "D07"
 "ouroboros/gateways/image_api.py" = "D02"
@@ -371,7 +381,9 @@ D20 = "Presence"
 "ouroboros/gateways/claudexor_uploads.py" = "D07"
 "ouroboros/harness_maintenance.py" = "D07"
 "ouroboros/gateways/claudexor_run_events.py" = "D07"
+"ouroboros/gateways/claudexor_observation.py" = "D07"
 "ouroboros/gateways/claudexor_routing.py" = "D07"
+"ouroboros/gateways/claudexor_route_health.py" = "D07"
 "ouroboros/llm_claudexor.py" = "D02"
 "ouroboros/git_shell_policy.py" = "D13"
 "ouroboros/git_observation.py" = "D18"
@@ -438,8 +450,8 @@ D20 = "Presence"
 "ouroboros/memory.py" = "D15"
 "ouroboros/merge_receipts.py" = "D10"
 "ouroboros/memory_inventory.py" = "D15"  # open rows and the one folded rule of old memory, shared by the view and the writers
-"ouroboros/memory_fallback.py" = "D15"  # signed acting drafts or candidates awaiting the mind's adoption
-"ouroboros/memory_sealing.py" = "D15"  # own unsealed work and separately attributed terminal links
+"ouroboros/memory_fallback.py" = "D15"  # signed acting drafts only with consciousness off
+"ouroboros/memory_sealing.py" = "D15"  # separately attributed terminal links
 "ouroboros/memory_nomination_receipts.py" = "D15"
 "ouroboros/model_concurrency.py" = "D02"
 "ouroboros/model_send_seal.py" = "D16"
@@ -512,6 +524,7 @@ D20 = "Presence"
 "ouroboros/project_dialogue.py" = "D17"
 "ouroboros/tool_error_words.py" = "D17"
 "ouroboros/room_membership.py" = "D17"
+"ouroboros/room_appearances.py" = "D17"  # the dialogue store's derived appearance index: writer facts and catch-up job
 "ouroboros/project_completion_facts.py" = "D17"
 "ouroboros/project_handoff.py" = "D17"
 "ouroboros/project_facts.py" = "D15"
@@ -521,6 +534,7 @@ D20 = "Presence"
 "ouroboros/project_naming.py" = "D17"
 "ouroboros/project_sources.py" = "D17"
 "ouroboros/projects_registry.py" = "D17"
+"ouroboros/project_closure.py" = "D17"  # reversible closure, separate from routing lifecycle
 "ouroboros/promotion_source.py" = "D08"
 "ouroboros/protected_artifacts.py" = "D04"
 "ouroboros/provider_connections.py" = "D02"
@@ -662,6 +676,7 @@ D20 = "Presence"
 "ouroboros/task_pacing.py" = "D01"
 "ouroboros/task_activity_facts.py" = "D01"
 "ouroboros/store.py" = "D17"
+"ouroboros/store_capture.py" = "D17"
 "ouroboros/store_empty.py" = "D17"
 "ouroboros/store_journal.py" = "D17"
 "ouroboros/store_hot_facts.py" = "D17"
@@ -937,9 +952,9 @@ D20 = "Presence"
 "supervisor/task_dispatch.py" = "D08"
 "supervisor/task_lifecycle.py" = "D09"
 "supervisor/task_reaper.py" = "D09"
-"supervisor/task_reaper_cancel_handoff.py" = "D09"
 "supervisor/terminal_cascade.py" = "D09"
 "supervisor/terminal_delivery.py" = "D09"
+"ouroboros/terminal_outbox.py" = "D09"  # shared durable outbox owner, below transport and startup migration
 "supervisor/terminal_supersession.py" = "D09"
 "supervisor/update_candidate.py" = "D10"
 "supervisor/update_merge.py" = "D10"
@@ -1128,6 +1143,7 @@ allowed = [
   "D12->D02",
   "D12->D03",
   "D12->D07",
+  "D12->D08",
   "D12->D11",
   "D12->D13",
   "D12->D18",
@@ -1262,7 +1278,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D12->D01",
   "D12->D05",
   "D12->D06",
   "D12->D09",

@@ -237,7 +237,7 @@ def test_the_view_fact_reaches_the_cap_info_the_task_context_and_one_event(tmp_p
     assert facts["role"] == "integrator" and facts["room_id"] == "1"
     assert facts["store_status"] == {"state": "active", "tail_facts": "filling"}  # open rows read live, no fill yet
     assert facts["legacy_frontier_status"] == "exact"
-    assert facts["spec"]["live_rooms"] == "lines" and facts["blocks"]["live_rooms"] == 4
+    assert facts["spec"]["live_rooms"] == "lines" and facts["blocks"]["live_rooms"] == 2
     assert facts["blocks"]["story_tokens"] > 0 and facts["blocks"]["room_tokens"] > 0
     assert facts["floor"]["mode"] == "max" and facts["floor"]["steps"] == {}
     assert ctx.memory_view_facts == {key: facts[key] for key in ("role", "room_id", "floor", "story_status", "max_room")}
@@ -272,7 +272,8 @@ def test_a_helpers_role_line_names_exactly_what_its_request_holds(tmp_path, rout
     assert f"the page of your parent's room {alpha}" in loaded and f"## This room ({alpha})" in c
     assert ("the top level of your story" in loaded) == story == ("## My story" in b)
     assert ("the top level of your story" in missing) == (not story)
-    assert "knowledge (overview, index, patterns)" in missing and "## Shared understanding" not in c
+    assert "the index arrives with your first delegation" in missing and "## Shared understanding" not in c
+    assert "## Knowledge base" not in c and "knowledge_list" in missing
     assert "raw conversations" in missing and "### Open conversation" not in c and "## Live rooms" not in c
     assert "the words of my human that caused this work" not in loaded  # no root record: no block drawn
 

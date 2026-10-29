@@ -328,9 +328,14 @@ def _capture_declared_context_core(
 
     Branch before shared memory is opened. Do not guess which memory sentences
     might bias this case. Rebuilds read the same durable task selection, while
-    retries and fitting operate on the resulting immutable ContextCore.
+    retries and fitting operate on the resulting immutable ContextCore. A task
+    scheduled with ``DECLARED_WORDS_FACT`` carries the owner's words that caused
+    the work right after its receipt, ahead of the dated runtime facts: the block
+    a shared child reads, rendered from the task's own frozen record.
     """
-    from ouroboros.subagent_work_order import input_source_selection_receipt
+    from ouroboros.safety_config import owner_rules_section
+    from ouroboros.memory_view import _owner_words_block  # the shared child's block, byte for byte
+    from ouroboros.subagent_work_order import declared_inputs_carry_owner_words, input_source_selection_receipt
     from ouroboros.subagent_metrics import fact_line
     from ouroboros.subagent_runtime import (
         current_model_visible_subagent_catalog, review_facts_block, review_records_block, subagent_supervision_fact_line,
@@ -340,8 +345,10 @@ def _capture_declared_context_core(
     same_drive = canonical_root.resolve(strict=False) == memory.drive_root.resolve(strict=False)
     process_memory = memory if same_drive else Memory(drive_root=canonical_root, repo_dir=memory.repo_dir)
     supplementary_messages: list = []
+    words = _owner_words_block(task) if declared_inputs_carry_owner_words(task) else ""
     parts = [
         "## Input source selection\n\n" + json.dumps(input_source_selection_receipt(task), ensure_ascii=False, sort_keys=True),
+        *([words] if words else []),
         runtime_builder(env, task, ctx=ctx, captured_at=sources["captured_at"],
                         supplementary_messages_out=supplementary_messages),
     ]
@@ -354,9 +361,10 @@ def _capture_declared_context_core(
             catalog_text = "## Available subagents\n\n" + json.dumps(catalog, ensure_ascii=False, indent=1)
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
-    review_text = ""
+    review_text, review_activity = "", []
     try:
-        review_text = review_facts_block()
+        review_text = review_facts_block(activity_out=review_activity)
+        parts.extend(review_activity)  # each seat's price and last review change: never the cached prefix
         parts.extend(filter(None, (
             review_records_block(drive_root=canonical_root, task_id=str(task["id"])),
             subagent_supervision_fact_line(task, ctx=ctx, catalog=catalog),
@@ -367,7 +375,8 @@ def _capture_declared_context_core(
     return _ContextCore(
         base_prompt=sources["base_prompt"], bible_md=sources["bible_md"],
         architecture_md=sources["architecture_md"], development_md=sources["development_md"],
-        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text) if part),
+        # The owner's standing rules are governance like SYSTEM.md, not a selectable case input.
+        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text, owner_rules_section()) if part),
         dynamic_text="\n\n".join(parts),
         user_content_json=json.dumps(user_builder(task), ensure_ascii=False, sort_keys=True),
         docs_need_development=_task_requires_self_body_docs(task),

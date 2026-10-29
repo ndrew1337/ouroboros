@@ -382,3 +382,39 @@ def saved_settings(monkeypatch, tmp_path, **values):
     path.write_text(json.dumps(document), encoding="utf-8")
     saved_settings._wrote = str(path)
     return path
+
+
+def write_legacy_capability_rows(root, *, effort_ceilings=None, effort_floors=None, rejected_params=None):
+    """Leave model-global rows in ``root``'s capability-evidence store in the shape releases before
+    exact-route request-wire recovery learned them. The store still loads them; nothing reads them."""
+    from ouroboros import capability_evidence as ce
+    from ouroboros.utils import utc_now_iso
+
+    observed_at = utc_now_iso()
+    with ce._store_transaction(root):
+        data = ce._load(root)
+        for key, ceiling in (effort_ceilings or {}).items():
+            data["effort_ceilings"][key] = {"ceiling": ceiling, "observed_at": observed_at,
+                                            "reason": "provider_rejected", "prev": ""}
+        for key, floor in (effort_floors or {}).items():
+            data["effort_floors"][key] = {"floor": floor, "observed_at": observed_at,
+                                          "reason": "provider_required", "prev": ""}
+        for key, params in (rejected_params or {}).items():
+            data["rejected_params"][key] = {"params": sorted(params), "observed_at": observed_at,
+                                            "reason": "provider_rejected"}
+        assert ce._save(root, data)
+
+
+def current_python_env(env_root) -> None:
+    """Leave what ``isolated_deps._ensure_python_env`` leaves for THIS interpreter, without venv or pip:
+    a ``pyvenv.cfg`` naming the running base and an interpreter entry. Fakes of the package installer call
+    it, so the live reader corroborates their record (``isolated_deps.python_env_binding``)."""
+    import sys
+
+    venv = pathlib.Path(env_root) / "python"
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    python.parent.mkdir(parents=True, exist_ok=True)
+    python.touch()
+    base = os.path.dirname(os.path.abspath(getattr(sys, "_base_executable", "") or sys.executable))
+    version = ".".join(map(str, sys.version_info[:3]))
+    (venv / "pyvenv.cfg").write_text(f"home = {base}\nversion = {version}\n", encoding="utf-8")

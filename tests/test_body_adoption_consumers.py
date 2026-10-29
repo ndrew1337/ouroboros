@@ -66,6 +66,23 @@ def _managed_server(monkeypatch, scene):
     return server
 
 
+def _task_rows(monkeypatch):
+    """The boot's rows addressed to the authorizing task, as the supervisor's queue receives them."""
+    from supervisor import workers
+
+    rows = []
+    monkeypatch.setattr(workers, "get_event_q", lambda **_kw: SimpleNamespace(put=rows.append))
+    return rows
+
+
+def _admitted(scene, chat_id=1):
+    """The authorizing task's admission receipt, which names its room (supervisor.task_admission)."""
+    from ouroboros.task_results import STATUS_SCHEDULED, write_task_result
+
+    write_task_result(scene.data, scene.ctx.task_id, STATUS_SCHEDULED, chat_id=chat_id,
+                      root_task_id=scene.ctx.task_id, result="Task accepted and scheduled.")
+
+
 def _switch(scene, reason="adopt it"):
     """Authorize, bind, arm and let the REAL helper switch the tree in this process."""
     body_adoption.authorize(scene.ctx, scene.cand, reason=reason)
@@ -314,7 +331,7 @@ def test_serving_push_publishes_only_the_operation_tag_and_never_a_candidates(sc
 
 
 @pytest.mark.parametrize("tag_evidence", ["neutral", "numbered", "legacy", "numbered_then_neutral"])
-def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(scene, monkeypatch, tmp_path, tag_evidence):
+def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_its_task(scene, monkeypatch, tmp_path, tag_evidence):
     from supervisor import git_ops, git_ops_reset, message_bus, state
 
     remote = tmp_path / "origin.git"
@@ -322,13 +339,14 @@ def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(sce
     git(scene.serving, "remote", "add", "origin", str(remote))
     monkeypatch.setattr(git_ops, "REPO_DIR", scene.serving)
     monkeypatch.setattr(git_ops, "BRANCH_DEV", "ouroboros")
-    facts, sent = [], []
+    facts, sent, rows = [], [], _task_rows(monkeypatch)
     monkeypatch.setattr(git_ops_reset, "_record_checkout_facts", lambda value: facts.append(value))
     monkeypatch.setattr(state, "load_state", lambda: {"owner_chat_id": 7})
     monkeypatch.setattr(message_bus, "send_with_budget", lambda chat, text, **kw: sent.append((chat, text, kw)))
 
     assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}  # nothing inherited
-    assert sent == [] and git(remote, "for-each-ref") == ""
+    assert sent == rows == [] and git(remote, "for-each-ref") == ""
+    _admitted(scene)
 
     git(scene.serving, "tag", "-a", "v-old", "-m", "old")
     git(scene.serving, "config", "push.followTags", "true")
@@ -351,13 +369,17 @@ def test_boot_settlement_pushes_the_adopted_serving_line_and_tells_the_owner(sce
     assert settled["outcome"] == "adopted" and settled["tests"]["tier"] == "full" and "publication" not in settled
     assert facts == [{"current_branch": "ouroboros", "current_sha": scene.cand}]
     assert git(remote, "rev-parse", "refs/heads/ouroboros") == scene.cand  # the serving line, as after any commit
-    assert sent and sent[0][0] == 7 and scene.cand[:12] in sent[0][1]
-    assert sent[0][2]["system_type"] == "restart_notice"
+    # The authorizing task's card row in the room its record names (Main, 1), never the owner chat 7 or an owner-wide notice.
+    assert sent == [] and len(rows) == 1 and (rows[0]["chat_id"], rows[0]["task_id"]) == (1, scene.ctx.task_id)
+    assert (rows[0]["system_type"], rows[0]["progress_meta"]["card_row"]) == ("body_adoption", "reviews")
+    assert rows[0]["progress_meta"]["card_row_id"] == f"body-adoption:{settled['adoption_id']}"
     tags = git(remote, "for-each-ref", "--format=%(refname)", "refs/tags").splitlines()
     assert tags == (["refs/tags/v-new"] if tag_evidence == "numbered" else [])
-    assert "Publication: Pushed" in sent[0][1]
+    headline, publication = rows[0]["text"].split("\n")
+    assert headline.startswith(f"Adopted candidate commit {scene.cand[:12]} on ouroboros") and "Publication" not in headline
+    assert publication.startswith("Publication: Pushed") and f" {publication}" in settled["note"]
     assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}
-    assert len(sent) == 1  # consuming the handoff does not schedule another push
+    assert len(rows) == 1 and sent == []  # consuming the handoff does not schedule another push or row
 
 
 @pytest.mark.parametrize("tests", [{"tier": "selected", "source": "proof", "head": "h"}, {}], ids=["selected", "unrecorded"])
@@ -371,12 +393,13 @@ def test_boot_settlement_withholds_branch_and_tag_publication_without_full_evide
     monkeypatch.setattr(git_ops, "REPO_DIR", scene.serving)
     monkeypatch.setattr(git_ops, "BRANCH_DEV", "ouroboros")
     monkeypatch.setattr("ouroboros.preflight_qualification.adoption_test_evidence", lambda *a, **kw: dict(tests))
-    facts, sent = [], []
+    facts, sent, rows = [], [], _task_rows(monkeypatch)
     monkeypatch.setattr(git_ops_reset, "_record_checkout_facts", lambda value: facts.append(value))
     monkeypatch.setattr(state, "load_state", lambda: {"owner_chat_id": 7})
     monkeypatch.setattr(message_bus, "send_with_budget", lambda chat, text, **kw: sent.append(text))
     finalize = body_adoption.finalize_on_boot  # sibling #1024 carries the operation-created tag in this result
     monkeypatch.setattr(body_adoption, "finalize_on_boot", lambda *a, **kw: {**finalize(*a, **kw), "created_tag": "v1.0.1"})
+    _admitted(scene)
 
     _switch(scene)
     settled = body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True)
@@ -386,7 +409,8 @@ def test_boot_settlement_withholds_branch_and_tag_publication_without_full_evide
     assert git(remote, "for-each-ref") == ""  # neither the branch nor a tag reached the remote
     assert settled["publication"] == {"status": "withheld", "branch": "ouroboros", "sha": scene.cand, "tier": tier,
                                       "created_tag": "v1.0.1"}
-    assert f"Publication withheld: this adoption rests on {tier} test evidence" in sent[0]
+    assert sent == [] and rows[0]["text"].split("\n")[1].startswith(
+        f"Publication withheld: this adoption rests on {tier} test evidence")
     events = [json.loads(line) for line in (scene.data / "logs/supervisor.jsonl").read_text().splitlines()]
     [withheld] = [event for event in events if event["type"] == "body_adoption_publication"]
     assert (withheld["status"], withheld["candidate"], withheld["base"]) == ("withheld", scene.cand, scene.old)
@@ -507,9 +531,10 @@ def test_an_unarmed_adoption_found_at_boot_is_explained_by_host_findings_only(sc
                                                                                why):
     from supervisor import message_bus, state
 
-    sent = []
+    sent, rows = [], _task_rows(monkeypatch)
     monkeypatch.setattr(state, "load_state", lambda: {"owner_chat_id": 7})
     monkeypatch.setattr(message_bus, "send_with_budget", lambda chat, text, **kw: sent.append((chat, text, kw)))
+    _admitted(scene)
     body_adoption.authorize(scene.ctx, scene.cand, reason=reason)
     restart_receipt(scene.data, scene.cand, reason)
     if history in ("bound", "blocked"):
@@ -528,8 +553,9 @@ def test_an_unarmed_adoption_found_at_boot_is_explained_by_host_findings_only(sc
 
     note = (f"Adoption of {scene.cand[:12]} was not applied ({why}). "
             "The serving body is unchanged; the candidate is retained.")
-    assert settled == {"outcome": "not_applied", "note": note}
-    assert sent == [(7, f"🧬 Body adoption: {note}", {"role": "system", "system_type": "restart_notice"})]
+    assert (settled["outcome"], settled["note"], settled["task_id"]) == ("not_applied", note, scene.ctx.task_id)
+    assert (settled["candidate"], settled["adoption_id"]) == (scene.cand, handoff["id"])
+    assert sent == [] and [(row["text"], row["task_id"]) for row in rows] == [(note, scene.ctx.task_id)]
     events = [json.loads(line) for line in (scene.data / "logs" / "supervisor.jsonl").read_text().splitlines()]
     assert [(event["outcome"], event["events"]) for event in events if event["type"] == "body_adoption_closed"] == [
         ("abandoned:not_armed", handoff["events"])]
@@ -546,9 +572,10 @@ def test_an_adoption_the_switch_abandoned_keeps_the_helpers_own_reason_at_boot(s
                        "abandoned", "checkout_path_changed")
     pathlib.Path(body_switch.pointer_path(str(scene.serving))).unlink()
 
-    assert body_adoption.finalize_on_boot(scene.data, scene.serving, supervisor_ready=True) == {
-        "outcome": "not_applied", "note": f"Adoption of {scene.cand[:12]} was abandoned before completion "
-                                          "(checkout_path_changed). The serving body is at its previous commit."}
+    settled = body_adoption.finalize_on_boot(scene.data, scene.serving, supervisor_ready=True)
+    assert (settled["outcome"], settled["note"], settled["task_id"], settled["candidate"]) == (
+        "not_applied", f"Adoption of {scene.cand[:12]} was abandoned before completion "
+                       "(checkout_path_changed). The serving body is at its previous commit.", scene.ctx.task_id, scene.cand)
 
 
 def test_intent_recovery_finds_the_candidate_commit_and_boot_verifies_only_the_serving_sha(
@@ -773,6 +800,7 @@ def test_boot_reports_partial_tag_publication_and_does_not_retry_it(scene, monke
     monkeypatch.setattr(state, "load_state", lambda: {"owner_chat_id": 7})
     sent, attempts = [], []
     monkeypatch.setattr(message_bus, "send_with_budget", lambda chat, text, **kw: sent.append(text))
+    rows = _task_rows(monkeypatch)
     network = git_ops._git_network_bounded
 
     def tag_refusal(command, **kwargs):
@@ -782,11 +810,12 @@ def test_boot_reports_partial_tag_publication_and_does_not_retry_it(scene, monke
         return network(command, **kwargs)
 
     monkeypatch.setattr(git_ops, "_git_network_bounded", tag_refusal)
+    _admitted(scene)
     _switch(scene)
     result = body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True)
     assert result["outcome"] == "adopted"
-    assert len(attempts) == 2 and len(sent) == 1
-    assert "partial publication: tag v-new" in sent[0] and "no automatic retry" in sent[0]
+    assert len(attempts) == 2 and len(rows) == 1 and sent == []
+    assert "partial publication: tag v-new" in rows[0]["text"] and "no automatic retry" in rows[0]["text"]
     assert git(remote, "for-each-ref", "--format=%(refname)") == "refs/heads/ouroboros"
     assert body_adoption.settle_on_boot(scene.data, scene.serving, supervisor_ready=True) == {}
-    assert len(attempts) == 2 and len(sent) == 1
+    assert len(attempts) == 2 and len(rows) == 1

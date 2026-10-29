@@ -3,7 +3,7 @@
 // JSON shape is read in one place: a field the server renames is one fix in this file. Readers are
 // tolerant (unknown extra keys are fine; a missing field stays absent, never a guessed zero); writers
 // send exactly the contract's request keys.
-import { extensionRoutePath, extensionRoutePrefix, fetchJson, jsonPost } from './api_client.js';
+import { extensionRoutePath, extensionRoutePrefix, fetchJson, jsonPost, readStateJson } from './api_client.js';
 import { tr } from './i18n.js';
 
 /** Raised on window after a place write the server confirmed: `{place}` or `{placeId, removed: true}`. */
@@ -164,9 +164,11 @@ export function normalizeConsciousness(raw, { enabled } = {}) {
         coverage: bg.recent_wakes === undefined ? '' : text(bg.recent_wakes_coverage),
         level: text(bg.level),
         nextWakeAt: text(bg.next_wake_at),
+        appointmentAt: text(bg.appointment_at),
         lastWakeAt: text(bg.last_wake_at),
         lastWakeOutcome: text(bg.last_wake_outcome),
         liveWakeTaskId: text(bg.live_wake_task_id),
+        liveWakeHeld: bg.live_wake_held === true,
         spentUsd: amount(bg.spent_24h_usd),
         dailyUsd: amount(bg.daily_usd),
         unknownUnmetered: count(bg.unknown_unmetered) || 0,
@@ -198,7 +200,7 @@ export async function readConsciousness(init = {}) {
 
 /** The status the Dashboard falls back to when the full snapshot cannot be read: `/api/state`. */
 export async function readConsciousnessFromState(init = {}) {
-    const data = await fetchJson('/api/state', { cache: 'no-store', ...init });
+    const data = await readStateJson(init);
     if (!object(data?.bg_consciousness_state) && typeof data?.bg_consciousness_enabled !== 'boolean') {
         throw new Error('Consciousness state unavailable');
     }

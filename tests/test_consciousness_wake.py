@@ -127,6 +127,7 @@ def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(cl
     assert clock.clock.tick(T0 + clock_tests.FLOOR) == "launched"
     accepted_a = clock.store[OBSERVATION_STATE_KEY]
     seed_wake(clock.root, task_id="wake0001", result="A's whole note.", wake_summary="A's line.")
+    clock.clock._wake_finished("wake0001", True)
     clock.receipt["task_id"] = "wake0002"
     clock.clock._next_wake_at = T0 + 2 * clock_tests.FLOOR
     with monkeypatch.context() as fault:
@@ -144,6 +145,7 @@ def test_next_wake_reads_last_admitted_note_even_when_its_input_source_failed(cl
     seed_wake(clock.root, task_id="wake0002", status="interrupted", outcome_axes={}, terminal_time=None,
               result="B's whole note.\n\nStill unfinished.", wake_summary="B's line.")
     seed_wake(clock.root, task_id="newer-foreign", result="Never use the newest task's note.")
+    clock.clock._wake_finished("wake0002", True)
     if restart:
         clock.clock = BackgroundConsciousness(clock.root, clock.root / "repo", lambda: 7,
                                               now=T0 + 2 * clock_tests.FLOOR)
@@ -190,6 +192,19 @@ def test_only_direct_turns_with_authored_lines_join_the_observation_text(tmp_pat
     else:
         assert "its line" not in line and row["result"] not in line
     assert row["result"] not in observation.full_text(), "the whole note has its separate previous-wake slot"
+
+
+@pytest.mark.parametrize("summary", ["Checked the disk: 30 GiB free.", ""])
+def test_a_scheduled_runs_sentence_joins_its_terminal_line_and_its_note_stays_out(tmp_path, summary):
+    since = T0 - 3600
+    seed_result(tmp_path, "sched1", {"task_id": "sched1", "status": "completed", "ts": _iso(since + 5),
+        "updated_at": _iso(since + 5), "_schema_version": 1, "description": "Daily check", "metadata": {},
+        "result": "Private note.", "wake_silent": True, **({"wake_summary": summary} if summary else {})})
+    _chat(tmp_path, _summary("sched1", since + 10))
+    observation = _observe(tmp_path)
+    line = next(line for kind, _, line in observation.events if kind == "task_terminal" and "sched1" in line)
+    assert line.endswith(": Daily check" + (f": {summary}" if summary else ""))
+    assert "Private note." not in observation.full_text()
 
 
 def _iso(ts):
@@ -637,7 +652,7 @@ def test_render_substitutes_every_placeholder_and_keeps_every_event(tmp_path, mo
     assert text.startswith("You are Ouroboros. No one has asked for a task")
     assert "1 h 30 min ago" in text and "autonomy: Acts — Also acts on its own:" in text
     assert "toggle_evolution, request_restart" in text
-    assert "allowance known spend (last 24 h): 4.00 / 20.00 USD" in text and "tasks running: 1/2" in text
+    assert "allowance known spend (last 24 h): 4.00 / 20.00 USD" in text and "own tasks: 1/2" in text
     assert "next interval: 3300 s" in text
     assert "previous_wake" in wake.PLACEHOLDERS and "- previous wake: none" in text
     assert "- wake cause: the scheduled wake time; events never move it, they are listed as observed" in text
@@ -685,8 +700,10 @@ def test_template_names_only_its_placeholders_and_the_wake_hints():
 @pytest.fixture
 def describe(monkeypatch):
     import server
+    from ouroboros import consciousness_view
 
     holder = {}
+    monkeypatch.setattr(consciousness_view, "time", SimpleNamespace(time=lambda: wake._parse_iso("2027-01-15T12:00:00Z")))
     monkeypatch.setattr(server, "_consciousness", SimpleNamespace(status_snapshot=lambda: dict(holder)))
     return lambda snapshot, enabled=True: (holder.clear(), holder.update(snapshot), server._describe_bg_consciousness_state(enabled))[2]
 

@@ -106,7 +106,7 @@ def _handle_text_response(
 def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_tools=False, assistant_message=None,
                              resume_candidate=False):
     """One completion request owner, with ordinary first/direct prose compatibility."""
-    from ouroboros.loop_delivery import consume_completion_request, hold_completion_response
+    from ouroboros.loop_delivery import consume_completion_request, hold_completion_response, observe_completion_hold
     ctx = tools._ctx
     if resume_candidate:
         content = ctx._delivery_candidate.full_text
@@ -115,9 +115,12 @@ def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_
         ctx._delivery_candidate.finalization_control = "owner_revision_required"
         if ctx._delivery_candidate.control_episode_seen:
             _arm_delivery_control(tools, limit_ctx, limit_ctx.llm_trace, control="owner_revision_required")
+        observe_completion_hold(tools, limit_ctx, "resume", "owner_input_changed")
         return None
     selected = bool(getattr(ctx, "_completion_selected", None)) or consume_completion_request(tools, limit_ctx, limit_ctx.llm_trace, content)
-    if not selected and (after_tools or park_for_left_review(tools, limit_ctx, content, emit_progress)):
+    origin = "resume" if resume_candidate else "selection" if selected else "prose"
+    # A park records its own hold; after tools nothing was offered (ordinary work, or a refusal already observed).
+    if not selected and (after_tools or park_for_left_review(tools, limit_ctx, content, emit_progress, origin)):
         return None
     if selected:
         from ouroboros.loop_messages import owner_source_sha256
@@ -126,6 +129,7 @@ def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_
             ctx._completion_selected = ctx._presence_completion = None
             ctx._delivery_candidate.control_episode_seen = True
             _arm_delivery_control(tools, limit_ctx, limit_ctx.llm_trace, control="owner_revision_required")
+            observe_completion_hold(tools, limit_ctx, origin, "owner_input_changed")
             return None
         content = ctx._delivery_candidate.full_text
     response_start = len(limit_ctx.messages)
@@ -255,14 +259,15 @@ def _provider_unavailable_result(
         )
     if is_context_overflow:
         reason = "context_overflow" if ctx.accumulated_usage.get("reason_code") == "context_overflow" else "llm_api_error"
-        text, usage, llm_trace = _forced_fallback_result(
-            ctx, llm_trace, fallback, "context_overflow",
-            source="context_overflow_local_salvage", host_words=not salvaged,
-        )
-        usage.update(
+        # Stamped before composing, as every rail is: the composer may end it on the owner's Stop now.
+        ctx.accumulated_usage.update(
             execution_status=RESULT_INFRA_FAILED,
             reason_code=reason,
             _last_llm_error_kind="context_overflow",
+        )
+        text, usage, llm_trace = _forced_fallback_result(
+            ctx, llm_trace, fallback, "context_overflow",
+            source="context_overflow_local_salvage", host_words=not salvaged,
         )
         return with_terminal_notice(text, usage, llm_trace)
     if is_transport_wait:
@@ -282,12 +287,12 @@ def _provider_unavailable_result(
         if wall:
             _finalize_forced_services(ctx, llm_trace)
             _drain_forced_owner_directives(ctx, llm_trace)
+        if ctx.accumulated_usage.get("execution_status") is not None:  # stamped before composing, as above
+            ctx.accumulated_usage.update(execution_status=RESULT_INFRA_FAILED, reason_code=terminal_reason)
         text, usage, llm_trace = _forced_fallback_result(
             ctx, llm_trace, fallback, reason_code=terminal_reason,
             source=no_call, provider_terminal=wall, host_words=not salvaged,
         )
-        if usage.get("execution_status") is not None:
-            usage.update(execution_status=RESULT_INFRA_FAILED, reason_code=terminal_reason)
         return with_terminal_notice(text, usage, llm_trace)
     prompt = (
         "[DEADLINE] Primary model work reached the owner deadline. Produce the best final answer now from verified work and state what remains undone."
@@ -495,6 +500,25 @@ def _load_working_recovery(ctx: Any, messages: List[Dict[str, Any]]) -> Dict[str
         return {}
 
 
+def _note_low_start(ctx: Any, plan: Any, mode: str, task_id: str, event_queue: Any) -> None:
+    """The owner's one Main line for a fresh start that memory lowered to Low (owner 1B, 29.10: ``low_start_line``),
+    owed through the terminal outbox under one id per task attempt; no line when Max returns. Never raises."""
+    from ouroboros.context_view_facts import low_start_line
+
+    try:
+        root, text = canonical_data_root(ctx), low_start_line(plan, mode, task_id)
+        if root is not None and text:
+            from supervisor.schedule_notes import owner_chat_id
+            from supervisor.terminal_delivery import enqueue_terminal_delivery_outcome
+
+            attempt = getattr(ctx, "task_attempt", None) or 1
+            enqueue_terminal_delivery_outcome(root, {
+                "type": "send_message", "chat_id": owner_chat_id(root), "task_id": "", "text": text, "role": "system",
+                "system_type": "low_start_notice", "delivery_id": f"low_start:{task_id}:{attempt}"}, event_queue=event_queue)
+    except Exception:
+        log.warning("The Low-start line of task %s was not queued", task_id, exc_info=True)
+
+
 @task_timing_scope(reuse=True)
 def run_llm_loop(
     messages: List[Dict[str, Any]], tools: ToolRegistry, llm: LLMClient,
@@ -527,9 +551,8 @@ def run_llm_loop(
     if not saved and not saved_pause and not saved_working:
         accumulated_usage["initial_model_request"] = {"model": active_model, "use_local": active_use_local}
         _emit_physical_mode(event_queue, task_id, drive_logs, context_fit_plan, active_context_mode)
-        from ouroboros.memory_max import observe_task_start  # every fresh start: the lost-Max episode
-        observe_task_start(ctx, context_fit_plan, active_context_mode, task_id=task_id or str(getattr(ctx, "task_id", "") or ""),
-                           event_queue=event_queue)
+        _note_low_start(ctx, context_fit_plan, active_context_mode, task_id or str(getattr(ctx, "task_id", "") or ""),
+                        event_queue)
     cost_ceiling = _resolve_task_cost_ceiling(ctx, budget_remaining_usd)
     if cost_ceiling.root_cap_usd is not None:
         # Resumed/late-started members see tree spend before their first pacing surface.

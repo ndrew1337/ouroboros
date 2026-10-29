@@ -1176,11 +1176,11 @@ class ToolRegistry:
             with tool_handoff(self._ctx, str(name or "")) as handoff:
                 result = self._execute_admitted_text(name, args, handoff)
                 typed = result if isinstance(result, ToolResult) else LegacyTextResultAdapter.from_text(name, result)
-                # Host unwind/transport owners settle local execution. Business
-                # status and tool-authored metadata cannot create or negate a join.
-                handoff["settled"] = (handoff.get("settled") is True
-                    or handoff.get("local_extension_returned") is True
-                    or handoff.get("mcp_call_returned") is True)
+                # Host unwind/transport owners settle local execution. Business status and
+                # tool-authored metadata cannot create or negate a join, nor can this fold: a held
+                # runner may record its own end concurrently, so the fold only ever adds one.
+                if handoff.get("local_extension_returned") is True or handoff.get("mcp_call_returned") is True:
+                    handoff["settled"] = True
                 return typed
         except OwnerPauseRefused as exc:
             from ouroboros.tools.tool_result import launch_refusal_result

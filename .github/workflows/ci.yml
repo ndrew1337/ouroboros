@@ -20,7 +20,7 @@
 # Every OS and the UI lane split their tests by the durations the previous run recorded
 # (`shard-plan`); every split is reconciled against an unsharded manifest.
 #
-# Tier 2.5 requires OPENROUTER_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY.
+# Tier 2.5 requires OPENROUTER_API_KEY / OPENROUTER_PROVIDER_ROUTES_API_KEY (its Google, Anthropic, OpenAI routes) / OPENAI_API_KEY / ANTHROPIC_API_KEY.
 # Optional MiniMax / DeepSeek / Cloud.ru / GigaChat rows run when their
 # repository secrets exist. The job runs the `integration` pytest marker; locally these tests are
 # excluded by `addopts = -m 'not integration'` in pyproject.toml.
@@ -906,6 +906,7 @@ jobs:
       scope: required
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_PROVIDER_ROUTES_API_KEY: ${{ secrets.OPENROUTER_PROVIDER_ROUTES_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
@@ -928,6 +929,7 @@ jobs:
       scope: optional
     secrets:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENROUTER_PROVIDER_ROUTES_API_KEY: ${{ secrets.OPENROUTER_PROVIDER_ROUTES_API_KEY }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}

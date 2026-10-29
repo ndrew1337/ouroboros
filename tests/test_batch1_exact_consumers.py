@@ -84,7 +84,7 @@ def test_context_uses_the_addressed_witness_authority(root):
     from ouroboros.context import _drive_state_section
 
     state.save_state(_prior())
-    witness = root / state_initialization.WITNESS_REL
+    witness = state_initialization.witness_path(root)
     raw = json.loads(witness.read_bytes())
     raw["phase"] = "pending"
     _write(witness, raw)
@@ -104,7 +104,7 @@ def test_consciousness_recovers_unknown_but_never_overrides_live_stop(root, monk
     state.STATE_PATH.unlink()
     state.STATE_LAST_GOOD_PATH.unlink()
     clock = BackgroundConsciousness(root, root / "repo", lambda: 7, now=100)
-    monkeypatch.setattr(clock, "live_turns", lambda: ("", False))
+    monkeypatch.setattr(clock, "live_wake", lambda: "")
     assert clock.tick(now=100) == "disabled"
     state.STATE_PATH.write_bytes(primary)
     state.STATE_LAST_GOOD_PATH.write_bytes(backup)

@@ -206,9 +206,10 @@ class ContextFitPlan:
 
         def project(projection: Optional[ContextFitProjection]) -> Optional[ContextFitProjection]:
             if projection is not None and projection.mode in contents and narrowed(projection):
-                system, facts = contents[projection.mode]
+                system, facts = contents[projection.mode]  # the start's Max room outlives a narrowing, as a selection's
                 projection = replace(projection, system_content_json=json.dumps(system, ensure_ascii=False, sort_keys=True),
-                                     memory_facts=facts, continuation_messages_json=tail_json,
+                                     memory_facts={**facts, **{key: value for key, value in projection.memory_facts.items()
+                                                               if key == "max_room"}}, continuation_messages_json=tail_json,
                                      estimated_tokens=_request_tokens(system, projection.user_content_json or self.user_content_json,
                                          supplementary_messages_json=self.core.supplementary_messages_json,
                                          current_messages=current_messages))

@@ -13,6 +13,9 @@ pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 
 def _watch_previews(page):
+    # The SPA records about 250 resources before its first preview (191 modules at 7.8.1), and a full Resource
+    # Timing buffer (250 entries by default) drops every later entry, the previews included.
+    page.add_init_script("performance.setResourceTimingBufferSize(5000)")
     page.evaluate("performance.clearResourceTimings()")
 
 
@@ -125,6 +128,7 @@ def test_session_access_is_visible_and_preserved_by_the_real_editor(subscription
     if surface == "settings":
         with page.expect_response("**/api/settings"):
             page.locator("#btn-save-settings").click()
+        ui["errors"].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
         page.reload()
         page.locator('[data-settings-tab="agents"]').click()
         assert page.locator('[data-subagent-field="access"]').first.input_value() == "workspace_write"

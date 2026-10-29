@@ -1053,11 +1053,10 @@ def parkable_direct_task(task: Dict[str, Any]) -> Dict[str, Any]:
 
 def prestart_pause_event(task: Dict[str, Any], error: BaseException, owner: Any) -> Optional[Dict[str, Any]]:
     """Positive no-body evidence for a fresh input; never reclassify a continuation or prior attempt."""
-    from ouroboros.owner_wait import governing_continuation
+    from ouroboros.owner_wait import fresh_input
 
     if (not getattr(error, "before_task_start", False) or getattr(error, "control_reason", "") != RAIL_OWNER_PAUSE
-            or governing_continuation(task) or int(task.get("_attempt") or 1) != 1
-            or task.get("original_task_id") or task.get("timeout_retry_from")):
+            or not fresh_input(task)):
         return None
     task_id = str(task["id"])
     root_id = str(task.get("root_task_id") or (task.get("metadata") or {}).get("root_task_id") or task_id)

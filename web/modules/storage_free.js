@@ -123,7 +123,7 @@ function checklistHtml(free, checked, days, listing = false) {
     return `<ul class="storage-free-groups${single ? ' is-single' : ''}">${groups.map((group) => `<li class="storage-free-group">
             ${single ? '' : `<input type="checkbox" class="ui-checkbox" id="storage-free-${attr(group.id)}" data-free-group="${attr(group.id)}" data-key="check-${attr(group.id)}"${checked.has(group.id) ? ' checked' : ''}>`}
             <label class="storage-free-label" for="storage-free-${attr(group.id)}">${text(fmt(words(group).label))}</label>
-            <span class="storage-free-size" data-i18n-fmt="storage.size">${text(groupSize(group, listing))}</span>
+            <span class="storage-free-size${isSize(group.bytes) && group.bytes_complete !== false ? '' : ' is-qualified'}" data-i18n-fmt="storage.size">${text(groupSize(group, listing))}</span>
             <p class="storage-free-why" data-i18n-fmt="storage.free.why">${text(groupWhy(group, days))}</p>
         </li>`).join('')}</ul>`;
 }

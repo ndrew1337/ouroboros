@@ -111,8 +111,9 @@ def main() -> int:
     if (git_dir / "ouroboros-body-adoption").exists():
         parser.error("source checkout has a pending body adoption; finish it before verification")
     # Short on purpose: server sockets live several levels below this root and
-    # macOS caps an AF_UNIX path at 104 bytes.
-    root = Path(tempfile.mkdtemp(prefix="ob-", dir=parent)).resolve()
+    # macOS caps an AF_UNIX path at 104 bytes. Born `.noindex`: Spotlight never
+    # registers the fixtures below it (fake `Ouroboros.app` bundles among them).
+    root = Path(tempfile.mkdtemp(prefix="ob-", suffix=".noindex", dir=parent)).resolve()
     try:
         env = boundary(root, repo, keep=(
             "OUROBOROS_RUN_UI_SMOKE", "OUROBOROS_EXPECT_BROWSER_ENGINES",

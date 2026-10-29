@@ -55,8 +55,9 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tupl
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, row_lineage
-from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, capture,
-                                       correction_line, draft_signer, source_time_span, verify_quotes)
+from ouroboros.chronicle_quotes import SPEAKERS
+from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, STORY_KINDS, ChronicleStore, PublishResult, capture,
+                                       draft_signer, source_time_span, verify_quotes)
 from ouroboros.dialogue_provenance import memory_row_header, recorded_finality, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
 from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
@@ -209,8 +210,32 @@ def _task_rows(root: Path, room: str, task_ids: Iterable[Any]) -> List[Tuple[Dic
     return sorted(selected, key=lambda entry: entry[2])
 
 
+def _note_covers(root: Path, room: str, ids: Any) -> tuple:
+    """A page may close selected notes even when no chat row remains open; no mark is affected."""
+    if (not isinstance(ids, list) or not ids or any(not isinstance(i, str) or not i.strip() for i in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError("covers.note_ids is a non-empty array of distinct note ids")
+    store = _activated(root)
+    notes = [store.get(ident) for ident in ids]
+    if any(not note or note.get("kind") != "note" or str(note.get("room_id")) != room for note in notes):
+        raise ValueError("covers.note_ids must resolve to notes of this room")
+    tasks = list(dict.fromkeys(str(note["task_id"]) for note in notes if note.get("task_id")))
+    from ouroboros.dialogue_positions import last_stream_position
+
+    head = max(0, last_stream_position(root))  # an empty stream starts at position zero
+    covers = {"room_id": room, "mode": "notes", "request": {"note_ids": ids},
+              "rows": [f"note:{ident}" for ident in ids], "first": None, "last": None, "count": 0,
+              "task_ids": tasks, "note_ids": ids, "stream_span": [head, head],
+              "ts_span": source_time_span(note.get("ts") for note in notes)}
+    return covers, {"rows": 0, "notes": len(notes), "by_author": {}}, []
+
+
 def _expand(root: Path, room: str, lineage: Dict[str, Any], *, from_addr: Any = None, to_addr: Any = None,
-            task_ids: Any = None) -> Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[Dict[str, Any], Dict[str, Any], int]]]:
+            task_ids: Any = None, note_ids: Any = None) -> Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[Dict[str, Any], Dict[str, Any], int]]]:
+    if note_ids is not None:
+        if task_ids is not None or from_addr or to_addr:
+            raise ValueError("covers.note_ids is a separate coverage choice, without row bounds or task_ids")
+        return _note_covers(root, room, note_ids)
     if task_ids is not None and (from_addr or to_addr):
         raise ValueError("covers is either {from, to}, {to} or {task_ids}, not both")
     if task_ids is not None:
@@ -257,7 +282,7 @@ def _expand(root: Path, room: str, lineage: Dict[str, Any], *, from_addr: Any = 
 
 
 def page_covers(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: Any = None,
-                task_ids: Any = None) -> Dict[str, Any]:
+                task_ids: Any = None, note_ids: Any = None) -> Dict[str, Any]:
     """The exact row set a page request names, with its coverage facts and the rows read.
 
     ``{"covers", "coverage_facts", "rows": [(address, row), ...]}``. ``from_addr``/``to_addr``
@@ -266,7 +291,7 @@ def page_covers(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: Any 
     raise ``chat_chain.RowAddressError``.
     """
     covers, facts, rows = _expand(Path(root), str(room_id), row_lineage(Path(root)), from_addr=from_addr,
-                                  to_addr=to_addr, task_ids=task_ids)
+                                  to_addr=to_addr, task_ids=task_ids, note_ids=note_ids)
     return {"covers": covers, "coverage_facts": facts, "rows": [(address, row) for address, row, _p in rows]}
 
 
@@ -323,11 +348,11 @@ def check_quotes(root: Any, quotes: Any) -> Tuple[bool, Optional[int]]:
 def _write_page(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
     covers_arg = a["covers"]
     if not isinstance(covers_arg, dict):
-        return _arg_error(ctx, "a page needs covers: {from, to} row addresses, {to} alone or {task_ids}")
+        return _arg_error(ctx, "a page needs covers: {from, to} row addresses, {to}, {task_ids} or {note_ids}")
     room, lineage = _room(ctx, root, a["room_id"]), row_lineage(root)
     try:
         covers, facts, rows = _expand(root, room, lineage, from_addr=covers_arg.get("from"),
-                                      to_addr=covers_arg.get("to"), task_ids=covers_arg.get("task_ids"))
+                                      to_addr=covers_arg.get("to"), task_ids=covers_arg.get("task_ids"), note_ids=covers_arg.get("note_ids"))
     except chat_chain.RowAddressError as exc:
         return _refused(ctx, "target_missing", f"a covers bound does not resolve: {exc.resolution.get('status')}")
     stamp = host_stamp(root, covers["task_ids"], rows=rows)
@@ -340,7 +365,8 @@ def _write_page(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, A
         return _published(ctx, result)
     statuses = Counter(entry["status"] or "unknown" for entry in stamp["tasks"])
     return _published(ctx, result, rows=covers["count"], notes=len(covers["note_ids"]), coverage_facts=facts,
-                      first=chat_chain.format_address(covers["first"]), last=chat_chain.format_address(covers["last"]),
+                      first=chat_chain.format_address(covers["first"]) if covers["first"] else None,
+                      last=chat_chain.format_address(covers["last"]) if covers["last"] else None,
                       stamp=dict(sorted(statuses.items())))
 
 
@@ -361,7 +387,8 @@ def _fold_effect(store: ChronicleStore, action: str, ids: Iterable[Any], text: s
     ids = [str(ident) for ident in ids]
     before = sum(len(str((store.get(ident) or {}).get("text") or "")) for ident in ids)
     return (f"{action} {len(ids)} record{'' if len(ids) == 1 else 's'}: {before:,} -> {len(text or ''):,} characters. "
-            "This task's view is not refreshed; the next start re-measures its Max room.")
+            "Originals remain readable by address. This task's view is not refreshed; the next start re-measures "
+            "its Max room and rewrites the cached story from the first changed retelling.")
 
 
 def _write_part(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
@@ -704,9 +731,10 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
         raise ValueError("rows are read from a chat room: room_id is its numeric chat id") from exc
     lineage = row_lineage(root)
     task_id = str(bounds.get("task_id") or "")
+    gaps: set = set()  # what a Project's rows read so may lack (``chat_chain.room_rows``): never "complete" unsaid
     source = chat_chain.iter_room_rows(root, room, from_addr=bounds.get("from") or None,
                                        to_addr=bounds.get("to") or None, task_ids=[task_id] if task_id else None,
-                                       period=bounds.get("period") or None)
+                                       period=bounds.get("period") or None, gaps=gaps)
     filters = [f"{key} {bounds[key]}" for key in ("from", "to", "task_id") if bounds.get(key)]
     if bounds.get("period"):
         filters.append(f"period {_span({'start': bounds['period'].get('from'), 'end': bounds['period'].get('to')})}")
@@ -722,6 +750,10 @@ def _read_rows(root: Path, room: str, bounds: Dict[str, Any], start: int, limit:
         return header + " " + body
 
     kept, texts, exhausted = _collect(source, render, limit)
+    if gaps:
+        from ouroboros.room_appearances import GAP_DETAILS
+
+        head += "".join(f"; incomplete: {GAP_DETAILS[kind]}" for kind in sorted(gaps))
 
     def continuation(k: int, done: bool) -> str:
         if done:
@@ -764,29 +796,12 @@ def _source_section(src: Dict[str, Any]) -> str:
     return "\n".join(["; ".join([head, *facts, read]), *source_change_lines(src)])
 
 
-def _as_of(store: ChronicleStore, record: Dict[str, Any], revision: str) -> Tuple[Dict[str, Any], List[str]]:
-    """The record as of one of its revisions: its words plus the corrections up to it; the later ones named."""
-    fixes = [r for r in store.records(record["room_id"], kinds=["correction"], after_seq=record["sequence"])
-             if r.get("target_id") == record["id"]]
-    revisions = [record["id"], *(fix["id"] for fix in fixes)]
-    if revision not in revisions:
-        raise ValueError(f"{revision} is not a revision of {record['id']}; its revisions: " + ", ".join(revisions))
-    kept = fixes[:revisions.index(revision)]
-    text = "\n\n".join([str(record.get("text", "")), *(f"{correction_line(fix)}\n{fix.get('text', '')}" for fix in kept)])
-    later = revisions[revisions.index(revision) + 1:]
-    return {**record, "current_text": text, "revision": revision, "corrections": [
-        {"id": fix["id"], "author": fix.get("author"), "ts": fix.get("ts")} for fix in kept]}, later
-
-
 def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str = "") -> Tuple[Dict[str, Any], str]:
     """The record as it acts (interpreted when it is a story record), or as of ``revision``, and its full text document."""
     room, kind = record["room_id"], record["kind"]
-    acting = next((r for r in store.room_records(room, after_seq=record["sequence"] - 1) if r["id"] == record["id"]),
-                  None)
-    shown = acting or record
-    later: List[str] = []
-    if revision:
-        shown, later = _as_of(store, shown, revision)
+    read = store.interpret([record], revision=revision or None)[0]  # the store's one composition at every revision
+    shown = read if revision or kind in STORY_KINDS and read.get("status") not in ("rejected", "candidate") else record
+    later: List[str] = read.get("later_corrections") or []
     if kind == "mark":
         shown = next((m for m in store.active_marks(room) if m["id"] == record["id"]), None) or record
         shown = {**shown, "sequence": record["sequence"]}
@@ -843,9 +858,7 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
                                                           else "the original and its corrections up to that one")
                         + (f"; later corrections not shown: {', '.join(later)}" if later else "; none later"))
     sections.append("text:\n" + str(record.get("text") if record.get("text") is not None else record.get("reason") or ""))
-    related = store.records(room, kinds=["correction", "decision", "mark_view", "mark_release", "selection"],
-                            after_seq=record["sequence"])
-    for other in (r for r in related if r.get("target_id") == record["id"]):
+    for other in store.targeting(record["id"], ("correction", "decision", "mark_view", "mark_release", "selection")):
         if revision and other["kind"] == "correction" and other["id"] not in (fix["id"] for fix in shown.get("corrections") or ()):
             continue  # a later correction is named above, not shown as that version
         body = other.get("text") if other["kind"] == "correction" else (
@@ -855,7 +868,7 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
             else "") + str(other.get("reason") or "")
         sections.append(f"{other['kind']} {other['id']} by {_author_label(other.get('author'))} (seq {other['sequence']}):\n"
                         f"{body}")
-    for account in store.accounts():  # the accounts this record informs, with the version each one read
+    for account in store.records(kinds=("account",)):  # the accounts this record informs, with the frozen version read
         for src in account.get("sources") or ():
             if src.get("id") == record["id"]:
                 sections.append(f"informs account {account['id']} (revision {src.get('revision')} read; seq {account['sequence']}): "
@@ -901,12 +914,13 @@ def _read_source(root: Path, ref: Any, start: int, limit: int) -> str:
 def _read_rooms(root: Path, store: ChronicleStore, start: int, limit: int) -> str:
     from ouroboros import memory_view as mv
 
-    spec = mv.ViewSpec("integrator", room_id=None)
+    spec = mv.ViewSpec("integrator", room_id=None, live_rooms="directory")
     with capture(root):  # one state of the chronicle for every room's facts
-        rows, lineage = memory_inventory.open_rows_by_room(root), row_lineage(root)
-        rooms = mv._live_rooms(store, root, spec, mv._labeler(root), rows, mv._notes_by_room(store), lineage)
+        gaps, quiet = {}, {}
+        rows, lineage = memory_inventory.open_rows_by_room(root, gaps=gaps, quiet=quiet), row_lineage(root)
+        rooms = mv._live_rooms(store, root, spec, mv.room_labeler(root), rows, mv._notes_by_room(store), lineage, gaps, quiet)
     body = "\n".join(mv._directory_room(room) for room in rooms)
-    return _window(f"Live rooms: {len(rooms)}", body, start, limit,
+    return _window(f"Open rooms: {len(rooms)}; live {sum(room['live'] for room in rooms)}", body, start, limit,
                    lambda n: f"memory_read(room_id='*', start={n})")
 
 
@@ -931,13 +945,14 @@ def _memory_read(ctx: Any, node_id: str = "", room_id: Any = None, after_seq: in
             text = _read_source(root, source_ref, start, limit)
         elif str(room_id) == "*":
             text = _read_rooms(root, store, start, limit)
-        elif str(room_id) == "candidates":
-            candidates = store.pending_candidates()
-            body = "\n".join(f"- {r['id']}; room {r['room_id']}; signed by {draft_signer(r['author'])}; "
-                f"memory_read(node_id='{r['id']}'); chronicle_write(kind='decision', target_id='{r['id']}', accepted=true/false, reason='...')"
-                for r in candidates)
-            text = _window(f"Drafts awaiting a decision: {len(candidates)}", body, start, limit,
-                           lambda n: f"memory_read(room_id='candidates', start={n})")
+        elif str(room_id) in {"late_reviews", "notes"}:
+            from ouroboros.memory_view import _notes_by_room
+            from ouroboros.memory_waiting import listing
+
+            with capture(root, tail="none"):
+                head, body = listing(str(room_id), store.active_marks(None) if room_id == "late_reviews" else (),
+                                     _notes_by_room(store) if room_id == "notes" else {})
+            text = _window(head, body, start, limit, lambda n: f"memory_read(room_id='{room_id}', start={n})")
         elif node_id:
             text = _read_node(root, str(node_id), start, limit, str(revision or ""))
         elif rows:
@@ -1015,17 +1030,40 @@ def _mark_target(ctx: Any, root: Path, store: ChronicleStore, a: Dict[str, Any])
     return ref, None, ""
 
 
+def _release_marks(ctx: Any, store: ChronicleStore, author: Dict[str, Any], ids: Any, reason: str) -> str:
+    if (not isinstance(ids, list) or not ids or any(not isinstance(item, str) or not item.strip() for item in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError("release_ids is a non-empty array of distinct mark ids")
+    released, refused = [], []
+    for mark in ids:
+        try:
+            result = store.release_mark(mark, author, reason)
+        except (OSError, TimeoutError) as exc:
+            refused.append({"id": mark, "reason": "unavailable", "detail": str(exc)})
+            continue
+        if result.ok:
+            released.append(mark)
+        else:
+            refused.append({"id": mark, "reason": result.reason, "detail": result.detail})
+    return _reply(ctx, {"ok": not refused, "operation": "mark_release", "released_ids": released, "refused": refused,
+                        "reason": "saved" if not refused else "partial" if released else refused[0]["reason"]},
+                  code="TOOL_REPORTED_FAILURE" if refused else "OK",
+                  meta={"memory_mark_ids": released, "memory_mark_operation": "mark_release"})
+
+
 def _memory_mark(ctx: Any, text: str = "", node_id: str = "", address: str = "", task_id: str = "",
                  source_ref: Any = None, quote: Optional[str] = None, room_id: Any = None, scope: str = "room",
-                 mark_id: str = "", visibility: str = "", release_id: str = "", reason: str = "",
+                 mark_id: str = "", visibility: str = "", release_ids: Any = None, reason: str = "",
                  anchor: Any = None) -> str:
     try:
         root = _root(ctx)
         store, author = _activated(root), focus_signature(ctx)
+        if release_ids is not None:
+            if any((mark_id, visibility, node_id, address, task_id, source_ref, text, quote, anchor)):
+                return _arg_error(ctx, "release_ids takes only one reason, without a mark target or view change")
+            return _release_marks(ctx, store, author, release_ids, str(reason or ""))
         if mark_id:
             result = store.set_mark_view(str(mark_id), str(visibility or ""), author, str(reason or ""))
-        elif release_id:
-            result = store.release_mark(str(release_id), author, str(reason or ""))
         else:
             if sum(bool(target) for target in (node_id, address, task_id, source_ref)) != 1:
                 return _arg_error(ctx, "a mark names exactly one target: node_id, address, task_id or source_ref")
@@ -1075,8 +1113,9 @@ def chronicle_tools() -> List[ToolEntry]:
         "room_id": room,
         "text": {"type": "string", "description": "The record in my own words. No length limit; it is read back through memory_read pages."},
         "covers": {"type": "object", "additionalProperties": False,
-                   "description": "page: {from, to} row addresses (inclusive, this room's rows between them), {to} alone (every row of this room still open up to that address, the ones the view counts as open — the host leaves out what pages already seal and what came after; it defines the page's coverage, not proof that the rows were read) or {task_ids} (those tasks' rows and the owner's words bound to them). The host expands it into the exact row set; rows another page already seals are refused (already_sealed).",
-                   "properties": {"from": address, "to": address, "task_ids": {"type": "array", "items": string}}},
+                   "description": "page: {from, to} row addresses (inclusive), {to} alone (this room's still-open rows up to it), {task_ids} (those tasks' rows and bound owner words), or {note_ids} (selected notes of this room, even without open rows). The host expands the exact coverage; it proves no reading. Already sealed members are refused. Pages never release marks.",
+                   "properties": {"from": address, "to": address, "task_ids": {"type": "array", "items": string},
+                                  "note_ids": {"type": "array", "items": string, "minItems": 1, "uniqueItems": True}}},
         "member_ids": {"type": "array", "items": string, "description": "part: adjacent unfolded records of one kind in one room; default room is theirs."},
         "quotes": quotes,
         "task_id": {"type": "string", "description": "note: the task it belongs to (default: this task)."},
@@ -1093,7 +1132,7 @@ def chronicle_tools() -> List[ToolEntry]:
     }
     read = {
         "node_id": {"type": "string", "description": "One record: as it acts now, its host stamp, coverage, original text, corrections and decisions."},
-        "room_id": {**room, "description": room["description"] + " '*' lists every live room as one directory line (label, period, counts, reader); 'candidates' lists the helper drafts awaiting my decision."},
+        "room_id": {**room, "description": room["description"] + " '*' lists all open rooms (label, period, counts, reader); 'late_reviews' lists unreleased host review marks; 'notes' lists unsealed mind notes. Lists name ids, rooms, dates and exact readers, oldest first."},
         "after_seq": {"type": "integer", "minimum": 0, "description": "Room records and active marks after this sequence (the previous page's next_after_seq)."},
         "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period, in stored order (the order from/to and next: from= follow). A room holding imported earlier messages reads by send time in its view and chat_history; here each stands where it was stored."},
         "from": address, "to": address,
@@ -1115,7 +1154,8 @@ def chronicle_tools() -> List[ToolEntry]:
         "scope": {"type": "string", "enum": ["room", "global"]},
         "mark_id": {"type": "string", "description": "Change an active mark's visible detail with visibility and reason."},
         "visibility": {"type": "string", "enum": ["full", "meaning"]},
-        "release_id": {"type": "string", "description": "Release an active mark (with reason); its history stays."},
+        "release_ids": {"type": "array", "items": string, "minItems": 1, "uniqueItems": True,
+                        "description": "Release these active marks with one reason; returns released ids and each refusal. Their history stays."},
         "reason": string,
         "anchor": {"type": "object", "additionalProperties": False,
                    "description": "Optional action this mark meets me at: {tool, text?} is a tool name, optionally with text its call's arguments must contain; {path} is a file or directory path a call names. The host adds the mark's words to the result of the first such call in each task (a room mark: that room's work only); it compares literally and never refuses the call.",
@@ -1138,6 +1178,6 @@ def chronicle_tools() -> List[ToolEntry]:
             read, []), _memory_read),
         ToolEntry("memory_mark", schema(
             "memory_mark",
-            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target; an optional anchor ties the mark to an action, so its words also meet me in that action's result. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release it (release_id, reason) when it no longer holds.",
+            "Mark what matters in my own words on one target: a chronicle record (node_id), a chat row (address), a task (task_id) or a retained source (source_ref); room or global scope; an optional quote is verified as an exact substring of the target; an optional anchor ties the mark to an action, so its words also meet me in that action's result. Change a mark's visible detail (mark_id, visibility full/meaning, reason) or release marks (release_ids, one reason) when they no longer hold.",
             mark, []), _memory_mark),
     ]

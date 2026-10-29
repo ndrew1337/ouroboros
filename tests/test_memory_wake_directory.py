@@ -16,7 +16,8 @@ def test_wake_keeps_ordinary_main_and_only_latest_authored_focus_elsewhere(tmp_p
     write_task_result(tmp_path, "tb1", "completed", focus={**focus, "text": "FOREIGN SIGNATURE"})
     main, main_text = _view(tmp_path, MAIN_TASK)
     wake, text = _view(tmp_path, {"id": "wake001", "usage_category": "consciousness"})
-    assert wake.spec.live_rooms == "directory" and wake.spec.work_room_levels == 2
+    # A wake is one turn beside its whole memory, as a Main turn is: one eighth of work room each (owner, 29.10).
+    assert wake.spec.live_rooms == "directory" and wake.spec.work_room_levels == 1
     assert main.spec.work_room_levels == 1
     assert _section(text, "## This room (Main)") == _section(main_text, "## This room (Main)")
     live = _section(text, "## Live rooms")

@@ -247,6 +247,7 @@ def test_chips_take_the_room_the_capsules_leave_and_fold_into_one_more_chip(subs
     state = {"chips": 0}
     page, _loaded, _posted = open_app(subscription_ui, state=state)
     evidence = {}
+    subscription_ui["errors"].watch(page)  # each reopen may cut off the page's own reads (tests/ui_console_errors.py)
     for scheme in ("light", "dark"):
         for width in (320, 360, 1280):
             page.set_viewport_size({"width": width, "height": 800})
@@ -342,6 +343,7 @@ def test_a_start_the_page_did_not_outlive_is_held_next_time_and_the_bar_offers_n
     page.evaluate("""() => localStorage.setItem('ouroboros.holds', JSON.stringify({v: 1, entries: {
         'module:voice:tts': {reason: 'start', rev: 'r1', at: Date.now()}}}))""")
     loaded.clear()
+    subscription_ui["errors"].watch(page)  # the reopen may cut off the page's own reads (tests/ui_console_errors.py)
     page.goto(subscription_ui["url"] + "/")
     held = toast(page, "Device voice did not start: the page stopped while it was starting last time.")
     held.wait_for()

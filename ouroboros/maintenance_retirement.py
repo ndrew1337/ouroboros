@@ -18,6 +18,7 @@ import uuid
 
 from ouroboros import maintenance_jobs, store
 from ouroboros.retention import get_gc_retention_days, time
+from ouroboros.unindexed import BYTECODE, LEGACY_BYTECODE
 
 log = logging.getLogger(__name__)
 JOB = "runtime_retirement"
@@ -189,24 +190,31 @@ def prune_agent_media_uploads(
 
 
 def prune_stale_bytecode(root, *, budget=None, sources=None) -> dict:
-    """Retire bytecode mirrors whose source directory is gone (``state/pycache``, the
+    """Retire bytecode mirrors whose source directory is gone (``state/pycache.noindex``, the
     ``PYTHONPYCACHEPREFIX`` pool workers write; ``state/python-userbase`` holds real installs and
     is never read here). Under a prefix CPython writes ``<prefix>/<source directory without its
     root>/<name>.<tag>.pyc`` (``importlib`` ``cache_from_source``), so a mirror directory names its
     source: ``"/" + relative`` on POSIX; on Windows the drive is stripped, so a mirror is stale only
     when that path is missing on every drive present now (``_source_roots``). Top-down: a stale
     mirror goes whole and is never descended; an unreadable source (access denied, a drive not
-    answering) keeps its mirror; links are neither followed nor removed. At most ``budget`` unlinks
-    a run, the rest owed through ``next_due``. A pure cache: a wrong removal costs a recompile."""
-    prefix = pathlib.Path(root) / "state" / "pycache"
+    answering) keeps its mirror; links are neither followed nor removed. The legacy ``state/pycache``
+    an older body or host writes again goes whole first, unless it is this process's own prefix.
+    At most ``budget`` unlinks a run, the rest owed through ``next_due``. A pure cache: a wrong
+    removal costs a recompile."""
+    prefix, legacy = pathlib.Path(root) / "state" / BYTECODE, pathlib.Path(root) / "state" / LEGACY_BYTECODE
     report = {"removed": 0, "unlinked": 0, "unknown": 0, "errors": 0}
-    try:
-        if not stat.S_ISDIR(os.lstat(prefix).st_mode):  # a link is not our prefix
+    left = [BYTECODE_UNLINKS_PER_RUN if budget is None else int(budget)]
+    own = getattr(sys, "pycache_prefix", None) or ""
+    own = os.path.normcase(os.path.abspath(own)) if own else ""
+    if _plain_tree(legacy) and os.path.normcase(os.path.abspath(legacy)) != own:
+        removed = _remove_mirror(legacy, left, report)
+        if removed is None:
+            report["next_due"] = time.time()
             return report
-    except OSError:
+        report["removed"] += removed
+    if not _plain_tree(prefix):
         return report
     roots = _source_roots() if sources is None else [os.fspath(path) for path in sources]
-    left = [BYTECODE_UNLINKS_PER_RUN if budget is None else int(budget)]
 
     def source(parts) -> str:
         """``present``, ``gone`` or ``unknown`` over every root; any root that has it keeps it."""
@@ -247,6 +255,14 @@ def prune_stale_bytecode(root, *, budget=None, sources=None) -> dict:
     if not walk(prefix, ()):
         report["next_due"] = time.time()  # owed: the next run of the job continues the walk
     return report
+
+
+def _plain_tree(path) -> bool:
+    """A real directory: a link is not our prefix."""
+    try:
+        return stat.S_ISDIR(os.lstat(path).st_mode)
+    except OSError:
+        return False
 
 
 def _link(entry) -> bool:

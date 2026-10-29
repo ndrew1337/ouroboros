@@ -168,7 +168,10 @@ screenshots when available. Infrastructure failures retain typed
 `refusal {type, code, message}` and `reason_code=infra_error:<code>` in both
 result surfaces. Post-stop `/proc` survivors fail a passing lane and name up
 to twenty PIDs/command heads with an omitted count; without `/proc` the scan
-is explicitly unavailable, never passed.
+is explicitly unavailable, never passed. An exit the server stop could not
+prove fails a passing lane the same way, listed in `server_stop_unconfirmed`;
+a restart after such a stop starts no second server on that data root, and
+`--prune-clones` keeps the clone after such a stop or a `/proc` survivor.
 
 After the lane server stops, on every outcome, `traces.py` copies its
 journals into `lanes/<id>_a<n>/traces/` with the data-root layout kept:

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import contextlib
 import dataclasses
+import functools
 import json
 import logging
 import pathlib
@@ -411,6 +412,17 @@ def _round_sha(request: ReviewChangeRequest, frozen: Any) -> str:
                             since_review=request.since_review)
 
 
+def wave_label_material() -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): the label a change or
+    preflight wave hands its seats as its commit message, for every subject kind, against a base or not."""
+    from types import SimpleNamespace
+
+    return [_wave_label(SimpleNamespace(surface=surface, subject=subject, base="⟨base⟩" if against else "",
+                                        head="⟨head⟩"), pathlib.Path("⟨root⟩"))
+            for surface in (SURFACE, "preflight") for subject in ("base..head", "index", "worktree")
+            for against in (False, True)]
+
+
 def _wave_label(request: ReviewChangeRequest, root: pathlib.Path) -> str:
     if request.surface == RESULT:
         return "review_change result: this task's result against what was asked (review only; nothing is delivered)"
@@ -428,25 +440,28 @@ def _prepare_wave(ctx: ToolContext, request: ReviewChangeRequest, frozen: Any, p
     from ouroboros.tools.commit_gate import commit_review_contract_fingerprint, compute_rebuttal_sha256, resolve_root_task_id
 
     if request.surface == RESULT:
-        from ouroboros.tools.review_result import result_rules
+        from ouroboros.tools.review_result import result_contract_fingerprint, result_rules
 
-        rules = result_rules()
+        rules, contract = result_rules(), result_contract_fingerprint
     elif request.surface == SKILL:
-        from ouroboros.tools.review_skill import skill_rules
+        from ouroboros.tools.review_skill import skill_contract_fingerprint, skill_rules
 
-        rules = skill_rules()
+        rules, contract = skill_rules(), skill_contract_fingerprint
     else:
-        rules = checklist_fingerprint(layer)
+        # A change or preflight wave is held to its layer's change brief, as the commit gate is to the body's.
+        rules, contract = checklist_fingerprint(layer), functools.partial(commit_review_contract_fingerprint, layer=layer)
     enforcement = str(get_review_enforcement() or "")
-    contract_fp = str(rejoin.review_contract_fingerprint or "") if rejoin is not None else str(commit_review_contract_fingerprint() or "")
+    # A rejoin collects under the contract its dispatch recorded. The rules stay the record's
+    # provenance (``_finish_record``), never identity (a): governance text buys no new wave.
+    contract_fp = str(rejoin.review_contract_fingerprint or "") if rejoin is not None else str(contract() or "")
     rebuttal_sha = str(compute_rebuttal_sha256(request.review_rebuttal) or "")
     # Identity (b), the logical round, enters both the reuse key (a) and the custody
     # retry key (c): a new rebuttal/question/brief/revision pair is a new wave and a
     # new physical operation; a retry of the same round rejoins the old one.
     round_sha = _round_sha(request, frozen)
     reuse_key = review_reuse_key(
-        frozen, rules_sha=str((rules.get("rules_source") or {}).get("sha") or ""), layer=layer,
-        assigned=panel.assigned, enforcement=enforcement, contract_fp=contract_fp, round_sha=round_sha)
+        frozen, layer=layer, assigned=panel.assigned, enforcement=enforcement, contract_fp=contract_fp,
+        round_sha=round_sha)
     # A subject may name the root task its paid-cycle allowance belongs to ("" = the manual lane,
     # counted per content version): a skill reviewed from the Skills page is nobody's task.
     ceiling_root = getattr(frozen, "ceiling_root", None)
@@ -1212,14 +1227,15 @@ _DESCRIPTION = (
     "(default: the Main model) reads the whole system against BIBLE.md and returns a report. subject=result "
     "(surface=result) reviews THIS task's result instead of a change: the reply (answer, default your latest reply), "
     "the files and effects the task produced, and what was asked; every seat answers one question, whether the "
-    "result does what was asked, judged on the result, never the method. On a Required root, Blocking widens a "
+    "result does what was asked, judged on the result, and on the method only where the owner's words or "
+    "explicit choice fixed it. On a Required root, Blocking widens a "
     "named subset to every ticked reviewer; Advisory names ticked reviewers and needs a reason when narrowed "
     "(missing reason is a typed $0 refusal); if you did not review before delivery the host seats the whole pool. "
     "Auto composes the rows you name in every strictness. Cyber Pro composes freely and never holds. A child's "
     "own result review composes freely. Omitted reviewers mean the whole pool. Under Auto ask when another mind's "
     "check could change what you deliver, or when your human asks for a careful check. It is unavailable when "
-    "task review is Off, and it has its own paid-cycle count. The same subject, "
-    "surface, rules and panel return the settled record free (reused=true); enforcement is recorded and on another "
+    "task review is Off, and it has its own paid-cycle count. The same subject, surface, panel and ask return the "
+    "settled record free (reused=true), even after a guide changed; enforcement is recorded and on another "
     "root never locks anything. Returns JSON {record_id, aggregate, per_question, panel, rows, subject, checklist, "
     "tests, cost, reused, findings} (+ report for subject=system)."
 )

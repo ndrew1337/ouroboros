@@ -1,6 +1,10 @@
 /** One stack of layers over the room (docs/DESIGN.md "Shell", plan P2).
  *
  * A layer is anything that lies over the page and is dismissed as one thing: the phone drawer and the Project panel.
+ * One page part is a layer too: Files' file shown alone on a narrow page (files.js), so Escape and Back leave it the way
+ * Back to folder does. It is pushed with `page: true` and lies in the page, under every overlay: opened while the
+ * drawer is open (a slow read finishing), it takes its place beneath the drawer, which Escape and Back close first. It
+ * is not modal and its focus is the owner's (`focus: false`, no opener): the stack neither moves focus in nor back.
  * Dialogs, menus and the work list keep their own focus traps and Escape. Every way of leaving ends in the same place:
  * Escape, the scrim, × call `pop()`, which closes exactly one layer, the top one, through the layer's own `onClose`;
  * the browser's or Android's Back and Telegram's Back call `back()`, which first gives an open dialog over the layer
@@ -17,7 +21,8 @@
  * Inert: a modal layer makes the rest of the shell inert (siblings along its ancestor path inside the shell's
  * container, never `<body>`'s other children, where dialogs, menus and toasts opened over the layer live; what the page
  * had already made inert is left alone); a non-modal layer (the docked Project panel) leaves the sidebar live. Focus goes
- * into the layer on open and returns to the opener on close. Every listener has a disposer.
+ * into the layer on open and returns to the opener on close, unless it was moved out to something still live. Every
+ * listener has a disposer.
  *
  * One commit per change: `batch(fn, { inertAfter })` runs the owner's pushes and removes and settles once at its end:
  * one history reconcile, one snapshot to the listeners (Telegram's Back follows once, never hide-then-show), focus
@@ -126,10 +131,14 @@ export function createLayerStack({ win = globalThis.window, doc = globalThis.doc
         if (!el.hasAttribute?.('tabindex')) el.tabIndex = -1;
         try { el.focus({ preventScroll: true }); } catch { /* detached */ }
     }
+    // The opener takes back a focus the layer held or that is lost; one the person moved beside a live layer (Main's
+    // field beside the docked Project) stays theirs.
     function restoreFocus(layer) {
-        const opener = layer.opener;
+        const opener = layer.opener, at = doc?.activeElement;
         if (!opener || opener.isConnected === false || typeof opener.focus !== 'function') return;
         if (opener.closest?.('[inert]')) return;
+        const outside = at && at !== doc.body && !layer.el?.contains?.(at);
+        if (outside && !at.closest?.('[inert]') && !at.closest?.('[hidden]')) return;
         try { opener.focus({ preventScroll: true }); } catch { /* gone */ }
     }
 
@@ -195,8 +204,9 @@ export function createLayerStack({ win = globalThis.window, doc = globalThis.doc
         }
     }
 
-    /** Open: `{ id, el, modal = true, onClose(reason), opener = activeElement, focus, live }` (`live`: elements
-     * beside the layer that stay usable under a modal one, its scrim). A known id keeps its
+    /** Open: `{ id, el, modal = true, onClose(reason), opener = activeElement, focus, live, page }` (`live`: elements
+     * beside the layer that stay usable under a modal one, its scrim; `page`: a part of the page, placed under every
+     * overlay already open). A known id keeps its
      * place in the stack and takes the new facts (an owner that syncs its state calls push on every sync). */
     function push(layer) {
         if (disposed || !layer || !layer.id) return false;
@@ -206,12 +216,19 @@ export function createLayerStack({ win = globalThis.window, doc = globalThis.doc
                 Object.assign(existing, layer);
                 return true;
             }
-            const active = doc?.activeElement && doc.activeElement !== doc.body ? doc.activeElement : null;
-            // A layer that replaces another in one commit (the Project picked in the drawer) returns focus where the
-            // one it replaces would have: a row inside the closed drawer cannot take it back.
-            const replaced = change.removed.find((gone) => active && gone.el?.contains?.(active));
-            const entry = { modal: true, opener: replaced ? replaced.opener : active, ...layer };
-            stack.push(entry);
+            // A layer that replaces others in one commit (the Project picked in the drawer) returns focus where they
+            // would have: the opener is followed out of every layer the commit retired (a row in the closed drawer,
+            // then the ☰ that opened the drawer in the replaced room) to the first one that stays.
+            const retired = new Set(change.removed);
+            let opener = doc?.activeElement && doc.activeElement !== doc.body ? doc.activeElement : null, gone;
+            while (opener && (gone = [...retired].find((left) => left.el?.contains?.(opener)))) {
+                retired.delete(gone);
+                opener = gone.opener;
+            }
+            const entry = { modal: true, opener, ...layer };
+            const under = entry.page ? stack.findIndex((open) => !open.page) : -1;
+            if (under < 0) stack.push(entry);
+            else stack.splice(under, 0, entry);
             change.pushed.add(entry.id);
             return true;
         });

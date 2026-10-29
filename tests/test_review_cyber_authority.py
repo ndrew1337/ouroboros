@@ -71,7 +71,7 @@ def test_review_status_readiness_matches_the_actual_gate(candidate, access):  # 
     projection = json.loads(_handle_review_status(candidate))
     assert "repo_commit_ready" not in projection, "no readiness axis is projected under either authority"
     assert not projection["open_obligations"] and not projection["commit_readiness_debts"]
-    assert not projection["advisory_runs"]
+    assert "advisory_runs" not in projection and "advisory_run_archive" not in projection
     assert not load_state(candidate.drive_root).advisory_runs
 
 

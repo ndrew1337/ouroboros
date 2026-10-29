@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 REVIEW_LEDGER_SCHEMA_VERSION = 1
 LEDGER_SUBDIR = "review_ledger"
 INDEX_NAME = "index.jsonl"
+PREFLIGHT_HEADS_NAME = "preflight_heads.json"  # checkout key -> its newest preflight record id ("" = any)
 LEDGER_LOCK_NAME = "review_ledger.lock"
 INDEX_MAX_BYTES = 2_000_000  # hot-index rotation threshold; segments stay beside it
 UNKNOWN = "unknown"
@@ -294,6 +295,7 @@ def _payload(record: Any) -> Dict[str, Any]:
 
 def _write_and_index(drive_root: Any, path: pathlib.Path, payload: Dict[str, Any]) -> None:
     write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _keep_preflight_head(drive_root, payload)  # first, so a rotation cannot archive what the heads seed from
     _rotate_index_if_needed(drive_root)
     append_jsonl(index_path(drive_root), index_row(drive_root, payload))
 
@@ -366,25 +368,20 @@ def note_author_decision(drive_root: Any, record_id: str, decision: Dict[str, An
         return None
 
 
-def note_commit_landing(drive_root: Any, record_id: str, landing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Record that this candidate's Git command succeeded. Same landing twice is a no-op."""
-    from ouroboros.review_doctrine import validate_landing, with_landing
+def note_commit_landing(drive_root: Any, record_id: str, landing: Optional[Dict[str, Any]],
+                        commit: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Record what this record's successful Git command landed (``review_doctrine.landed_record``):
+    the commit against the reviewed tree, and the author's landing on a decision it holds. A repeat is a no-op."""
+    from ouroboros.review_doctrine import landed_record
+    from ouroboros.review_history import retain_author_decision
 
     try:
-        checked = validate_landing(landing)
-        current = load_record(drive_root, record_id) if checked is not None else None
-        author = current.get("author_decision") if isinstance(current, dict) else None
-        if checked is None or not isinstance(author, dict) or author.get("landing") == checked:
+        current = load_record(drive_root, record_id)
+        if current is None or landed_record(current, landing, commit, recorded_at="") is None:
             return current
-
-        def _mutate(payload: Dict[str, Any]) -> Dict[str, Any]:
-            from ouroboros.review_history import retain_author_decision
-
-            payload["author_decision"] = retain_author_decision(
-                drive_root, payload, with_landing(payload.get("author_decision") or {}, checked))
-            return payload
-
-        return revise_record(drive_root, record_id, _mutate)
+        return revise_record(drive_root, record_id, lambda payload: landed_record(
+            payload, landing, commit, recorded_at=utc_now_iso(),
+            retain=lambda body, decision: retain_author_decision(drive_root, body, decision)) or payload)
     except (OSError, ValueError):
         log.warning("review ledger commit landing not recorded on %s", record_id, exc_info=True)
         return None
@@ -562,26 +559,67 @@ def surface_records(drive_root: Any, surface: str) -> List[Dict[str, Any]]:
     return _index_rows(drive_root, surface=str(surface or ""))
 
 
-def latest_preflight_record(drive_root: Any, *, repo_key: str = "") -> Optional[Dict[str, Any]]:
-    """The newest ``surface=preflight`` record of one checkout — the look
-    ``review_status`` reports fresh or ``stale_from_edit`` and a worktree mutation
-    marks stale (D5-002). ``repo_key`` is ``review_state.make_repo_key`` of the
-    checkout; empty matches any. Reads the hot index only; a record that cannot be
-    read or names no root is skipped, never reported as a look."""
+def _head_keys(root: str) -> tuple:
+    """The heads a preflight record of ``root`` holds: any checkout's, and its own while it is on disk."""
     from ouroboros.review_state import make_repo_key
 
-    for row in recent_records(drive_root, limit=50, hot_only=True, surface="preflight"):
-        try:
-            record = load_record(drive_root, str(row.get("record_id") or ""))
-        except ValueError:
-            continue
+    return ("", make_repo_key(pathlib.Path(root))) if pathlib.Path(root).exists() else ("",)
+
+
+def _preflight_heads(drive_root: Any) -> Dict[str, Any]:
+    """Current pointers, or a bounded legacy view with explicit coverage; never
+    rebuild unreadable saved heads or infer absence from a partial import."""
+    path = ledger_dir(drive_root) / PREFLIGHT_HEADS_NAME
+    if path.exists():
+        data = _read_json(path)
+        if (data is None or not isinstance(data.get("heads"), dict)
+                or not isinstance(data.get("complete"), bool)
+                or any(not isinstance(v, str) or not v for v in data["heads"].values())):
+            raise ValueError(f"review ledger preflight heads {path} are unreadable")
+        return data
+    rows = recent_records(drive_root, limit=50, hot_only=True, surface="preflight")
+    data = {"heads": {}, "complete": len(rows) < 50 and not archived_segments_exist(drive_root)}
+    for row in rows:
+        record_id = str(row.get("record_id") or "")
+        record = load_record(drive_root, record_id)
         root = str(((record or {}).get("subject") or {}).get("root") or "")
-        if not record or not root:
+        if not root:
+            data["complete"] = False
             continue
-        if repo_key and make_repo_key(pathlib.Path(root)) != repo_key:
-            continue
-        return record
-    return None
+        for key in _head_keys(root):
+            data["heads"].setdefault(key, record_id)
+    return data
+
+
+def _keep_preflight_head(drive_root: Any, payload: Dict[str, Any]) -> None:
+    """Publish under the ledger lock; pruning retains incomplete coverage."""
+    path = ledger_dir(drive_root) / PREFLIGHT_HEADS_NAME
+    root = str((payload.get("subject") or {}).get("root") or "") if payload.get("surface") == "preflight" else ""
+    if path.exists() and not root:
+        return
+    try:
+        data = _preflight_heads(drive_root)
+    except (OSError, ValueError):
+        log.warning("preflight heads not updated; source record and index retained", exc_info=True)
+        return
+    heads = data["heads"]
+    heads.update(dict.fromkeys(_head_keys(root) if root else (), payload["record_id"]))
+    kept = {key: record_id for key, record_id in heads.items() if not key or pathlib.Path(key).exists()}
+    data.update(heads=kept, complete=data["complete"] and len(kept) == len(heads))
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def latest_preflight_record(drive_root: Any, *, repo_key: str = "") -> Optional[Dict[str, Any]]:
+    """Read the checkout's current look (empty key: any). An incomplete imported
+    window or unreadable source raises ValueError rather than declaring no look."""
+    data = _preflight_heads(drive_root)
+    record_id = data["heads"].get(repo_key, "")
+    if not record_id and not data["complete"]:
+        raise ValueError("preflight history incomplete for this checkout; the look may be outside the retained window")
+    record = load_record(drive_root, record_id) if record_id else None
+    if record_id and record is None:
+        raise ValueError(f"review ledger preflight head {record_id} names no record")
+    return record
 
 
 def normalize_model_name(text: Any) -> str:
@@ -1121,16 +1159,16 @@ def _assigned_rows(assigned: Any) -> List[str]:
     return sorted(rows)
 
 
-def reuse_key_digest(*, surface: str, kind: str, root: str, diff_sha: str, tree_sha: str, rules_sha: str, layer: str,
+def reuse_key_digest(*, surface: str, kind: str, root: str, diff_sha: str, tree_sha: str, layer: str,
                      assigned: Any, enforcement: str, contract_fp: str, round_sha: str = "") -> str:
-    """sha256 of the reuse identity (§6 "Subject operation", identity a): surface,
-    subject kind/root/diff/tree, the rules source, the checklist layer, the assigned
-    composition, the enforcement and the review contract — plus the logical round
-    (``review_subject.review_round_sha``: rebuttal, author questions, goal, scope,
-    resolved base/head), so only the IDENTICAL request reuses a settled answer."""
+    """sha256 of the reuse identity (§6 "Subject operation", identity a): surface, subject
+    kind/root/diff/tree, checklist layer, assigned composition, enforcement and review contract,
+    plus the logical round (``review_subject.review_round_sha``: rebuttal, author questions, goal,
+    scope, resolved base/head), so only the IDENTICAL request reuses a settled answer. Governance
+    text never enters (DEVELOPMENT 05): the record keeps the rules it was judged by as provenance."""
     fields = {"surface": str(surface or ""), "kind": str(kind or ""), "root": str(root or ""),
-              "diff_sha": str(diff_sha or ""), "tree_sha": str(tree_sha or ""), "rules_sha": str(rules_sha or ""),
-              "layer": str(layer or ""), "assigned": _assigned_rows(assigned), "enforcement": str(enforcement or ""),
+              "diff_sha": str(diff_sha or ""), "tree_sha": str(tree_sha or ""), "layer": str(layer or ""),
+              "assigned": _assigned_rows(assigned), "enforcement": str(enforcement or ""),
               "contract_fp": str(contract_fp or ""), "round_sha": str(round_sha or "")}
     return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -1245,7 +1283,7 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
     enforcement, contract_fp = str(facts.get("enforcement") or ""), str(facts.get("review_contract_fingerprint") or "")
     reuse_key = str(facts.get("reuse_key") or structured.get("reuse_key") or "") or reuse_key_digest(
         surface=surface, kind=subject["kind"], root=subject["root"], diff_sha=subject["diff_sha"], tree_sha=subject["tree_sha"],
-        rules_sha=checklist["rules_source"]["sha"], layer=checklist["layer"], assigned=rows, enforcement=enforcement,
+        layer=checklist["layer"], assigned=rows, enforcement=enforcement,
         contract_fp=contract_fp, round_sha=round_sha_of(
             rebuttal_sha=str(facts.get("rebuttal_sha256") or ""), questions=facts.get("author_questions") or [],
             goal=str(facts.get("goal") or ""), scope=str(facts.get("scope") or ""),

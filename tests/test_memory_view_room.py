@@ -86,9 +86,10 @@ _FOCUS = {"initiator": "consciousness", "usage_category": "consciousness", "wake
       "source": "promote_chat_to_task"}, 2),
     ({"id": "e1", "type": "evolution", "chat_id": 1, "metadata": {"evolution_transaction": {}}}, 2),
     ({"id": "s1", "type": "deep_self_review", "chat_id": 1, "_require_worker_pool": True}, 2),
-    ({"id": "w1", "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}, 2),
+    # A wake leaves one eighth, as a direct turn does; the work it starts is a root of its own (owner, 29.10).
+    ({"id": "w1", "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}, 1),
     ({"id": "f1", "type": "presence", "source": "presence", "chat_id": 7, "_is_direct_chat": True,
-      "_presence_turn": True, "metadata": {**PRESENCE, **_FOCUS}}, 2),  # a focus wake
+      "_presence_turn": True, "metadata": {**PRESENCE, **_FOCUS}}, 1),  # a focus wake
 ])
 def test_the_start_work_room_follows_task_facts_not_the_task_type(tmp_path, task, levels):
     shared.projects(tmp_path)
@@ -155,7 +156,9 @@ def test_the_working_sources_line_lists_exactly_what_the_spec_loads():
     loaded, missing = line.split("Loaded above: ", 1)[1].split(" Not loaded: ", 1)
     assert "the top level of your story" in loaded and "the page of your parent's room" in loaded
     assert "the words of my human that caused this work" in loaded and "raw conversations" in missing
-    assert "knowledge (overview, index, patterns)" in missing and "knowledge" not in loaded
+    knowledge = "knowledge (overview, index, project journal and workpad"
+    assert f"{knowledge}; the index arrives with your first delegation)" in missing and "knowledge" not in loaded
+    assert "patterns" not in line and "knowledge_list, knowledge_read" in missing  # the index's own reader is named
     assert "shared biography" not in line
     # Each field moves its item: the line changes with the spec, never independently of it.
     for field, value, gone, now_missing in (
@@ -171,8 +174,8 @@ def test_the_working_sources_line_lists_exactly_what_the_spec_loads():
         if now_missing:
             assert now_missing in new_missing, field
         if field == "knowledge":
-            assert "knowledge (overview, index, patterns)" in new_loaded
-            assert "knowledge (overview, index, patterns)" not in new_missing
+            assert f"{knowledge})" in new_loaded
+            assert knowledge not in new_missing and "first delegation" not in changed
     nanny = mv.working_sources_line(dataclasses.replace(mv.ROLE_DEFAULTS["nanny"], room_id="1"))
     assert "the top level of your story" in nanny.split(" Not loaded: ", 1)[1]
     # With a captured view the owner's words are named only when their block was drawn.
@@ -396,7 +399,7 @@ def test_a_page_seals_rows_only_in_its_room_and_a_row_in_two_rooms_stays_open_in
     assert lane1.startswith("### Open conversation since 2026-09-05 10:03")
     assert _addr(rows[18]) in lane1  # sealed in the transport room, still open in Main
     wake, wake_text = _view(tmp_path, {"id": "w1", "chat_id": 1, "metadata": {"usage_category": "consciousness"}})
-    transport = next(room for room in wake.live_rooms if room["room_id"] == "777")["facts"]
+    transport = next(room for room in wake.other_rooms if room["room_id"] == "777")["facts"]
     assert (transport["rows"], transport["people"], transport["pages"]) == (1, 0, 1)
 
 
@@ -453,7 +456,7 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     live = _section(text, "## Live rooms")
     assert (f"### Project Beta [chat_id={beta}] — open 2026-09-05 10:15 → 2026-09-05 10:16; people 1, mine 1, task facts 0, "
             f"~20 chars; my notes not yet sealed: 0; no page of this room yet\nmemory_read(room_id='{beta}', rows=true)") in live
-    quiet = [room for room in snapshot.live_rooms if not room["notes"] and not room["words"]]
+    quiet = [room for room in (*snapshot.live_rooms, *snapshot.other_rooms) if not room["notes"] and not room["words"]]
     assert [room["room_id"] for room in quiet] == [str(rooms["alpha"]), beta, "777"]
     assert mv._rooms_line(quiet) == (
         "3 open rooms; open 2026-09-05 10:13 → 2026-09-05 10:20; people 3, mine 2, task facts 1, "
@@ -475,7 +478,7 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     assert (f"{head}task facts 9, ~{chars - sealed} chars; my notes not yet sealed: 1; pages of this room: 1, "
             "last covered row 2026-09-05 10:10\n") in text
     assert "sealed up to" not in text and "sealed through" not in text and "frontier" not in text
-    quiet = [room for room in snapshot.live_rooms if not room["notes"] and not room["words"]]
+    quiet = [room for room in (*snapshot.live_rooms, *snapshot.other_rooms) if not room["notes"] and not room["words"]]
     assert mv._rooms_line(quiet).startswith(
         "3 open rooms; open 2026-09-05 10:13 → 2026-09-05 10:17; people 2, mine 2, task facts 1, ")
     assert "; pages of these rooms: 1, last covered row 2026-09-05 10:20; memory_read(" in mv._rooms_line(quiet)

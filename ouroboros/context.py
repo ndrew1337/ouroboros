@@ -89,9 +89,10 @@ def build_user_content(task: Dict[str, Any]) -> Any:
     metadata = task.get("metadata") if isinstance(task.get("metadata"), dict) else {}
     author = metadata.get("objective_author")
     if isinstance(author, dict) and author.get("kind") == "task":
-        text = (f"[OBJECTIVE_AUTHOR] The objective below was drafted by task {author.get('task_id')}, "
-                "not spoken by the owner. The owner's words retain their own source. "
-                "[/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
+        from ouroboros.owner_words import objective_author_line
+
+        text = (f"[OBJECTIVE_AUTHOR] The objective below was {objective_author_line({'objective_author': author})}. "
+                "My human's words keep their own source. [/OBJECTIVE_AUTHOR]\n\n" + str(text or ""))
     image_b64 = task.get("image_base64")
     if not image_b64 and task.get("image_source_ref"):
         # A prestart Pause has original input, but no checkpointed transcript.
@@ -221,11 +222,20 @@ def _build_attachment_image_blocks(task: Dict[str, Any]) -> List[Dict[str, Any]]
     return blocks
 
 
-def _scheduled_tasks_digest(env: Any, *, limit: int = 8) -> Optional[Dict[str, Any]]:
+def _scheduled_tasks_digest(env: Any, task: Optional[Dict[str, Any]] = None, *, limit: int = 8) -> Optional[Dict[str, Any]]:
+    """The schedule digest; a Presence caller's (the tool's own caller rule) holds only its own follow-ups (#1589)."""
     from datetime import datetime, timezone
+    from types import SimpleNamespace
+    from ouroboros.dialogue_provenance import presence_caller_binding
+    from supervisor.queue_schedules import presence_promise_store
     from supervisor.schedule_view import digest
     data = schedule_store_fact(env)
-    return data if "unavailable" in data else digest(data["tasks"], datetime.now(timezone.utc), limit=limit)
+    if "unavailable" in data:
+        return data
+    binding = presence_caller_binding(SimpleNamespace(task_metadata=(task or {}).get("metadata"),
+                                                      task_contract=(task or {}).get("task_contract")))
+    return digest((data if binding is None else presence_promise_store(data, binding))["tasks"],
+                  datetime.now(timezone.utc), limit=limit)
 
 
 # The owner-surface note is shared by the runtime-section builder.
@@ -316,6 +326,7 @@ def _task_authority_projection(env: Any, task: Dict[str, Any]) -> Dict[str, Any]
 def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, scheduled_tasks_digest_out: Optional[Dict[str, Any]] = None,
                           captured_at: str = "", supplementary_messages_out: Optional[List[Dict[str, Any]]] = None) -> str:
     declared = task_input_sources(task) == "declared"
+    canonical_root = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
     try:
         git_branch, git_sha = get_git_info(env.repo_dir)
     except Exception:
@@ -384,19 +395,19 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
 
     runtime_data["effort_range"] = {**effort_range(), "binds": effort_range_binds(task.get("metadata"))}
     # What Ouroboros owns on disk and its body's dated facts: facts, no threshold.
-    runtime_data.update(body_facts(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None)
-                                                or env.drive_root), observed_at=runtime_data["context_captured_at"]))
+    runtime_data.update(body_facts(canonical_root, observed_at=runtime_data["context_captured_at"]))
     runtime_data.update(_task_authority_projection(env, task))
     if supplementary_messages_out is not None:
-        from ouroboros.main_context_authority import predecessor_notes_message
+        from ouroboros.main_context_authority import late_answer_notes_message, predecessor_notes_message
         from ouroboros.review_history_view import capture_review_history_messages
 
-        canonical_root = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
         runtime_data, supplemental = capture_review_history_messages(runtime_data, task_id=str(task.get("id") or ""),
                                                                      drive_root=canonical_root)
-        # The predecessor mind's notes are the first row after the assignment (never a declared input).
-        notes = None if declared else predecessor_notes_message(task, drive_root=canonical_root)
-        supplementary_messages_out.extend([*([notes] if notes else []), *supplemental])
+        # The predecessor mind's notes are the first row after the assignment, then a late answer's
+        # asker's, as information only (neither is a declared input).
+        notes = [] if declared else [row for row in (predecessor_notes_message(task, drive_root=canonical_root),
+                                                     late_answer_notes_message(task, drive_root=canonical_root)) if row]
+        supplementary_messages_out.extend([*notes, *supplemental])
     if declared:
         runtime_data["task_constraint"] = task.get("task_constraint") or getattr(ctx, "task_constraint", {})
     runtime_data["operational_reality_rule"] = (
@@ -491,7 +502,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
         log.debug("Failed to build queue digest for context", exc_info=True)
     if budget_info:
         runtime_data["budget"] = budget_info
-    schedule_digest = None if declared else _scheduled_tasks_digest(env)
+    schedule_digest = None if declared else _scheduled_tasks_digest(env, task)
     if schedule_digest:
         runtime_data["scheduled_tasks"] = schedule_digest
         if scheduled_tasks_digest_out is not None:
@@ -594,9 +605,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
         from ouroboros.task_tree_ledger import tree_ledger_tail_digest
         _root_id = str(task.get("root_task_id") or task.get("id") or "")
         from ouroboros.tool_access import canonical_data_root
-        _tree_root = (canonical_data_root(ctx) if ctx is not None else pathlib.Path(
-            task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root
-        ).resolve(strict=False))
+        _tree_root = canonical_data_root(ctx) if ctx is not None else canonical_root.resolve(strict=False)
         _tree_digest = tree_ledger_tail_digest(
             _root_id, limit=40, data_root=_tree_root,
         ) if _root_id else ""
@@ -634,8 +643,7 @@ def build_knowledge_sections(
     # One mind keeps its authored common orientation across rooms. The generated
     # inventory is navigation, not a substitute for that understanding; a
     # project's shelf adds focus without hiding the common corpus.
-    from ouroboros.knowledge import (OVERVIEW_TOPIC, knowledge_index_view,
-                                     read_knowledge_note, resolve_knowledge_address)
+    from ouroboros.knowledge import OVERVIEW_TOPIC, read_knowledge_note, resolve_knowledge_address
 
     pid = str(project_id or "").strip()
     global_address = resolve_knowledge_address(env.drive_path("memory").parent, OVERVIEW_TOPIC, "global")
@@ -651,25 +659,8 @@ def build_knowledge_sections(
         sections.append(_SHARED_UNDERSTANDING_GAP)
     except (OSError, UnicodeDecodeError) as exc:
         sections.append(f"Shared understanding source unavailable: knowledge_read(topic='{OVERVIEW_TOPIC}', scope='global'). {type(exc).__name__}.")
-    knowledge_indexes = [(global_address,
-                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
-                          "knowledge index")]
-    if pid:
-        from ouroboros.project_facts import project_knowledge_dir
-
-        project_address = resolve_knowledge_address(project_knowledge_dir(pid).parents[2], "topic", f"project:{pid}")
-        knowledge_indexes.append((project_address,
-                                  f"## Project knowledge ({pid})", "project knowledge index"))
-    for address, header, label in knowledge_indexes:
-        # Every shelf and overview branch projects the current source state, even
-        # when a previous writer could not publish its generated index.
-        try:
-            text = knowledge_index_view(address, overview=overview)
-        except (OSError, UnicodeDecodeError) as exc:
-            text = f"Knowledge navigation unavailable: {type(exc).__name__}; knowledge_list(scope={address.scope!r})."
-        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
-            log.warning("context: %s is large (%d chars)", label, len(text))
-        sections.append(f"{header}\n\n{text}")
+    sections.extend(knowledge_navigation_sections(global_address.canonical_root, pid, overview=overview,
+                                                  warn_large=warn_large))
     if pid:
         # Bounded per-project journal tail + workpad (multi-project, v6.32.0):
         # the project's durable progress memory rides along with its knowledge.
@@ -697,6 +688,35 @@ def build_knowledge_sections(
     return sections
 
 
+def knowledge_navigation_sections(root: Any, project_id: str = "", *, overview: Any = None,
+                                  warn_large: bool = False) -> List[str]:
+    """The global shelf's knowledge index and a project shelf's, under their headings: one rendering
+    for the integrating context and for a helper's first delegation (``delegation_knowledge_index``).
+    ``overview`` is the global note its caller already read, if any."""
+    from ouroboros.knowledge import OVERVIEW_TOPIC, knowledge_index_view, resolve_knowledge_address
+
+    pid = str(project_id or "").strip()
+    knowledge_indexes = [(resolve_knowledge_address(root, OVERVIEW_TOPIC, "global"),
+                          "## Knowledge base\n\nGlobal navigation: knowledge_list(scope='global'); read linked topics with knowledge_read(topic=..., scope='global').",
+                          "knowledge index")]
+    if pid:
+        project_address = resolve_knowledge_address(root, "topic", f"project:{pid}")
+        knowledge_indexes.append((project_address,
+                                  f"## Project knowledge ({pid})", "project knowledge index"))
+    sections: List[str] = []
+    for address, header, label in knowledge_indexes:
+        # Every shelf and overview branch projects the current source state, even
+        # when a previous writer could not publish its generated index.
+        try:
+            text = knowledge_index_view(address, overview=overview)
+        except (OSError, UnicodeDecodeError) as exc:
+            text = f"Knowledge navigation unavailable: {type(exc).__name__}; knowledge_list(scope={address.scope!r})."
+        if warn_large and len(text) > _LARGE_CONTEXT_SECTION_CHARS:
+            log.warning("context: %s is large (%d chars)", label, len(text))
+        sections.append(f"{header}\n\n{text}")
+    return sections
+
+
 _SECTION_BUDGETS = {"scratchpad": SCRATCHPAD_SECTION_BUDGET_CHARS, "identity": 80_000, "registry": 30_000,
                     "world": WORLD_SECTION_BUDGET_CHARS}
 
@@ -707,78 +727,21 @@ def _warn_if_over_budget(name: str, content: str) -> None:
         log.warning("Context section '%s' exceeds budget: %d chars > %d", name, len(content), budget)
 
 
-def _render_scratchpad_for_context(memory: "Memory", budget: int) -> str:
-    """Render the scratchpad SECTION BODY for context, with block-boundary degradation.
+def _scratchpad_for_context(memory: "Memory", ctx: Any = None) -> Tuple[str, str]:
+    """``(source, body)``: the whole working memory, rendered from its canonical blocks.
 
-    ibl-2b09abdadd25: when scratchpad.md exceeds the consumer budget, return
-    the newest WHOLE blocks that fit (drop oldest-first) instead of the raw
-    file. Always retain the single newest block (even if it alone exceeds
-    budget) paired with an in-band gap marker (BIBLE P1 — never silent).
-    Falls back to raw markdown when scratchpad_blocks.json is absent/empty
-    (legacy flat scratchpad) so a missing source-switch does not introduce
-    silent amnesia. Block-boundary cuts only — never mid-block, never
-    mid-string. The caller wraps the returned body with the section header
-    ("## Scratchpad (from `memory/scratchpad.md` ...)") inline, same as before.
-
-    The kept slice is rendered by the writer's own
-    ouroboros.memory.render_scratchpad_markdown, so the degraded body is the
-    same markdown, in the same newest-first order, as the prefix of
-    scratchpad.md it stands in for.
+    The scratchpad is tier-0 core (``context_layout.TIER0_ALWAYS_FULL``): no build drops a
+    block for age or size (#918); a window too small for the core is ``memory_floor``'s
+    measured fact. Blocks render through the writer's own ``render_scratchpad_markdown``, so a
+    projection a failed regeneration left stale never hides an active block. With no blocks
+    (none yet, or a flat pre-block scratchpad) the file itself is the section. The fold
+    journal's reader is qualified for ``ctx``, the focus reading this section.
     """
-    raw = memory.load_scratchpad()
-    if len(raw) <= budget:
-        return raw
-
     blocks = memory.load_scratchpad_blocks()
     if not blocks:
-        # Legacy fallback: scratchpad.md has content but blocks.json is
-        # missing or unparseable. Return raw unchanged; we cannot trim by
-        # block. _has_retired_flat_scratchpad_without_blocks elsewhere
-        # already prevents NEW writes on this state.
-        return raw
-
-    # Render through the writer's own renderer so a degraded build reads in
-    # the SAME order (newest-first) as the scratchpad.md it stands in for.
-    journal_pointer = memory.journal_path().exists()
-
-    def _build(kept: List[Dict[str, Any]]) -> str:
-        return render_scratchpad_markdown(kept, journal_pointer=journal_pointer)
-
-    n_total = len(blocks)
-    # Find the largest k (newest-first kept) such that the section fits.
-    n_kept = n_total
-    while n_kept > 1:
-        section = _build(blocks[-n_kept:])
-        if len(section) <= budget:
-            break
-        n_kept -= 1
-    # Always retain at least the single newest, even if it alone exceeds
-    # budget (BIBLE P1 — never silent, paired with the gap marker below).
-    n_kept = max(1, n_kept)
-    section = _build(blocks[-n_kept:])
-    omitted = n_total - n_kept
-    # Fire the gap marker whenever older blocks were dropped OR the retained
-    # newest block(s) alone still exceed budget (n_kept forced to 1 above) —
-    # both are a silent-looking truncation from the consumer's point of view
-    # and BIBLE P1 requires either be disclosed in-band, not just logged.
-    # The marker names the LIVE store: a context build retires nothing, so the
-    # dropped blocks are still in scratchpad.md (the journal only holds blocks
-    # the writer actually retired/replaced — pointing there cannot resolve).
-    if omitted > 0 or len(section) > budget:
-        if omitted > 0:
-            first_ts = str(blocks[0].get("ts", ""))[:16]
-            last_ts = str(blocks[omitted - 1].get("ts", ""))[:16]
-            reason = (
-                f"{omitted} oldest block(s) ({first_ts}..{last_ts}) omitted from "
-                "this context build for size; they are still live"
-            )
-        else:
-            reason = "newest block exceeds the section budget"
-        section += (
-            f"\n⚠️ [budget gap: {reason} — re-read the full working memory with "
-            "`read_file(root='runtime_data', path='memory/scratchpad.md', start_line=1)`.]\n"
-        )
-    return section
+        return "memory/scratchpad.md", memory.load_scratchpad()
+    return "memory/scratchpad_blocks.json", render_scratchpad_markdown(
+        blocks, journal_pointer=memory.journal_path().exists(), journal_reader=memory.scratchpad_journal_reader(ctx))
 
 
 def build_memory_sections(memory: Memory, partition: str = "all", *, include_scratchpad: bool = True,
@@ -790,20 +753,10 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
     include_volatile = partition in {"all", "volatile"}
 
     if include_volatile and include_scratchpad:
-        scratchpad_raw = memory.load_scratchpad()
-        # WARNING is preserved on the RAW (pre-trim) value: it signals the rot
-        # class is present, even when the helper trims it down for the consumer.
-        # ibl-2b09abdadd25 closes the gap where the trimmed output alone would
-        # never re-fire the warning.
-        _warn_if_over_budget("scratchpad", scratchpad_raw)
-        scratchpad_body = _render_scratchpad_for_context(memory, SCRATCHPAD_SECTION_BUDGET_CHARS)
-        # A trimmed body must not carry the "do not re-read" instruction: the
-        # omitted blocks are only reachable by re-reading the live file.
-        if scratchpad_body != scratchpad_raw:
-            header = "## Scratchpad (from `memory/scratchpad.md` — PARTIAL: trimmed to the section budget; re-read via read_file(root='runtime_data', path='memory/scratchpad.md') for the full working memory)"
-        else:
-            header = "## Scratchpad (from `memory/scratchpad.md` — already loaded; do not re-read via read_file(root='runtime_data', path='memory/scratchpad.md'))"
-        sections.append(header + "\n\n" + scratchpad_body)
+        source, scratchpad_body = _scratchpad_for_context(memory, ctx)
+        _warn_if_over_budget("scratchpad", scratchpad_body)  # a log line only: the section is never cut
+        sections.append(f"## Scratchpad (from `{source}` — already loaded; do not re-read via "
+                        "read_file(root='runtime_data', path='memory/scratchpad.md'))\n\n" + scratchpad_body)
 
     if include_stable:
         identity_raw = memory.load_identity()
@@ -1120,10 +1073,11 @@ def _capture_context_core(
             )
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
+    review_activity: List[str] = []  # each seat's price and last review: the changing part's, never B's
     try:
         from ouroboros.subagent_runtime import review_facts_block
 
-        semi_stable_parts.append(review_facts_block())
+        semi_stable_parts.append(review_facts_block(activity_out=review_activity))
     except Exception:
         log.warning("Failed to build the Review block", exc_info=True)
     semi_stable_parts.extend(build_memory_sections(context_memory, partition="stable", ctx=ctx))
@@ -1131,6 +1085,8 @@ def _capture_context_core(
     skills = timed("installed_skills", discover_context_skills, canonical_root)  # shared with the catalog below
     if always_on := always_in_context_section(skills):
         semi_stable_parts.append(always_on)
+    from ouroboros.safety_config import owner_rules_section
+    semi_stable_parts.append(owner_rules_section())  # the Supervisor's read, for every focus and child
     # Knowledge leads the changing block (its edits never cost the cached story) and
     # rides only where the view holds it: a child or nanny reads it by knowledge_read.
     head_parts = (build_knowledge_sections(context_env, project_id=resolve_project_id(task))
@@ -1152,8 +1108,9 @@ def _capture_context_core(
     from ouroboros.delegate_supervision import _attempt_key
     attempt_key = _attempt_key(ctx if ctx is not None else SimpleNamespace(task_attempt=task.get("_attempt")))
     health_section = build_health_invariants(context_env, task_id=str(task.get("id") or ""),
-                                             active_root=active_root, attempt_key=attempt_key, view_role=view_spec.role)
+                                             active_root=active_root, attempt_key=attempt_key)
     dynamic_parts = [health_section] if health_section else []
+    dynamic_parts.extend(review_activity)
     try:
         from ouroboros.subagent_runtime import review_records_block, subagent_supervision_fact_line
         from ouroboros.subagent_metrics import fact_line
@@ -1164,7 +1121,8 @@ def _capture_context_core(
         )))
     except Exception:
         log.warning("Failed to build the Review records block", exc_info=True)
-    dynamic_parts.extend(build_memory_sections(context_memory, partition="volatile", include_scratchpad=not is_child))
+    dynamic_parts.extend(build_memory_sections(context_memory, partition="volatile", include_scratchpad=not is_child,
+                                               ctx=ctx))
 
     registry_digest = _build_registry_digest(context_env)
     if registry_digest:
@@ -1202,7 +1160,7 @@ def _capture_context_core(
         try:
             from ouroboros.review_state import format_status_section, load_state
             advisory_state = load_state(canonical_root)
-            if advisory_state.advisory_runs or advisory_state.latest_attempt():
+            if advisory_state.latest_attempt():
                 advisory_section = format_status_section(
                     advisory_state,
                     repo_dir=pathlib.Path(env.repo_dir),
@@ -1232,6 +1190,7 @@ def _capture_context_core(
             task_metadata.get("presence"),
             str(task.get("id") or ""),
             status_root=canonical_root,  # a forked promoted root finds its binding's work canonically
+            scheduled=bool(task_metadata.get("schedule_occurrence")) and not task.get("_presence_turn"),
         )
         if presence_section:
             dynamic_parts.append(presence_section)

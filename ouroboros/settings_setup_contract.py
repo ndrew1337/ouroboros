@@ -27,6 +27,8 @@ from ouroboros.model_slots import (
     PROCESSING_PREFERENCE_KEY, normalize_model_role_options, normalize_processing_preference,
 )
 from ouroboros.provider_models import parse_claudexor_model, provider_for_model
+from ouroboros.provider_connections import configured_connections, connection_rows, normalize_connections
+from ouroboros.gateway.secret_rows import mask_connections, rehydrate_connections
 
 
 
@@ -151,7 +153,7 @@ for _profile_defaults in _MODEL_DEFAULTS.values():
 _STEPS = _rows(("id", "title", "railCopy", "copy", "footer"), (
     ("accounts", "Connect your accounts", "Subscriptions + API", "Connect Codex to start without an API key, or add an API key or local model. The same account can serve models and agents.", "Add more subscriptions or API access later in Settings → Accounts. Subscription limits and optional provider credits still apply."),
     ("models", "Choose models", "model slots", "Review the visible model defaults derived from your current setup, then edit anything you want before launch.", "Each slot names its source. OpenRouter stays the source for ids such as openai/gpt-5.6-terra; a provider's own key routes that slot straight to the provider."),
-    ("review_mode", "Choose review mode", "Advisory vs blocking", "Decide how strict pre-commit review should be before Ouroboros starts modifying itself.", "Pick both review enforcement and the initial runtime mode before Ouroboros starts."),
+    ("review_mode", "Choose review mode", "Advisory vs blocking", "Reviewers read how Ouroboros understood a request, its plans, its results and its changes. Decide whether their critical findings block the work or only inform Ouroboros.", "Pick both review enforcement and the initial runtime mode before Ouroboros starts."),
     ("budget", "Review limits", "Quota + API budget", "Review subscription quotas and optional API spending limits.", "When subscription quota is exhausted, work waits for renewal or your choice of another account or model. This integration does not enable paid provider credits."),
     ("summary", "Review before launch", "Final check", "Check the final provider, model, review, and budget picture. Ouroboros will save these onboarding values before starting.", "The same onboarding values remain editable later in Settings."),
 ))
@@ -200,7 +202,7 @@ _MODEL_SLOTS = _rows(("slot", "stateKey", "settingKey", "inputId", "label", "not
 ))
 
 _REVIEW_MODES = _rows(("value", "label", "tone", "className", "copy"), (
-    ("advisory", "Advisory", "Flexible", "advisory", "Review still runs. After feedback, Ouroboros can fix, reject or finish; raw reviewer findings remain visible."),
+    ("advisory", "Advisory", "Flexible", "advisory", "Reviewers read plans, results and changes; their findings stay visible and Ouroboros decides what to do with them."),
     ("blocking", "Blocking", "Strict", "blocking", "Outside Cyber Pro Access, unresolved critical review findings block commits. Cyber Pro keeps the findings as evidence for Ouroboros's decision."),
 ))
 
@@ -460,6 +462,7 @@ def build_initial_setup_state(settings: dict, host_mode: str = "desktop") -> dic
         value, error = parse_budget_setting(field["settingKey"], settings.get(field["settingKey"]), use_default_for_blank=True)
         budget_state[field["stateKey"]] = float(field["default"] if error or value is None else value)
     state = {
+        "connections": mask_connections(list(connection_rows(settings.get("OUROBOROS_CONNECTIONS")))),
         "providerProfile": profile,
         "reviewEnforcement": _string(settings.get("OUROBOROS_REVIEW_ENFORCEMENT")) or str(SETTINGS_DEFAULTS["OUROBOROS_REVIEW_ENFORCEMENT"]),
         "runtimeMode": _string(settings.get("OUROBOROS_RUNTIME_MODE")) or str(SETTINGS_DEFAULTS["OUROBOROS_RUNTIME_MODE"]),
@@ -559,6 +562,15 @@ def validate_setup_payload(data: dict, current_settings: dict) -> Tuple[dict, st
             return {}, str(exc)
     secret_keys = secret_provider_setting_keys()
     keys: Dict[str, str] = {}
+    connections = current_settings.get("OUROBOROS_CONNECTIONS", [])
+    if "OUROBOROS_CONNECTIONS" in data:
+        connections, error = normalize_connections(data["OUROBOROS_CONNECTIONS"])
+        if error:
+            return {}, error
+        try:
+            connections = rehydrate_connections(connections, current_settings.get("OUROBOROS_CONNECTIONS"))
+        except ValueError as exc:
+            return {}, str(exc)
     for field in _PROVIDER_FIELDS:
         setting_key = field["settingKey"]
         raw_value = data.get(setting_key)
@@ -599,6 +611,7 @@ def validate_setup_payload(data: dict, current_settings: dict) -> Tuple[dict, st
             continue
         if (
             value
+            and setting_key != "OPENAI_COMPATIBLE_API_KEY"
             and (field.get("inputType") or "password") == "password"
             and len(value) < 10
         ):
@@ -609,6 +622,7 @@ def validate_setup_payload(data: dict, current_settings: dict) -> Tuple[dict, st
         for setting_key, value in keys.items()
         if setting_key not in {"OPENAI_COMPATIBLE_API_KEY", "MINIMAX_REGION", "ZAI_PLAN"}
     )
+    has_remote = has_remote or bool(configured_connections({**keys, "OUROBOROS_CONNECTIONS": connections}))
     has_local = bool(local_source)
     if not has_remote and not has_local and not (pending_subscription or selected_subscription):
         return {}, "Connect Codex, an API provider, or a local model before continuing."
@@ -650,6 +664,8 @@ def validate_setup_payload(data: dict, current_settings: dict) -> Tuple[dict, st
         return {}, "Local-only setups must route at least one model to the local runtime."
 
     prepared = dict(current_settings)
+    if "OUROBOROS_CONNECTIONS" in data:
+        prepared["OUROBOROS_CONNECTIONS"] = connections
     for key in (MODEL_ACCOUNTS_KEY, MODEL_CONTEXT_WINDOWS_KEY, MODEL_PROCESSING_PREFERENCES_KEY):
         if key in data:
             try:

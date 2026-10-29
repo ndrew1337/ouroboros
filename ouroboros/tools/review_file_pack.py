@@ -394,6 +394,11 @@ def span_only_release_carriers(
     return carriers
 
 
+def pack_omission_note(omitted: list[str]) -> str:
+    """The OMISSION NOTE a pack appends for the files it could not put in direct context (``""`` when none)."""
+    return f"⚠️ OMISSION NOTE: {len(omitted)} file(s) omitted from direct context: {', '.join(omitted)}" if omitted else ""
+
+
 def pack_exclusion_note(carriers: list[str], duplicated: list[str] = ()) -> str:
     """The PACK EXCLUSION NOTE a pack appends after its OMISSION NOTE, naming
     every withheld path by class (``""`` when nothing is withheld)."""

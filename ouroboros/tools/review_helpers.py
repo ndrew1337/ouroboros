@@ -14,7 +14,6 @@ import logging
 import os
 import pathlib
 import subprocess
-import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -460,12 +459,17 @@ def load_governance_doc(
     except Exception as exc:
         if on_missing in ("silent", "placeholder"):
             return fallback
-        return f"[⚠️ OMISSION: {rel_path} could not be loaded ({path}): {exc}]"
+        return GOVERNANCE_OMISSION["unloadable"].format(rel_path=rel_path, path=path, error=exc)
     if on_missing == "silent":
         return fallback
     if on_missing == "placeholder":
-        return fallback if fallback else f"({rel_path} not found)"
-    return f"[⚠️ OMISSION: {rel_path} not found at {path}]"
+        return fallback if fallback else GOVERNANCE_OMISSION["placeholder"].format(rel_path=rel_path)
+    return GOVERNANCE_OMISSION["missing"].format(rel_path=rel_path, path=path)
+
+
+# What a brief says in place of a governance document it could not load.
+GOVERNANCE_OMISSION = {"unloadable": "[⚠️ OMISSION: {rel_path} could not be loaded ({path}): {error}]",
+                       "missing": "[⚠️ OMISSION: {rel_path} not found at {path}]", "placeholder": "({rel_path} not found)"}
 # File-classification constants shared by legacy pack helpers and generated atlases.
 
 
@@ -637,6 +641,15 @@ def review_history_with_obligations(history: Any, *, drive_root: Any, repo_root:
     return render_history_with_obligations(history, drive_root=drive_root, repo_root=repo_root, task_id=task_id)
 
 
+def intent_material() -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): the intent and scope sections
+    over fixed placeholders, once per source of the intent (goal with a narrative commit body, scope, commit
+    subject, fallback). The author's words and the exhibits it carries are data."""
+    return [build_goal_section("⟨goal⟩", "", "⟨subject⟩\n\n⟨body⟩", "⟨owner words⟩", "⟨execution⟩", "⟨pulse⟩"),
+            build_goal_section("", "⟨scope⟩"), build_goal_section("", "", "⟨subject⟩"), build_goal_section(),
+            build_scope_section("⟨scope⟩")]
+
+
 def build_scope_section(scope: str = "") -> str:
     """Format the 'Scope of this change' section. Empty string if no scope."""
     if not scope.strip():
@@ -648,19 +661,6 @@ def build_scope_section(scope: str = "") -> str:
         f"Scope affects only pre-existing unchanged code outside the diff.\n"
         f"Issues in untouched legacy code outside the declared scope are advisory at most."
     )
-
-
-def get_advisory_runtime_diagnostics(model: str, prompt_chars: int,
-                                     touched_paths: list) -> dict:
-    """Best-effort advisory dispatch diagnostics; never raises. (The retired
-    Claude-SDK/CLI version probes died with that transport.)"""
-    return {
-        "model": model,
-        "prompt_chars": prompt_chars,
-        "prompt_tokens_approx": max(1, prompt_chars // 4),
-        "touched_paths": touched_paths,
-        "python": sys.executable,
-    }
 
 
 def check_worktree_readiness(
@@ -780,27 +780,6 @@ def _run_review_preflight_tests(ctx: "Any", timeout: Optional[int] = None, *, fo
         return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ERROR", text=(f"⚠️ Unexpected error running tests: {exc}")))
 
 
-def format_advisory_error(prefix: str, result_error: str, stderr_tail: str,
-                          session_id: str, diag: dict) -> str:
-    """Format advisory delivery diagnostics with the ADVISORY_ERROR sentinel."""
-    lines = [
-        f"⚠️ ADVISORY_ERROR: {prefix}",
-        f"  error          : {result_error}",
-        f"  model          : {diag.get('model', '?')}",
-        f"  python         : {diag.get('python', '?')}",
-        f"  prompt_chars   : {diag.get('prompt_chars', '?')}",
-        f"  prompt_tokens  : ~{diag.get('prompt_tokens_approx', '?')}",
-        f"  touched_paths  : {diag.get('touched_paths', [])}",
-    ]
-    if session_id:
-        lines.append(f"  session_id     : {session_id}")
-    if stderr_tail:
-        lines.append("  stderr_tail    :")
-        for ln in stderr_tail.strip().splitlines()[-30:]:
-            lines.append(f"    {ln}")
-    return "\n".join(lines)
-
-
 # v7next F2.3a (D06): moved spans live in their owner leaves; re-exported
 # here so this facade stays the single import surface for callers and tests.
 from ouroboros.tools.review_prompt_text import (  # noqa: E402, F401 -- intentional public re-exports
@@ -860,6 +839,7 @@ from ouroboros.tools.review_file_pack import (  # noqa: E402, F401 -- intentiona
     list_changed_paths_from_git_status,
     list_git_tracked_paths,
     pack_exclusion_note,
+    pack_omission_note,
     parse_changed_paths_from_porcelain,
     parse_changed_paths_from_porcelain_z,
     parse_git_name_status,

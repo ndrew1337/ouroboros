@@ -5,8 +5,9 @@
 // lifecycle button NAMES its action to the one audited server seam, so the owner's
 // buttons and the agent's tool mean exactly the same thing.
 
-import { fetchJson, isStoreMigrating } from './api_client.js';
+import { fetchJson, isStoreMigrating, readStateJson } from './api_client.js';
 import { setInlineStatus } from './ui_helpers.js';
+import { fmt, tr } from './i18n.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { taskCancelPending } from './log_events.js';
 import { waitingModel } from './project_activity.js';
@@ -34,6 +35,20 @@ function esc(value) {
 }
 
 const getJson = (url) => fetchJson(url, { cache: 'no-store' });
+
+/** How long a task has run, in words (DESIGN §6: quantities in human words): «45s» below a minute, then «9 min»,
+ * «1 h 30 min»; never «1700s». A duration the row does not carry is '' — unknown is never «0s». */
+export function elapsedWords(seconds) {
+    const value = Number(seconds);
+    if (seconds === null || seconds === '' || !Number.isFinite(value)) return '';
+    const total = Math.max(0, Math.round(value));
+    if (total < 60) return `${total}s`;
+    const minutes = Math.round(total / 60);
+    if (minutes < 60) return fmt('{n} min', { n: minutes });
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return rest ? fmt('{hours} h {minutes} min', { hours, minutes: rest }) : fmt('{n} h', { n: hours });
+}
 
 // Census phases that only say the task is still active.
 const ACTIVE_PHASES = new Set(['working', 'thinking', 'finalizing']);
@@ -84,7 +99,8 @@ function lateWorkHtml(a, late) {
 export function liveActivityRowHtml(a, nowMs = Date.now(), slot = null, resume = false) {
     const names = { direct_chat: 'Direct turn', managed_task: 'Managed task' };
     const started = Number(a.started_at) || 0;
-    const elapsed = started > 0 ? ` · ${Math.max(0, Math.round(nowMs / 1000 - started))}s` : '';
+    const spent = started > 0 ? elapsedWords(nowMs / 1000 - started) : '';
+    const elapsed = spent ? ` · ${spent}` : '';
     const late = a.late_work && typeof a.late_work === 'object' ? lateWorkHtml(a, a.late_work) : null;
     const outcome = !late && slot && ownOutcomePhase(a);
     return `<div class="activity-row">
@@ -150,8 +166,10 @@ function scheduleRunHtml(s) {
         parts.push('last run: outcome not observed yet');
     } else if (outcome?.state) {
         const quiet = outcome.quiet === true && outcome.notice !== true;
-        const state = quiet && outcome.state === 'completed' ? 'ran · no message' : outcome.state;
-        parts.push(`last run: ${esc(state)}${outcome.ended_at ? ` · ${scheduleInstantHtml(outcome.ended_at, { includeYear: true })}` : ''}${outcome.line && !quiet ? ` · ${outcome.notice ? 'notice: ' : ''}${esc(outcome.line)}` : ''}`);
+        const state = quiet && outcome.state === 'completed' ? tr('schedule.outcome.quiet', 'ran · no message') : outcome.state;
+        // The line is the host's notice, else the run's own words (its sentence, or the end of its answer).
+        const line = outcome.line ? ` · ${outcome.notice ? `notice: ${esc(outcome.line)}` : `<span data-i18n-authored>${esc(outcome.line)}</span>`}` : '';
+        parts.push(`last run: ${esc(state)}${outcome.ended_at ? ` · ${scheduleInstantHtml(outcome.ended_at, { includeYear: true })}` : ''}${line}`);
     }
     if (s.previous_run_open) {
         parts.push(`previous run still open${s.previous_run_open.task_id ? `: ${esc(s.previous_run_open.task_id)}` : ''}`);
@@ -314,7 +332,8 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
             const t = (q && q.task) || {};
             const id = esc(q.id || t.id || '');
             const label = esc(t.title || t.objective || t.text || q.type || id || 'task');
-            const rt = kind === 'running' && q.runtime_sec != null ? ` · ${Math.round(q.runtime_sec)}s` : '';
+            const spent = kind === 'running' ? elapsedWords(q.runtime_sec) : '';
+            const rt = spent ? ` · ${spent}` : '';
             const ownId = String(q.id || t.id || '');
             const projected = workOfEpisode(census, ownId) || memberState(census, ownId);
             const view = workRowView(projected || { activity: 'unknown', confirmed: false });
@@ -368,11 +387,10 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
         const detail = esc(bg.detail || (enabled ? 'enabled' : 'disabled'));
         const facts = [
             bg.level ? `autonomy ${esc(bg.level)}` : '',
-            enabled && bg.next_wake_at ? `next wake ${esc(formatWhen(bg.next_wake_at))}` : '',
             bg.last_wake_at ? `last wake ${esc(formatWhen(bg.last_wake_at))}${bg.last_wake_outcome ? ` (${esc(bg.last_wake_outcome)})` : ''}` : '',
             allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded)
                 ? `allowance ${esc(allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded))} (24 h)` : '',
-            Number.isFinite(Number(bg.max_tasks)) ? `tasks ${Number(bg.tasks_running || 0)}/${Number(bg.max_tasks)}` : '',
+            Number.isFinite(Number(bg.max_tasks)) ? esc(fmt('own tasks {running}/{max}', { running: Number(bg.tasks_running || 0), max: Number(bg.max_tasks) })) : '',
         ].filter(Boolean).join(' · ');
         return `<div class="activity-row">
             <div class="activity-row-main">
@@ -450,7 +468,7 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
             // This view renders only the queue; queue_only skips the whole
             // task-results scan server-side (v6.9x P2).
             getJson('/api/tasks?queue_only=1'),
-            getJson('/api/state'),
+            readStateJson(),
             getJson('/api/schedules'),
         ]);
         if (destroyed || revision !== refreshRevision) return;

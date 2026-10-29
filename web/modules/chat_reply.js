@@ -361,6 +361,8 @@ export function createChatReplies({ chatId, feed, input, composerArea = null, ke
         decorate(bubble, row) {
             const address = String(row?.row_address || '');
             if (address) bubble.dataset.rowAddress = address;
+            // Work speech another room also shows: its read is shared (read_ahead.js).
+            if (row?.room_revisions && typeof row.room_revisions === 'object') bubble.dataset.roomRevisions = JSON.stringify(row.room_revisions);
             const sender = bubble.querySelector('.sender');
             const role = ROLE_NAMES.find((name) => bubble.classList.contains(name));
             const relay = role === 'assistant' ? createRelayQuote(row?.relay, { onDomWrite, card: bubble.dataset.systemType === 'relay_entry' }) : null;

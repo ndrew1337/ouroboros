@@ -41,6 +41,7 @@ from ouroboros.tools.review_helpers import (
     load_checklist_layers,
     load_governance_doc,  # noqa: F401 -- retained test/facade patch seam
     build_touched_file_pack,
+    pack_omission_note,
     triad_pack_exclusions,
     build_goal_section,
     build_scope_section,
@@ -132,12 +133,14 @@ def _git_show_staged(repo_dir, path: str) -> Optional[str]:
 
 
 def _preflight_check(commit_message: str, staged_files: str,
-                     repo_dir) -> Optional[str]:
+                     repo_dir, *, neutral_allowed: Optional[bool] = None) -> Optional[str]:
     """Fast deterministic review preflight for common incomplete staged diffs.
 
     Only exact mechanical checks live here — ones that compare real staged
     artifacts (version-carrier sync, README changelog row, P9 history limits,
-    conftest.py hygiene). Two lexical heuristics were deliberately removed
+    conftest.py hygiene). Standalone prepared-index review admits neutral
+    contributions; commit callers pass their candidate or managed-update authority.
+    Two lexical heuristics were deliberately removed
     (issue #447): the commit-message version-reference guess (its "version"
     substring test matched "conversion") and the ".py under ouroboros/ or
     supervisor/ requires tests/ staged" predicate (it refused comment-only
@@ -177,6 +180,7 @@ def _preflight_check(commit_message: str, staged_files: str,
     release_error = format_release_metadata_preflight(release_metadata_diagnostics(
         repo_dir, sorted(active_staged), source="index",
         read_text=lambda path: _git_show_staged(repo_dir, path), deleted=sorted(staged_set - active_staged),
+        neutral_allowed=neutral_allowed,
     ))
     if release_error:
         return release_error
@@ -784,10 +788,7 @@ def _prepare_unified_review(ctx: ToolContext, commit_message: str,
             exclude_paths=exclude_paths,
         )
         if _omitted:
-            current_files_section += (
-                f"\n\n⚠️ OMISSION NOTE: {len(_omitted)} file(s) omitted from direct context: "
-                f"{', '.join(_omitted)}"
-            )
+            current_files_section += f"\n\n{pack_omission_note(_omitted)}"
         if exclusion_note:
             current_files_section += f"\n\n{exclusion_note}"
         if not current_files_section.strip():

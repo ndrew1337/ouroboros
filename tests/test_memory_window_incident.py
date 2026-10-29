@@ -31,7 +31,10 @@ def test_incident_start_keeps_story_before_old_replies(tmp_path, monkeypatch):
     print("INCIDENT_START", json.dumps({"floor": steps, "input": shown.calibrated_tokens, "mode": plan.initial_mode}))
     assert steps.get("F2", 0) > 0 and steps.get("F5", 0) < 103
     assert steps != {"F1": 359, "F5": 103}
-    assert shown.calibrated_tokens + 65_536 + 218_000 <= 872_000
+    # The start leaves the reply reserve and the wake's own work room: one eighth since the owner's 29.10 decision
+    # (a wake is one turn, as a direct chat turn is), read from the view so the replay runs on any revision.
+    work = -(-872_000 // 8) * shown.memory_facts["spec"]["work_room_levels"]
+    assert shown.calibrated_tokens + 65_536 + work <= 872_000
 
 
 def test_incident_chosen_range_survives_zero_result_room(tmp_path, monkeypatch):
