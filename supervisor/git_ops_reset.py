@@ -660,8 +660,8 @@ def import_test() -> Dict[str, Any]:
         return {"ok": True, "skipped": "frozen"}
 
     before = _bootstrap_snapshot()
-    if before and before == _bootstrap_receipt():
-        _SMOKED["head"] = _clean_dev_head()  # this exact snapshot passed its smoke at an earlier, interrupted boot
+    if before and before == _bootstrap_receipt():  # this exact clean snapshot passed an earlier boot's smoke: record it
+        _SMOKED["head"] = before["head"] if before["branch"] == _go().BRANCH_DEV and _go()._is_launcher_managed_repo() else ""
         return {"ok": True, "skipped": "unchanged_bootstrap"}
     _forget_bootstrap_receipt()
     _SMOKED.clear()

@@ -101,6 +101,24 @@ def test_a_ready_boot_whose_receipt_skips_the_smoke_still_advances_a_lagging_poi
     assert (git_ops.advance_recovery_point(True), _stable(repo)) == expected
 
 
+def test_a_commit_landing_after_the_receipt_matched_is_never_promoted(managed, monkeypatch):
+    repo, _drive, calls, _first = managed
+    assert git_ops.import_test()["ok"] and calls == ["smoke"]  # an earlier boot: smoke passed, receipt kept
+    proven = _git(repo, "rev-parse", "HEAD")
+    monkeypatch.setattr(git_ops_reset, "_SMOKED", {})  # the next process
+    receipt = git_ops_reset._bootstrap_receipt
+
+    def receipt_then_commit():
+        saved = receipt()
+        (repo / "value.txt").write_text("a commit nobody smoked\n", encoding="utf-8")
+        _git(repo, "commit", "-qam", "landed after the receipt matched")
+        return saved
+
+    monkeypatch.setattr(git_ops_reset, "_bootstrap_receipt", receipt_then_commit)
+    assert git_ops.import_test()["skipped"] == "unchanged_bootstrap" and calls == ["smoke"]
+    assert git_ops.advance_recovery_point(True) == proven and _stable(repo) == proven, "the unsmoked commit moved it"
+
+
 def _failing_dev_smoke(monkeypatch, repo, dev_head):
     run = subprocess.run
 
