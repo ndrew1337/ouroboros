@@ -97,15 +97,48 @@ def _shown_elsewhere(text: str, representation: str, rule: str) -> Dict[str, Any
             "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "rule": rule}
 
 
+def _assignment_form(value: Any) -> str:
+    """The objective form ``build_task_contract`` stores (stripped), applied to both compared sides."""
+    return str(value or "").strip()
+
+
+def _assignment_reference(objective: str, task: Mapping[str, Any]) -> Dict[str, Any]:
+    """The objective as a reference to the assignment as a request actually delivers it.
+
+    The first user turn carries the assignment whole, or, when the whole input cannot fit a
+    request, a pointer to its exact stored source: a wake's observation
+    (``loop_model_call._project_wake_input``), an owner-Nano input
+    (``context_input_selection.task_input_pointer``). This view is captured before either
+    decision, so the rule names both deliveries, and a wake whose observation is already
+    bound names that stored source itself (``consciousness_wake.bind_wake_observation``).
+    """
+    from ouroboros.consciousness_wake import WAKE_OBSERVATION_KEY
+
+    rule = ("The objective is this task's assignment, the first user turn of this conversation; when the "
+            "whole input cannot fit a request, that turn is a pointer to its exact stored source instead. "
+            "It is not repeated here.")
+    metadata = task.get("metadata") if isinstance(task.get("metadata"), Mapping) else {}
+    wake = metadata.get(WAKE_OBSERVATION_KEY)
+    source = wake.get("source") if isinstance(wake, Mapping) else None
+    if not isinstance(source, Mapping) or not isinstance(source.get("read"), Mapping):
+        return _shown_elsewhere(objective, "assignment", rule)
+    return {**_shown_elsewhere(objective, "assignment", rule + " This wake's complete observation is stored "
+                               "at `source`, whichever way the turn delivers it."),
+            "source": {key: copy.deepcopy(source[key]) for key in ("read", "sha256", "lines") if key in source}}
+
+
 def project_main_task_authority(task: Mapping[str, Any]) -> Dict[str, Any]:
     """Build the provider-only authority section without mutating ``task``.
 
     The materialized predecessor (the brief) appears once, at the top level; an
     equal copy nested in the task's own contract is dropped from this view. A
-    contract objective byte-identical to the assignment — the first user turn of
-    the conversation — and a contract context byte-identical to the task block's
+    contract objective equal to the assignment — the first user turn of the
+    conversation — and a contract context byte-identical to the task block's
     own ``context`` are shown as typed references, so the work order and its
-    context appear once per request.
+    context appear once per request. The objective comparison applies the
+    contract's own normalization to both sides (``_assignment_form``): a task
+    text ending in a line break (a wake's rendered template) is still the one
+    assignment. The context needs none, since the contract keeps it verbatim.
     """
     projection: Dict[str, Any] = {}
     predecessor = task.get("predecessor_authority")
@@ -121,10 +154,9 @@ def project_main_task_authority(task: Mapping[str, Any]) -> Dict[str, Any]:
         elif isinstance(nested, Mapping):
             projected_contract["predecessor_authority"] = project_helper_predecessor_authority(nested)
         objective = projected_contract.get("objective")
-        if isinstance(objective, str) and objective and objective == str(task.get("text") or ""):
-            projected_contract["objective"] = _shown_elsewhere(objective, "assignment", (
-                "The objective is this task's assignment, the first user turn of this conversation; "
-                "it is not repeated here."))
+        if (isinstance(objective, str) and _assignment_form(objective)
+                and _assignment_form(objective) == _assignment_form(task.get("text"))):
+            projected_contract["objective"] = _assignment_reference(objective, task)
         context = projected_contract.get("context")
         if isinstance(context, str) and context and context == task.get("context"):
             projected_contract["context"] = _shown_elsewhere(context, "task_context", (
