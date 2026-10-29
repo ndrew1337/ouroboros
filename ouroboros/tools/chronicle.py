@@ -55,8 +55,9 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tupl
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_import import LEGACY_ROOM_ID, row_lineage
-from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, SPEAKERS, ChronicleStore, PublishResult, capture,
-                                       correction_line, draft_signer, source_time_span, verify_quotes)
+from ouroboros.chronicle_quotes import SPEAKERS
+from ouroboros.chronicle_store import (DELEGATED_FOCUS_ROLES, STORY_KINDS, ChronicleStore, PublishResult, capture,
+                                       draft_signer, source_time_span, verify_quotes)
 from ouroboros.dialogue_provenance import memory_row_header, recorded_finality, render_row_text, row_author
 from ouroboros.knowledge import focus_signature
 from ouroboros.mark_anchors import anchor_problem, describe as describe_anchor
@@ -764,29 +765,12 @@ def _source_section(src: Dict[str, Any]) -> str:
     return "\n".join(["; ".join([head, *facts, read]), *source_change_lines(src)])
 
 
-def _as_of(store: ChronicleStore, record: Dict[str, Any], revision: str) -> Tuple[Dict[str, Any], List[str]]:
-    """The record as of one of its revisions: its words plus the corrections up to it; the later ones named."""
-    fixes = [r for r in store.records(record["room_id"], kinds=["correction"], after_seq=record["sequence"])
-             if r.get("target_id") == record["id"]]
-    revisions = [record["id"], *(fix["id"] for fix in fixes)]
-    if revision not in revisions:
-        raise ValueError(f"{revision} is not a revision of {record['id']}; its revisions: " + ", ".join(revisions))
-    kept = fixes[:revisions.index(revision)]
-    text = "\n\n".join([str(record.get("text", "")), *(f"{correction_line(fix)}\n{fix.get('text', '')}" for fix in kept)])
-    later = revisions[revisions.index(revision) + 1:]
-    return {**record, "current_text": text, "revision": revision, "corrections": [
-        {"id": fix["id"], "author": fix.get("author"), "ts": fix.get("ts")} for fix in kept]}, later
-
-
 def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str = "") -> Tuple[Dict[str, Any], str]:
     """The record as it acts (interpreted when it is a story record), or as of ``revision``, and its full text document."""
     room, kind = record["room_id"], record["kind"]
-    acting = next((r for r in store.room_records(room, after_seq=record["sequence"] - 1) if r["id"] == record["id"]),
-                  None)
-    shown = acting or record
-    later: List[str] = []
-    if revision:
-        shown, later = _as_of(store, shown, revision)
+    read = store.interpret([record], revision=revision or None)[0]  # the store's one composition at every revision
+    shown = read if revision or kind in STORY_KINDS and read.get("status") not in ("rejected", "candidate") else record
+    later: List[str] = read.get("later_corrections") or []
     if kind == "mark":
         shown = next((m for m in store.active_marks(room) if m["id"] == record["id"]), None) or record
         shown = {**shown, "sequence": record["sequence"]}
@@ -843,9 +827,7 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
                                                           else "the original and its corrections up to that one")
                         + (f"; later corrections not shown: {', '.join(later)}" if later else "; none later"))
     sections.append("text:\n" + str(record.get("text") if record.get("text") is not None else record.get("reason") or ""))
-    related = store.records(room, kinds=["correction", "decision", "mark_view", "mark_release", "selection"],
-                            after_seq=record["sequence"])
-    for other in (r for r in related if r.get("target_id") == record["id"]):
+    for other in store.targeting(record["id"], ("correction", "decision", "mark_view", "mark_release", "selection")):
         if revision and other["kind"] == "correction" and other["id"] not in (fix["id"] for fix in shown.get("corrections") or ()):
             continue  # a later correction is named above, not shown as that version
         body = other.get("text") if other["kind"] == "correction" else (
@@ -855,7 +837,7 @@ def _node_document(store: ChronicleStore, record: Dict[str, Any], revision: str 
             else "") + str(other.get("reason") or "")
         sections.append(f"{other['kind']} {other['id']} by {_author_label(other.get('author'))} (seq {other['sequence']}):\n"
                         f"{body}")
-    for account in store.accounts():  # the accounts this record informs, with the version each one read
+    for account in store.records(kinds=("account",)):  # the accounts this record informs, with the frozen version read
         for src in account.get("sources") or ():
             if src.get("id") == record["id"]:
                 sections.append(f"informs account {account['id']} (revision {src.get('revision')} read; seq {account['sequence']}): "
@@ -904,7 +886,7 @@ def _read_rooms(root: Path, store: ChronicleStore, start: int, limit: int) -> st
     spec = mv.ViewSpec("integrator", room_id=None)
     with capture(root):  # one state of the chronicle for every room's facts
         rows, lineage = memory_inventory.open_rows_by_room(root), row_lineage(root)
-        rooms = mv._live_rooms(store, root, spec, mv._labeler(root), rows, mv._notes_by_room(store), lineage)
+        rooms = mv._live_rooms(store, root, spec, mv.room_labeler(root), rows, mv._notes_by_room(store), lineage)
     body = "\n".join(mv._directory_room(room) for room in rooms)
     return _window(f"Live rooms: {len(rooms)}", body, start, limit,
                    lambda n: f"memory_read(room_id='*', start={n})")

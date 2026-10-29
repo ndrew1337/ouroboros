@@ -84,6 +84,7 @@ D20 = "Presence"
 "ouroboros/room_reader.py" = "D11"
 "ouroboros/tools/control_relay.py" = "D05"
 "ouroboros/tools/control_ui_translation.py" = "D05"
+"ouroboros/tools/control_update_description.py" = "D05"
 "ouroboros/openrouter_cost.py" = "D02"
 "ouroboros/obligations.py" = "D11"
 "ouroboros/startup_migrations.py" = "D11"
@@ -190,6 +191,8 @@ D20 = "Presence"
 "ouroboros/consciousness_wake.py" = "D15"
 "ouroboros/chat_chain.py" = "D15"
 "ouroboros/chronicle_store.py" = "D15"
+"ouroboros/chronicle_quotes.py" = "D15"
+"ouroboros/memory_reader.py" = "D15"  # the extensions' supported memory read (PluginAPI read_memory)
 "ouroboros/chronicle_import.py" = "D15"
 "ouroboros/late_review_marks.py" = "D15"  # late reviewer feedback kept in view as a host mark in its owning room
 "ouroboros/plan_collection_job.py" = "D15"
@@ -1269,7 +1272,6 @@ lazy_only = [
   "D10->D11",
   "D10->D14",
   "D10->D15",
-  "D12->D01",
   "D12->D05",
   "D12->D06",
   "D12->D09",
