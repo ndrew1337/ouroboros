@@ -107,9 +107,8 @@ def max_room_fact(snapshot: Optional[mv.MemoryViewSnapshot], core: Any, books: I
     elements = floor_elements(snapshot) if snapshot else ()
     ordinary = mv.FloorLevel(tuple((step, tuple(ident for s, ident, *_ in elements if s == step))
                                    for step in _ORDINARY)) if snapshot else mv.FULL_VIEW
-    pages = [e for e in (snapshot.story if snapshot else ()) if e.get("kind") == "page" and not e.get("told_by")]
     memory = {"story": view_tokens(story), "room": view_tokens(mv.render_room(snapshot, ordinary)) if snapshot else 0,
-              "unfolded": sum(view_tokens("\n".join(mv._page_lines(entry))) for entry in pages)}
+              "unfolded": unfolded_pages(snapshot)["tokens"]}
     zero = math.ceil(fixed * ratio) + reserve + work
     return {"window": window, "allowance": allowance, "floor_need": math.ceil((fixed - schemas) * ratio) + reserve + work,
             "schemas": schemas, "zero_need": zero, "need": zero + math.ceil((memory["story"] + memory["room"]) * ratio),
@@ -146,7 +145,6 @@ def crowded_by_memory(fact: Optional[Mapping[str, Any]]) -> bool:
             and isinstance(fact.get("window"), int) and fact["zero_need"] <= fact["window"])
 
 
-CROWDED_POSSIBILITY = "Folding memory or fewer tool schemas may bring the books back."
 ROUTE_FACT = ("its window cannot hold the books beside my core, assignment, reply reserve and the work's room (needs "
               "{need:,} > {window:,}: {parts}); folding memory or dropping tool schemas cannot make room here.")
 
@@ -157,18 +155,45 @@ def floor_parts(fact: Mapping[str, Any]) -> str:
     return f"{named}, reply reserve {fact['reserve']:,}, work room {fact['work']:,}"
 
 
-def measure_text(fact: Mapping[str, Any], *, parts: bool = False) -> str:
-    """The host's measure of one start in the provable parts; the mind judges what they mean."""
+def unfolded_pages(snapshot: Optional[mv.MemoryViewSnapshot]) -> Dict[str, Any]:
+    """My story's pages no part or account holds yet, from the captured snapshot alone: how many, their tokens and
+    ``rooms`` as ``[label, tokens, pages]``, the room holding most of them first (where they pile up)."""
+    rooms: Dict[str, List[Any]] = {}
+    for entry in snapshot.story if snapshot else ():
+        if entry.get("kind") == "page" and not entry.get("told_by"):
+            room = rooms.setdefault(str(entry.get("room_id")), [str(entry.get("label") or entry.get("room_id")), 0, 0])
+            room[1] += view_tokens("\n".join(mv._page_lines(entry)))
+            room[2] += 1
+    ranked = sorted(rooms.values(), key=lambda room: (-room[1], room[0]))
+    return {"pages": sum(room[2] for room in ranked), "tokens": sum(room[1] for room in ranked), "rooms": ranked}
+
+
+def pages_text(pages: Mapping[str, Any], *, rooms: int = 3) -> str:
+    """``N pages no part or account holds yet, T tokens, most in <room> t, …``: the rooms holding most of them."""
+    most = ", ".join(f"{label} {tokens:,}" for label, tokens, _count in pages["rooms"][:rooms])
+    return (f"{pages['pages']} page{'' if pages['pages'] == 1 else 's'} no part or account holds yet, "
+            f"{pages['tokens']:,} tokens" + (f", most in {most}" if most else ""))
+
+
+def addressed_text(steps: Mapping[str, Any]) -> str:
+    """``3 task fact lines, 2 quiet rooms``: what a view shows only by address, in its floor note's words."""
+    return ", ".join(text.format(steps[step]) for step, text in _SHOWN if steps.get(step))
+
+
+def measure_text(fact: Mapping[str, Any], *, parts: bool = False, pages: Optional[Mapping[str, Any]] = None) -> str:
+    """The host's measure of one start in the provable parts; the mind judges what they mean. ``pages``
+    (``unfolded_pages`` of the same snapshot) names how many unfolded pages there are and where they pile up."""
     zero = fact["window"] - fact["zero_need"]
+    unfolded = pages_text(pages) if pages is not None else f"pages no part or account holds yet {fact['unfolded']:,}"
     return (f"window {fact['window']:,}; books, core, knowledge, scratchpad, runtime facts, assignment, reply reserve and work room "
             f"{fact['floor_need']:,}{f' ({floor_parts(fact)})' if parts else ''}; tool schemas {fact['schemas']:,}; with "
             f"no memory shown {'headroom' if zero >= 0 else 'over by'} {abs(zero):,}; my memory "
-            f"{fact['story'] + fact['room']:,} = story {fact['story']:,} (pages no part or account holds yet "
-            f"{fact['unfolded']:,}) + rooms {fact['room']:,}, beside a Max room of {fact['allowance']:,}")
+            f"{fact['story'] + fact['room']:,} = story {fact['story']:,} ({unfolded}) + rooms {fact['room']:,}, "
+            f"beside a Max room of {fact['allowance']:,}")
 
 
 def lowered_line(mode: str, lowered_from: str, fact: Optional[Mapping[str, Any]] = None) -> str:
-    """Why a start left the owner's mode, in measured parts: facts and a possibility, never an instruction."""
+    """Why a start left the owner's mode, in measured parts: facts only, never an instruction or a possibility."""
     if mode != "low":
         return (f"The window cannot hold {lowered_from.capitalize()} with even the shortest view of my memory; "
                 f"this task runs in {mode.capitalize()}.")
@@ -177,7 +202,7 @@ def lowered_line(mode: str, lowered_from: str, fact: Optional[Mapping[str, Any]]
     if fact["floor_need"] > fact["window"]:
         return "Low with chapter maps, a disclosed fact of this route: " + ROUTE_FACT.format(
             need=fact["floor_need"], window=fact["window"], parts=floor_parts(fact))
-    return f"Low with chapter maps. The host's measure of this start: {measure_text(fact, parts=True)}. {CROWDED_POSSIBILITY}"
+    return f"Low with chapter maps. The host's measure of this start: {measure_text(fact, parts=True)}."
 
 
 def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Optional[int]], *,
@@ -384,7 +409,7 @@ def floor_note(level: mv.FloorLevel, *, window_tokens: Optional[int], mode: str,
                   if window_tokens is not None else []) + (
             [f"the {(budget_mode or mode).capitalize()} mode budget ({target_tokens} tokens)"] if level.by_budget else [])
         subject = " and ".join(bounds)
-        shown = ", ".join(text.format(counts[step]) for step, text in _SHOWN if counts.get(step))
+        shown = addressed_text(counts)
         sealing = (" Sealing a closed part of the open conversation as a page (chronicle_write kind=page) or folding "
                    "old pages (kind=part) can carry the commitments in my own words."
                    if names is None or _SEALING_TOOLS & set(names) else "")

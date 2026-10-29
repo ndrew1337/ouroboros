@@ -28,11 +28,34 @@ def test_source_changes_on_numbered_refusal_and_later_acceptance(tmp_path, monke
 def test_memory_line_names_the_memory_for_every_integrating_focus_and_none_for_helpers():
     p, snap = plan()
     line = memory_facts(p, "max")  # no Max room fact in this receipt: the memory alone
-    assert line.startswith("memory: story ") and "pages not yet in a part or account 2" in line
-    assert "Max room" not in line and "drafts awaiting" not in line
+    assert line.startswith("memory: story ") and " (2 pages no part or account holds yet, " in line
+    assert "; marks in view 0" in line and "Max room" not in line and "drafts awaiting" not in line
     for role in ("child", "nanny"):
         helper = replace(snap, spec=replace(snap.spec, role=role))
         assert memory_facts(replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(helper))), "max") == ""
     wake = replace(snap, spec=replace(snap.spec, role="consciousness"), live_rooms=(live_room(1),))
     p = replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(wake)))
     assert "drafts awaiting a decision 0" in memory_facts(p, "max")
+
+
+def test_memory_line_names_where_unfolded_pages_pile_up_what_is_addressed_and_the_marks():
+    from tests._memory_view_synthetic import marks, pages
+
+    p, snap = plan()
+
+    def moved(count, chars, room, label):
+        return [{**entry, "id": f"{room}-{n}", "room_id": room, "label": label}
+                for n, entry in enumerate(pages(count, chars))]
+
+    story = [*pages(1, 9_000), *moved(2, 2_000, "2", "Project B"), *moved(1, 500, "3", "GitHub C"),
+             *moved(1, 100, "4", "Room D"), {**pages(1, 50_000)[0], "id": "told", "told_by": "account-1"}]
+    snap = replace(snap, story=tuple(story), marks=tuple(marks(3)))
+    facts = {**p.max_projection.memory_facts, "floor": {"steps": {"F1": 2, "F6a": 3}}}
+    p = replace(p, core=replace(p.core, memory_view_json=mv.snapshot_json(snap)),
+                max_projection=replace(p.max_projection, memory_facts=facts))
+    line = memory_facts(p, "max")
+    assert " (5 pages no part or account holds yet, " in line  # a page an account tells is not unfolded
+    assert ", most in Main " in line and line.index("Main ") < line.index("Project B ") < line.index("GitHub C ")
+    assert "Room D" not in line  # the three rooms holding most of them
+    assert "; shown only by address: 3 other rooms in an aggregate, 2 task fact lines;" in line
+    assert line.endswith("; marks in view 3")

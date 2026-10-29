@@ -24,27 +24,31 @@ def block_label(message, index, block, plan):
 
 
 def memory_facts(plan, mode):
-    """One round line of an integrating focus (every view role but a delegated child or nanny): the host's
-    measure of the start's Max room, the pages no part or account holds yet and the drafts awaiting a decision.
-    Measured parts and a possibility, never an instruction; without a Max room fact (the owner's Low or Nano,
-    an unknown window) the line names the memory alone."""
+    """One round line of an integrating focus (every view role but a delegated child or nanny), on every start:
+    on the owner's Max with a known window, the host's measure of the start's Max room part by part (books, core,
+    knowledge and runtime facts, assignment, reply reserve, work room, tool schemas) and how the start settled;
+    my memory: the story with its pages no part or account holds yet (how many, their tokens, the rooms holding
+    most of them) and the rooms' lines; what this view shows only by address; the marks in view; the drafts
+    awaiting a decision. Counted from the captured snapshot and its receipt; measures only, no advice and no
+    threshold. Without a Max room fact (the owner's Low or Nano, an unknown window) it names the memory alone."""
     snapshot = memory_snapshot(plan)
     if snapshot is None or snapshot.spec.role in DELEGATED_FOCUS_ROLES:
         return ""
     receipt = plan.projection(mode).memory_facts or {}
-    room, blocks = receipt.get("max_room"), receipt.get("blocks") or {}
+    room, blocks, pages = receipt.get("max_room"), receipt.get("blocks") or {}, floor.unfolded_pages(snapshot)
     if not room:
-        line = f"memory: story {blocks.get('story_tokens', 0):,} + rooms {blocks.get('room_tokens', 0):,}"
+        line = (f"memory: story {blocks.get('story_tokens', 0):,} ({floor.pages_text(pages)}) + rooms "
+                f"{blocks.get('room_tokens', 0):,}")
     else:
-        line = "Max room: " + floor.measure_text(room) + {
+        line = "Max room at the start: " + floor.measure_text(room, parts=True, pages=pages) + {
             "held": "; Max held" + (f" by cuts {', '.join(room['cuts'])}" if room["cuts"] else ""),
-            "crowded": "; Low. " + floor.CROWDED_POSSIBILITY.rstrip("."),
+            "crowded": "; Low",
             "route": "; Low, a disclosed fact of this route: folding memory or dropping tool schemas cannot make room here",
         }[room["cause"]]
-    pages = sum(1 for entry in snapshot.story if entry.get("kind") == "page" and not entry.get("told_by"))
+    shown = floor.addressed_text((receipt.get("floor") or {}).get("steps") or {})
     drafts = len(snapshot.candidates)
-    return f"{line}; pages not yet in a part or account {pages}" + (
-        f"; drafts awaiting a decision {drafts}" if drafts or snapshot.spec.role == "consciousness" else "")
+    return (line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
+            + (f"; drafts awaiting a decision {drafts}" if drafts or snapshot.spec.role == "consciousness" else ""))
 
 
 def low_start_line(plan, mode, task_id):
