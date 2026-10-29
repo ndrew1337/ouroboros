@@ -220,9 +220,12 @@ def _note_covers(root: Path, room: str, ids: Any) -> tuple:
     if any(not note or note.get("kind") != "note" or str(note.get("room_id")) != room for note in notes):
         raise ValueError("covers.note_ids must resolve to notes of this room")
     tasks = list(dict.fromkeys(str(note["task_id"]) for note in notes if note.get("task_id")))
+    from ouroboros.dialogue_positions import last_stream_position
+
+    head = max(0, last_stream_position(root))  # an empty stream starts at position zero
     covers = {"room_id": room, "mode": "notes", "request": {"note_ids": ids},
               "rows": [f"note:{ident}" for ident in ids], "first": None, "last": None, "count": 0,
-              "task_ids": tasks, "note_ids": ids, "stream_span": [-1, -1],
+              "task_ids": tasks, "note_ids": ids, "stream_span": [head, head],
               "ts_span": source_time_span(note.get("ts") for note in notes)}
     return covers, {"rows": 0, "notes": len(notes), "by_author": {}}, []
 
