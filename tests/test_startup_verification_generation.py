@@ -131,3 +131,20 @@ def test_a_worker_writes_bytecode_only_into_a_prefix_inside_its_data_dir(tmp_pat
     assert all(path.is_relative_to(data / "state" / "pycache.noindex") for path in cached)
     assert sorted((module.parent / "__pycache__").glob("preflight_receipts.*.pyc")) == beside, \
         "nothing is ever written beside the source"
+
+
+def test_a_worker_handed_an_older_launchers_prefix_moves_it_before_writing(tmp_path):
+    """A worker under a legacy ``state/pycache`` (its own and the one its children inherit) writes only unindexed."""
+    data = tmp_path / "data"
+    legacy, new = data / "state" / "pycache", data / "state" / "pycache.noindex"
+    legacy.mkdir(parents=True)
+    env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONPATH": str(REPO), "PYTHONPYCACHEPREFIX": str(legacy)}
+    probe = ("import os, sys; import supervisor.worker_process as w; "
+             f"w.write_bytecode_to_prefix_only({str(data)!r}); "
+             "print(sys.pycache_prefix); print(os.environ['PYTHONPYCACHEPREFIX']); import ouroboros.preflight_receipts")
+    done = subprocess.run([sys.executable, "-B", "-c", probe], cwd=tmp_path, env=env,
+                          capture_output=True, text=True, timeout=120)
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines()[-2:] == [str(new), str(new)], "the old worker wrote into the legacy tree"
+    cached = sorted(tmp_path.rglob("preflight_receipts.*.pyc"))
+    assert cached and all(path.is_relative_to(new) for path in cached) and not legacy.exists()
