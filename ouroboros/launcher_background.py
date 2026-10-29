@@ -34,7 +34,6 @@ import json
 import logging
 import os
 import pathlib
-import shlex
 import signal
 import sys
 import threading
@@ -156,24 +155,28 @@ def activate_running_instance(lock_path) -> bool:
 
 
 def other_copy_line(lock_path, port_file, bundle_dir) -> str:
-    """The one line a manual second launch shows first when the running instance is another copy of the
-    app, from that instance's own report: its process's ``--seed-bundle`` (else its executable) and the
-    ``app_version`` its ``/api/health`` answers. ``""`` for this same copy, an unreadable instance, or an
-    AppImage, whose per-launch mount names no copy."""
+    """The one line a manual second launch of a packaged copy shows first when the running instance is another
+    copy, from that instance's own report: its command line names its copy (the text after its last
+    ``--seed-bundle``, which the source handoff appends, else its executable) and its ``/api/health`` its
+    ``app_version``. ``""`` when this copy's path occurs in that command line (the same copy), for an
+    unreadable instance, a source run (no bundle manifest here), or an AppImage, whose per-launch mount names
+    no copy. ``ps`` joins argv without quoting, so the command line is never split into arguments."""
     from ouroboros.desktop_autostart import app_copy
     from ouroboros.platform_layer import process_command
 
+    bundle = pathlib.Path(bundle_dir)
+    if os.environ.get("APPIMAGE") or not (bundle / "repo_bundle_manifest.json").is_file():
+        return ""
     try:
-        argv = shlex.split(process_command(int(pathlib.Path(lock_path).read_text(encoding="utf-8").strip())),
-                           posix=os.name != "nt")
+        command = process_command(int(pathlib.Path(lock_path).read_text(encoding="utf-8").strip()))
     except (OSError, ValueError):
         return ""
-    seeds = [argv[index + 1] for index, arg in enumerate(argv[:-1]) if arg == "--seed-bundle"]
-    if not argv or os.environ.get("APPIMAGE"):
+    mine = app_copy(bundle)
+    if not command or any(os.path.normcase(path) + os.sep in os.path.normcase(command)
+                          for path in (str(mine), os.path.realpath(mine))):
         return ""
-    theirs, mine = app_copy(pathlib.Path((seeds or argv)[0].strip('"'))), app_copy(pathlib.Path(bundle_dir))
-    if os.path.normcase(os.path.realpath(theirs)) == os.path.normcase(os.path.realpath(mine)):
-        return ""
+    _, seeded, tail = command.rpartition(" --seed-bundle ")
+    theirs = app_copy(pathlib.Path((tail if seeded else command.split(" --", 1)[0]).strip().strip('"')))
     try:
         port = int(pathlib.Path(port_file).read_text(encoding="utf-8").strip())
         with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/health", timeout=2) as response:
