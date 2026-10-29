@@ -1024,7 +1024,7 @@ stay stable across revisions.
 
 | # | item | what to check |
 |---|------|---------------|
-| 1 | the bar | Does `done_when` capture what the ask needs? For a vague ask ("make it good"), is it the bar a demanding person who made the request would mean — nothing obviously missing, nothing met trivially? Is each claim an observable outcome a third party could check, or a method the owner fixed for this work — not a method of the mind's own choosing? When the work changes what a person sees, does a claim reach that view in its changed state, not only the data or API behind it? |
+| 1 | the bar | Does `done_when` capture what the ask needs? For a vague ask ("make it good"), is it the bar a demanding person who made the request would mean — nothing obviously missing, nothing met trivially? Is each claim an observable outcome a third party could check, or a method the owner fixed for this work — not a method of the mind's own choosing? When work changes what a person sees, does the plan apply the product's information-placement rules to each fact, including text added within existing components, and does a claim reach that changed view rather than only its data or API? |
 | 2 | load-bearing decisions | Are the decisions that are expensive to reverse explicit, with their rejected alternatives and why? |
 | 3 | constraints and invariants | Are the real constraints named — budget, deadline, safety, irreversibility, commitments to others? |
 | 4 | deferrals | Is anything deferred that will be expensive to change once the work has started? |

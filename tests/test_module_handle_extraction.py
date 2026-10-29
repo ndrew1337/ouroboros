@@ -232,7 +232,7 @@ LEAVES: dict[str, tuple[str, str, frozenset[str]]] = {
         "_clear_bootstrap_pin_marker", "_clear_update_intent",
         "_collect_repo_sync_state", "_compute_ref_ahead_count",
         "_create_rescue_snapshot", "_git_dir", "_guard_live_repo_destructive_git",
-        "_has_remote", "_maybe_repair_git_index", "_pin_to_bundle_sha_on_bootstrap",
+        "_has_remote", "_is_launcher_managed_repo", "_maybe_repair_git_index", "_pin_to_bundle_sha_on_bootstrap",
         "_preserve_branch_for_official_reset", "_read_managed_repo_meta",
         "_read_update_intent", "_ref_points_at_ref", "_rescue_untracked_incomplete",
         "_run_git_resilient", "_update_source", "append_jsonl", "git_capture",
