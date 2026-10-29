@@ -196,9 +196,11 @@ def _reviewed_skill_python(
     A dispatch binding is authoritative and loads exactly its physical payload
     against its canonical state root.  Legacy task metadata is consulted only
     when a non-registry/direct caller supplied no binding.  A skill that declares
-    Python packages without a usable env python reports
-    ``skill_env_python_unavailable``: another interpreter would run it without
-    them, so the launch is refused rather than resolved further.
+    Python packages whose env python exists but cannot run here (``moved``,
+    ``other_python``, ``unreadable``) reports ``skill_env_python_unavailable``:
+    another interpreter would run it without them, so the launch is refused
+    rather than resolved further.  A never-installed (``absent``) env falls
+    through as before, keeping authoring and repair runs possible.
     """
 
     try:
@@ -224,7 +226,7 @@ def _reviewed_skill_python(
             loaded = find_skill(drive_root, skill_name)
         if loaded is None:
             return "", "reviewed_skill_environment_unavailable"
-        if unusable_python_env(drive_root, loaded):
+        if unusable_python_env(drive_root, loaded) in {"moved", "other_python", "unreadable"}:
             return "", "skill_env_python_unavailable"
         if not skill_readiness_for_execution(drive_root, loaded).ready:
             return "", "reviewed_skill_environment_unavailable"

@@ -250,8 +250,9 @@ def test_reviewed_skill_environment_precedes_executor(tmp_path, monkeypatch):
     assert trace.environment == "isolated_skill"
 
 
-def test_a_skill_with_python_packages_and_no_usable_env_python_is_refused_not_rerouted(tmp_path, monkeypatch):
-    """Agent or PATH python would run such a skill without its packages; a skill without them keeps today's choice."""
+def test_a_skill_whose_env_python_cannot_run_here_is_refused_not_rerouted(tmp_path, monkeypatch):
+    """Agent or PATH python would run such a skill without its packages; a never-installed env (authoring, repair)
+    and a skill without Python packages keep today's choice."""
     import ouroboros.skill_loader as skill_loader
     import ouroboros.skill_readiness as skill_readiness
     from tests._shared import current_python_env
@@ -269,13 +270,18 @@ def test_a_skill_with_python_packages_and_no_usable_env_python_is_refused_not_re
         (skill_dir / ".ouroboroshub.json").write_text(json.dumps({"install_specs": {"auto": [{"kind": kind, "package": "x"}]}}))
         return resolve_process_python(ctx, "run_command", _tool_args("run_command"), runtime_mode="advanced")
 
-    resolved, trace = resolve("pip")  # no env python at all, or one left on a vanished app's Python
-    assert resolved == _tool_args("run_command") and trace.error_reason == "skill_env_python_unavailable"
+    resolved, trace = resolve("pip")  # never installed: an unready skill falls through as it always did
+    assert resolved["cmd"][0] == str(agent_python) and trace.fallback_reason == "reviewed_skill_environment_unavailable"
     resolved, trace = resolve("npm")  # no Python package rides on the interpreter
     assert resolved["cmd"][0] == str(agent_python) and not trace.error_reason
     current_python_env(skill_dir / ".ouroboros_env")
     resolved, trace = resolve("pip")  # a usable env: an unready skill falls through as it always did
     assert resolved["cmd"][0] == str(agent_python) and trace.fallback_reason == "reviewed_skill_environment_unavailable"
+    cfg = skill_dir / ".ouroboros_env" / "python" / "pyvenv.cfg"
+    version = next(line for line in cfg.read_text().splitlines() if line.startswith("version"))
+    cfg.write_text(f"home = {tmp_path / 'gone' / 'bin'}\n{version}\n")
+    resolved, trace = resolve("pip")  # an env left on a vanished app's Python: refused
+    assert resolved == _tool_args("run_command") and trace.error_reason == "skill_env_python_unavailable"
 
 
 @pytest.mark.parametrize(
