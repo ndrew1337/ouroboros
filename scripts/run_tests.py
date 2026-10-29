@@ -313,8 +313,11 @@ def _defer_full(selection):
     rest = [path for path in selection.changed if (path, escalating[0]) not in selection.reasons
             and (path, escalating[1]) not in selection.reasons]
     try:
-        files = select_from_paths(REPO, rest, base=selection.base, extra_tests=selection.extra_tests,
-                                  test_reason=selection.test_reason).files if rest else ()
+        chosen = select_from_paths(REPO, rest, base=selection.base, extra_tests=selection.extra_tests,
+                                   test_reason=selection.test_reason) if rest else None
+        files = chosen.files if chosen is not None and chosen.tier != "full" else ()
+        if chosen is not None and chosen.tier == "full":  # an escalation not named above: the floor alone
+            why = f"{why}; the other changes escalate too ({'; '.join(r for _p, r in chosen.reasons)})"
     except (ValueError, OSError, subprocess.SubprocessError) as exc:  # the floor still runs
         files, why = (), f"{why}; the other changes could not be selected: {exc}"
     note = (f"full scope deferred to the landed matrix; this leg runs the contract floor, the Node lane and "

@@ -300,6 +300,14 @@ def test_a_deferred_full_escalation_keeps_what_the_other_changes_select(run_test
     assert record["files"] == sorted(test_selection.FLOOR_TESTS)  # the floor still runs, and the note says why
     assert "the other changes could not be selected: import scan unavailable" in summary.read_text(encoding="utf-8")
 
+    # The other changes escalate too (a reason this leg does not name): the floor alone, never the whole suite.
+    monkeypatch.setattr(test_selection, "select_from_paths", lambda *a, **k: dataclasses.replace(
+        chosen, reasons=(("ouroboros/utils.py", "a renamed escalation"),)))
+    run_tests.main(["--selected", "--defer-full", "--evidence-dir", str(tmp_path / "again")])
+    record = json.loads((tmp_path / "again" / "selection.json").read_text(encoding="utf-8"))
+    assert record["files"] == sorted(test_selection.FLOOR_TESTS)
+    assert "the other changes escalate too (a renamed escalation)" in summary.read_text(encoding="utf-8")
+
 
 def test_sequential_with_pytest_arguments_is_refused(run_tests, monkeypatch):
     monkeypatch.setattr(run_tests, "_run", lambda label, argv, cwd: pytest.fail("nothing must run"))
