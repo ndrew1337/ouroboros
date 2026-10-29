@@ -337,8 +337,9 @@ def reopen_for_owner_message(drive_root, row: dict) -> None:
     from ouroboros.projects_registry import PROJECT_ACTIVE, list_reserved_projects, update_project
 
     try:
+        address = row.get("chat_id")
         project = next((p for p in list_reserved_projects(drive_root, strict=True)
-                        if p.get("chat_id") == row.get("chat_id") and p.get("lifecycle") == PROJECT_ACTIVE), None)
+                        if p.get("lifecycle") == PROJECT_ACTIVE and p.get("chat_id") == address), None)
         if project and "closed" in project:
             update_project(drive_root, project["id"], closed=None)
     except Exception:
