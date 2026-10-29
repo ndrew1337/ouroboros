@@ -171,23 +171,30 @@ def _kept_notes(drive_root: Any, owner: str, saved: Mapping[str, Any], *, cleare
     retired. A named source that cannot be read raises.
     """
     from ouroboros import review_history_view as view
-    from ouroboros.artifacts import read_actor_source_bytes
+    from ouroboros.artifacts import read_actor_source_bytes, task_artifact_dir_path
     from ouroboros.project_dialogue import continuation_narrative_is_valid, resolve_legacy_continuation_narrative
 
     reader = f"get_task_result(task_id={owner!r}, include_authority=True)"
+
+    def source(ref: Mapping[str, Any], field: str) -> str:
+        # The immutable handle belongs to owner, not the receiving task's artifact_store.
+        path = task_artifact_dir_path(drive_root, owner, create=False) / str(ref["path"])
+        read = {"tool": "read_file", "arguments": {"root": "runtime_data", "path": str(path)}}
+        return (f"{reader} -> {field}; read from this task with {json.dumps(read, sort_keys=True)}; "
+                f"original task-local reference (its relative reader is scoped to {owner}): "
+                f"{json.dumps(ref, ensure_ascii=False, sort_keys=True)}")
+
     working = saved.get(WORKING_NOTES_FIELD)
     if isinstance(working, Mapping) or (cleared_is_final and working is not None):
         texts = [str(text) for text in json.loads(read_actor_source_bytes(drive_root, owner, working))["notes"]]
-        return texts, (f"{reader} -> {WORKING_NOTES_FIELD}; the retained bytes are "
-                       f"{json.dumps(working, ensure_ascii=False, sort_keys=True)} of task {owner}")
+        return texts, source(working, WORKING_NOTES_FIELD)
     if cleared_is_final and WORKING_NOTES_FIELD in saved:
         return None
     selection = saved.get(view.SELECTED_VIEW_FIELD)
     if selection:
         record = view.load_review_history_view(selection, lambda ref: read_actor_source_bytes(drive_root, owner, ref))
         return ([capsule["content"][0]["text"] for capsule in view.selected_actor_capsules(record)],
-                f"{reader} -> {view.SELECTED_VIEW_FIELD}; the retained bytes are "
-                f"{json.dumps(selection.get('source_ref'), ensure_ascii=False, sort_keys=True)} of task {owner}")
+                source(selection["source_ref"], view.SELECTED_VIEW_FIELD))
     narrative = saved.get("continuation_narrative")
     if continuation_narrative_is_valid(narrative, owner):
         return [str(narrative["text"])], f"{reader} -> continuation_narrative"

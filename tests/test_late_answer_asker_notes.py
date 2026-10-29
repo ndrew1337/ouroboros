@@ -29,6 +29,8 @@ LATE_ID = f"quiz_late_answer:{ASKER}:q1"
 FINAL = "Shipped on sqlite; postgres stays open."
 READER = f"get_task_result(task_id={ASKER!r}, include_authority=True)"
 
+pytestmark = pytest.mark.usefixtures("provider_catalog_offline")
+
 
 def _world(tmp_path):
     """The context-test env and memory; its drive is the canonical root the whole story lives on."""
@@ -222,6 +224,32 @@ def _continue_of_asker():
     from tests.test_continuation_context_authority import _pull_source
 
     return {"id": "next", "text": "continue", "predecessor_authority": {"task_id": ASKER, "source": _pull_source(ASKER)}}
+
+
+@pytest.mark.parametrize("forked", [False, True])
+@pytest.mark.parametrize("kind", ["late_answer", "continue"])
+def test_the_displayed_notes_reader_resolves_for_the_receiving_task(tmp_path, monkeypatch, forked, kind):
+    """Execute the emitted reader, not the asker's unqualified artifact_store recipe."""
+    from ouroboros.main_context_authority import late_answer_notes_message, predecessor_notes_message, WORKING_NOTES_FIELD
+    from ouroboros.task_results import load_task_result
+    from ouroboros.tools.registry import ToolContext, ToolRegistry
+
+    env, _memory, root = _world(tmp_path / "canonical")
+    ref = _asker_folds_and_ends(root)
+    drive = root / "state" / "headless_tasks" / "receiving-head" / "data" if forked else root
+    drive.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", root)
+    ctx = ToolContext(repo_dir=env.repo_dir, drive_root=drive, budget_drive_root=str(root), task_id="receiving-head",
+                      task_metadata={"delegation_role": "root", "budget_drive_root": str(root)})
+    registry = ToolRegistry(repo_dir=ctx.repo_dir, drive_root=ctx.drive_root)
+    registry.set_context(ctx)
+    row = (late_answer_notes_message(_late_head(), drive_root=root) if kind == "late_answer"
+           else predecessor_notes_message(_continue_of_asker(), drive_root=root))
+    tail = row["content"].split("read from this task with ", 1)[1]
+    read, _ = json.JSONDecoder().raw_decode(tail)
+    result = registry.execute_result(read["tool"], read["arguments"])
+    assert result.status == "ok" and NOTE in result.text, result.text
+    assert load_task_result(root, ASKER)[WORKING_NOTES_FIELD] == ref, "display must not rewrite the retained handle"
 
 
 @pytest.mark.parametrize("field", ["retired", "absent"])
