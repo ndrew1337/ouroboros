@@ -26,6 +26,7 @@ from ouroboros.loop_llm_call import classify_llm_exception, is_rate_limit_text
 from ouroboros.pricing import emit_llm_usage_event, normalize_usage_cost, infer_provider_from_model
 from ouroboros.utils import sanitize_tool_result_for_log
 from ouroboros.config import runtime_setting
+from ouroboros.safety_config import OWNER_RULES_KEY
 
 from ouroboros.safety_records import (
     _safety_drive_root, _record_safety_usage, _emit_durable_safety_event, _emit_safety_mode_skip, coalesce_verdicts, verdict_history_bytes,
@@ -513,6 +514,29 @@ def _hold(ctx, tool_name, reason, *, status="UNAVAILABLE"):
     return _Assessment(False, f"⚠️ {marker}: {reason}. This call was not checked. {next_step}", status=status)
 
 
+def _focus_event_source(row, metadata, notes):
+    """A place event's host frame as its typed records when they reproduce that row exactly.
+
+    Each row is compared on its own, so any other row (attachments, images, another turn's frame,
+    a Continue order) stays whole. Notes as they stood at the event are kept only where they differ
+    from those read now."""
+    from ouroboros.presence_context import focus_frame_sources
+
+    typed = (focus_frame_sources(metadata, row.get("content"))
+             if isinstance(row, dict) and row.get("source") == "initial_text" else None)
+    if typed is None:
+        return row
+    at_event, place_id = typed.pop("notes_at_event", None) or [], (metadata.get("focus") or {}).get("place_id")
+
+    def versions(rows):
+        return sorted((str(n.get("text")), str(n.get("author")), str(n.get("at") or "")) for n in rows)
+    if versions(at_event) != versions(n for n in notes if n["place_id"] == place_id):
+        typed["notes_at_event"] = at_event
+    return {**{key: value for key, value in row.items() if key != "content"},
+            "host_frame": "prompts/FOCUS.md showed the mind these records and its allowance",
+            **typed}
+
+
 def _build_check_prompt(tool_name, arguments, messages=None, *, args_json=None, ctx=None, resolved_binding=None):
     """Fixed host evidence, with authorship separate from semantic authorization."""
     from dataclasses import asdict, is_dataclass
@@ -524,14 +548,14 @@ def _build_check_prompt(tool_name, arguments, messages=None, *, args_json=None, 
     kind = work_kind(metadata)
     focus = metadata.get("focus") or {}
     place = dict(call_place_facts(ctx, tool_name, arguments) or {})
+    place_ids = {row["place_id"] for row in place.get("places", []) if row.get("place_id")}
     # A focus occasions the work; it does not establish where this call lands.
     # Only these two built-ins take an actual place reference as their subject.
-    if tool_name in {"configure_presence", "place_reply"} and arguments.get("place_id"):
-        place["place_id"] = arguments["place_id"]
-    place_ids = {row["place_id"] for row in place.get("places", []) if row.get("place_id")}
-    if place.get("place_id"):
-        place_ids.add(place["place_id"])
-    notes = []
+    referenced = arguments.get("place_id") if tool_name in {"configure_presence", "place_reply"} else None
+    if referenced and referenced not in place_ids:  # a resolved row already names its place
+        place["place_id"] = referenced
+        place_ids.add(referenced)
+    notes = []  # each place's notes once, read now from the canonical store
     if place_ids:
         for record in load_places(canonical_data_root(ctx)):
             if record.place_id not in place_ids:
@@ -539,9 +563,12 @@ def _build_check_prompt(tool_name, arguments, messages=None, *, args_json=None, 
             if record.place_id == place.get("place_id"):
                 place.update(place_label=record.label, place_state=record.state)
             notes.extend({"place_id": record.place_id, "text": n.text, "author": n.author,
+                          **({"at": n.at} if n.at else {}),
                           "standing_delegation": n.author in {"owner", "migration"}} for n in record.notes)
-    if tool_name == "place_reply":
-        place.update(effect="message", targets={"destination": arguments.get("destination")})
+    if tool_name == "place_reply":  # always a message; resolved rows already carry its route
+        place["effect"] = "message"
+        if not place.get("targets"):
+            place["targets"] = {"destination": arguments.get("destination")}
     occasion = "unknown"
     if metadata.get("schedule_writer_kind"):
         occasion = metadata["schedule_writer_kind"] + "-written schedule"
@@ -554,6 +581,8 @@ def _build_check_prompt(tool_name, arguments, messages=None, *, args_json=None, 
     directives = getattr(ctx, "_owner_directives", None)
     # User messages are quoted input when the caller has no retained host source; never certify them as owner words.
     sources = directives if isinstance(directives, list) else [m for m in (messages or []) if m.get("role") == "user"]
+    if isinstance(directives, list):
+        sources = [_focus_event_source(row, metadata, notes) for row in sources]
     target = asdict(resolved_binding) if is_dataclass(resolved_binding) else resolved_binding
     with _PRIOR_LOCK:
         root = _root_id(ctx)
@@ -570,7 +599,8 @@ def _build_check_prompt(tool_name, arguments, messages=None, *, args_json=None, 
                      "origin_wake_task_id": metadata.get("origin_wake_task_id"), "focus": focus,
                      "sources": sources, "retained_host_sources": isinstance(directives, list)},
         "subject": {"tool": tool_name, "physical_target": target, "place": place},
-        "standing_delegation": {"owner_rules": runtime_setting("OUROBOROS_SAFETY_OWNER_RULES", ""), "place_notes": notes},
+        # The acting mind's context reads the same key through the same snapshot (``owner_rules_section``).
+        "standing_delegation": {"owner_rules": runtime_setting(OWNER_RULES_KEY, ""), "place_notes": notes},
         "earlier_verdicts": earlier,
         "earlier_safe_verdicts_omitted": omitted_safe,
     }

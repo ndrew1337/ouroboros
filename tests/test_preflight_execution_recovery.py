@@ -9,7 +9,7 @@ import pytest
 
 from ouroboros import preflight_receipts as receipts
 from ouroboros import review_ledger
-from ouroboros.tools.registry import ToolContext
+from ouroboros.tools.registry import ToolContext, ToolRegistry
 from tests import _contributor_packet_shared as shared
 from tests.test_preflight_receipts_consumers import _foreign_review, _recording
 from tests.test_preflight_receipts import _git, _tiny_repo
@@ -41,6 +41,10 @@ def test_deterministic_refusal_reaches_every_seat_without_starting_tests(
     if prior_proof != "absent":
         # Model a context that still owns a prior attestation. The selected gate
         # below must not mistake it for an invocation that got past preflight.
+        # A worker mints it after its registry imported every tool module, so the browser
+        # module's PLAYWRIGHT_BROWSERS_PATH default is already in the environment the proof
+        # binds; a first registry built by the review below would change it (#2363).
+        ToolRegistry(repo_dir=repo, drive_root=ctx.drive_root)
         shared.passing_test_runner(ctx)
         if prior_proof == "stale":
             (repo / "ouroboros" / "helper.py").write_text("VALUE = 3\n", encoding="utf-8")

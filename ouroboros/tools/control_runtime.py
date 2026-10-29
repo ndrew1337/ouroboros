@@ -335,8 +335,9 @@ def _chat_history(
     )
 
 
-def _update_scratchpad(ctx: ToolContext, content: str) -> str:
-    """LLM-driven scratchpad update — appends a timestamped block (Constitution P5: LLM-first)."""
+def _update_scratchpad(ctx: ToolContext, content: str, replaces: list | None = None, draft_source: str = "") -> str:
+    """LLM-driven scratchpad write (Constitution P5: LLM-first): append a timestamped block, or
+    fold the named blocks into one text the integrating mind accepts (#918; ``Memory.fold_scratchpad_blocks``)."""
     if not content or not isinstance(content, str) or len(content.strip()) < 10:
         return (
             _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=("⚠️ REJECTED: content is empty or too short "
@@ -344,7 +345,10 @@ def _update_scratchpad(ctx: ToolContext, content: str) -> str:
             "Scratchpad must have meaningful content (10+ chars). "
             "This likely means the tool call was malformed — check your arguments.")))
         )
-    from ouroboros.memory import Memory
+    if replaces is not None and not (isinstance(replaces, list) and all(isinstance(item, str) for item in replaces)):
+        return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_ARG_ERROR", text=(
+            "⚠️ REJECTED: replaces is a list of block sha256 strings (shown after each block's heading).")))
+    from ouroboros.memory import Memory, ScratchpadFoldFailed, ScratchpadProjectionStale, scratchpad_block_sha256
     from ouroboros.knowledge import focus_signature
     from ouroboros.tool_access import canonical_data_root
 
@@ -355,22 +359,65 @@ def _update_scratchpad(ctx: ToolContext, content: str) -> str:
     # remembers into the canonical root the next context reads.
     mem = Memory(drive_root=canonical_data_root(ctx))
     mem.ensure_files()
+    # The accepting focus, signed by the host; never a model name standing for authorship.
+    metadata = {
+        "focus": focus_signature(ctx)["focus"],
+        "task_id": str(getattr(ctx, "task_id", "") or ""),
+        "task_type": str(getattr(ctx, "current_task_type", "") or ""),
+        "delegation_role": str((getattr(ctx, "task_metadata", {}) or {}).get("delegation_role", "")) if isinstance(getattr(ctx, "task_metadata", {}), dict) else "",
+    }
+    draft = str(draft_source or "").strip()
+    stale = ""
     try:
-        block = mem.append_scratchpad_block(
-            content,
-            source="task",
-            metadata={
-                "focus": focus_signature(ctx)["focus"],
-                "task_id": str(getattr(ctx, "task_id", "") or ""),
-                "task_type": str(getattr(ctx, "current_task_type", "") or ""),
-                "delegation_role": str((getattr(ctx, "task_metadata", {}) or {}).get("delegation_role", "")) if isinstance(getattr(ctx, "task_metadata", {}), dict) else "",
-            },
-        )
+        if replaces:
+            written = mem.fold_scratchpad_blocks(content, replaces, metadata=metadata, draft_source=draft)
+        else:
+            written = mem.append_scratchpad_block(content, source="task", metadata={
+                **metadata, **({"draft_source": draft} if draft else {})})
+    except ScratchpadProjectionStale as error:
+        written, stale = error.result, str(error)
+    except ScratchpadFoldFailed as error:
+        return _fold_refusal(ctx, error)
     except RuntimeError as exc:
         if "LEGACY_SCRATCHPAD_REQUIRES_MANUAL_UPGRADE" in str(exc):
             return _publish_tool_result(ctx, ToolResult(status="unavailable", code="LEGACY_UNAVAILABLE", text=(f"⚠️ {exc}")))
         raise
-    return f"OK: scratchpad block appended ({len(content)} chars, ts={block.get('ts', '?')[:16]})"
+    if replaces:
+        fold = written["block"]
+        text = (f"OK: scratchpad fold applied: {len(written['sources'])} blocks "
+                f"({sum(len(str(block.get('content', ''))) for block in written['sources'])} chars) replaced by one "
+                f"fold block ({len(content)} chars, sha256 {scratchpad_block_sha256(fold)}); exact originals journaled "
+                f"at entry_id={written['entry_id']}: {mem.scratchpad_journal_reader(ctx)}. "
+                f"Active now: {written['blocks_after']} blocks, {written['content_len']} chars.")
+    else:
+        text = (f"OK: scratchpad block appended ({len(content)} chars, ts={written.get('ts', '?')[:16]}, "
+                f"sha256 {scratchpad_block_sha256(written)})")
+    if not stale:
+        return text
+    return _publish_tool_result(ctx, ToolResult(status="ok", code="OK", text=text + (
+        f"\n⚠️ SCRATCHPAD_PROJECTION_STALE: the canonical blocks hold this change, but the memory/scratchpad.md "
+        f"projection was not regenerated ({stale}); the next context renders the canonical blocks and the next "
+        "scratchpad write regenerates the file.")))
+
+
+def _fold_refusal(ctx: ToolContext, error: RuntimeError) -> str:
+    """No block changed (``ScratchpadFoldFailed``): a conflict names what is active now, a failure its cause."""
+    from ouroboros.memory import scratchpad_block_sha256 as sha256
+    from ouroboros.tool_access import canonical_data_root
+    from ouroboros.tool_access_reads import canonical_runtime_reader
+
+    if error.kind not in ("not_active", "ambiguous"):
+        return _publish_tool_result(ctx, ToolResult(status="error", code="TOOL_REPORTED_FAILURE", text=(
+            f"⚠️ SCRATCHPAD_FOLD_FAILED ({error.kind}): {error}; no block changed — every active block stays "
+            "(a preserved source row without blocks_folded in memory/scratchpad_journal.jsonl is preparation only).")))
+    active = "\n".join(f"- [{str(block.get('ts', ''))[:16]} — {block.get('source', '?')}] sha256 {sha256(block)}: "
+                       f"{' '.join(str(block.get('content', '')).split())[:80]}" for block in reversed(error.active))
+    reader = canonical_runtime_reader(ctx, canonical_data_root(ctx), "memory/scratchpad_blocks.json")
+    return publish_no_effect(ctx, ToolResult(status="error", code="TOOL_REPORTED_FAILURE", text=(
+        f"⚠️ SCRATCHPAD_FOLD_CONFLICT ({error.kind}): {error}; no block changed. Another focus may have folded "
+        "them, or the view is older. Your earlier Scratchpad section may be stale. "
+        f"Read the complete current blocks with {reader}. "
+        f"Active blocks observed at this refusal, newest first (previews):\n{active}")))
 
 
 def owner_contact_refusal(ctx: ToolContext, chat_id: object) -> str:
@@ -445,10 +492,11 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
     """Send a separate owner reply without completing the ongoing task.
 
     ``destination="main"`` addresses the owner's main chat from an owner-visible
-    root room: the row is typed ``main_notice``, which the supervisor
-    and history replay pin to Main whatever the sender's Project binding, and
-    which never counts as the task's final answer. When to send one is the
-    model's judgment (BIBLE P5); no host counter or timer triggers it.
+    root room: the row is typed ``main_notice``, written to Main whatever the
+    sender's Project binding and shown by that Project too (one row,
+    ``room_membership.row_rooms``); it never counts as the task's final answer.
+    When to send one is the model's judgment (BIBLE P5); no host counter or
+    timer triggers it.
     """
     chat_id = getattr(ctx, "current_chat_id", None)
     if chat_id is None or chat_id == "":  # 0 is a real hidden session, not absence
@@ -514,9 +562,9 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         chat_id, system_type = relay["source"]["chat_id"], "relay_reply"
         reply_meta = {"reply_to": resolve_reply(canonical_data_root(ctx), relay["source"]["address"]),
                       "reply_to_relay": relay["relay_id"]}
-    from ouroboros.tools.owner_delivery import deliver_owner_event
+    from ouroboros.tools.owner_delivery import deliver_owner_event, stamp_lineage
     from ouroboros.utils import append_jsonl
-    mode = deliver_owner_event(ctx, {
+    event = stamp_lineage(ctx, {
         "type": "send_message",
         "chat_id": chat_id,
         "text": text,
@@ -525,7 +573,19 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         "system_type": system_type,
         "progress_meta": reply_meta,
         "ts": utc_now_iso(),
-    })
+    })  # the producer before the debt and the dispatch: a replayed answer is the same work's
+    if relay:
+        # A relay's answer is owed before the queue sees it (the terminal outbox, as Presence Main contact is):
+        # a send that fails after enqueue is retried under this id, and the open return retires only once owed.
+        from supervisor.terminal_delivery import register_pending_delivery
+        from ouroboros.tool_access import canonical_data_root
+
+        event["delivery_id"] = f"relay-return:{relay['relay_id']}:{getattr(ctx, 'task_id', '') or ''}"
+        if not register_pending_delivery(canonical_data_root(ctx), event):
+            return publish_no_effect(ctx, ToolResult(status="unavailable", code="CAPABILITY_UNAVAILABLE", text=(
+                f"⚠️ RELAY_RETURN_NOT_OWED: the answer to relay {relay['relay_id']} could not be recorded for delivery. "
+                "Nothing was sent and the relay stays open; retry the same words."), meta={"reason_code": "RELAY_RETURN_NOT_OWED"}))
+    mode = deliver_owner_event(ctx, event)
     append_jsonl(ctx.drive_logs() / "events.jsonl", {
         "ts": utc_now_iso(),
         "type": "proactive_message",
@@ -539,6 +599,8 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         ctx._open_relays.pop(relay["relay_id"], None)
         from ouroboros.owner_relay import persist_held_state
         persist_held_state(ctx)
+        return (f"OK: answer to relay {relay['relay_id']} owed to {relay['source'].get('label') or 'its source room'} "
+                f"(delivery {event['delivery_id']}); the outbox retries it until sent.")
     if target == "main":
         return "OK: notice sent to the main chat." if mode == "live" else "OK: notice queued for delivery to the main chat."
     if mode == "live":

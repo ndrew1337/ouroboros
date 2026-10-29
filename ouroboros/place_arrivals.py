@@ -113,11 +113,13 @@ def record_heard(root, task, event, reason, *, captured_task_id=None):
 
 
 def retain_focus_source(root, task_id):
-    """Only an admitted focus needs the immutable context-source blob.
+    """The immutable context-source blob of an admitted focus, or of an arrival whose author's mail leaves
+    facts out (``place_intake.offer_to_author``); heard-only arrivals need none. Returns its reference,
+    the one already retained when there is one.
 
     Its pointer lives in the existing dedup record, so source row bytes and byte
     coordinates stay unchanged. dialogue_store projects it for every row reader.
-    Caller holds intake_lock through this operation and the running-task write.
+    Caller holds intake_lock through this operation (and a focus's running-task write).
     """
     from ouroboros import chat_chain
     with dialogue_store.transaction(root, write=False) as conn:
@@ -127,7 +129,7 @@ def retain_focus_source(root, task_id):
     body = dialogue_store.decode(row['body'])
     facts = json.loads(row['dispatch_input'] or '{}')
     if body.get('context_source_ref') or facts.get('place_context_source_ref'):
-        return
+        return body.get('context_source_ref') or facts['place_context_source_ref']
     source = {'recorded_at': body['ts'], 'source_event_id': body['client_message_id'],
               'text': body['text'], 'transport': body['transport']}
     ref = chat_chain.retain_memory_source(SimpleNamespace(drive_root=root, task_id=task_id), 'presence-event',
@@ -136,6 +138,7 @@ def retain_focus_source(root, task_id):
         conn.execute("UPDATE dialogue SET dispatch_input=json_set(COALESCE(dispatch_input,'{}'), "
                      "'$.place_context_source_ref',json(?)) WHERE stream='chat' AND seq=?",
                      (json.dumps(ref), row['seq']))
+    return ref
 
 
 def _dialogue_indexes(root):

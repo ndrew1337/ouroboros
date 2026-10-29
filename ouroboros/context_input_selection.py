@@ -333,6 +333,7 @@ def _capture_declared_context_core(
     the work right after its receipt, ahead of the dated runtime facts: the block
     a shared child reads, rendered from the task's own frozen record.
     """
+    from ouroboros.safety_config import owner_rules_section
     from ouroboros.memory_view import _owner_words_block  # the shared child's block, byte for byte
     from ouroboros.subagent_work_order import declared_inputs_carry_owner_words, input_source_selection_receipt
     from ouroboros.subagent_metrics import fact_line
@@ -373,7 +374,8 @@ def _capture_declared_context_core(
     return _ContextCore(
         base_prompt=sources["base_prompt"], bible_md=sources["bible_md"],
         architecture_md=sources["architecture_md"], development_md=sources["development_md"],
-        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text) if part),
+        # The owner's standing rules are governance like SYSTEM.md, not a selectable case input.
+        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text, owner_rules_section()) if part),
         dynamic_text="\n\n".join(parts),
         user_content_json=json.dumps(user_builder(task), ensure_ascii=False, sort_keys=True),
         docs_need_development=_task_requires_self_body_docs(task),

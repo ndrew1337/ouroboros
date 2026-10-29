@@ -1375,7 +1375,8 @@ def send_with_budget(chat_id: int, text: str, log_text: Optional[str] = None,
             )
 
         if not is_progress and stored:
-            meta.update(projection_fields(stored))
+            from ouroboros.room_appearances import frame_rooms
+            meta.update(projection_fields(stored), **frame_rooms(DATA_DIR, stored))
         if _text.strip() in ("", "\u200b"):
             return
         # Budget footers belong in dashboard/status flows, not every chat reply.

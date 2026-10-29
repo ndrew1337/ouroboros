@@ -5,7 +5,7 @@
 // lifecycle button NAMES its action to the one audited server seam, so the owner's
 // buttons and the agent's tool mean exactly the same thing.
 
-import { fetchJson, isStoreMigrating } from './api_client.js';
+import { fetchJson, isStoreMigrating, readStateJson } from './api_client.js';
 import { setInlineStatus } from './ui_helpers.js';
 import { tr } from './i18n.js';
 import { openConfirmDialog } from './confirm_dialog.js';
@@ -453,7 +453,7 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
             // This view renders only the queue; queue_only skips the whole
             // task-results scan server-side (v6.9x P2).
             getJson('/api/tasks?queue_only=1'),
-            getJson('/api/state'),
+            readStateJson(),
             getJson('/api/schedules'),
         ]);
         if (destroyed || revision !== refreshRevision) return;

@@ -128,18 +128,27 @@ def publish_pending_owner_dialogue(ctx: Any, messages: list) -> None:
     acknowledge_owner_dialogue(ctx, rows)
 
 
+def stamp_lineage(ctx: Any, evt: Dict[str, Any]) -> Dict[str, Any]:
+    """The producing task's lineage (``task_id`` / ``parent_task_id`` / ``root_task_id``) on an owner-directed
+    event, kept where already set: what the supervisor resolves the project binding from. A caller that owes the
+    event durably before delivering it (a relay's answer) stamps it first, so a replay is the same producer's."""
+    meta = getattr(ctx, "task_metadata", {})
+    meta = meta if isinstance(meta, dict) else {}
+    evt.setdefault("task_id", str(getattr(ctx, "task_id", "") or ""))
+    evt.setdefault("parent_task_id", str(meta.get("parent_task_id") or ""))
+    evt.setdefault("root_task_id", str(meta.get("root_task_id") or ""))
+    return evt
+
+
 def deliver_owner_event(ctx: Any, evt: Dict[str, Any]) -> str:
     """Deliver an owner-directed chat event live, or buffer it. Returns
     ``"live"`` or ``"deferred"`` — the caller words its receipt honestly.
 
-    Lineage (``task_id`` / ``parent_task_id`` / ``root_task_id``) is stamped
-    for every task frame so the supervisor can resolve project binding for
-    live deliveries exactly as it does for the end-of-task drain.
+    Lineage is stamped for every task frame (``stamp_lineage``) so the supervisor
+    can resolve project binding for live deliveries exactly as it does for the
+    end-of-task drain.
     """
     from ouroboros.contracts.chat_id_policy import is_a2a_chat_id
-
-    meta = getattr(ctx, "task_metadata", {})
-    meta = meta if isinstance(meta, dict) else {}
 
     def _accepted(mode: str) -> str:
         if not is_a2a_chat_id(evt.get("chat_id")):
@@ -151,9 +160,7 @@ def deliver_owner_event(ctx: Any, evt: Dict[str, Any]) -> str:
         ctx.pending_events.append(evt)
         return _accepted("deferred")
 
-    evt.setdefault("task_id", str(getattr(ctx, "task_id", "") or ""))
-    evt.setdefault("parent_task_id", str(meta.get("parent_task_id") or ""))
-    evt.setdefault("root_task_id", str(meta.get("root_task_id") or ""))
+    stamp_lineage(ctx, evt)
     if is_a2a_chat_id(evt.get("chat_id")):
         return _deferred()
     if getattr(ctx, _STICKY_ATTR, False):

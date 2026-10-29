@@ -9,9 +9,8 @@ from types import SimpleNamespace
 from ouroboros import context_compaction as compaction
 from ouroboros.artifacts import collect_task_artifact_records
 from ouroboros.context_budget import ContextReclaimRequest
-from ouroboros.consolidator import consolidate_scratchpad
 from ouroboros.loop_tool_execution import process_tool_results
-from ouroboros.memory import Memory
+from ouroboros.memory import Memory, scratchpad_block_sha256
 from ouroboros.tools.core import _read_file
 from ouroboros.tools.core_file_tools import delivered_source_prefix
 from ouroboros.tools.registry import ToolContext
@@ -39,64 +38,55 @@ def _read_source(ctx: ToolContext, ref: dict, *, start_char: int = 0) -> str:
     return delivered_source_prefix(ctx.last_read_view, display, len(display)) if ctx.last_read_view else display
 
 
-def test_fifo_eviction_keeps_exact_block_and_current_scratchpad_names_reader(tmp_path):
+def test_eleven_blocks_stay_whole_and_a_fold_names_its_exact_journaled_originals(tmp_path):
+    """#918: the former FIFO evicted ``scratch-source-0`` here; now all eleven stay, and a fold's
+    exact originals are what the current scratchpad's journal reader returns."""
     memory = Memory(tmp_path)
     contents = [f"scratch-source-{index}" for index in range(11)]
     for content in contents:
         memory.append_scratchpad_block(content, source="phase3b-test")
+    assert [block["content"] for block in memory.load_scratchpad_blocks()] == contents
+
+    first = memory.load_scratchpad_blocks()[0]
+    memory.fold_scratchpad_blocks("folded scratch-source-0", [scratchpad_block_sha256(first)])
 
     current = memory.load_scratchpad()
-    assert "read_file(root='runtime_data', path='memory/scratchpad_journal.jsonl'" in current
-
+    assert f"Exact replaced blocks: {memory.scratchpad_journal_reader()};" in current
     journal = _read_source(_tool_ctx(tmp_path), {"read": {"tool": "read_file", "arguments": {
         "root": "runtime_data", "path": "memory/scratchpad_journal.jsonl"}}})
     rows = [json.loads(line) for line in journal.splitlines() if line.startswith("{")]
-    evicted = [row for row in rows if row.get("type") == "block_evicted"]
-    assert [row["evicted_block_content"] for row in evicted] == [contents[0]]
+    assert [row["source_blocks"] for row in rows if row.get("type") == "fold_sources_preserved"] == [[first]]
+    assert not [row for row in rows if row.get("type") == "block_evicted"]
 
 
-class _ConsolidationLLM:
-    def chat(self, **_kwargs):
-        return {
-            "content": json.dumps({
-                "compressed_block": "compressed working memory",
-            })
-        }, {"prompt_tokens": 10, "completion_tokens": 5}
-
-
-def test_scratchpad_consolidation_journals_exact_replaced_blocks_and_ref(tmp_path):
+def test_scratchpad_fold_journals_exact_replaced_blocks_and_ref(tmp_path):
     memory = Memory(tmp_path)
     original = []
     for index in range(4):
         content = f"block-{index}-" + (chr(97 + index) * 8_000)
         original.append(memory.append_scratchpad_block(content, source=f"source-{index}"))
 
-    usage = consolidate_scratchpad(
-        memory,
-        _ConsolidationLLM(),
-    )
-    assert usage["prompt_tokens"] == 10
-    assert usage["completion_tokens"] == 5
+    memory.fold_scratchpad_blocks("compressed working memory",
+                                  [scratchpad_block_sha256(block) for block in original[:2]])
 
     blocks = memory.load_scratchpad_blocks()
-    consolidated = blocks[0]
-    assert consolidated["source"] == "consolidation"
-    source_ref = consolidated["metadata"]["source_ref"]
+    folded = blocks[0]
+    assert folded["source"] == "fold" and blocks[1:] == original[2:]
+    source_ref = folded["metadata"]["source_ref"]
     assert source_ref["read"] == {
         "tool": "read_file",
         "arguments": {
             "root": "runtime_data",
-            "path": "memory/scratchpad_journal.jsonl",
+            "path": str(memory.journal_path()),  # absolute: a relative path names a fork's own drive
             "start_line": 1,
         },
     }
     assert source_ref["entry_id"]
 
-    journal = _read_source(_tool_ctx(tmp_path), {"read": {"tool": "read_file", "arguments": {
-        "root": "runtime_data", "path": "memory/scratchpad_journal.jsonl"}}})
+    journal = _read_source(_tool_ctx(tmp_path), source_ref)
     rows = [json.loads(line) for line in journal.splitlines() if line.startswith("{")]
     entry = next(row for row in rows if row.get("entry_id") == source_ref["entry_id"])
-    assert entry["type"] == "blocks_consolidated"
+    assert entry["type"] == "fold_sources_preserved"
     assert entry["source_blocks"] == original[:2]
     assert source_ref["entry_id"] in memory.load_scratchpad()
 

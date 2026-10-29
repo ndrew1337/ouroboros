@@ -1147,9 +1147,21 @@ An exhausted or unknown allowance returns `consciousness_allowance_exhausted`,
 `disposition: retry` and `retry_after` seconds. Physical capacity keeps the existing
 `presence_capacity_full` retry response. A matching event focuses consciousness in
 that room under the owner's autonomy level and allowance, independently of its own
-clock. A current author can receive later arrivals as typed context-only mail.
-The host acknowledges this handoff only while that author accepts intake under its
-final-drain lock; a closed or ended author leaves the event eligible for ordinary admission.
+clock. Before allowance, rate or capacity is consulted, the conversation's current author
+receives later arrivals as typed context-only mail, whether or not they match a wake fact;
+Paused, Off/Panic and a bot event without a bot wake item stay heard only. The mail carries the
+arrival's text, source event id, exact `message` and `conversation` facts, observed `facts` and
+attachments. An attached `transport_queue` keeps every fact but its `events` there, completeness
+included. The mail's `context_source_ref` then names the arrival's retained exact facts:
+`memory_read(source_ref=…)` returns them, the whole snapshot included, and the arrival's room row
+shows the same reference in `chat_history` and `memory_read` rows. The host
+acknowledges this handoff (`completed`, `silent`) only while that author accepts intake under
+its final-drain lock, or when a retry finds the arrival already held by it after the earlier
+answer was lost; a closed or ended author leaves the event eligible for ordinary admission. If the
+Host process dies between that handoff and its answer, a retry reaches ordinary admission: the
+handoff is not exactly-once across a Host crash. A
+wake arrival its model has not seen when it finishes reopens it for another round; background
+arrivals alone never do.
 
 A focus uses ordinary `finish_task`, including `silent=true`. The host derives
 `message`, `silent`, `tool_delivered` or `deferred` from the final, delivery receipts
@@ -1264,6 +1276,50 @@ answer `unresolved` (observe on) or `interrupted` (ended); current hosts send ne
 `output_ref` at most once:
 deduplicate by `output_ref`, never by text, since an identical correction is new speech. Without
 `continuation_version` the legacy shape is unchanged and the request waits for the author's terminal.
+
+##### Version 2: early answer and reply anchor
+
+`GET /identity` also lists `presence_continuation_versions: [1, 2]`. The scalar
+`presence_continuation_version` stays `1`, because existing consumers compare it exactly. Request
+`continuation_version: 2` only when the list contains 2.
+
+- **Early answer.** An event that starts an author receives the same `continuing` envelope
+  (`deferred`, empty `text` and `output_ref`, `continuation_ref` equal to `turn_ref`,
+  `continuation_version: 2`). It arrives as soon as three facts hold: the author's RUNNING row is
+  durable, this write-once envelope is stored on that row, and the author's prepared loop accepts
+  conversation mail, past its start checks (settings, billing, the global budget) and before its
+  first model send. No review park is needed.
+  - An author refused before that point never answers early. The request answers with that
+    refusal, as at version 1, so a FIFO-conforming v2 consumer hands no follower to that author.
+    This does not guarantee consumption after a later loop failure or crash.
+  - Persist the reference, release the conversation's input FIFO and poll the reference.
+  - Send the conversation's next event only after this answer: it then meets an author that
+    takes it as context.
+  - The answer lends nothing. The author keeps its conversation, its active slot and this
+    request's in-flight reservation until a real park or its terminal.
+- **No gate wait.** When no live author takes the event and its conversation or every active
+  slot is held (an author preparing, closing or remote, or saturation), the request answers HTTP
+  429 at once:
+  `{ok: false, error, code: "presence_capacity_full", disposition: "retry", field:
+  "conversation" | "capacity", retry_after, attachment_manifest: []}`.
+  Nothing is held, started or recorded beyond the room's capture. Keep the event at the head of
+  its FIFO, retry it unchanged after `retry_after` seconds (1 for `conversation`, 5 for
+  `capacity`; back off as you see fit), and serve other conversations meanwhile. Versions 0 and 1
+  keep waiting in the gate.
+- **Polls.** A version-2 turn's poll echoes `continuation_version: 2`; turns admitted at other
+  versions keep `1`. Its terminal adds `reply_anchor: {source_event_id, message}`, where `message`
+  is the exact captured `event.message` of the last input the selected answer covers. Covered
+  inputs are the turn's own event and arrivals delivered to the model before the answered send
+  that selected the answer. After a review park they include the incoming messages its reentry
+  facts carry whole, never those named only by address. "Last" is the greatest
+  `message.source_order`, or delivery order when one lacks it.
+  - Arrivals drained after that send, such as at the author's final closure, never move the
+    anchor.
+  - A send refused before dispatch, or answered by nothing, covers nothing.
+  - A forced final keeps the coverage of the last answered send before it.
+  - Reply to the anchored message in the turn's conversation and thread.
+  - Promoted children and retained refusals keep their own references and carry no anchor.
+  - A turn answered within the request (`status: "completed"`) carries the same anchor.
 
 Before speaking again, the same author reacquires the conversation and active slot and receives
 observed conversation and delivery facts since its yield. Reentry retains the exact observed text,

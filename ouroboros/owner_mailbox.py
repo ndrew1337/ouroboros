@@ -108,11 +108,23 @@ def _append_mail(drive_root: pathlib.Path, task_id: str, path: pathlib.Path, ent
     from ouroboros.task_custody import task_mail_lock
 
     with task_mail_lock(drive_root, task_id) as locked:
-        if locked and entry.get("provenance") == "place_event" and path.exists():
-            for line in mailbox_lines(path.read_text(encoding="utf-8")):
-                if json.loads(line).get("msg_id") == entry["msg_id"]:
-                    return True
+        if locked and entry.get("provenance") == "place_event" and _holds(path, entry["msg_id"]):
+            return True
         return bool(locked and append_jsonl(path, entry))
+
+
+def _holds(path: pathlib.Path, msg_id: str) -> bool:
+    return path.exists() and any(json.loads(line).get("msg_id") == msg_id
+                                 for line in mailbox_lines(path.read_text(encoding="utf-8")))
+
+
+def place_event_retained(drive_root: pathlib.Path, task_id: str, msg_id: str) -> bool:
+    """Whether this author already holds a place arrival: its append outlived a lost settlement.
+    An entry is appended only while its author accepts intake, so its final drain reads it."""
+    from ouroboros.task_custody import task_mail_lock
+
+    with task_mail_lock(drive_root, task_id) as locked:
+        return bool(locked) and _holds(_mailbox_path(drive_root, task_id), msg_id)
 
 
 def acknowledged_task_message_ids(
@@ -348,13 +360,15 @@ def write_task_message(
     relation: str = "",
     sender_origin: Optional[Dict[str, Any]] = None,
     reply_to: Optional[Dict[str, Any]] = None,
+    place_arrival: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Write an addressed task-tree message without forging owner provenance.
 
     ``relation`` is the peer_task sender's typed place relative to the
     recipient (a ``PEER_RELATION_LABELS`` key); stored only when non-empty.
     ``sender_origin`` is the sending run's host-recorded origin (a Presence
-    room/event), never the author of the words it quotes.
+    room/event), never the author of the words it quotes. ``place_arrival``
+    keeps a place event's typed facts (source event, message, wake) unrendered.
     """
 
     from ouroboros.delegate_reply import normalize_reply_to
@@ -383,6 +397,8 @@ def write_task_message(
         entry["relation"] = str(relation)
     if sender_origin:
         entry["sender_origin"] = {str(key): str(value) for key, value in dict(sender_origin).items()}
+    if provenance == "place_event" and isinstance(place_arrival, dict):
+        entry["place_arrival"] = dict(place_arrival)
     if provenance == "system" and isinstance(review_feedback, dict):
         entry["review_feedback"] = dict(review_feedback)
     if provenance == "system" and isinstance(work_attention, dict):
@@ -735,6 +751,8 @@ def drain_owner_entries(
                         drained["relation"] = str(entry["relation"])
                     if isinstance(entry.get("sender_origin"), dict) and entry.get("sender_origin"):
                         drained["sender_origin"] = dict(entry["sender_origin"])  # rendered beside the words
+                    if drained["provenance"] == "place_event" and isinstance(entry.get("place_arrival"), dict):
+                        drained["place_arrival"] = dict(entry["place_arrival"])  # wake and anchor facts, unrendered
                 entries.append(drained)
         if _read_status is not None:
             _read_status["complete"] = complete

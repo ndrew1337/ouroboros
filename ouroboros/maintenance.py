@@ -35,7 +35,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional
 
 from ouroboros import (delegate_capture_job, delegate_pending, maintenance_jobs, maintenance_retirement,
-                       plan_collection_job, record_compression, store, subagent_metrics)
+                       plan_collection_job, record_compression, room_appearances, store, subagent_metrics)
 from ouroboros.startup_historical_audit import _REPORT_BYTES, finish_maintenance_job, spawn_maintenance_job
 
 log = logging.getLogger(__name__)
@@ -177,21 +177,53 @@ def _task_rows(root: pathlib.Path) -> int:
         return int(txn.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
 
 
-def _analyze_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
+# The planner statistics every store keeps, on every SQLite build: row counts (``sqlite_stat1``), as the app's own
+# SQLite keeps. A build with ENABLE_STAT4 (Homebrew's Python, for one) also samples each index into ``sqlite_stat4``,
+# and every new connection loads those samples with the schema, a cost that grows with the history
+# (tests/test_cost_contract.py B7). The job's row names the policy, so a store analyzed under another moves once.
+STATISTICS = "stat1"
+
+
+def _stale(row: Dict[str, Any], tasks: int) -> bool:
     """Planner statistics once per store file (this row lives in it), and again once the task
     table grew tenfold since: statistics describe the data's magnitude, so a fresh install's
-    would mislead the planner as it grows. Never by itself a reason to spawn the child."""
+    would mislead the planner as it grows."""
+    return row.get("state") != "done" or tasks >= 10 * max(1, int(row.get("tasks") or 0))
+
+
+def _sampled(root: pathlib.Path) -> bool:
+    """Whether ``sqlite_stat4`` holds a sample: its schema row, then at most one of its rows."""
+    with store.open_store(root, write=False) as txn:
+        table = txn.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat4'").fetchone()
+        return bool(table and txn.conn.execute("SELECT 1 FROM sqlite_stat4 LIMIT 1").fetchone())
+
+
+def _analyze_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
+    """Stale statistics, a row that does not name today's ``STATISTICS``, or samples beside one that does:
+    an older body's job (a plain ``ANALYZE``, then a merge into this row) rebuilds them on a STAT4 build and
+    keeps the row's word. Never by itself a reason to spawn the child: a store analyzed before moves when
+    the child next runs."""
     if not child:
         return False
-    return row.get("state") != "done" or _task_rows(root) >= 10 * max(1, int(row.get("tasks") or 0))
+    return row.get("statistics") != STATISTICS or _sampled(root) or _stale(row, _task_rows(root))
 
 
 def _analyze_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """``ANALYZE`` when the statistics are stale; then the samples go and this connection's planner
+    reloads what stays (``ANALYZE sqlite_master``), in the transaction that writes the row: a store
+    analyzed before keeps its ``sqlite_stat1`` and its tenfold base, an interrupted run changes nothing."""
+    row = maintenance_jobs.job(root, "sqlite_analyze") or {}
     with store.open_store(root, write=True) as txn:
         tasks = int(txn.conn.execute("SELECT COUNT(*) FROM tasks").fetchone()[0])
-        txn.conn.execute("ANALYZE")
-    maintenance_jobs.record(root, "sqlite_analyze", state="done", tasks=tasks)
-    return {"state": "done", "items": tasks}
+        stale = _stale(row, tasks)
+        if stale:
+            txn.conn.execute("ANALYZE")
+        if txn.conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='sqlite_stat4'").fetchone():
+            txn.conn.execute("DELETE FROM sqlite_stat4")
+            txn.conn.execute("ANALYZE sqlite_master")
+        maintenance_jobs.record_in(txn, "sqlite_analyze", state="done", statistics=STATISTICS,
+                                   **({"tasks": tasks} if stale else {}))
+    return {"state": "done", "items": tasks if stale else 0}
 
 
 def _packing_inputs(root: pathlib.Path) -> Dict[str, Any]:
@@ -304,6 +336,19 @@ def _tail_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, 
     return report
 
 
+def _appearances_run(root: pathlib.Path, should_stop: Callable[[], bool]) -> Dict[str, Any]:
+    """``room_appearances.run``, resumable at the store's mark; this row keeps only its state."""
+    try:
+        report = room_appearances.run(root, should_stop)
+    except Exception as exc:
+        if not _contention(exc):
+            maintenance_jobs.record(root, "room_appearances", state="failed")
+        raise
+    if (maintenance_jobs.job(root, "room_appearances") or {}).get("state") != report["state"]:
+        maintenance_jobs.record(root, "room_appearances", state=report["state"])
+    return report
+
+
 def _hot_facts_due(root: pathlib.Path, row: Dict[str, Any], facts: Dict[str, Any], child: bool) -> bool:
     """Rows written before the hot-fact columns (or by an older writer since) wait for a classification
     pass (``store_hot_facts.run_hot_facts``); a root without such rows has nothing to do. A failed pass
@@ -335,6 +380,7 @@ JOBS: Dict[str, tuple] = {
     "legacy_reconcile": (_legacy_due, _legacy_run),
     "dialogue_import": (_dialogue_due, _dialogue_run),  # the owner's history: newest segments first
     "memory_tail": (_tail_due, _tail_run),  # after the import: the tail's positions are settled
+    "room_appearances": (room_appearances.due, _appearances_run),  # after the import, like the tail
     "hot_facts": (_hot_facts_due, _hot_facts_run),
     "ended_plan_asks": (plan_collection_job.due, plan_collection_job.run),
     "custody_trash": (_trash_due, _trash_run),  # before retirement: a removed drive's bytecode goes in the same pass
