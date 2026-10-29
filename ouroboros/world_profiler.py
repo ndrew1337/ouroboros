@@ -113,15 +113,15 @@ def _tools_found() -> list[str]:
 
 
 def _host_line(repo_dir: str) -> str:
-    """Which copy of the app runs which body, re-derived at every start: the app is a replaceable host."""
+    """Which copy of the app runs which body version, re-derived at every start: the app is a replaceable host.
+    The body's commit rides the runtime section; here it would rewrite this cached block after every commit."""
     from ouroboros.platform_layer import BUNDLE_DIR_ENV, app_location_labels
-    from ouroboros.utils import get_git_info
 
     try:
         version = (Path(repo_dir) / "VERSION").read_text(encoding="utf-8").strip()
     except OSError:
         version = "unknown"
-    body = f"body {version} @ {get_git_info(Path(repo_dir))[1][:12] or 'unknown'}"
+    body = f"body {version}"
     bundle_text, app = os.environ.get(BUNDLE_DIR_ENV, "").strip(), os.environ.get("OUROBOROS_APP_VERSION", "").strip()
     bundle = Path(bundle_text)
     if not (bundle_text and app and (bundle / "repo_bundle_manifest.json").is_file()):
