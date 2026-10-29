@@ -161,6 +161,7 @@ D20 = "Presence"
 "ouroboros/claudexor_exit_facts.py" = "D07"
 "ouroboros/claudexor_runtime.py" = "D07"
 "ouroboros/claudexor_runtime_retention.py" = "D07"
+"ouroboros/claudexor_node_seed.py" = "D07"  # the daemon's kept copy of the bundled Node
 "ouroboros/engine_pin_policy.py" = "D07"  # one engine pin rule shared by update preflight and restart
 "ouroboros/claudexor_startup_failure.py" = "D07"
 "ouroboros/cli.py" = "D18"
