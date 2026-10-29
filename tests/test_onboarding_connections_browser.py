@@ -241,3 +241,57 @@ def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_
         assert all(not frame['overflow'] and frame['body'][1] <= frame['viewport'][0] + 1 for frame in report['frames'].values())
         assert all(width >= scroll - 1 for frame in report['frames'].values() for width, scroll in frame['scrollBodies'])
         browser.close()
+
+
+@pytest.mark.parametrize("engine", ["chromium", "webkit"])
+def test_undo_named_server_edits_restores_the_current_wizard_draft(direct_server_with_data, tmp_path, engine):
+    from playwright.sync_api import sync_playwright, expect
+
+    ui = direct_server_with_data
+    evidence = diagnostic_directory(tmp_path / "frames", f"undo-server-{engine}")
+    (ui["data_dir"] / "settings.json").unlink()
+    with _server() as (url, calls), sync_playwright() as pw:
+        browser = getattr(pw, engine).launch(headless=True)
+        page = browser.new_page(viewport={"width": 1360, "height": 900})
+        errors, failed = record_console_errors(page), record_failed_loads(page)
+        page.goto(ui["url"] + "/onboarding", wait_until="networkidle")
+        page.locator('#s-openai-compatible-base-url').fill('')
+        page.locator('#s-openai-compatible-key').fill('')
+        page.locator('[data-connection-add="openai-compatible"]').click()
+        row = page.locator('[data-connection-row][data-uid]').last
+        row.locator('[data-connection-label]').fill('Research server')
+        row.locator('[data-connection-field="base_url"]').fill(url)
+        row.locator('[data-connection-field="api_key"]').fill('b')
+        page.click('#next-btn')
+        main = page.locator('[data-model-role="main"]')
+        source = main.locator('[data-model-role-source] option').evaluate_all(
+            "nodes => nodes.map(n => n.value).find(v => v.startsWith('api:openai-compatible@'))")
+        main.locator('[data-model-role-source]').select_option(source)
+        main.locator('[data-model-role-model]').fill('same-model')
+        page.click('#back-btn')  # The editor now has a nonempty mount baseline.
+        row = page.locator('[data-connection-row][data-uid]').last
+        row.locator('[data-connection-toggle]').click()
+        expect(page.locator('#next-btn')).to_be_disabled()
+        row.locator('[data-connection-toggle]').click()
+        expect(page.locator('#next-btn')).to_be_enabled()
+        report = {"candidate_identity": ui["candidate_identity"], "engine": engine,
+                  "toggle_back": _frame(page, evidence, 'toggle-back')}
+        # Returning fields to the loaded values emits an empty patch, not a new document.
+        row.locator('[data-connection-field="base_url"]').fill('http://127.0.0.1:1/v1')
+        row.locator('[data-connection-field="base_url"]').fill(url)
+        row.locator('[data-connection-field="api_key"]').fill('temporary-draft-key')
+        row.locator('[data-connection-field="api_key"]').fill('b')
+        page.click('#next-btn')
+        expect(main.locator('[data-model-role-source]')).to_have_value(source)
+        expect(main.locator('[data-model-role-model]')).to_have_value('same-model')
+        page.locator('#compatible-model-source').select_option(source.removeprefix('api:'))
+        with page.expect_response('**/api/openai-compatible/models') as discovery:
+            page.click('#load-compatible-models')
+        assert discovery.value.status == 200
+        sent = discovery.value.request.post_data_json
+        assert sent['baseUrl'] == url and sent['apiKey'] == 'b'
+        assert calls and all(call['authorization'] == 'Bearer b' for call in calls)
+        report.update(discovery_payload=sent, upstream_calls=calls, console_errors=errors,
+                      failed_loads=failed, models=_frame(page, evidence, 'undone-models'))
+        (evidence / 'undo-proof.json').write_text(json.dumps(report, indent=2))
+        browser.close()

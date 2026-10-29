@@ -1129,9 +1129,11 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
     function bindProvidersStep() {
         const panel = root.querySelector('[data-settings-panel="providers"]');
         if (panel) {
+            const mountedConnections = JSON.stringify(state.connections || []);
             const changed = () => {
                 const rows = connectionsEditor?.collect().OUROBOROS_CONNECTIONS;
-                if (rows) state.connections = rows;
+                // collect() is a mount-relative patch; undo must restore that baseline too.
+                state.connections = rows ?? JSON.parse(mountedConnections);
                 for (const field of compatibleCard.fields) {
                     const input = panel.querySelector(`#${field.id}`);
                     const stateKey = PROVIDER_FIELDS.find((entry) => entry.settingKey === field.settingKey)?.stateKey;
