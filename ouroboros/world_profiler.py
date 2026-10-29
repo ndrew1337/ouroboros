@@ -13,6 +13,7 @@ import os
 import platform
 import re
 import shutil
+import sys
 from datetime import datetime, timezone
 from hashlib import sha256
 from pathlib import Path
@@ -111,6 +112,26 @@ def _tools_found() -> list[str]:
     return tools
 
 
+def _host_line(repo_dir: str) -> str:
+    """Which copy of the app runs which body, re-derived at every start: the app is a replaceable host."""
+    from ouroboros.platform_layer import BUNDLE_DIR_ENV, is_unstable_macos_app_path
+    from ouroboros.utils import get_git_info
+
+    try:
+        version = (Path(repo_dir) / "VERSION").read_text(encoding="utf-8").strip()
+    except OSError:
+        version = "unknown"
+    body = f"body {version} @ {get_git_info(Path(repo_dir))[1][:12] or 'unknown'}"
+    bundle_text, app = os.environ.get(BUNDLE_DIR_ENV, "").strip(), os.environ.get("OUROBOROS_APP_VERSION", "").strip()
+    bundle = Path(bundle_text)
+    if not (bundle_text and app and (bundle / "repo_bundle_manifest.json").is_file()):
+        return f"source runtime (Python {platform.python_version()} at {sys.executable}); {body}"
+    where = Path(os.environ.get("APPIMAGE") or next((p for p in (bundle, *bundle.parents) if p.suffix == ".app"),
+                                                    bundle.parent if bundle.name == "_internal" else bundle))
+    transient = " (a disk image or translocated read-only copy)" if is_unstable_macos_app_path(where) else ""
+    return f"App {app} at {where}{transient} (bundled Python {platform.python_version()}); {body}"
+
+
 def measured_block(repo_dir: str = "", data_dir: str = "") -> str:
     """The host's fenced block: system facts, a probe of common binaries and the roots in use.
 
@@ -121,6 +142,7 @@ def measured_block(repo_dir: str = "", data_dir: str = "") -> str:
     return f"""{MEASURED_START}
 ## System (measured at startup, {stamp})
 - **OS**: {platform.system()} {platform.release()} ({platform.machine()})
+- **Host**: {_host_line(repo_dir)}
 - **CPU**: {get_cpu_info()}
 - **RAM**: {get_system_memory()}
 - **User**: {user}

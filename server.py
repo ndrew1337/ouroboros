@@ -123,10 +123,8 @@ DEFAULT_PORT = int(os.environ.get("OUROBOROS_SERVER_PORT", "8765"))
 PORT_FILE = resolve_port_file(DATA_DIR, hosting_data_dir=DATA_DIR)
 
 sys.path.insert(0, str(REPO_DIR))
-if not os.environ.get("OUROBOROS_AGENT_PYTHON"):
-    _agent_python = sys.executable
-    if isinstance(_agent_python, str) and _agent_python:
-        os.environ["OUROBOROS_AGENT_PYTHON"] = _agent_python
+if isinstance(sys.executable, str) and sys.executable:  # this host's interpreter, never an inherited (moved-app) one
+    os.environ["OUROBOROS_AGENT_PYTHON"] = sys.executable
 
 # Logging is configured in main(), not at import: a spawn/forkserver worker re-imports
 # this module as ``__mp_main__`` and configures itself in ``worker_main``

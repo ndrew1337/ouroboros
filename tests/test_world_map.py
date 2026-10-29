@@ -304,6 +304,37 @@ def test_measured_block_falls_back_to_username(monkeypatch):
     assert "- **User**: winuser" in wprof.measured_block("/r", "/d")
 
 
+
+def test_the_measured_block_names_the_app_copy_and_the_body_it_runs(tmp_path, monkeypatch):
+    """The app is a replaceable host: a moved, translocated or newer app shows at the next start."""
+    import platform
+    import subprocess
+    import sys
+
+    for name, value in (("_tools_found", lambda: []), ("get_cpu_info", lambda: "c"), ("get_system_memory", lambda: "m")):
+        monkeypatch.setattr(wprof, name, value)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "VERSION").write_text("7.9.0\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "x"],
+                   cwd=repo, check=True)
+    body = "body 7.9.0 @ " + subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True,
+                                            text=True).stdout.strip()[:12]
+    python = platform.python_version()
+    for name in ("OUROBOROS_BUNDLE_DIR", "APPIMAGE"):
+        monkeypatch.delenv(name, raising=False)
+    assert f"- **Host**: source runtime (Python {python} at {sys.executable}); {body}" in wprof.measured_block(str(repo), "/d")
+    for app in (tmp_path / "Applications" / "Ouroboros.app", tmp_path / "AppTranslocation" / "X" / "d" / "Ouroboros.app"):
+        bundle = app / "Contents" / "Frameworks"
+        bundle.mkdir(parents=True)
+        (bundle / "repo_bundle_manifest.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setenv("OUROBOROS_BUNDLE_DIR", str(bundle))
+        monkeypatch.setenv("OUROBOROS_APP_VERSION", "7.10.0")
+        transient = " (a disk image or translocated read-only copy)" if "AppTranslocation" in str(app) else ""
+        assert f"- **Host**: App 7.10.0 at {app}{transient} (bundled Python {python}); {body}" in wprof.measured_block(
+            str(repo), "/d")
+
 def test_startup_verification_refreshes_the_measured_block_in_place(tmp_path, monkeypatch):
     from ouroboros import agent_startup_checks as checks_module
 
