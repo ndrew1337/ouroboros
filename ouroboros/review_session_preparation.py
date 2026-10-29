@@ -34,6 +34,32 @@ def render_review_session_prompt(request: Any, slot: Any, task: str) -> str:
     ))
 
 
+def session_material(surface: str, contract: str, schema: Any, accesses: Any) -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): an agent-session seat's wrapper
+    over a placeholder task for each seated access: the work-order frame with ``contract``, the read-only system
+    instructions or the checking copy's, the answer ``schema`` and the paged-turn pointers. The host and environment
+    facts every delegated run shares are not review text and are left out."""
+    from types import SimpleNamespace
+
+    from ouroboros.review_checking import checking_material
+    from ouroboros.review_execution import _REVIEW_SESSION_INSTRUCTIONS
+    from ouroboros.tools.review_brief_coupling import paged_review_text
+    from ouroboros.tools.review_multi_model import TRIAD_ROLE_HINT
+
+    source = {"session_relative_path": "⟨path⟩", "sha256": "⟨sha⟩"}
+    material = [json.dumps(schema, sort_keys=True), *(paged_review_text("⟨text⟩", source, label=f"review {key}",
+                                                                        delegated=True) for key in ("prompt", "instructions"))]
+    for access in sorted(set(accesses)):
+        prompt = render_review_session_prompt(SimpleNamespace(surface=surface, policy={"output_contract": contract}),
+                                              SimpleNamespace(role_hint=TRIAD_ROLE_HINT, slot_id="⟨slot⟩", session_access=access),
+                                              "⟨task⟩")
+        material += [prompt.replace(HOST_FACTS_INSTRUCTION, "").replace(SHARED_ENVIRONMENT_INSTRUCTION, ""),
+                     *([_REVIEW_SESSION_INSTRUCTIONS] if access == "readonly" else [
+                         *checking_material(), *(_ENVIRONMENT_NOTE["note"].format(where=where) for where in (
+                             _ENVIRONMENT_NOTE["scratch"].format(scratch="⟨scratch⟩"), _ENVIRONMENT_NOTE["outside"]))])]
+    return material
+
+
 def seat_service_directories(gateway: Any, route_id: str, shape: Any, data_root: Any, task_id: str,
                              operation_id: str, area: str, thread_seat: str = "") -> Any:
     """What a writable seat may write outside its copy (``workspace_preflight.session_service_directories``):
@@ -48,6 +74,11 @@ def seat_service_directories(gateway: Any, route_id: str, shape: Any, data_root:
     return session_service_directories(
         gateway, route_id, access=shape.access, mode=shape.mode, data_root=data_root, drive_root=data_root,
         task_id=task_id, key=f"seat-{seat_dir(data_root, task_id, operation_id).name}", execution_root=area)
+
+
+# A writable seat's own note inside the environment facts every delegated run is given.
+_ENVIRONMENT_NOTE = {"scratch": "in {scratch}, the scratch your engine grants this run, never inside this copy",
+                     "outside": "outside this copy", "note": "{where}, since its changes are retained as evidence"}
 
 
 def seat_environment_facts(area: str, source: Any, data_root: Any, service: Any = None) -> str:
@@ -76,10 +107,10 @@ def seat_environment_facts(area: str, source: Any, data_root: Any, service: Any 
             body = body_fact(source.get("root"), system_repo=resolve_repo_dir(), data_dir=data_root).body == BODY_TRUE
         except Exception:  # an unrecognized subject is foreign: a named recipe gap, never a guess
             body = False
-    where = (f"in {service.scratch}, the scratch your engine grants this run, never inside this copy"
-             if service.scratch else "outside this copy")
+    where = (_ENVIRONMENT_NOTE["scratch"].format(scratch=service.scratch) if service.scratch
+             else _ENVIRONMENT_NOTE["outside"])
     return session_environment_facts(area, data_root=data_root, body=body, service=service,
-                                     environment_note=f"{where}, since its changes are retained as evidence")
+                                     environment_note=_ENVIRONMENT_NOTE["note"].format(where=where))
 
 
 def prepare_review_session_request(invocation: Any, route: Any, *,

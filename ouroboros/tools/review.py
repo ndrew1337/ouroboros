@@ -41,6 +41,7 @@ from ouroboros.tools.review_helpers import (
     load_checklist_layers,
     load_governance_doc,  # noqa: F401 -- retained test/facade patch seam
     build_touched_file_pack,
+    pack_omission_note,
     triad_pack_exclusions,
     build_goal_section,
     build_scope_section,
@@ -787,10 +788,7 @@ def _prepare_unified_review(ctx: ToolContext, commit_message: str,
             exclude_paths=exclude_paths,
         )
         if _omitted:
-            current_files_section += (
-                f"\n\n⚠️ OMISSION NOTE: {len(_omitted)} file(s) omitted from direct context: "
-                f"{', '.join(_omitted)}"
-            )
+            current_files_section += f"\n\n{pack_omission_note(_omitted)}"
         if exclusion_note:
             current_files_section += f"\n\n{exclusion_note}"
         if not current_files_section.strip():

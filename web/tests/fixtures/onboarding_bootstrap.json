@@ -405,6 +405,7 @@
     "cloudruKey": "",
     "compatibleApiKey": "",
     "compatibleBaseUrl": "",
+    "connections": [],
     "consciousnessModel": "",
     "deepseekKey": "",
     "fallbackModel": "openai/gpt-5.6-luna",

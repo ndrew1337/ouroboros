@@ -55,10 +55,47 @@ def result_rubric() -> str:
 
 
 def result_rules() -> Dict[str, Any]:
-    """The rules a result wave is judged by, in the checklist facts' own shape."""
+    """The rules a result wave is judged by, in the checklist facts' own shape: the record's provenance, never
+    its reuse identity (``result_contract_fingerprint``)."""
     from ouroboros.tools.review_checklist import section_fingerprint
 
     return section_fingerprint(RESULT_CHECKLIST_SECTION)
+
+
+# The result brief's own words: how it frames the author's goal and questions, named scope and answer to the
+# previous review, in the brief's order, and what a retrieving seat must read and where.
+_AUTHOR_WORDS = ("## The author's own goal and questions for this review", "## Scope the author names",
+                 "## The author's answer to the previous review of this result")
+_READ_SUBJECT = "The subject's exact text is retained at {source}; read it whole. "
+_READ_IN_PLACE = ("Every produced file the subject names is at its absolute path: read what you need in place, "
+                  "nothing is copied for you.")
+
+
+def result_contract_fingerprint() -> str:
+    """The review contract of a result wave's reuse identity (``commit_gate.commit_review_contract_fingerprint``
+    over ``result_contract_words``)."""
+    from ouroboros.tools.commit_gate import commit_review_contract_fingerprint
+
+    own, packet, retrieving = result_contract_words()
+    return commit_review_contract_fingerprint(own, packet=packet, retrieving=retrieving, layer=RESULT_LAYER, shape="array")
+
+
+def result_contract_words() -> Tuple[list, list, list]:
+    """``(every seat, packet, retrieving)``: the result brief's own text over fixed placeholders in these branches
+    (the head with and without the author's words, the subject's frame of what was asked, produced and verified,
+    the packet's and a retrieving seat's composition). The rubric (a guide), the request, the reply, the produced
+    material and the receipts are data."""
+    from ouroboros.owner_words import reviewer_words_material
+    from ouroboros.tools.review_multi_model import triad_stable_head
+
+    heads = [_brief_head(goal=words, scope=words, review_rebuttal=words, rubric="⟨rubric⟩") for words in ("⟨words⟩", "")]
+    produced = {"files": [{"path": "⟨path⟩", "kind": "⟨kind⟩", "sha256": "⟨sha⟩", "size": 1}], "issues": ["⟨issue⟩"],
+                "effects": [{"tool": "⟨tool⟩", "receipt": "⟨receipt⟩", "host_notes": ["⟨note⟩"]}]}
+    own = [RESULT_CHECKLIST_SECTION, *heads, _SUBJECT_HEAD, *_ASK_WORDS.values(), *reviewer_words_material(),
+           *(answer_text(reply=reply, produced=material, verification="⟨verification⟩")
+             for reply, material in (("⟨reply⟩", produced), ("", {})))]
+    return (own, [RESULT_USER_TURN, triad_stable_head(RESULT_LAYER, ""), _packet_prompt("⟨head⟩", "⟨subject⟩")],
+            [_retrieving_task("⟨head⟩", source, "⟨subject⟩") for source in ("⟨source⟩", None)])
 
 
 def latest_reply(ctx: Any) -> str:
@@ -158,6 +195,14 @@ def _declared_effects(ctx: Any, root: Any, task_id: str, issues: List[str]) -> L
     return effects
 
 
+# How the subject frames what was asked and what was verified, around the host's records of both.
+_ASK_WORDS = {"objective": "The objective above: {author}.", "claims": "claims the result is held to ({source}):",
+              "support": " (support: {support})", "unavailable": "claims: unavailable ({error})",
+              "none": "(the task states no request beyond its reply)",
+              "no_receipts": "(no host-attested verification receipts)",
+              "unreadable": "(verification receipts unreadable: {error})"}
+
+
 def _ask(ctx: Any) -> str:
     """What was asked, host-attested: the task's own request fields (the objective with its author,
     ``owner_words.objective_author_line``), the claims it is held to (an ingress contract's, else the
@@ -172,21 +217,22 @@ def _ask(ctx: Any) -> str:
         if value not in (None, "", [], {}):
             lines.append(f"{key}: {value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)}")
             if key == "objective":
-                lines.append(f"The objective above: {objective_author_text(ctx)}.")
+                lines.append(_ASK_WORDS["objective"].format(author=objective_author_text(ctx)))
     try:
         claims, source, _exhibit = _accept_effective_claims(
             ctx, contract, getattr(ctx, "drive_root", None), str(getattr(ctx, "task_id", "") or ""))
     except Exception as exc:
         claims, source = [], ""
-        lines.append(f"claims: unavailable ({type(exc).__name__}: {exc})")
+        lines.append(_ASK_WORDS["unavailable"].format(error=f"{type(exc).__name__}: {exc}"))
     if claims:
-        lines.append(f"claims the result is held to ({source or 'task contract'}):")
-        lines.extend(f"- {claim.get('claim') or claim}" + (f" (support: {claim['support']})" if claim.get("support") else "")
+        lines.append(_ASK_WORDS["claims"].format(source=source or "task contract"))
+        lines.extend(f"- {claim.get('claim') or claim}" + (_ASK_WORDS["support"].format(support=claim["support"])
+                                                            if claim.get("support") else "")
                      for claim in claims if isinstance(claim, dict))
     words = owner_words_text(ctx, audience="reviewer")
     if words.strip():
         lines.append(words.strip())
-    return "\n".join(lines) or "(the task states no request beyond its reply)"
+    return "\n".join(lines) or _ASK_WORDS["none"]
 
 
 def _verification(ctx: Any) -> str:
@@ -197,9 +243,9 @@ def _verification(ctx: Any) -> str:
     try:
         receipts = read_context_verification_receipts(ctx, task_id, fallback_root=getattr(ctx, "drive_root", None)) if task_id else []
     except Exception as exc:
-        return f"(verification receipts unreadable: {type(exc).__name__}: {exc})"
+        return _ASK_WORDS["unreadable"].format(error=f"{type(exc).__name__}: {exc}")
     if not receipts:
-        return "(no host-attested verification receipts)"
+        return _ASK_WORDS["no_receipts"]
     return json.dumps({"summary": _accept_verification_summary(receipts), "receipts": _accept_receipt_exhibits(receipts)},
                       ensure_ascii=False, indent=1, default=str)
 
@@ -341,17 +387,23 @@ def subject_source(ctx: Any, text: str) -> Optional[pathlib.Path]:
     return task_artifact_dir_path(root, task_id) / str(ref["path"])
 
 
-def _brief_head(*, goal: str, scope: str, review_rebuttal: str) -> str:
+def _brief_head(*, goal: str, scope: str, review_rebuttal: str, rubric: Optional[str] = None) -> str:
     from ouroboros.triad_review import REVIEW_JSON_ARRAY_CONTRACT
 
-    parts = ["## REVIEW INSTRUCTIONS", "", result_rubric()]
-    if goal.strip():
-        parts += ["## The author's own goal and questions for this review", "", goal.strip(), ""]
-    if scope.strip():
-        parts += ["## Scope the author names", "", scope.strip(), ""]
-    if review_rebuttal.strip():
-        parts += ["## The author's answer to the previous review of this result", "", review_rebuttal.strip(), ""]
+    parts = ["## REVIEW INSTRUCTIONS", "", result_rubric() if rubric is None else rubric]
+    for heading, words in zip(_AUTHOR_WORDS, (goal, scope, review_rebuttal)):
+        if words.strip():
+            parts += [heading, "", words.strip(), ""]
     return "\n".join([*parts, "## Your answer", "", REVIEW_JSON_ARRAY_CONTRACT])
+
+
+def _packet_prompt(head: str, subject_text: str) -> str:
+    return f"{head}\n\n---\n\n# THE SUBJECT\n\n{subject_text}"
+
+
+def _retrieving_task(head: str, source: Any, subject_text: str) -> str:
+    where = _READ_SUBJECT.format(source=source) if source else ""
+    return f"{head}\n\n{where}{_READ_IN_PLACE}\n\n---\n\n# THE SUBJECT\n\n" + subject_text
 
 
 def prepare_result_review(ctx: Any, subject: Any, *, goal: str = "", scope: str = "",
@@ -383,9 +435,7 @@ def prepare_result_review(ctx: Any, subject: Any, *, goal: str = "", scope: str 
     for index in range(count):
         if not row_plan_retrieves(row_plan, index):
             continue
-        where = (f"The subject's exact text is retained at {source}; read it whole. " if source else "")
-        task = (f"{head}\n\n{where}Every produced file the subject names is at its absolute path: read what you "
-                "need in place, nothing is copied for you.\n\n---\n\n# THE SUBJECT\n\n" + subject.diff_text)
+        task = _retrieving_task(head, source, subject.diff_text)
         digest = hashlib.sha256(task.encode("utf-8")).hexdigest()
         tasks[index], shas[index], texts[digest] = task, digest, task
         policies[index] = {"output_contract": REVIEW_JSON_ARRAY_CONTRACT, "output_shape": "array"}
@@ -396,7 +446,7 @@ def prepare_result_review(ctx: Any, subject: Any, *, goal: str = "", scope: str 
     accesses = list(row_plan.get("session_accesses") or [""] * len(routes))
     seats = [SimpleNamespace(route=route, session_access=access) for route, access in zip(routes, accesses)]
     packet = [str(row_plan["slot_ids"][index]) for index in range(count) if not row_plan_retrieves(row_plan, index)]
-    prompt = f"{head}\n\n---\n\n# THE SUBJECT\n\n{subject.diff_text}" if packet else ""
+    prompt = _packet_prompt(head, subject.diff_text) if packet else ""
     return {
         "prompt": prompt, "stable_prefix_len": len(head) if packet else 0,
         "models": row_plan["models"], "routes": routes, "row_plan": row_plan,

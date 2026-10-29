@@ -12,7 +12,8 @@ import {
 } from '../modules/route_editor_primitives.js';
 import { modelSourceGroups, sourceChoice, sourceFromChoice } from '../modules/model_roles.js';
 import { adoptConnectionLabels, connectionLabel, routeConnectionId } from '../modules/connection_labels.js';
-import { PROVIDER_CARDS, PROVIDER_SECRET_KEYS, connectionRowHtml, renderSettingsPage } from '../modules/settings_ui.js';
+import { PROVIDER_CARDS, PROVIDER_SECRET_KEYS, connectionRowHtml } from '../modules/settings_provider_cards.js';
+import { renderSettingsPage } from '../modules/settings_ui.js';
 import {
     cacheHintsNote, connectionNameFor, connectionReferencesText, connectionRowFacts, connectionRows, connectionUsage,
 } from '../modules/settings_connections.js';
@@ -263,4 +264,20 @@ test('a new key takes a stored name from its label once; the setting and the sav
     ], connections), /OUROBOROS_MODEL/);
     assert.equal(connectionReferencesText([{ label: 'Main', connection: 'openrouter@claude-credits' }, 'Subagent 2'], connections),
         'Still naming a removed or disabled key, so they cannot send: Main (OpenRouter · Claude credits), Subagent 2');
+});
+
+test('a wizard draft lists named endpoints without saved metadata, keeping identical model IDs distinct', () => {
+    const settings = { OUROBOROS_CONNECTIONS: [
+        { kind: 'openai-compatible', name: 'alpha', label: 'Local reasoning server', base_url: 'http://127.0.0.1:41001/v1' },
+        { kind: 'openai-compatible', name: 'beta', label: 'Remote research server', base_url: 'http://127.0.0.1:41002/v1', api_key: 'b' },
+        { kind: 'openai-compatible', name: 'off', base_url: 'http://127.0.0.1:41003/v1', enabled: false },
+        { kind: 'openai-compatible', name: 'empty', api_key: 'no-url' },
+    ] };
+    const providers = configuredApiProviders(settings);
+    assert.deepEqual(providers.map((entry) => entry.id), ['openai-compatible@alpha', 'openai-compatible@beta']);
+    assert.equal(composeModelSource(providers[0].id, 'same-model'), 'openai-compatible@alpha::same-model');
+    assert.equal(composeModelSource(providers[1].id, 'same-model'), 'openai-compatible@beta::same-model');
+    assert.equal(apiConnections({ OPENAI_COMPATIBLE_BASE_URL: 'http://127.0.0.1:41001/v1',
+        OUROBOROS_CONNECTIONS: [{ kind: 'openai-compatible', name: 'default', enabled: false }] })
+        .find((entry) => entry.id === 'openai-compatible').enabled, false);
 });

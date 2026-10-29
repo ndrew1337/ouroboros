@@ -755,6 +755,20 @@ CHECKING_REVIEWER_INSTRUCTIONS = (
 )
 
 
+def checking_material() -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): a writable seat's checking
+    instructions over placeholder copies of every source kind (a frozen tree with and without a parent, a live
+    folder, a retained view), beside a reference root of their own or none. The scratch wording every delegated run
+    shares is not review text; folders, trees and roots are data."""
+    tree = {"kind": "git_tree", "tree": "⟨tree⟩", "parent": "⟨parent⟩", "root": "⟨root⟩"}
+    shared = scratch_fact(granted="⟨scratch⟩")
+    return list(dict.fromkeys(
+        (CHECKING_REVIEWER_INSTRUCTIONS + checking_instructions("⟨area⟩", source, reference, "⟨scratch⟩")).replace(
+            shared, "⟨scratch fact⟩") for source in (tree, {**tree, "parent": ""}, {"kind": "workspace", "root": "⟨root⟩"},
+                                                    {"kind": "directory", "view": "⟨view⟩", "root": "⟨root⟩"})
+        for reference in ("⟨reference⟩", "")))
+
+
 def thread_seat_area(data_root: Any, task_id: str, seat: str, source: Mapping[str, Any], *,
                      operation_id: str = "") -> str:
     """The persistent checking clone a writable seat's sticky thread owns as its root.
