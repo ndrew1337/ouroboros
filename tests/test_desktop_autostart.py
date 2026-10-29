@@ -366,6 +366,11 @@ def test_a_launchagent_whose_copy_is_gone_follows_this_one_without_enabling_anyt
     os_state.override = "disabled"
     assert startup.follow_moved_app() is False and startup.autostart_status() == {"state": "other_copy"}
     other.unlink()  # that copy went to the Trash
+    foreign = {"Label": startup.LABEL, "ProgramArguments": [str(other), "--hand-written"], "RunAtLoad": True}
+    path.write_bytes(plistlib.dumps(foreign))
+    assert startup.follow_moved_app() is False and plistlib.loads(path.read_bytes()) == foreign, "not this app's shape"
+    path.write_bytes(plistlib.dumps({"Label": startup.LABEL, "ProgramArguments": [str(other), *startup.AUTOMATIC_ARGS],
+                                     "RunAtLoad": True}))
     assert startup.follow_moved_app() is True
     entry = plistlib.loads(path.read_bytes())
     assert entry == {"Label": startup.LABEL, "ProgramArguments": [str(exe), *startup.AUTOMATIC_ARGS], "RunAtLoad": True}
@@ -386,6 +391,10 @@ def test_an_xdg_entry_whose_appimage_is_gone_follows_the_new_file_and_keeps_its_
     old.touch()
     assert startup.follow_moved_app() is False, "a copy that still exists stays other_copy"
     old.unlink()
+    shaped = path.read_text(encoding="utf-8")
+    path.write_text(shaped.replace(" --launch-intent automatic", " --minimized"), encoding="utf-8")
+    assert startup.follow_moved_app() is False and "--minimized" in path.read_text(encoding="utf-8"), "a hand-written Exec"
+    path.write_text(shaped, encoding="utf-8")
     assert startup.follow_moved_app() is True
     assert _exec_argv(path) == [str(exe), "--appimage-extract-and-run", "--launch-intent", "automatic"]
     assert "X-GNOME-Autostart-enabled=false" in path.read_text(encoding="utf-8")

@@ -242,6 +242,9 @@ def test_a_run_entry_whose_copy_is_gone_follows_this_one_and_keeps_the_startup_a
     registry.keys[autostart.APPROVED_KEY] = {autostart.VALUE_NAME: _approved(0x03)}
     assert desktop_autostart.follow_moved_app() is False and autostart.autostart_state() == "other_copy"
     other.unlink()  # an update removed the old folder and extracted the new one elsewhere
+    registry.keys[autostart.RUN_KEY][autostart.VALUE_NAME] = (f'"{other}" /hand-written', 1)
+    assert desktop_autostart.follow_moved_app() is False, "a value of another shape is not this app's entry"
+    registry.keys[autostart.RUN_KEY][autostart.VALUE_NAME] = (f'"{other}" --launch-intent automatic', 1)
     assert desktop_autostart.follow_moved_app() is True
     assert registry.value(autostart.RUN_KEY) == (f'"{packaged}" --launch-intent automatic', _FakeWinreg.REG_SZ)
     assert autostart.autostart_state() == "disabled_by_os", "set_autostart would have cleared the owner's switch"

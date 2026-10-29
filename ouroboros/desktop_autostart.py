@@ -211,21 +211,22 @@ def _vanished(program: object, exe: Path) -> bool:
     return isinstance(program, str) and Path(program).is_absolute() and Path(program) != exe and not Path(program).exists()
 
 
-def _desktop_program(command: str) -> str:
-    """The program an XDG ``Exec`` names: string unescaping, then argument quoting (``_desktop_command``)."""
+def _desktop_argv(command: str) -> list[str]:
+    """The argv an XDG ``Exec`` runs: string unescaping, then argument quoting (``_desktop_command``)."""
     escapes = {"s": " ", "n": "\n", "t": "\t", "r": "\r", "\\": "\\"}
     try:
-        return shlex.split(re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), m.group(0)), command))[0].replace("%%", "%")
-    except (ValueError, IndexError):
-        return ""
+        return [arg.replace("%%", "%") for arg in shlex.split(re.sub(r"\\(.)", lambda m: escapes.get(m.group(1), m.group(0)), command))]
+    except ValueError:
+        return []
 
 
 def follow_moved_app() -> bool:
     """At a packaged start, a sign-in entry whose program is gone names this copy instead (True when rewritten).
 
-    Only the program changes: the entry's arguments, an OS switch-off (launchctl override, StartupApproved,
-    Hidden) and the owner's choice stay, nothing is enabled, and an entry naming a copy that still exists
-    stays ``other_copy``. The native unit names a fixed path. Fail-soft: a boot step never fails here."""
+    Only an entry of this app's own shape (its label or file, the automatic-intent arguments) is touched,
+    and only its program changes: an OS switch-off (launchctl override, StartupApproved, Hidden) and the
+    owner's choice stay, nothing is enabled, and an entry naming a copy that still exists stays
+    ``other_copy``. The native unit names a fixed path. Fail-soft: a boot step never fails here."""
     exe, _reason = launcher_target()
     if exe is None or exe == NATIVE_LAUNCHER:
         return False
@@ -237,7 +238,7 @@ def follow_moved_app() -> bool:
             path = Path.home() / "Library/LaunchAgents" / f"{LABEL}.plist"
             entry = plistlib.loads(path.read_bytes())
             argv = entry.get("ProgramArguments") if isinstance(entry, dict) and entry.get("Label") == LABEL else None
-            if not (isinstance(argv, list) and argv and _vanished(argv[0], exe)):
+            if not (isinstance(argv, list) and argv[1:] == AUTOMATIC_ARGS and _vanished(argv[0], exe)):
                 return False
             write_bytes_atomic(path, plistlib.dumps({**entry, "ProgramArguments": [str(exe), *argv[1:]]}))
         else:
@@ -245,7 +246,8 @@ def follow_moved_app() -> bool:
             text = path.read_text(encoding="utf-8")
             parser = configparser.ConfigParser(interpolation=None)
             parser.read_string(text)
-            if not _vanished(_desktop_program(parser["Desktop Entry"].get("Exec", "")), exe):
+            argv = _desktop_argv(parser["Desktop Entry"].get("Exec", ""))
+            if not (argv[-2:] == AUTOMATIC_ARGS and _vanished(argv[0], exe)):
                 return False
             # The current command keeps an AppImage's extract-and-run mode; Hidden and the GNOME switch stay.
             write_text_atomic(path, re.sub(r"(?m)^Exec=.*$", lambda _m: f"Exec={_desktop_command(exe)}", text, count=1))

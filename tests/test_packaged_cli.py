@@ -523,6 +523,19 @@ def test_installer_replaces_its_own_cmd_whose_app_is_gone(tmp_path):
     with pytest.raises(PackagedCLIError, match="refusing to overwrite"):
         plan_windows_install(root, target_dir=target_dir)
 
+
+def test_installer_under_an_appimage_points_at_its_cli_instead_of_linking_into_the_mount(tmp_path, monkeypatch):
+    from ouroboros.packaged_cli import PackagedCLIError
+    from ouroboros.packaged_cli_install import plan_posix_install
+
+    root = _make_bundle_root(tmp_path)
+    (tmp_path / "bin").mkdir()
+    monkeypatch.setenv("APPIMAGE", "/home/me/Ouroboros.AppImage")
+    with pytest.raises(PackagedCLIError, match='use "/home/me/Ouroboros.AppImage" --cli'):
+        plan_posix_install(root, target_dir=tmp_path / "bin")
+    monkeypatch.delenv("APPIMAGE")
+    assert plan_posix_install(root, target_dir=tmp_path / "bin").action == "create"
+
 def test_installer_rejects_macos_dmg_or_translocation_paths():
     from ouroboros.packaged_cli import PackagedCLIError
     from ouroboros.packaged_cli_install import reject_unstable_macos_path
