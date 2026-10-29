@@ -92,6 +92,8 @@ class PresenceTurnResult:
     continuation_ref: str = ""
     output_ref: str = ""
     continuation_version: int = 0
+    # Version 2: ``{source_event_id, message}`` of the last input this output covers.
+    reply_anchor: Mapping[str, Any] | None = None
 
 
 def _presence_delivery(outcome: str, text: str, terminal_origin: str, *, legacy: bool = False) -> tuple[str, str]:
@@ -141,6 +143,7 @@ def presence_result_from_stored(stored: Mapping[str, Any], task_id: str, drive_r
         work_ref=str(metadata.get("presence_work_ref") or ""),
         delivery_reporting_version=int(presence.get("delivery_reporting_version") == 1),
         output_ref=str(metadata.get("presence_output_ref") or "") if text else "",
+        reply_anchor=metadata.get("presence_reply_anchor"),
     ))
 
 
@@ -196,6 +199,9 @@ def build_presence_result_event(task: dict[str, Any], text: str, ctx: Any, *, te
         metadata["presence_output_ref"] = output_ref
     if work_ref:
         metadata["presence_work_ref"] = work_ref
+    from ouroboros.presence_continuation import reply_anchor
+    if anchor := (reply_anchor(ctx, metadata) if task.get("_presence_turn") else {}):  # never a promoted root's
+        metadata["presence_reply_anchor"] = anchor
     if not getattr(ctx, "_presence_completion_accepted", False) and isinstance(declared, dict):
         metadata["presence_declaration"] = {key: declared[key] for key in ("status", "reason") if declared.get(key)}
     task["metadata"] = metadata
@@ -210,6 +216,7 @@ def build_presence_result_event(task: dict[str, Any], text: str, ctx: Any, *, te
         **({"finish_note": note} if note else {}),
         "work_ref": work_ref,
         "output_ref": output_ref,
+        **({"reply_anchor": anchor} if anchor else {}),
         "ts": utc_now_iso(),
     }
 
@@ -269,9 +276,21 @@ def _configured_gate(drive_root: Path | None = None) -> PresenceTurnGate:
         return _GATES.setdefault(key, PresenceTurnGate(limit, state_root=state_root))
 
 
-async def admit_configured_gate(drive_root: Path, conversation_key: str) -> PresenceTurnLease:
-    """Coroutine admission into the configured gate ``run_presence_turn`` would otherwise take."""
-    return await _configured_gate(Path(drive_root)).admit(conversation_key)
+async def admit_configured_gate(drive_root: Path, conversation_key: str, *, wait: bool = True) -> PresenceTurnLease:
+    """Coroutine admission into the configured gate ``run_presence_turn`` would otherwise take.
+
+    ``wait=False`` (continuation version 2) tries every resource once: a busy one is a typed
+    retry that leaves the event in its transport's custody, holding nothing and waiting nowhere.
+    """
+    gate = _configured_gate(Path(drive_root))
+    if wait:
+        return await gate.admit(conversation_key)
+    lease, busy = gate.try_admit(conversation_key)
+    if lease is None:
+        error = PresenceTurnError("presence_capacity_full", busy, disposition="retry")
+        error.retry_after = 1 if busy == "conversation" else 5
+        raise error
+    return lease
 
 
 def _stable_numeric_id(prefix: str, value: str) -> int:
@@ -1154,6 +1173,8 @@ def run_presence_turn(
             retained_manifest=next((resolve_attachment_manifest(drive_root, task_id, r) for r in prior_rows
                                     if r.get("direction") == "in"), None),
         )
+        if event.continuation_version == 2:  # this turn's outputs name their reply anchor; never in the root carrier
+            task["metadata"]["presence_continuation_version"] = event.continuation_version
         chat_id = int(task["chat_id"])
         actor_id = _stable_numeric_id("presence-actor-log", str(task.get("actor_id") or ""))
         log_dialogue = functools.partial(_log_dialogue, Path(drive_root), chat_id=chat_id,
@@ -1257,6 +1278,7 @@ def run_presence_turn(
             continuation_ref=task_id if continued else "",
             output_ref=str(row.get("output_ref") or ""),
             continuation_version=event.continuation_version,
+            reply_anchor=row.get("reply_anchor"),
         )
         from ouroboros.place_reply import project_reply
         result = project_reply(drive_root, task["metadata"], result)
@@ -1325,14 +1347,19 @@ class PresenceTurnExecution:
             except Exception:
                 log.warning("presence turn %s could not return its capacity", self.turn_id, exc_info=True)
 
-    def publish_initial(self, value: Any) -> bool:
-        """The durable initial envelope of a continuing author: its waiters answer, its capacity returns."""
+    def publish_initial(self, value: Any, *, return_capacity: bool = True) -> bool:
+        """The durable initial envelope of a continuing author: its waiters answer, its capacity returns.
+
+        An author that answered early (``return_capacity=False``: it still runs and holds its
+        lease) returns the capacity at its first real park, whose envelope is then already out.
+        """
         with self._lock:
-            if self.initial.done():
-                return False
-            self.initial.set_result(value)
-        self.return_capacity()
-        return True
+            published = not self.initial.done()
+            if published:
+                self.initial.set_result(value)
+        if return_capacity:
+            self.return_capacity()
+        return published
 
 
 class PresenceTurnExecutions:

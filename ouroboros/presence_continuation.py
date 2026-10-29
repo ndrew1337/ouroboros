@@ -17,8 +17,13 @@ is never restarted automatically.
 
 A boundary with still-live tool invocations, processes or services is not passive:
 the author waits holding the conversation, as before. Persistence failure lends
-nothing. ``continuation_version`` is negotiated per request; only a version-1 consumer
-takes the initial envelope. A review verdict never publishes by itself. Each terminal
+nothing. ``continuation_version`` is negotiated per request; only a version-1 or -2
+consumer takes the initial envelope. Version 2 also takes it when the author's prepared
+loop opens intake (``answer_early``: its RUNNING row and that envelope read back, its start
+checks passed, its loop accepting conversation mail), lending and returning nothing, so its
+transport's FIFO moves on while later arrivals join this author as context until its final
+closure. Its outputs name the last input an answered model send covered (``reply_anchor``),
+reentry facts included. A review verdict never publishes by itself. Each terminal
 output has a host-minted ``output_ref`` bound to the author's selection revision and
 destination: re-finalizing a selection already released (a pre-fold continuation's
 early release, ``_presence_released``) sends nothing again, a new selection is new
@@ -42,6 +47,9 @@ from ouroboros.task_store import patch_document
 log = logging.getLogger(__name__)
 
 CONTINUATION_VERSION = 1
+EARLY_CONTINUATION_VERSION = 2
+# ``/identity`` keeps the scalar at 1 (deployed consumers compare it exactly) and lists both.
+CONTINUATION_VERSIONS = (CONTINUATION_VERSION, EARLY_CONTINUATION_VERSION)
 # Controls that end a parked author without another model or tool step. A graceful
 # finalize request reacquires: its bounded wrap-up still speaks under the conversation.
 HARD_STOPS = frozenset({"cancelled", "task_ended", "deadline", "execution_deadline",
@@ -54,8 +62,8 @@ _REENTRY_GAPS_SHOWN = 8
 
 
 def continuation_version(value: Any) -> int:
-    if type(value) is not int or value not in (0, CONTINUATION_VERSION):
-        raise ValueError("continuation_version must be 0 or 1")
+    if type(value) is not int or value not in (0, *CONTINUATION_VERSIONS):
+        raise ValueError("continuation_version must be 0, 1 or 2")
     return value
 
 
@@ -111,14 +119,108 @@ class ReviewWaitBinding:
 
 def bind_review_wait(agent: Any, *, lease: Any, event: Any, task_id: str, identity: str,
                      drive_root: Path) -> None:
-    """Bind review/private-question parks; never grant the generic owner-wait capability."""
+    """Bind review/private-question parks; never grant the generic owner-wait capability.
+
+    A version-2 author also answers its starting event when its prepared loop opens intake (``answer_early``).
+    """
     if lease is None or not callable(getattr(lease, "lend", None)):
         return
     binding = ReviewWaitBinding(lease, Path(drive_root), task_id, identity, event)
     try:
         agent.review_wait_callback = functools.partial(presence_review_wait, binding)
+        if getattr(event, "continuation_version", 0) == EARLY_CONTINUATION_VERSION:
+            agent.intake_opened_callback = functools.partial(answer_early, binding)
     except AttributeError:
         log.debug("Presence agent %s takes no review-wait owner", task_id)
+
+
+def answer_early(binding: ReviewWaitBinding, _task: Any = None) -> bool:
+    """Publish the write-once initial envelope once this author's loop reads conversation mail.
+
+    Called when the prepared loop opens intake (``OuroborosAgent._handle_task_scoped``): after
+    every start check (settings, billing, the global budget), before the first model send. An
+    author refused earlier never answers early, so no follower is sent to a consumer that will
+    not read it; a repeat publishes nothing. The envelope is committed on the event's real
+    RUNNING row and read back first. Nothing is lent and no capacity returns: the author keeps
+    its gate lease and the transport's in-flight reservation until a real park or its terminal.
+    A failure only leaves the event waiting for that envelope or the terminal, as version 1 does.
+    """
+    execution = getattr(binding.lease, "execution", None)
+    if execution is None or execution.initial.done():
+        return False
+    from ouroboros.presence_runner import PresenceTurnResult
+
+    try:
+        initial = _persist(binding, "", "", utc_now_iso(), lend=False)["initial"]
+    except Exception:
+        log.warning("Presence %s could not record its early answer; its event waits", binding.task_id, exc_info=True)
+        return False
+    return execution.publish_initial(PresenceTurnResult(
+        outcome=initial["outcome"], text=initial["text"], task_id=binding.task_id, work_ref=initial["work_ref"],
+        delivery_reporting_version=binding.event.delivery_reporting_version, status="continuing",
+        continuation_ref=binding.task_id, output_ref=initial["output_ref"],
+        continuation_version=EARLY_CONTINUATION_VERSION), return_capacity=False)
+
+
+def note_place_delivery(ctx: Any, entry: Mapping[str, Any], controls: dict) -> None:
+    """A drained place arrival: a wake one may reopen a ready final, background alone never does.
+
+    Each arrival the drain hands to the model is a candidate for coverage (``covered_send``), as is
+    each incoming message a reentry note carries whole (``reentry_note``, never a wake).
+    Entries written before the ``wake`` fact existed keep their earlier reopening.
+    """
+    arrival = entry.get("place_arrival") if isinstance(entry.get("place_arrival"), Mapping) else {}
+    if arrival.get("wake") is not False:
+        controls["place_event"] = True  # accepted context, never owner authority
+    if ctx is not None and arrival.get("source_event_id"):
+        message = arrival.get("message") if isinstance(arrival.get("message"), Mapping) else {}
+        if not isinstance(getattr(ctx, "_presence_delivered", None), list):
+            ctx._presence_delivered = []
+        ctx._presence_delivered.append({  # written only on the author's loop thread: drains and reentry
+            "source_event_id": str(arrival["source_event_id"]), "message": dict(message),
+            "wake": arrival.get("wake") is not False})
+
+
+def covered_send(ctx: Any, send: Callable[[], tuple]) -> tuple:
+    """One model send of a round (``loop_model_call._call_round_model``, fallbacks included).
+
+    Only a usable response covers the place arrivals delivered before the send: one refused
+    before dispatch, or answered by nothing, leaves coverage where the last answered send put it.
+    """
+    seen = len(getattr(ctx, "_presence_delivered", None) or [])
+    result = send()
+    if seen and result[0] is not None:
+        ctx._presence_covered = max(int(getattr(ctx, "_presence_covered", 0) or 0), seen)
+    return result
+
+
+def uncovered_wake(ctx: Any) -> bool:
+    """A wake arrival reached this author after its model's last answered send, e.g. drained in the
+    round that only finalizes a ``finish_task``: its ready final reopens for it (background alone never)."""
+    delivered = getattr(ctx, "_presence_delivered", None) or []
+    return any(row.get("wake") for row in delivered[int(getattr(ctx, "_presence_covered", 0) or 0):])
+
+
+def reply_anchor(ctx: Any, metadata: Any) -> dict:
+    """``{source_event_id, message}`` of a version-2 turn's output's last covered input, else ``{}``.
+
+    Covered: the author's own event and the arrivals delivered before its latest answered model
+    send (``covered_send``; arrivals drained after it, as at the final closure, are not). Last: the
+    greatest provider ``source_order``, or delivery order when any covered input lacks one. A forced
+    final keeps the coverage of the last answered send before it.
+    """
+    metadata = metadata if isinstance(metadata, Mapping) else {}
+    presence = metadata.get("presence") if isinstance(metadata.get("presence"), Mapping) else {}
+    event = presence.get("event") if isinstance(presence.get("event"), Mapping) else {}
+    if metadata.get("presence_continuation_version") != EARLY_CONTINUATION_VERSION or not event.get("source_event_id"):
+        return {}
+    delivered = getattr(ctx, "_presence_delivered", None) or []
+    covered = [{"source_event_id": str(event["source_event_id"]), "message": dict(event.get("message") or {})},
+               *({"source_event_id": row["source_event_id"], "message": row["message"]}
+                 for row in delivered[:int(getattr(ctx, "_presence_covered", 0) or 0)])]
+    if all(type(row["message"].get("source_order")) is int for row in covered):
+        return max(enumerate(covered), key=lambda item: (item[1]["message"]["source_order"], item[0]))[1]
+    return covered[-1]
 
 
 def presence_review_wait(binding: ReviewWaitBinding, ctx: Any, checkpoint: dict, messages: list) -> str:
@@ -257,8 +359,11 @@ def _yield_conversation(binding: ReviewWaitBinding, ctx: Any, checkpoint: dict) 
     return binding.lent
 
 
-def _persist(binding: ReviewWaitBinding, work_ref: str, review_binding: str, now: str) -> dict:
-    """Initial envelope and current child, read back before anything is lent."""
+def _persist(binding: ReviewWaitBinding, work_ref: str, review_binding: str, now: str, *, lend: bool = True) -> dict:
+    """Initial envelope and current child, read back before anything is lent.
+
+    ``lend=False`` (an early answer) records no yield: ``lent_at``/``first_lent_at`` stay for a real park.
+    """
     from ouroboros.task_results import (
         STATUS_RUNNING, load_task_result, require_writable_task_result_schema,
         stamp_task_result_schema,
@@ -289,13 +394,15 @@ def _persist(binding: ReviewWaitBinding, work_ref: str, review_binding: str, now
             # Retain the latest admitted child even if a later park has no new handoff.
             "child_work_ref": str(work_ref or old.get("child_work_ref") or initial.get("work_ref") or ""),
             "author_controller": controller_identity(),
-            "first_lent_at": old.get("first_lent_at") or old.get("lent_at") or now, "lent_at": now,
+            **({"first_lent_at": old.get("first_lent_at") or old.get("lent_at") or now, "lent_at": now} if lend
+               else {key: old[key] for key in ("first_lent_at", "lent_at") if key in old}),
         }
         return stamp_task_result_schema({**current, "presence_continuation": record})
 
     committed = patch_document(binding.drive_root, binding.task_id, update)["presence_continuation"]
     stored = (load_task_result(binding.drive_root, binding.task_id, strict=True) or {}).get("presence_continuation")
-    if (not isinstance(stored, dict) or stored.get("lent_at") != now or stored.get("event_identity") != binding.identity
+    if (not isinstance(stored, dict) or (lend and stored.get("lent_at") != now)
+            or stored.get("event_identity") != binding.identity
             or not isinstance(stored.get("initial"), dict)
             or stored.get("child_work_ref") != committed["child_work_ref"]):
         raise ValueError("presence continuation did not read back")
@@ -445,6 +552,18 @@ def _history_reader(ctx: Any, event: Any, since: str, *, retained_source: bool =
     return f"chat_history({json.dumps(arguments, ensure_ascii=False)}) reads them."
 
 
+def _carried_arrivals(ctx: Any, rows: list) -> None:
+    """The incoming messages a reentry note carries whole reach the model as drained arrivals do: each joins
+    coverage (``covered_send``) with its exact captured message, as context and never a wake. Rows named
+    only by address, imported earlier history, replies and delivery facts move nothing."""
+    for row in rows:
+        transport = row.get("transport") if isinstance(row.get("transport"), Mapping) else {}
+        if (row.get("direction") == "in" and row.get("type") != "presence_delivery" and row.get("client_message_id")
+                and not isinstance(row.get("historical_import"), dict)):
+            note_place_delivery(ctx, {"place_arrival": {"source_event_id": row["client_message_id"],
+                                                        "message": transport.get("message"), "wake": False}}, {})
+
+
 def reentry_note(binding: ReviewWaitBinding, ctx: Any) -> str:
     """Host-authored facts since this author yielded: observations, never owner directives."""
     from ouroboros.chat_chain import format_address, row_address
@@ -480,6 +599,7 @@ def reentry_note(binding: ReviewWaitBinding, ctx: Any) -> str:
         room -= len(fact)
     kept.reverse()
     omitted = rows[:len(rows) - len(kept)]
+    _carried_arrivals(ctx, rows[len(omitted):])
     lines = list(kept)
     if omitted:
         lines.insert(0, f"({len(omitted)} earlier row(s) of this conversation are not repeated here: "
@@ -720,9 +840,11 @@ def turn_response(result: Any, version: int, drive_root=None) -> dict:
             "turn_ref": result.task_id, "work_ref": result.work_ref,
             "delivery_reporting_version": getattr(result, "delivery_reporting_version", 0)}
     if version:
-        body.update(status=getattr(result, "status", "completed"), continuation_version=CONTINUATION_VERSION,
+        body.update(status=getattr(result, "status", "completed"), continuation_version=version,
                     continuation_ref=getattr(result, "continuation_ref", ""),
                     output_ref=getattr(result, "output_ref", ""))
+    if version == EARLY_CONTINUATION_VERSION and getattr(result, "reply_anchor", None):
+        body["reply_anchor"] = dict(result.reply_anchor)
     return body
 
 
@@ -755,8 +877,11 @@ def work_view(stored: Mapping[str, Any], ref: str, drive_root=None) -> tuple[int
     if not isinstance(record, dict) or not isinstance(record.get("initial"), dict):
         return None
     presence = (stored.get("metadata") or {}).get("presence") or {}
+    # A turn negotiated at version 2 polls as 2; every other recorded turn keeps 1.
+    version = EARLY_CONTINUATION_VERSION if record.get("continuation_version") == EARLY_CONTINUATION_VERSION \
+        else CONTINUATION_VERSION
     common = {"ok": True, "work_ref": ref, "task_id": ref,
-              "continuation_ref": ref, "continuation_version": CONTINUATION_VERSION,
+              "continuation_ref": ref, "continuation_version": version,
               "child_work_ref": str(record.get("child_work_ref") or record["initial"].get("work_ref") or ""),
               "outputs": [project_output(drive_root, stored.get("metadata") or {}, ref, row)
                           for row in record.get("outputs") or [] if isinstance(row, dict)],
@@ -765,8 +890,9 @@ def work_view(stored: Mapping[str, Any], ref: str, drive_root=None) -> tuple[int
     if status not in {"completed", "failed", "cancelled"}:
         return 202, {**common, "status": "pending"}
     result = presence_result_from_stored(stored, ref, drive_root)
+    anchor = {"reply_anchor": dict(result.reply_anchor)} if version == EARLY_CONTINUATION_VERSION and result.reply_anchor else {}
     return 200, {**common, "status": status, "outcome": result.outcome, "text": result.text,
-                 "output_ref": result.output_ref, "child_work_ref": result.work_ref or common["child_work_ref"]}
+                 "output_ref": result.output_ref, "child_work_ref": result.work_ref or common["child_work_ref"], **anchor}
 
 
 def start_proactive_turn(*, admission: Any, event: Any, repo_dir: Path, drive_root: Path,
@@ -807,7 +933,8 @@ def start_proactive_turn(*, admission: Any, event: Any, repo_dir: Path, drive_ro
 
 
 __all__ = [
-    "CONTINUATION_VERSION", "HARD_STOPS", "bind_review_wait", "continuation_version", "conversation_lost",
-    "output_ref", "presence_review_wait", "replay_envelope", "reentry_note",
-    "selection_for", "start_proactive_turn", "terminal_output", "turn_response", "work_view",
+    "CONTINUATION_VERSION", "CONTINUATION_VERSIONS", "EARLY_CONTINUATION_VERSION", "HARD_STOPS",
+    "answer_early", "bind_review_wait", "continuation_version", "conversation_lost", "covered_send",
+    "note_place_delivery", "output_ref", "presence_review_wait", "replay_envelope", "reentry_note", "reply_anchor",
+    "selection_for", "start_proactive_turn", "terminal_output", "turn_response", "uncovered_wake", "work_view",
 ]
