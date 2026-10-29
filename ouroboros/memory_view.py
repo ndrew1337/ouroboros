@@ -176,12 +176,10 @@ def view_role(task: Mapping[str, Any]) -> str:
 
 def start_room(task: Mapping[str, Any], role: str) -> int:
     """The role's start work room from the task's own facts, read at its top level or under ``metadata``."""
-    from ouroboros.consciousness_authority import WAKE_CAUSE_FOCUS, wake_cause
     from ouroboros.context_budget import start_room_levels
 
     meta = _mapping(task.get("metadata"))
-    return start_room_levels(role, focus_wake=wake_cause({**task, **meta}) == WAKE_CAUSE_FOCUS,
-                             direct_chat=bool(task.get("_is_direct_chat") or meta.get("_is_direct_chat")))
+    return start_room_levels(role, direct_chat=bool(task.get("_is_direct_chat") or meta.get("_is_direct_chat")))
 
 
 def _explicit_problem(explicit: Any) -> str:

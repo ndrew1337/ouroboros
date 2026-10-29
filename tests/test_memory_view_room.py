@@ -86,9 +86,10 @@ _FOCUS = {"initiator": "consciousness", "usage_category": "consciousness", "wake
       "source": "promote_chat_to_task"}, 2),
     ({"id": "e1", "type": "evolution", "chat_id": 1, "metadata": {"evolution_transaction": {}}}, 2),
     ({"id": "s1", "type": "deep_self_review", "chat_id": 1, "_require_worker_pool": True}, 2),
-    ({"id": "w1", "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}, 2),
+    # A wake leaves one eighth, as a direct turn does; the work it starts is a root of its own (owner, 29.10).
+    ({"id": "w1", "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}, 1),
     ({"id": "f1", "type": "presence", "source": "presence", "chat_id": 7, "_is_direct_chat": True,
-      "_presence_turn": True, "metadata": {**PRESENCE, **_FOCUS}}, 2),  # a focus wake
+      "_presence_turn": True, "metadata": {**PRESENCE, **_FOCUS}}, 1),  # a focus wake
 ])
 def test_the_start_work_room_follows_task_facts_not_the_task_type(tmp_path, task, levels):
     shared.projects(tmp_path)
