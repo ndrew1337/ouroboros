@@ -124,8 +124,8 @@ def test_a_recovery_point_that_cannot_read_the_stores_is_never_started(managed, 
     assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD") == "ouroboros"
 
 
-def test_a_recovery_point_that_reads_the_stores_is_handed_off_and_checked_out_dev_untouched(managed, monkeypatch):
-    repo, _drive, _calls, _first = managed
+def _store_aware_point(repo):
+    """Move the recovery point to a commit that carries the store modules; dev HEAD and that commit."""
     dev_head = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "ouroboros-stable")
     for rel in STORES:
@@ -135,9 +135,46 @@ def test_a_recovery_point_that_reads_the_stores_is_handed_off_and_checked_out_de
     _git(repo, "commit", "-qm", "store-aware recovery point")
     stable = _git(repo, "rev-parse", "HEAD")
     _git(repo, "checkout", "-q", "ouroboros")
+    return dev_head, stable
+
+
+def test_a_recovery_point_that_reads_the_stores_is_handed_off_and_checked_out_dev_untouched(managed, monkeypatch):
+    repo, _drive, _calls, _first = managed
+    dev_head, stable = _store_aware_point(repo)
     handed = []
     monkeypatch.setattr("ouroboros.store_switch._hand_off_stores", lambda root: handed.append(root) or "")
     _failing_dev_smoke(monkeypatch, repo, dev_head)
     assert git_ops.safe_restart(reason="bootstrap") == (True, "OK: fell back to ouroboros-stable")
     assert handed, "the stores were handed off before the checkout"
     assert _git(repo, "rev-parse", "HEAD") == stable and _git(repo, "rev-parse", "ouroboros") == dev_head
+
+
+
+def test_the_fallback_hands_off_this_roots_real_stores_with_the_dialogue_open(managed, monkeypatch):
+    """The dialogue opens before repairs (ARCHITECTURE ch.2): its idle handle is this process's own, closed by the
+    handoff, and every WAL store leaves WAL before the store-aware recovery point is checked out."""
+    import sqlite3
+
+    from ouroboros import dialogue_store, store, usage_store
+    from tests.test_store import publish
+
+    repo, drive, _calls, _first = managed
+    monkeypatch.setattr(sqlite3, "sqlite_version_info", (3, 53, 1))
+    monkeypatch.setattr(store, "_filesystem_type", lambda _path: "apfs")  # the stores open in WAL
+    publish(drive)
+    usage_store.migrate_from_journal(drive)
+    with usage_store.hold(drive) as txn:
+        txn.set_meta("retained", 1)
+    dialogue_store.ensure(drive)
+    dialogue_store.append(drive, "chat", {"direction": "out", "chat_id": 1, "text": "before the repairs"})
+    paths = [store.store_path(drive), drive / usage_store.STORE_REL, dialogue_store.path(drive)]
+    assert all(store.wal_file(path) for path in paths)
+    dev_head, stable = _store_aware_point(repo)
+    _failing_dev_smoke(monkeypatch, repo, dev_head)
+    try:
+        assert git_ops.safe_restart(reason="bootstrap") == (True, "OK: fell back to ouroboros-stable")
+        assert not any(store.wal_file(path) for path in paths), "an older body opens no WAL file"
+        assert _git(repo, "rev-parse", "HEAD") == stable and _git(repo, "rev-parse", "ouroboros") == dev_head
+    finally:
+        store.forget_handoffs()
+        store.close_connections()
