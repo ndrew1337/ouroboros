@@ -267,7 +267,7 @@ def test_evolution_page_reads_runtime_and_history_independently():
     source = _read("web/modules/evolution.js")
 
     # Two reads, neither waiting for the other: the campaign paints from the state, the history from its saved copy.
-    assert "apiFetch('/api/state', { cache: 'no-store' })" in source
+    assert "await readStateSnapshot(stateSnapshots, request)" in source and "await readState()" in source
     assert "apiFetch(`/api/evolution-data${force ? '?force=1' : ''}`, { cache: 'no-store' })" in source
     assert "Promise.all" not in source
     assert "loadHistory({ force: !historyError })" in source  # Try again re-measures after a failed refresh

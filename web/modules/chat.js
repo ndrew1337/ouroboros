@@ -30,6 +30,7 @@ import { createProjectReadReceipt, isAtNewestMessage, newestMessageOffset, readB
 import { createSharedReadTracker } from './read_ahead.js';
 import { mergeHistoricalTimelineItem, historyNodeIsProtected, historyRowIds, historyStamps, stampHistoryNode, compareHistoryPosition } from './chat_history_replay.js';
 import { apiClient, apiFetch, fetchTaskDetail, fetchTaskDetailStrict, isStoreMigrating } from './api_client.js';
+import { readStateSnapshot } from './state_snapshots.js';
 import { syncHistoryRetentionItem } from './history_retention.js';
 import {
     childReportLabel,
@@ -628,14 +629,7 @@ export function createChatInstance({
     async function refreshHeaderControlState(force = false) {
         if (!force && state.activePage !== 'chat') return;
         const request = await stateSnapshots.gate(force);
-        if (!request) return;
-        try {
-            const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
-            if (!resp.ok) throw new Error(`State read failed: HTTP ${resp.status}`);
-            stateSnapshots.apply(request, await resp.json());
-        } catch {
-            stateSnapshots.fail?.(request);
-        }
+        if (request) await readStateSnapshot(stateSnapshots, request);
     }
 
     function persistVisibleHistory() {

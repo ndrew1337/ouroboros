@@ -312,6 +312,7 @@ def _admit_chat_task(
         "chat_id": chat_id,
         "text": text,
         "_is_direct_chat": True,
+        "_fresh_identity": True,  # host-only, set at this mint; no task row or client metadata carries it
     }
     from supervisor.active_activity import get_direct_activity_registry
 
