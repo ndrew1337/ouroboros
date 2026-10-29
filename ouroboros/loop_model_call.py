@@ -1412,7 +1412,7 @@ def _call_round_model_once(ctx: _RoundModelCallContext) -> Tuple[Any, float, str
 # changes books before addressing eligible unseen bodies, a just-chosen one last. Each pass runs once
 # per round whatever the route, so a configured fallback receives the view as applied and walks nothing
 # again. The fallback chain and the end of the path follow in the caller.
-REFUSAL_PASSES: Tuple[Tuple[str, ...], ...] = (("host_copies", "bodies"), ("floor", "books", "unseen_bodies"))
+from ouroboros.context_budget import REFUSAL_PASSES  # one rung order; dispatch stays in this driver
 WAKE_DELIVERY_STEP = "wake_delivery"  # the change applied before the passes, when there was one
 #: The round needing size recovery (``context_renewal`` reads it); a fallback's other failure cannot cancel it.
 CONTEXT_REFUSAL_ROUND_KEY = "_context_refusal_round"

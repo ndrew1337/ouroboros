@@ -88,6 +88,7 @@ NANO_MIN_HEADROOM_TOKENS = 8_192
 RECLAIM_LOW_WATER_DIVISOR = 8
 #: An unknown reclaim target: the step takes everything its category can give (the refusal passes).
 WHOLE_CATEGORY = 2**31 - 1
+REFUSAL_PASSES = (("host_copies", "bodies"), ("floor", "books", "unseen_bodies"))
 
 def start_room_levels(role: str, *, focus_wake: bool = False, direct_chat: bool = False) -> int:
     """Every new work starts with one eighth, including roots and wakes (owner, 27 October)."""

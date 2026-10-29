@@ -18,14 +18,16 @@ a tool call. Chosen read units and explicitly restored sources stay whole. The r
 tool unit since the newest note with its typed facts, shown or never shown. Unasked tool units, replies the notes
 already cover, host state the host sends afresh (facts, clock, roster and skill snapshots,
 bound and unchanged), superseded review copies and earlier address records leave the view;
-one host record names the checkpoint that holds them exactly. A renewal that would remove no
-tool unit or covered reply, or a seed not smaller than the refused request, is
-never sent: the round then ends in the named refusal.
+one host record names the checkpoint that holds them exactly. Owner 29.10 Q1=A:
+if that seed still exceeds the physical window, oldest delivered whole rows may
+leave by exact address; core, assignment, notes, newest owner turn and current tail
+stay. An irreducible view, or a candidate that does not shrink, still refuses.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import math
 from types import SimpleNamespace
 from typing import Any, Dict, List, Sequence, Tuple
 
@@ -137,7 +139,6 @@ def renewal_seed(messages: Sequence[Dict[str, Any]]) -> Tuple[List[Dict[str, Any
 
 def renew_after_refusal(limit_ctx: Any, tools: Any) -> bool:
     """Publish the renewal seed for a round that ended in a size refusal; False when renewal cannot help."""
-    from ouroboros.artifacts import store_actor_source_bytes
     from ouroboros.context_fit import estimate_context_prompt_tokens
     from ouroboros.loop_llm_call import TRANSPORT_DEATHS_KEY
     from ouroboros.loop_model_call import CONTEXT_REFUSAL_ROUND_KEY
@@ -151,38 +152,110 @@ def renew_after_refusal(limit_ctx: Any, tools: Any) -> bool:
         return False
     messages = limit_ctx.messages
     before = len(messages)
-    seed, left = renewal_seed(messages)
-    if not (left["tool_rows"] or left["covered_replies"] or left["restored_sources"]):
-        return _cannot_help(limit_ctx)  # only host rows would leave: a renewal cannot make this conversation fit
-    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    try:
-        source = store_actor_source_bytes(limit_ctx.drive_root or limit_ctx.drive_logs.parent, limit_ctx.task_id,
-                                          category="context_checkpoints", source_id=hashlib.sha256(raw).hexdigest(),
-                                          data=raw, extension="json")
-    except (OSError, ValueError):
-        return False  # no exact source, no renewal: every address must resolve (BIBLE P1)
-    index = units_since_note(messages, getattr(getattr(tools, "_ctx", None), "_last_context_observation", None))
-    seed.append(bound_host_row(RENEWAL_RECORD_NAME, (
-        "[Host record: working view renewed during context-size recovery. Same task; "
-        "nothing summarized; no model called.] Kept, in order: the assignment, every delivered message and "
-        "outward dialogue, my notes, my replies since my newest note and the current review decisions. "
-        f"Left the view: {left['tool_rows']} tool rows, {left['covered_replies']} replies before my newest note, "
-        f"{left['host_rows']} host rows, {left['restored_sources']} sources I restored. The exact transcript "
-        f"of {before} rows: {json.dumps(source, ensure_ascii=False, sort_keys=True)}."
-        + (f"\nTool units since my newest note (they left the view; each stays exact there):\n{index}" if index
-           else "")
-        )))
+    root = limit_ctx.drive_root or limit_ctx.drive_logs.parent
     schemas = getattr(limit_ctx, "tool_schemas", None)
-    if estimate_context_prompt_tokens(seed, schemas) >= estimate_context_prompt_tokens(messages, schemas):
-        return _cannot_help(limit_ctx)  # never send a candidate that is not smaller than the refused one
+    density = usage.get("_context_measurement_density") or 1.0
+    def measure(rows):
+        return math.ceil(estimate_context_prompt_tokens(rows, schemas) * density)
+    seed, record = renewal_view(messages, observation=getattr(tools._ctx, "_last_context_observation", None),
+                                drive_root=root, task_id=limit_ctx.task_id, measure=measure)
+    capacity = usage.get("_context_capacity_total_tokens")
+    reserve = usage.get("_context_response_reserve_tokens") or 0
+    if capacity is not None and measure(seed) + reserve > capacity:
+        seed, cut = physical_window_cut(seed, drive_root=root, task_id=limit_ctx.task_id,
+                                        measure=measure, usable=capacity - reserve)
+        if cut:
+            record = {**(record or {}), "physical_cut": cut}
+    if measure(seed) >= measure(messages):
+        return _cannot_help(limit_ctx)
+    if not record:
+        return _cannot_help(limit_ctx)
     _publish_reclaimed_transcript(SimpleNamespace(messages=messages, task_id=limit_ctx.task_id, tools=tools), seed,
                                   by="renewal")
     from ouroboros.loop import _emit_checkpoint_event
 
     _emit_checkpoint_event(limit_ctx.event_queue, limit_ctx.task_id, limit_ctx.drive_logs, {
         "checkpoint_kind": "context_view_renewed", "round": limit_ctx.round_idx, "owner_visible": True,
-        "source": source, "rows_before": before, "rows_after": len(seed), **left})
+        "rows_before": before, "rows_after": len(seed), **record})
     return True
+
+
+def renewal_view(messages, *, observation, drive_root, task_id, measure):
+    """Pure selection plus exact custody; both drivers price their own final envelope.
+
+    No round flags, dispatch, publication or trace pruning belongs here.
+    """
+    from ouroboros.artifacts import store_actor_source_bytes
+    seed, left = renewal_seed(messages)
+    if not (left["tool_rows"] or left["covered_replies"] or left["restored_sources"]):
+        return messages, None
+    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+    try:
+        source = store_actor_source_bytes(drive_root, task_id, category="context_checkpoints",
+            source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension="json")
+    except (OSError, ValueError):
+        return messages, None
+    index = units_since_note(messages, observation)
+    seed.append(bound_host_row(RENEWAL_RECORD_NAME, (
+        "[Host record: working view renewed during context-size recovery. Same task; "
+        "nothing summarized; no model called.] Kept, in order: the assignment, every delivered message and "
+        "outward dialogue, my notes, my replies since my newest note and the current review decisions. "
+        f"Left the view: {left['tool_rows']} tool rows, {left['covered_replies']} replies before my newest note, "
+        f"{left['host_rows']} host rows, {left['restored_sources']} sources I restored. The exact transcript "
+        f"of {len(messages)} rows: {json.dumps(source, ensure_ascii=False, sort_keys=True)}."
+        + (f"\nTool units since my newest note (they left the view; each stays exact there):\n{index}" if index else ""))))
+    return (seed, {"source": source, **left}) if measure(seed) < measure(messages) else (messages, None)
+
+
+def physical_window_cut(messages, *, drive_root, task_id, measure, usable):
+    """Owner 29.10 Q1=A: oldest delivered whole rows leave only for physical room.
+
+    Core, assignment, notes and the newest owner turn plus everything after it
+    are immune. No text is shortened or merged; the exact pre-cut checkpoint is
+    the reader for every removed position. A prediction about a mode target is
+    never authority for this cut.
+    """
+    from ouroboros.artifacts import store_actor_source_bytes
+    from ouroboros.context_budget import OWNER_WORDS_KIND, host_row_intact
+    if measure(messages) <= usable:
+        return messages, None
+    first_user = next((i for i, row in enumerate(messages) if row.get("role") == "user"), -1)
+    latest = max((i for i, row in enumerate(messages) if row.get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND),
+                 default=first_user)
+    # Consecutive owner deliveries are one newest turn, not independent old rows.
+    while latest > first_user and messages[latest - 1].get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND:
+        latest -= 1
+    eligible = [i for i, row in enumerate(messages) if first_user < i < latest
+                and row.get(HOST_CONTEXT_KIND_KEY) in OWNER_ROW_KINDS
+                and not row.get("tool_calls") and not _is_note(row)]
+    if not eligible:
+        return messages, None
+    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    try:
+        source = store_actor_source_bytes(drive_root, task_id, category="context_checkpoints",
+            source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension="json")
+    except (OSError, ValueError):
+        return messages, None
+    prior = {i for i, row in enumerate(messages) if first_user < i < latest
+             and row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut' and host_row_intact(row)}
+    gone = set(prior)  # the new exact checkpoint retains the preceding cut's reader too
+    before = measure(messages)
+    for position in eligible:
+        gone.add(position)
+        address = bound_host_row("context_physical_cut", (
+            "[Host record: this window's physical cut, not a summary or an authored fold.] "
+            f"Oldest delivered whole rows left the working view: zero-based positions {sorted(gone - prior)}. "
+            + (f"Earlier physical-cut address records at positions {sorted(prior)} remain exact in that checkpoint. " if prior else "") +
+            "Newest owner turn, assignment, core, notes and current tail stay. "
+            f"Read the exact original rows in this checkpoint JSON array: {json.dumps(source, sort_keys=True)}."))
+        candidate = [address if i == eligible[0] else row for i, row in enumerate(messages)
+                     if i == eligible[0] or i not in gone]
+        after = measure(candidate)
+        if after <= usable:
+            return candidate, {"source": source, "positions": sorted(gone - prior), "previous_cuts": sorted(prior),
+                               "before_tokens": before, "after_tokens": after}
+    # Irreducible core/notes/tail still refuses. Publish nothing from a failed cut.
+    return messages, None
 
 
 def _cannot_help(limit_ctx: Any) -> bool:
