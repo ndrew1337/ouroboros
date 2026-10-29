@@ -1227,7 +1227,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     page.querySelector('#updates-promote').addEventListener('click', async () => {
         const confirmedPromote = await openConfirmDialog({
             title: 'Save recovery point',
-            body: 'Move this installation\'s local recovery branch (ouroboros-stable) to the current checkout?\n\nThis is the fallback the runtime boots when the working branch breaks. It does not publish anything and does not change the official QA feed of any install.',
+            body: 'Move this installation\'s local recovery branch (ouroboros-stable) to the current checkout now?\n\nThis is the fallback the runtime boots when the working branch breaks. Ouroboros also moves it forward after every successful start, so a point saved here lasts until the next one (earlier versions stay under Restore). It does not publish anything and does not change the official QA feed of any install.',
             confirmLabel: 'Save recovery point',
         });
         if (!confirmedPromote) return;

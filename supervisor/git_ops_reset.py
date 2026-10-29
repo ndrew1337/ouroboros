@@ -664,11 +664,14 @@ def import_test() -> Dict[str, Any]:
     if before and before == _bootstrap_receipt():
         return {"ok": True, "skipped": "unchanged_bootstrap"}
     _forget_bootstrap_receipt()
+    _SMOKED.clear()
     r = subprocess.run(
         [sys.executable, "-c", "import ouroboros, ouroboros.agent; print('import_ok')"],
         cwd=str(_go().REPO_DIR),
         capture_output=True, text=True,
     )
+    if r.returncode == 0:
+        _note_smoked_head()
     if r.returncode != 0:
         _forget_dependency_fingerprint()  # a broken environment is re-synced next time, never skipped
     elif before and before == _bootstrap_snapshot():
@@ -679,6 +682,55 @@ def import_test() -> Dict[str, Any]:
             log.warning("Bootstrap receipt not recorded; the next boot verifies again", exc_info=True)
     return {"ok": (r.returncode == 0), "stdout": r.stdout, "stderr": r.stderr,
             "returncode": r.returncode}
+
+
+_SMOKED: Dict[str, str] = {}  # this process's passing smoke of a clean, launcher-managed dev checkout
+
+
+def _note_smoked_head() -> None:
+    """Keep the commit this smoke proved for ``advance_recovery_point`` when the checkout is a clean,
+    launcher-managed dev branch (at smoke time: an update being finalized, its receipt kept off, counts)."""
+    out = [_go().git_capture(["git", *args]) for args in (["rev-parse", "--abbrev-ref", "HEAD"], ["status", "--porcelain"],
+                                                         ["rev-parse", "HEAD"])]
+    if not any(rc for rc, _o, _e in out) and out[0][1].strip() == _go().BRANCH_DEV and not out[1][1].strip() \
+            and _go()._is_launcher_managed_repo():
+        _SMOKED["head"] = out[2][1].strip()
+
+
+def advance_recovery_point(ready: bool) -> str:
+    """After a ready boot, ``update-ref`` the local recovery branch (never pushed; Save recovery point moves it at
+    once) to the commit this process's smoke proved, never live HEAD; returns it, ``""`` when nothing moved."""
+    head, ref = _SMOKED.get("head", ""), f"refs/heads/{_go().BRANCH_STABLE}"
+    if not ready or not head or _go().git_capture(["git", "rev-parse", "--verify", "--quiet", ref])[1].strip() == head:
+        return ""
+    rc, _out, err = _go().git_capture(["git", "update-ref", ref, head])
+    if rc != 0:
+        log.warning("Recovery point not advanced to %s: %s", head[:12], err)
+        return ""
+    _go().append_jsonl(_go().current_drive_root() / "logs" / "supervisor.jsonl",
+                       {"ts": _go().utc_now_iso(), "type": "recovery_point_advanced", "ref": ref, "to": head})
+    return head
+
+
+def _recovery_checkout(reason: str) -> Tuple[bool, str]:
+    """The recovery point, checked out through the store-switch owner: a target that cannot read this
+    installation's stores is never started automatically (a typed failure; the owner restores); one that can
+    gets the stores handed off, then the branch is checked out as before (the dev branch is never rewritten)."""
+    from ouroboros import store_switch
+
+    repo, stable, why = _go().REPO_DIR, _go().BRANCH_STABLE, f"{reason}_fallback_stable"
+    target = store_switch.rev_parse(repo, stable)
+    if target and any(store_switch.switch_needs(repo, target).values()):
+        _rc, dev_head, _ = _go().git_capture(["git", "rev-parse", "HEAD"])
+        return False, (f"recovery_point_predates_stores: {_go().BRANCH_DEV} {dev_head.strip()[:12] or '?'} failed its "
+                       f"import smoke and the recovery point {stable} ({target[:12]}) cannot read this "
+                       "installation's stores, so it was not started; use Restore on the Updates page")
+    if not target:  # nothing to examine: the checkout itself reports it
+        return _checkout_outcome(stable, why, "rescue_and_reset")
+    ok, message, _deferred = store_switch.switch_or_reset(_go().current_drive_root(), repo, target_sha=target, target_ref=stable,
+                                                          reason=why, door="safe_restart_fallback",
+                                                          reset=lambda: _checkout_outcome(stable, why, "rescue_and_reset"))
+    return ok, message
 
 
 def _forget_dependency_fingerprint() -> None:
@@ -783,9 +835,10 @@ def safe_restart(
         },
     )
 
-    ok_s, err_s = _checkout_outcome(_go().BRANCH_STABLE, f"{reason}_fallback_stable", "rescue_and_reset")
+    ok_s, err_s = _recovery_checkout(reason)
     if not ok_s:
-        return False, f"Failed checkout {_go().BRANCH_STABLE}: {err_s}"
+        return False, (err_s if err_s.startswith("recovery_point_predates_stores")
+                       else f"Failed checkout {_go().BRANCH_STABLE}: {err_s}")
 
     deps_ok_s, deps_msg_s = _go().sync_runtime_dependencies(reason=f"{reason}_fallback_stable")
     if not deps_ok_s:
@@ -820,14 +873,11 @@ def _record_checkout_facts(facts: dict, *, invalidate_bootstrap: bool = True) ->
 
 
 def _dependency_fingerprint(req_path, cmd):
-    """Actual requirement bytes, install target/environment and interpreter.
-
-    A packaged host (``OUROBOROS_BUNDLE_DIR`` holding its bundle manifest) counts by content, not
-    location: a path inside the bundle counts relative to it in every field, and the app version,
-    ``sys.version``, cache tag, machine, manifest identity and bundled distributions are hashed, so the
-    same app moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs.
-    Paths outside it (the userbase, a container's venv), flags and the requirements digest stay as they
-    are; a run without a manifest hashes as before."""
+    """Actual requirement bytes, install target/environment and interpreter. A packaged host
+    (``OUROBOROS_BUNDLE_DIR`` with its bundle manifest) counts by content: paths inside the bundle are relative
+    to it in every field and its identity (``_packaged_host``, app version, ``sys.version``) is hashed, so the
+    same app moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs; paths
+    outside it (the userbase, a container's venv), flags and the requirements digest stay as they are."""
     import hashlib
     import json
     import site
@@ -868,9 +918,8 @@ def _inside_bundle(value, bundle):
 
 @functools.lru_cache(maxsize=None)
 def _packaged_host(bundle, purelib):
-    """The packaged host's content identity, read once per process (the host never changes under one):
-    ``{}`` without a bundle manifest. Distributions come from the bundle's own purelib folder names
-    (``name-version.dist-info``), no file parsed; a venv the sync itself writes is never listed."""
+    """The packaged host's identity, read once per process (``{}`` without a bundle manifest); distributions come from
+    the bundle's own purelib folder names (``name-version.dist-info``), never a venv the sync itself writes."""
     import platform
     from ouroboros.utils import read_json_dict
     manifest = read_json_dict(pathlib.Path(bundle) / "repo_bundle_manifest.json") or {}

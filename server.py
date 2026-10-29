@@ -941,7 +941,7 @@ def _boot_managed_update_tasks() -> None:
     """Finalize a pending update, restart after rollback, then refresh its feed."""
     try:
         from ouroboros.gateway.update_progress import observe_boot
-        from supervisor.git_ops import compute_managed_update_status
+        from supervisor.git_ops import advance_recovery_point, compute_managed_update_status
         from supervisor.update_merge import active_update_tx, finalize_managed_update_on_boot
 
         ready = _wait_for_supervisor_update_finalize()
@@ -973,6 +973,7 @@ def _boot_managed_update_tasks() -> None:
             close_repo_writer_admission("managed_update:rollback_restart")
             _request_restart_exit()
             return
+        advance_recovery_point(ready and _bootstrap_ok is True and result.get("rolled_back") is not True)
         update_status = compute_managed_update_status(fetch=True)
         try:
             from ouroboros.update_letter import refresh_after_check, runtime_status
