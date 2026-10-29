@@ -134,7 +134,60 @@ def poll(h, ref):
 
 
 def test_identity_advertises_the_continuation_version(host):
-    assert host.client.get("/identity", headers=_HEADERS).json()["presence_continuation_version"] == 1
+    identity = host.client.get("/identity", headers=_HEADERS).json()
+    assert identity["presence_continuation_version"] == 1  # deployed consumers compare the scalar exactly
+    assert identity["presence_continuation_versions"] == [1, 2]
+
+
+def test_v2_early_answer_lends_nothing_and_the_real_park_returns_the_reservation_once(host, monkeypatch):
+    import threading
+    from ouroboros.conversation_lease import live_author
+
+    h = host
+    original = h.Agent.handle_task
+
+    def opens_intake(self, task):
+        # ``OuroborosAgent._handle_task_scoped`` fires it once its prepared loop opens intake; this harness
+        # agent runs the loop directly, so it fires it here, twice: a repeat answers nothing again.
+        callback = getattr(self, "intake_opened_callback", None)
+        for _ in range(2):
+            callback(task)
+        return original(self, task)
+
+    monkeypatch.setattr(h.Agent, "handle_task", opens_intake)
+    proceed, step = threading.Event(), author(deliver)
+
+    def held(messages):
+        assert proceed.wait(60), "the test never let the author's model call return"
+        return step(messages)
+
+    h.script = held
+    reservations = h.client.app.state.host_service_context._inflight
+    first = turn(h, 42, version=2).json()
+    ref = first["continuation_ref"]
+    assert (first["status"], first["continuation_version"], first["turn_ref"]) == ("continuing", 2, ref)
+    record = load_task_result(h.data, ref)["presence_continuation"]
+    assert "lent_at" not in record and "first_lent_at" not in record and record["continuation_version"] == 2
+    assert reservations["telegram-bot:presence"] == 1 and live_author(record["conversation_key"], drive_root=h.data) == ref
+    proceed.set()
+    wait_for(lambda: parked(h, ref), what="the review park")
+    wait_for(lambda: reservations["telegram-bot:presence"] == 0, what="the park's return of the reservation")
+    record = load_task_result(h.data, ref)["presence_continuation"]
+    assert record["lent_at"] and record["first_lent_at"] and record["initial"] == {
+        "status": "continuing", "outcome": "deferred", "text": "", "output_ref": "", "work_ref": ""}
+    h.quick.add("telegram:bot-1:43")  # the lent conversation and slot run the next event at once
+    assert turn(h, 43, NEW_WORDS, version=2).json()["text"] == "Noted."
+    assert turn(h, 42, version=2).json() == first  # still the write-once envelope
+    h.release.set()
+    wait_for(lambda: poll(h, ref).status_code == 200, timeout=60, what="the late result")
+    late = poll(h, ref).json()
+    assert (late["text"], late["continuation_version"]) == (ANSWER, 2)
+    # The resumed author's final model send carried event 43 whole in its reentry note: that is the last
+    # input its answer covers, so the reply anchors there, with 43's exact captured message.
+    assert "(event telegram:bot-1:43, taken by turn" in str(h.inputs[-1]) and NEW_WORDS in str(h.inputs[-1])
+    assert late["reply_anchor"] == {"source_event_id": "telegram:bot-1:43", "message": {"message_id": "43"}}
+    wait_for(lambda: reservations["telegram-bot:presence"] == 0, what="no second return")
+    assert reservations["telegram-bot:presence"] == 0
 
 
 def test_v1_consumer_gets_the_envelope_the_next_event_runs_and_the_late_result_polls_once(host):
