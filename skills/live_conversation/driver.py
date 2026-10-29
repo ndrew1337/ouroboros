@@ -8,6 +8,7 @@ the whole transcript again; transport loss continues through that same fitted hi
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from pathlib import Path
 from websockets.exceptions import ConnectionClosed
@@ -210,6 +211,9 @@ class _Call:
         self.preparing_options = None
         self.failed_preparation_revision = None
         self.deferred_tool_outputs = []
+        self.pending_context_rows = []
+        self.delivered_catalog = None
+        self.preparing_revision = None
 
     async def run(self):
         writer = self.writer = asyncio.create_task(self.save_rows())
@@ -288,12 +292,16 @@ class _Call:
 
     async def consume(self, session):
         self.session = self.last_session = session
+        if not self.resume:
+            self.delivered_catalog = None
         self.connection_resumed = self.resume
         self.session_ended = asyncio.Event()
         if not self.resume:
             self.deferred_tool_outputs.clear()  # completed effects are in this adopted fresh prefix
+            self.pending_context_rows.clear()
             if self.host.model.vision:
                 self.attention.seen.clear()  # pixels are transport state; blind frame facts are already in the fit
+                self.attention.include_images(getattr(self.host, "fitted_frame_rows", lambda: ())())
             self.refit_offers()
         if getattr(self.host, 'take_mail_answer', lambda: False)():
             self.pending_offers.append(self.room_answer_pointer())
@@ -380,7 +388,10 @@ class _Call:
                         'You may answer, act or stay silent.'})
                 return
             try:
-                return await session.send(command)
+                result = await session.send(command)
+                if isinstance(command, ToolOutputs):
+                    self.delivered_catalog = command.tools
+                return result
             except ConnectionClosed:
                 # The writer saw the closed socket before the native reader, which
                 # owns the outcome: a resume releases this output to the replacement,
@@ -413,10 +424,12 @@ class _Call:
         # them in its selected input instead.
         pointer = self.room_answer_pointer()
         self.pending_offers.append(pointer)  # owns the answer before a write can yield or be cancelled
+        self.pending_context_rows.extend(rows)
         if not self.connected.is_set():
             return
         if self.host.renewal_due() or self.renewing or self.host.state.get("refit"):
-            self.request_renewal()
+            if self.request_renewal() is False:
+                await self.release_serving()
         else:
             # A failed/cancelled write leaves the pointer call-owned. The native
             # reader classifies a closed socket before consume retires this worker.
@@ -426,6 +439,7 @@ class _Call:
             except BaseException:
                 self.response_open = bool(self.active_responses)
                 raise
+            self.pending_context_rows[:] = [row for row in self.pending_context_rows if all(row is not old for old in rows)]
             self.pending_offers[:] = [row for row in self.pending_offers if row is not pointer]
 
     def timing(self, phase):
@@ -436,7 +450,7 @@ class _Call:
     def request_renewal(self, *, resuming=False, within=None):
         if (not resuming and self.failed_preparation_revision is not None
                 and self.failed_preparation_revision == getattr(self.host, '_history_version', 0)):
-            return  # only a changed canonical view earns another speculative fit
+            return False  # only a changed canonical view earns another speculative fit
         if not self.renewing:
             self.timing("requested")
         # A fresh fit wins over a requested resume while the transport is live.
@@ -447,6 +461,7 @@ class _Call:
             prepare = getattr(self.host, 'prepare_session', None)
             if (prepare is not None and self.preparing is None
                     and getattr(self.session, 'silent_context_updates', False)):
+                self.preparing_revision = getattr(self.host, "_history_version", 0)
                 self.preparing_options = session_options(self.host, '')
                 self.preparing = asyncio.create_task(prepare(self.preparing_options))
         if within is not None:
@@ -469,24 +484,46 @@ class _Call:
                 return  # the existing sequential fallback can now take the quiet boundary
             if exc.code != 'context_capacity':
                 raise  # credentials, quota and policy keep their terminal contract
+            revision = getattr(exc, 'source_revision', None)
         except (OSError, ConnectionClosed) as exc:
             from ouroboros.realtime_session import transport_loss
             if transport_loss(exc):
                 return
             raise
-        self.failed_preparation_revision = getattr(self.host, '_history_version', 0)
+        self.failed_preparation_revision = revision if revision is not None else self.preparing_revision
         self.renewing = self.resume = False
         self.renewal_deadline = None
         self.host.state.pop('refit', None)
         self.tool_refit.clear()
-        # Completed effects belong to the call. An unfittable declaration change
-        # still returns its result on the serving connection's existing catalog.
-        pending, self.deferred_tool_outputs = self.deferred_tool_outputs, []
-        for output, offers in pending:
+        await self.release_serving()
+
+    def serving_catalog(self):
+        if self.delivered_catalog is None:
+            # External sessions need only the public selected catalog, never .tools.
+            self.delivered_catalog = tuple(json.loads(self.session.selected.tools_json))
+        return self.delivered_catalog
+
+    async def guard_serving(self, rows):
+        check = getattr(self.host, 'delivery_fits', None)
+        if check is None or not await check(rows, self.serving_catalog()):
+            raise RealtimeSetupError('context_capacity',
+                "This room's context and working reserve do not fit this engine's window.")
+
+    async def release_serving(self):
+        # Obligations leave custody only after a successful fitting delivery.
+        while self.deferred_tool_outputs:
+            output, offers = self.deferred_tool_outputs[0]
+            await self.guard_serving(output.messages)
             if any(row.get('tool_call_id') not in output.silent for row in output.messages if row.get('role') == 'tool'):
                 self.response_open = True
-            await self.send(ToolOutputs(output.messages, tuple(self.session.tools), silent=output.silent))
+            await self.send(ToolOutputs(output.messages, self.serving_catalog(), silent=output.silent))
+            self.deferred_tool_outputs.pop(0)
             self.pending_offers[:] = [row for row in self.pending_offers if all(row is not offer for offer in offers)]
+        if self.pending_context_rows and self.connected.is_set():
+            rows = tuple(self.pending_context_rows)
+            await self.guard_serving(rows)
+            await self.session.send(ContextUpdate(rows, respond=False))
+            self.pending_context_rows[:] = [row for row in self.pending_context_rows if all(row is not old for old in rows)]
 
     async def close_preparation(self):
         task, self.preparing = self.preparing, None
@@ -620,7 +657,7 @@ class _Call:
                         # Waiting for quiet would deadlock on the withheld result.
                         offers = []
                         if any(call["id"] not in silent for call in calls):
-                            offers = [*images, {"role": "user", "content":
+                            offers = [*({**image, "_canonical": True} for image in images), {"role": "user", "content":
                                 "[Host fact; not owner words] The requested tool batch returned; its results are in the fitted history. "
                                 "You may continue from them, act or stay silent; completed effects stay done."}]
                             self.pending_offers.extend(offers)
@@ -628,6 +665,9 @@ class _Call:
                         self.tool_refit.set()
                         self.deferred_tool_outputs.append((ToolOutputs(tuple(changes) + tuple(images),
                             tuple(self.host.schemas), silent=silent), offers))
+                        if not self.renewing:
+                            self.tool_refit.clear()
+                            await self.release_serving()
                     # A deliberate goodbye needs only playback, no further
                     # native result or connection that could cut it short.
                 else:
@@ -903,15 +943,17 @@ class _Call:
         if not self.pending_offers or not self.connected.is_set() or not self.quiet():
             return
         if self.host.renewal_due() or self.host.state.get("refit"):
-            self.request_renewal()
-            return
+            if self.request_renewal() is not False:
+                return
+            await self.guard_serving(self.pending_offers)
         self.attention.include_images(self.pending_offers)
         requested = any(row.get("_requested_look") for row in self.pending_offers)
         frames = await self.attention.deliver(self.session, requested=requested)
         self.pending_offers = [*frames, *self.pending_offers]
         if self.host.renewal_due():
-            self.request_renewal()
-            return
+            if self.request_renewal() is not False:
+                return
+            await self.guard_serving(self.pending_offers)
         # Persistence or image ACKs may yield to new speech. Keep the facts until
         # quiet is observed again; the frame is already accounted for exactly once.
         if not self.quiet():

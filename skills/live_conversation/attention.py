@@ -119,7 +119,9 @@ class Attention:
     def include_images(self, rows):
         """A refitted look already brings its exact pixels with the pending offer."""
         for row in rows:
-            if row.get("_call_frame_source") and row.get("_call_frame_digest"):
+            if (row.get("_call_frame_source") and row.get("_call_frame_digest")
+                    and isinstance(row.get("content"), list)
+                    and any(part.get("type") == "image_url" for part in row["content"])):
                 self.seen[row["_call_frame_source"]] = row["_call_frame_digest"]
 
     def tool_outputs(self, calls, changes):

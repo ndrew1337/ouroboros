@@ -19,8 +19,9 @@ def image_positions(messages):
 
 def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max'):
     """Nano chosen by the owner batches >4 to 2; Max/Low keep their >10 to 5 floor."""
-    from ouroboros.context_budget import MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER
-    keep, high = (2, 4) if owner_mode == 'nano' else (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER)
+    from ouroboros.context_budget import (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER,
+                                          NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER)
+    keep, high = (NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER) if owner_mode == 'nano' else (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER)
     positions = image_positions(messages)
     total = len(positions) + max(0, int(incoming))
     if total <= high:
@@ -30,13 +31,14 @@ def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max'):
     return True
 
 
-def fresh_call_images(messages):
+def fresh_call_images(messages, *, owner_mode='max'):
     """A newer stamped delivery replaces only that source's earlier pixels in this send copy.
 
     No stamp or no exact reader means no supersession. Canonical bytes stay intact.
     Neither filenames nor pixel similarity define a capture source.
     """
     rows, seen = copy.deepcopy(messages), set()
+    evict_stale_image_blocks(rows, owner_mode=owner_mode)
     for mi, bi in reversed(image_positions(rows)):
         block = rows[mi]['content'][bi]
         source = block.get('_capture_source')

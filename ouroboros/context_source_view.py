@@ -390,20 +390,16 @@ def emergency_address_view(
     )
 
 
-def fresh_room_rows(messages, *, drive_root, task_id):
-    """A fresh prefix replaces its passive room snapshot, retaining the exact prior view.
-
-    Unlike an append to a live connection, setup rereads this prefix. One reader
-    travels in the replacement fact, so repeated renewals cannot grow host facts.
-    The first snapshot has the same reader shape as every successor.
-    """
-    from ouroboros.artifacts import store_actor_source_bytes
-    data = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode('utf-8')
+def fresh_room_rows(messages, *, drive_root, task_id, persist=False):
+    """Price a fixed-width reader; retain exact bytes only for the published selection."""
+    from ouroboros.artifacts import actor_source_reference, store_actor_source_bytes
+    data = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8') if persist else b''
+    args = dict(category='context_checkpoints', source_id='room-' + hashlib.sha256(data).hexdigest()[:16],
+                data=data, extension='json')
     try:
-        ref = store_actor_source_bytes(pathlib.Path(drive_root), str(task_id or 'context'),
-            category='context_checkpoints', source_id='room-' + hashlib.sha256(data).hexdigest()[:16],
-            data=data, extension='json')
-    except Exception:
+        ref = (store_actor_source_bytes(pathlib.Path(drive_root), str(task_id or 'context'), **args) if persist
+               else actor_source_reference(**args))
+    except OSError:
         log.warning('Room facts kept: exact prior view could not be retained', exc_info=True)
         return messages, ''
     rows = [row for row in messages if not (host_row_intact(row)

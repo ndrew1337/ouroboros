@@ -302,6 +302,14 @@ class LiveHost(Protocol):
                       status: str) -> None:
         """Settle this call-lifetime response id once (unknown when unpriced, never zero)."""
 
+    def fitted_frame_rows(self) -> tuple[dict, ...]:
+        """Canonical image rows still sent as pixels by this fit; older hosts return none."""
+        return ()
+
+    async def delivery_fits(self, rows, schemas) -> bool:
+        """Whether held input plus pending delivery fits this connection; unknown declines fallback."""
+        return False
+
     def renewal_due(self) -> bool:
         """Held input + pending history/schema growth + working reserve needs a refit.
 

@@ -19,7 +19,7 @@ tool unit since the newest note with its typed facts, shown or never shown. Unas
 already cover, host state the host sends afresh (facts, clock, roster and skill snapshots,
 bound and unchanged), superseded review copies and earlier address records leave the view;
 one host record names the checkpoint that holds them exactly. Owner 29.10 Q1=A:
-if that seed still exceeds the physical window, oldest delivered whole rows may
+if that seed still exceeds the physical window, oldest whole rows of any kind may
 leave by exact address; core, assignment, notes, newest owner turn and current tail
 stay. An irreducible view, or a candidate that does not shrink, still refuses.
 """
@@ -185,16 +185,13 @@ def renewal_view(messages, *, observation, drive_root, task_id, measure):
 
     No round flags, dispatch, publication or trace pruning belongs here.
     """
-    from ouroboros.artifacts import store_actor_source_bytes
+    from ouroboros.artifacts import actor_source_reference, store_actor_source_bytes
     seed, left = renewal_seed(messages)
     if not (left["tool_rows"] or left["covered_replies"] or left["restored_sources"]):
         return messages, None
     raw = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
-    try:
-        source = store_actor_source_bytes(drive_root, task_id, category="context_checkpoints",
-            source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension="json")
-    except (OSError, ValueError):
-        return messages, None
+    args = dict(category="context_checkpoints", source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension="json")
+    source = actor_source_reference(**args)
     index = units_since_note(messages, observation)
     seed.append(bound_host_row(RENEWAL_RECORD_NAME, (
         "[Host record: working view renewed during context-size recovery. Same task; "
@@ -204,58 +201,93 @@ def renewal_view(messages, *, observation, drive_root, task_id, measure):
         f"{left['host_rows']} host rows, {left['restored_sources']} sources I restored. The exact transcript "
         f"of {len(messages)} rows: {json.dumps(source, ensure_ascii=False, sort_keys=True)}."
         + (f"\nTool units since my newest note (they left the view; each stays exact there):\n{index}" if index else ""))))
-    return (seed, {"source": source, **left}) if measure(seed) < measure(messages) else (messages, None)
+    if measure(seed) >= measure(messages):
+        return messages, None
+    try:
+        store_actor_source_bytes(drive_root, task_id, **args)
+    except OSError:
+        return messages, None
+    return seed, {"source": source, **left}
+
+
+def _cut_units(messages):
+    """Oldest eligible atomic units; protection is independent of dialogue kind."""
+    from ouroboros import context_compaction as cc
+    from ouroboros.context_budget import OWNER_WORDS_KIND, host_row_intact
+    from ouroboros.context_source_view import chosen_read_units
+    from ouroboros.main_context_authority import PREDECESSOR_NOTES_NAME
+    from ouroboros.review_history_view import REVIEW_CONTEXT_INDEX_KEY, obsolete_review_index_positions
+    first = next((i for i, row in enumerate(messages) if row.get('role') == 'user'), -1)
+    latest = max((i for i, row in enumerate(messages) if i > first
+                  and row.get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND), default=len(messages) - 1)
+    while latest > first + 1 and messages[latest - 1].get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND:
+        latest -= 1
+    obsolete = set(obsolete_review_index_positions(messages))
+    protected = {i for i, row in enumerate(messages) if i <= first or i >= latest or row.get('role') == 'system'
+        or _is_note(row) or _restored_address(row) or row.get(HOST_CONTEXT_KIND_KEY) == PREDECESSOR_NOTES_NAME
+        or row.get('review_feedback') or (row.get(REVIEW_CONTEXT_INDEX_KEY) and i not in obsolete)
+        or row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut'}
+    prior = {i for i, row in enumerate(messages) if first < i < latest
+             and row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut' and host_row_intact(row)}
+    units = cc.context_units(list(messages), scope='tool')
+    chosen = chosen_read_units(messages, units)
+    spans = {unit.start: unit for unit in units}
+    groups, i = [], first + 1
+    while i < latest:
+        unit = spans.get(i)
+        group = tuple(range(i, unit.end + 1)) if unit else (i,)
+        if not protected.intersection(group) and not (unit and unit.unit_id in chosen):
+            groups.append(group)
+        i = group[-1] + 1
+    return groups, prior
 
 
 def physical_window_cut(messages, *, drive_root, task_id, measure, usable):
-    """Owner 29.10 Q1=A: oldest delivered whole rows leave only for physical room.
+    """Cut the oldest whole units under physical pressure, never protected judgment.
 
-    Core, assignment, notes and the newest owner turn plus everything after it
-    are immune. No text is shortened or merged; the exact pre-cut checkpoint is
-    the reader for every removed position. A prediction about a mode target is
-    never authority for this cut.
+    Price the monotone prefix search without writes. Only a fitting result gets
+    its exact checkpoint; bisection leaves the same smallest cut as a linear walk.
     """
-    from ouroboros.artifacts import store_actor_source_bytes
-    from ouroboros.context_budget import OWNER_WORDS_KIND, host_row_intact
-    if measure(messages) <= usable:
-        return messages, None
-    first_user = next((i for i, row in enumerate(messages) if row.get("role") == "user"), -1)
-    latest = max((i for i, row in enumerate(messages) if row.get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND),
-                 default=first_user)
-    # Consecutive owner deliveries are one newest turn, not independent old rows.
-    while latest > first_user and messages[latest - 1].get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND:
-        latest -= 1
-    eligible = [i for i, row in enumerate(messages) if first_user < i < latest
-                and row.get(HOST_CONTEXT_KIND_KEY) in OWNER_ROW_KINDS
-                and not row.get("tool_calls") and not _is_note(row)]
-    if not eligible:
-        return messages, None
-    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    try:
-        source = store_actor_source_bytes(drive_root, task_id, category="context_checkpoints",
-            source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension="json")
-    except (OSError, ValueError):
-        return messages, None
-    prior = {i for i, row in enumerate(messages) if first_user < i < latest
-             and row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut' and host_row_intact(row)}
-    gone = set(prior)  # the new exact checkpoint retains the preceding cut's reader too
+    from ouroboros.artifacts import actor_source_reference, store_actor_source_bytes
     before = measure(messages)
-    for position in eligible:
-        gone.add(position)
-        address = bound_host_row("context_physical_cut", (
+    if before <= usable:
+        return messages, None
+    groups, prior = _cut_units(messages)
+    if not groups:
+        return messages, None
+    raw = json.dumps(messages, ensure_ascii=False, sort_keys=True, default=str).encode('utf-8')
+    args = dict(category='context_checkpoints', source_id=hashlib.sha256(raw).hexdigest(), data=raw, extension='json')
+    source = actor_source_reference(**args)
+    def candidate(count):
+        positions = [i for group in groups[:count] for i in group]
+        gone = set(positions) | prior
+        address = bound_host_row('context_physical_cut', (
             "[Host record: this window's physical cut, not a summary or an authored fold.] "
-            f"Oldest delivered whole rows left the working view: zero-based positions {sorted(gone - prior)}. "
-            + (f"Earlier physical-cut address records at positions {sorted(prior)} remain exact in that checkpoint. " if prior else "") +
-            "Newest owner turn, assignment, core, notes and current tail stay. "
+            f"Oldest whole rows left the working view: zero-based positions {positions}. "
+            + (f"Earlier physical-cut address records at positions {sorted(prior)} remain exact in that checkpoint. " if prior else '')
+            + "Newest owner turn, assignment, core, notes and current tail stay. "
             f"Read the exact original rows in this checkpoint JSON array: {json.dumps(source, sort_keys=True)}."))
-        candidate = [address if i == eligible[0] else row for i, row in enumerate(messages)
-                     if i == eligible[0] or i not in gone]
-        after = measure(candidate)
-        if after <= usable:
-            return candidate, {"source": source, "positions": sorted(gone - prior), "previous_cuts": sorted(prior),
-                               "before_tokens": before, "after_tokens": after}
-    # Irreducible core/notes/tail still refuses. Publish nothing from a failed cut.
-    return messages, None
+        rows = [address if i == positions[0] else row for i, row in enumerate(messages)
+                if i == positions[0] or i not in gone]
+        return rows, positions, measure(rows)
+    low, high = 1, len(groups)
+    best = candidate(high)
+    if best[2] > usable:
+        return messages, None
+    while low < high:
+        middle = (low + high) // 2
+        trial = candidate(middle)
+        if trial[2] <= usable:
+            high, best = middle, trial
+        else:
+            low = middle + 1
+    try:
+        store_actor_source_bytes(drive_root, task_id, **args)
+    except OSError:
+        return messages, None
+    rows, positions, after = best
+    return rows, {'source': source, 'positions': positions, 'previous_cuts': sorted(prior),
+                  'before_tokens': before, 'after_tokens': after}
 
 
 def _cannot_help(limit_ctx: Any) -> bool:

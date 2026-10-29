@@ -71,7 +71,15 @@ def test_call_requested_pixels_use_the_same_owner_image_floor(host_world, owner,
     host = host_world.host
     host.plan = replace(host.plan, preferred_mode=owner)
     async def deliver():
-        for row in images(5):
+        for row in images(5, source=""):
             await host.observe_context(row)
     asyncio.run(deliver())
-    assert len(image_positions(host.messages)) == expected
+    assert len(image_positions(host.messages)) == 5  # canonical call rows never evict mid-connection
+    assert len(image_positions(rows_for_engine(host.messages, vision=True, fresh=True, owner_mode=owner))) == expected
+
+
+def test_owner_image_numbers_share_the_budget_policy_owner():
+    from ouroboros.context_budget import (NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER,
+        MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER)
+    assert (NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER) == (2, 4)
+    assert (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER) == (5, 10)

@@ -25,6 +25,9 @@ def test_refused_fit_is_durable_before_error_and_fitting_candidate_stays_quiet(h
     from ouroboros.usage_accounting import read_usage_records
 
     host = host_world.host
+    from ouroboros.context_budget import bound_host_row
+    monkeypatch.setattr('ouroboros.context_measurement.room_fact',
+        lambda *a, **kw: bound_host_row('ouroboros_context_facts', 'Fixture room facts.'))
     monkeypatch.setattr(ContextFitPlan, 'reproject_for_route', lambda plan, **kwargs: plan)
     _, request, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
     raw = request.prompt_tokens_bounded_estimate

@@ -570,6 +570,15 @@ class ConversationHost:
         self.quote = warm_quote(engine=self.turn.route.accounting_provider, model=self.turn.model,
                                 drive_root=self.ctx.drive_root)
 
+    def fitted_frame_rows(self):
+        return getattr(self, '_fitted_frame_rows', ())
+
+    async def delivery_fits(self, rows, schemas):
+        from ouroboros.live_context_view import serving_delivery_fits
+        snapshot = copy.copy(self)
+        snapshot.messages = copy.deepcopy(self.messages)
+        return await asyncio.to_thread(serving_delivery_fits, snapshot, rows, schemas)
+
     async def prepare_session(self, options: LiveOptions):
         """Open a silent successor from a private ordinary fit; adoption stays explicit."""
         from ouroboros.live_connections import PreparedConnection
@@ -728,6 +737,8 @@ class ConversationHost:
 
     async def apply_context_view(self):
         from ouroboros.live_context_view import apply_context_view
+        from ouroboros.live_context_view import drain_exposure
+        await drain_exposure(self)
         async with self._tools_lock:
             return await joined(asyncio.to_thread(apply_context_view, self))
 
@@ -735,9 +746,7 @@ class ConversationHost:
         from ouroboros.context_budget import bound_host_row
         async with self._tools_lock:
             if isinstance(row.get('content'), list):
-                from ouroboros.loop_messages import _evict_stale_image_blocks
                 self.messages.append({**copy.deepcopy(row), '_host_context_kind': 'call_observation'})
-                _evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode)
             else:
                 self.messages.append(bound_host_row("call_observation", "[Call peer observation] " + str(row.get("content", ""))))
             self._context_changed()
@@ -760,6 +769,8 @@ class ConversationHost:
 
     async def tool_batch(self, calls):
         """Serialize ordinary and feature tools; retain changes to existing rows too."""
+        from ouroboros.live_context_view import drain_exposure
+        await drain_exposure(self)
         async with self._tools_lock:
             fresh, cached, proposed = [], [], {}
             for call in calls:
@@ -945,6 +956,7 @@ class ConversationHost:
     async def finish(self):
         """End call-lifetime custody, after sessions and owned work have drained."""
         from ouroboros.live_usage import abandon_live_response
+        from ouroboros.live_context_view import drain_exposure
 
         for task in self._connection_tasks:
             if not task.done():
@@ -952,6 +964,7 @@ class ConversationHost:
         pending_connections = [task for task in self._connection_tasks if not task.done()]
         if pending_connections:
             await joined(asyncio.gather(*pending_connections, return_exceptions=True))
+        await drain_exposure(self)
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:

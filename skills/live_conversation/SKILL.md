@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.19
+version: 0.1.20
 type: extension
 runtime: python3
 entry: plugin.py
@@ -58,4 +58,4 @@ the switch. Transport failure or a stale fit falls back; provider refusals end
 without another attempt. Committed room mail keeps its answer opportunity across
 a handoff, and an interrupted answer proves the connection just as a completed one does.
 
-Fresh candidates use the shared transcript remedies before the final physical window cut: oldest delivered whole rows move to exact checkpoint addresses; core, assignment, notes, newest owner turn and current tail stay. A failed speculative fit keeps the serving connection and retries only after canonical change. Owner Nano batches more than four images to two; Max/Low keep the ten-to-five batch. Earlier same-source frames are captioned by the fresh engine projection; canonical originals remain readable.
+Fresh candidates use the shared transcript remedies before the final physical window cut: oldest whole rows of any kind move to exact checkpoint addresses; core, assignment, notes, newest owner turn and current tail stay. A failed speculative fit keeps the serving connection only while pending deliveries fit its measured free room; otherwise the call ends with context_capacity, keeping receipts and completed effects. Only a change from the failed snapshot permits another preparation. In the fresh call projection, owner Nano batches more than four images to two; Max/Low keep the ten-to-five batch. Canonical call images stay intact during the connection, and pixels already in the fitted prefix are not sent twice. Earlier same-source frames are captioned by the fresh engine projection; canonical originals remain readable.

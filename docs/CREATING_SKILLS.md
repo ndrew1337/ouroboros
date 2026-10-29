@@ -1629,7 +1629,7 @@ then owner instructions are included in the fit. Known overflow refuses with a t
 sentence if the ladder cannot fit it. Provider windows use the route's ordinary density
 (cold 1.0); split text-input usage calibrates selected text only, never media. Estimator
 windows use raw chars/4; Grok usage excludes instructions and never teaches density.
-The sealed wire, including provider language additions, is budgeted before opening.
+The sealed wire, including provider language additions, is budgeted before opening. Fresh candidates use the shared source-view remedies, memory floor, seed and exact oldest-whole-row physical cut; a provider must never independently shorten the selected input. Pricing is read-only, includes its passive room fact, and publishes its exact reader only for the selected candidate. Usable response exposure is hashed off the media loop from a snapshot of actually delivered rows; queued data is not exposure.
 The final physical guard honours the route reserve. The first full candidate also tries
 to leave one eighth for work through the ordinary ladder; missing room starts with a
 notice when input plus reserve still fits. Reconnects measure remaining room without
@@ -1643,7 +1643,8 @@ output-limit evidence in `LiveOptions.model_output_bound_tokens`. A provider own
 layout and normalization, and must never cut selected input. It reports each response's
 start, finish, status and usage axes, including interrupted/tool-only responses.
 `connected_seconds` is a cumulative connection watermark, including idle and closing
-time. The factory's `observe("usage", raw)` reports JSON
+time. For optional delivery evidence, shared `JsonSession.hold_context` and `hold_tool_call` record rows only after delivery, and `capture_response_context(response_id)` snapshots what that response held before queued updates are released. Older/external providers without these hooks keep exposure unknown; setup or queued results never prove exposure.
+The factory's `observe("usage", raw)` reports JSON
 `{"usage": {...}, "raw_usage": {...}}` for that physical connection; `close()` emits
 its final sample before returning. Samples and responses share one watermark. The host
 settles growth after Stop/budget exhaustion without admitting work or inventing responses;
@@ -1666,6 +1667,7 @@ durable immediately; whole-turn checkpoints are coalesced. The server's host-att
 Provider-specific audio-drop policy stays in the provider. `renewal_ready` carries
 native input/transcription work; the feature also waits for tools and playback.
 `final_captions()` returns received unfinished words at teardown without new wire work.
+After a failed speculative fit, the additive `LiveHost.delivery_fits(rows, schemas)` checks pending delivery against serving room (older hosts default false, declining an unproven fallback). The feature retains its last successfully delivered catalog, initially `selected.tools_json`; a session need not expose a private `tools` member. `LiveHost.fitted_frame_rows()` defaults to an empty tuple and supplies only fitted pixel rows for duplicate suppression when implemented. The call applies the owner-mode image floor only at fresh projection, retaining canonical pixels. Authored receipts price the existing connection without a fresh room fact.
 Automatic feature/provider reload refuses with `live_call_active` and retries later.
 Owner disable cancels the call; host teardown joins its sockets and started tools. Page contributions use `provides: conversation`,
 `runtime: client`, `render.kind: host` under the ordinary `page_module` grant.

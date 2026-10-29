@@ -157,3 +157,13 @@ def test_plugin_api_2_3_unites_memory_and_voice_without_losing_prior_minimums():
         for capabilities in (["read_memory"], ["register_realtime_provider", "register_live_conversation"]):
             result = negotiate_plugin_api(SimpleNamespace(plugin_api={"version": minimum, "capabilities": capabilities}))
             assert result.ok and result.generation == "2.3", result
+
+
+def test_new_fit_ports_keep_old_host_defaults():
+    import asyncio
+    from ouroboros.contracts.live_conversation import LiveHost
+    class OldHost(LiveHost):
+        pass
+    old = OldHost()
+    assert old.fitted_frame_rows() == ()
+    assert asyncio.run(old.delivery_fits([], [])) is False

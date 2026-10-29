@@ -25,7 +25,7 @@ FIELDS = ('plan', '_physical_context', '_renewal_window', '_renewal_facts', '_he
           '_history_at_receipt', '_selected_text_estimate', '_selected_raw_estimate', '_session_instructions',
           '_density_input', '_connection_quote', '_connection_accounting', '_meter_watermark', 'connection_number',
           '_view_session_factory', '_view_session_options', '_prepared_view', '_schemas_mode',
-          '_history_tokens', '_history_cached_version')
+          '_history_tokens', '_history_cached_version', '_fitted_frame_rows')
 
 
 def connection_for(host):
@@ -140,6 +140,8 @@ class PreparedConnection:
                 return session_candidate(view, self.provider['session'], self.options, observation_fp=credentials.scope)
         # The heavy ordinary ladder runs off the media loop on a private context.
         self.session, self.request, evidence = await joined(asyncio.to_thread(fit))
+        from ouroboros.context_images import fresh_call_images
+        view._fitted_frame_rows = fresh_call_images(view.messages, owner_mode=view.plan.preferred_mode)
         view._context_session = self.session
         if self.options.resume_handle:
             previous = getattr(getattr(self.host, '_connection_view', None), '_context_session', None)
@@ -178,7 +180,7 @@ class PreparedConnection:
             if tail:
                 _, request, evidence, _ = await joined(asyncio.to_thread(measure_session_wire,
                     view, view.plan, [*rows_for_engine(view.messages, vision=host.model.vision,
-                        fresh=not self.options.resume_handle), *tail], view.schemas, self.provider['session'], self.options,
+                        fresh=not self.options.resume_handle, owner_mode=view.plan.preferred_mode), *tail], view.schemas, self.provider['session'], self.options,
                     _room_fact=False, fresh=False))
                 if main_context_fit_refusal(request) is not None:
                     raise RealtimeSetupError('prepared_stale', 'new canonical rows need the ordinary ladder again')
@@ -213,6 +215,7 @@ class PreparedConnection:
             self.connection['switched_at'] = time.time()
             if tail:
                 await self.session.send(ContextUpdate(tuple(rows_for_engine(tail, vision=host.model.vision)), respond=False))
+                view._fitted_frame_rows.extend(tail)  # these pixels reached the new connection before consume
                 self.caught_up = True
 
     async def _lifetime(self):
@@ -235,7 +238,10 @@ class PreparedConnection:
                 raise RealtimeSetupError('provider_changed', 'selected loaded generation changed; start a new call')
             work = _LoopWork(); work.task = asyncio.current_task()
             scope.enter_context(extension_work_scope(self.provider, work))
+            from ouroboros.live_context_view import drain_exposure
+            await drain_exposure(host)
             async with host._tools_lock:
+                self.source_revision = host._history_version
                 self.source, self.source_schemas = copy.deepcopy(host.messages), copy.deepcopy(host.schemas)
                 view = self.view = copy.copy(host)
                 view._connection_owner, view._connection_view = host, None
@@ -306,6 +312,8 @@ class PreparedConnection:
                     CURRENT.reset(token)
                 self.result.set_result(result)
         except BaseException as exc:
+            if isinstance(exc, RealtimeSetupError) and exc.code == 'context_capacity':
+                exc.source_revision = getattr(self, 'source_revision', None)
             for future in (self.ready, self.result):
                 if not future.done():
                     future.set_exception(exc)

@@ -33,7 +33,7 @@ def test_first_call_tool_can_inspect_the_accepted_view_and_budget(host_world):
     asyncio.run(host.session(consume, LiveOptions(instructions='Measured call instructions.')))
 
 
-def test_authored_fold_waits_for_quiet_prices_wire_preserves_new_words_and_restores_exact_units(host_world):
+def test_authored_fold_waits_for_quiet_prices_wire_preserves_new_words_and_restores_exact_units(host_world, monkeypatch):
     from ouroboros.context_budget import bound_host_row, OWNER_WORDS_KIND
     from ouroboros.contracts.live_conversation import LiveOptions
     from ouroboros.tools.compact_context import _compact_context
@@ -51,6 +51,12 @@ def test_authored_fold_waits_for_quiet_prices_wire_preserves_new_words_and_resto
     owner = bound_host_row(OWNER_WORDS_KIND, 'New owner words arriving after inspect stay whole.')
     options = LiveOptions(instructions='The complete feature frame also occupies the measured wire.')
     saved = {}
+    from ouroboros.realtime_setup import measure_session_wire
+    measured = []
+    def price(*args, **kwargs):
+        measured.append(kwargs)
+        return measure_session_wire(*args, **kwargs)
+    monkeypatch.setattr('ouroboros.realtime_setup.measure_session_wire', price)
 
     async def first(session):
         shown = json.loads(_compact_context(host.ctx, inspect=True))
@@ -86,12 +92,15 @@ def test_authored_fold_waits_for_quiet_prices_wire_preserves_new_words_and_resto
         assert any(row.get('tool_call_id') == 'fold' for row in host.messages)
         assert any(row.get('tool_call_id') == 'load-reader' for row in host.messages)
         saved['receipt'] = copy.deepcopy(receipt)
+        assert any(row.get('fresh') is False and row.get('_room_fact') is False for row in measured), measured
 
     async def second(session):
         receipt = saved['receipt']
         actual = host._prepared_view[0]
-        assert receipt['fit_after']['estimated_input_tokens'] == actual['fit']['measurement']['estimated_input_tokens']
-        assert receipt['fit_after']['wire_sha256'] == actual['wire_sha256']
+        # The authored receipt prices the serving view. A fresh open additionally
+        # replaces its room fact and records its own independently measured wire.
+        assert receipt['fit_after']['estimated_input_tokens'] > 0
+        assert host.ctx._context_view_receipt['sent_fit']['wire_sha256'] == actual['wire_sha256']
         assert not actual['work_room']['first_send'] and actual['work_room']['requested_tokens'] == 0
         assert 'requested' in _compact_context(host.ctx, restore_unit_refs=[saved['restore']])
         assert await host.apply_context_view()
@@ -139,7 +148,7 @@ def test_call_note_form_selection_and_exact_restore_survive_reopens(host_world):
         saved['wire'] = receipt['fit_after']['wire_sha256']
 
     async def restore(session):
-        assert host._prepared_view[0]['wire_sha256'] == saved['wire']
+        assert host.ctx._context_view_receipt['sent_fit']['wire_sha256'] == host._prepared_view[0]['wire_sha256']
         wire = json.loads(session.selected.messages_json)
         assert _note_pointer(note) in wire[0]['content'][-1]['text']
         assert note['text'] not in json.dumps(wire)

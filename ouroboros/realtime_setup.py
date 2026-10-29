@@ -15,7 +15,7 @@ from ouroboros.extension_registry_state import (
 )
 
 
-def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False) -> list[dict]:
+def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False, owner_mode='max') -> list[dict]:
     """What the speech engine receives from the ordinary history.
 
     An engine whose catalog says it does not see images gets each image part as
@@ -26,7 +26,7 @@ def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False) -> list[dict
     from ouroboros.llm_messages import project_wire_messages
     if fresh:
         from ouroboros.context_images import fresh_call_images
-        rows = fresh_call_images(rows)
+        rows = fresh_call_images(rows, owner_mode=owner_mode)
     if vision:
         return project_wire_messages(rows, delivery_marks=True)
     out = []
@@ -202,7 +202,7 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
     facts = host.model.facts
     # Every candidate an engine receives passes here (setup, renewal, an authored view's measurement): a blind
     # engine gets image parts as captions, the canonical history keeps the images (R15-1).
-    messages = rows_for_engine(messages, vision=host.model.vision, fresh=fresh)
+    messages = rows_for_engine(messages, vision=host.model.vision, fresh=fresh, owner_mode=plan.preferred_mode)
     rows = [*messages, *([{"role": "system", "content": options.instructions}] if options.instructions else [])]
     fit = measure_main_fit(plan, rows, schemas, profile=_main_context_profile(plan, plan.initial_mode),
         rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
@@ -289,14 +289,15 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             output_reserve=plan.output_reserve_tokens, tool_schemas=host.schemas, start_mode=plan.initial_mode,
             current_messages=[*current, *extra], start_work=start_work)
         current = plan.reproject_transcript(current, plan.initial_mode)
-    steps = iter(("floor",) if options.resume_handle else (*REFUSAL_PASSES[0], "floor", "unseen_bodies", "seed", "physical_cut"))
+    steps = iter(("floor",) if options.resume_handle else (*REFUSAL_PASSES[0], *(step for step in REFUSAL_PASSES[1] if step != "books"), "seed", "physical_cut"))
     receipts = []
     room_attempted = False
+    room_facts = not options.resume_handle
     while True:
         rows = [*current, *extra]
         sent_rows = list(current)
         session, request, evidence, physical_window = measure_session_wire(
-            host, plan, current, host.schemas, factory, options, canonical_rows=sent_rows)
+            host, plan, current, host.schemas, factory, options, canonical_rows=sent_rows, _room_fact=room_facts)
         measurement = evidence['fit']['measurement']
         measured, raw = measurement['estimated_input_tokens'], measurement['raw_input_tokens']
         ratio = measurement['measurement_density']
@@ -327,11 +328,24 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             evidence['work_room'].update(reason='start_room_shortfall', detail=detail)
             if not any(row.get('_host_context_kind') == 'context_start_room' for row in current):
                 notice = bound_host_row('context_start_room', detail)
-                _, with_notice, _, _ = measure_session_wire(host, plan, [*current, notice], host.schemas, factory, options)
+                _, with_notice, _, _ = measure_session_wire(host, plan, [*current, notice], host.schemas, factory, options, _room_fact=room_facts)
                 if main_context_fit_refusal(with_notice) is None:
                     current.append(notice)
                     continue
         if refusal is None:
+            if room_facts:
+                from ouroboros.context_source_view import fresh_room_rows
+                _, placeholder = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
+                _, reader = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
+                if not reader:
+                    room_facts = False  # retain the old view; do not append an unreadable fact
+                    continue
+                sent_rows[-1] = bound_host_row('ouroboros_context_facts', sent_rows[-1]['content'].replace(placeholder, reader))
+                session, request, sealed, physical_window = measure_session_wire(
+                    host, plan, sent_rows, host.schemas, factory, options, _room_fact=False)
+                sealed.update({key: evidence[key] for key in ('work_room', 'recovery')})
+                sealed['fit']['automatic_pass_used'] = bool(receipts)
+                evidence = sealed
             current = sent_rows
             rows = [*current, *extra]
             host._renewal_window, host._renewal_facts = _renewal_window(physical_window, facts), facts
@@ -353,7 +367,7 @@ def session_candidate(host, factory, options, *, observation_fp=None):
         rung = next(steps, None)
         if rung is not None:
             def measure(candidate):
-                return measure_session_wire(host, plan, candidate, host.schemas, factory, options)[2]['fit']['measurement']['estimated_input_tokens']
+                return measure_session_wire(host, plan, candidate, host.schemas, factory, options, _room_fact=room_facts)[2]['fit']['measurement']['estimated_input_tokens']
             usable = physical_window.total_equivalent - physical_window.reserve
             goal = max(0, measured - usable) + math.ceil(physical_window.boundary / RECLAIM_LOW_WATER_DIVISOR)
             before = measured

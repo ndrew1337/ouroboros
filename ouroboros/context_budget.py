@@ -378,6 +378,9 @@ IMAGE_BLOCK_CHAR_EQUIVALENT = 4_400
 MAX_LIVE_IMAGE_BLOCKS = 5
 # Owner decision 2026-10-21: batch eviction above 10 back to the 5-image floor of 2026-07-29.
 LIVE_IMAGE_BLOCKS_HIGH_WATER = 10
+# Owner 29.10: Nano uses the same batch shape, with a two-image floor.
+NANO_LIVE_IMAGE_BLOCKS = 2
+NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER = 4
 
 # --- Scratchpad size thresholds (SSOT; previously scattered literals) -------
 # Context-section soft budget for the rendered scratchpad (warn-only).
