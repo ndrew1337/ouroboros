@@ -662,10 +662,12 @@
  */
 
 /**
- * `POST /api/projects/{project_id}/update`: name and/or pin; at least one.
+ * `POST /api/projects/{project_id}/update`: name, pin or closure; at least one.
+ * `closed`: true closes as owner; false reopens.
  * @typedef {Object} ProjectUpdateRequest
  * @property {string=} name
  * @property {boolean=} pinned
+ * @property {boolean=} closed
  */
 
 /**

@@ -173,11 +173,12 @@ HOST_ROW_CLASSES = {
     "finalization_notice": ("card_row", 2),
     "host_progress": ("card_row", 1),
     "initialization_notice": ("not_started", 1),
+    "low_start_notice": ("runtime_state", 1),  # a fresh start memory lowered to Low (owner 1B, 29.10)
     "managed_update_notice": ("runtime_state", 2),
-    "memory_max_notice": ("runtime_state", 1),  # the lost-Max episode opened or closed (memory_max)
     "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),
     "project_completion_summary": ("main_lifecycle", 1),
+    "project_closure": ("runtime_state", 1),  # the mind's reversible project decision, in its room
     "project_handoff": ("main_lifecycle", 1),
     "project_started": ("main_lifecycle", 1),
     "promotion_notice": ("runtime_state", 4),

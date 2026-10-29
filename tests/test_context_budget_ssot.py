@@ -17,12 +17,13 @@ def _src(rel: str) -> str:
 
 def test_agent_context_budget_values_pinned():
     """Values are the SSOT; changing them is a deliberate, visible edit."""
-    # Owner choice of 2026-09-29 (Low 250K, Nano 85K); the memory view's working room
-    # is two low-water levels under a window, one under an owner Low/Nano target.
+    # Owner choice of 2026-09-29 (Low 250K, Nano 85K). The memory view's working room is two
+    # low-water levels for a root; a wake (consciousness or a Presence focus), a direct chat
+    # turn and a helper leave one (owner decision 2026-10-29, question 3 = A).
     assert cb.OWNER_LOW_TARGET_TOKENS == 250_000
     assert cb.OWNER_NANO_TARGET_TOKENS == 85_000
-    assert cb.start_room_levels("integrator") == cb.start_room_levels("consciousness") == 2
-    assert cb.start_room_levels("presence", focus_wake=True) == 2
+    assert cb.start_room_levels("integrator") == 2
+    assert cb.start_room_levels("consciousness") == cb.start_room_levels("consciousness", direct_chat=True) == 1
     assert cb.start_room_levels("integrator", direct_chat=True) == cb.start_room_levels("presence") == 1
     assert cb.start_room_levels("child") == cb.start_room_levels("nanny") == 1
     for retired in ("BG_CONTEXT_WARN_CHARS", "BG_CONTEXT_MAX_CHARS", "BG_STATE_JSON_WARN_CHARS", "BG_OBSERVATIONS_WARN_BYTES"):

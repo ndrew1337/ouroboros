@@ -1,45 +1,9 @@
-"""Own-work candidate selection and terminal links; neither invents page coverage."""
+"""Terminal links of authored pages; they never invent page coverage."""
 from __future__ import annotations
-
-import json
 
 from ouroboros import chat_chain, memory_inventory
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
 from ouroboros.dialogue_provenance import recorded_finality
-
-
-def failed_work_units(root, store):
-    """Candidates over the open rows of finished failures (failed or cancelled) the mind never sealed.
-
-    Every post-task run asks this while consciousness is on, a direct turn's in the server after its
-    answer, so it is addressed by the open rows: they name their tasks, whose typed status alone is
-    read (never a task body); only when one of them failed does the chronicle answer which of them
-    the mind sealed (its page author index) and which rows a pending candidate of their room covers."""
-    from ouroboros.memory_fallback import FallbackUnit
-    from ouroboros.memory_inventory import OpenSegment
-    from ouroboros.task_store import task_facts
-
-    open_rows = memory_inventory.open_rows_by_room(root)
-    named = sorted({str(entry[1].get("task_id") or "") for entries in open_rows.values() for entry in entries} - {""})
-    # The named rows alone, through the primary key: a status filter in SQL lets the planner walk
-    # every failed task through the status index instead.
-    facts = task_facts(root, where="task_id IN (SELECT value FROM json_each(?))", params=(json.dumps(named),)) if named else {}
-    failed = {task_id for task_id, fact in facts.items() if fact["status"] in ("failed", "cancelled")}
-    if failed:
-        failed -= store.mind_page_authors(failed)
-    units = []
-    for room, entries in open_rows.items():
-        entries = [entry for entry in entries if str(entry[1].get("task_id") or "") in failed]
-        pending = {ref for record in store.pending_candidates(room) for ref in record["covers"]["rows"]} if entries else set()
-        by_task = {}
-        for entry in entries:
-            if entry[0]["row_sha256"] not in pending:
-                by_task.setdefault(str(entry[1].get("task_id") or ""), []).append(entry)
-        for task_id, rows in by_task.items():
-            segment = OpenSegment(room, rows[0][0], rows[-1][0], tuple(rows), store.room_head(room))
-            units.append(FallbackUnit("page", room, f"candidate:{task_id}:{rows[0][0]['row_sha256'][:12]}",
-                                      segment=segment, candidate_task=task_id))
-    return sorted(units, key=lambda unit: unit.segment.rows[0][2])
 
 
 def _terminal_writer(record):

@@ -323,6 +323,29 @@ def _chat_record(
     return None, None
 
 
+def reopen_for_owner_message(drive_root, row: dict) -> None:
+    """A fresh local owner's row reopens its room; replay never undoes a later closure.
+
+    The web door fixes user_id=1. The numeric guard excludes non-project addresses cheaply;
+    registry membership remains authority. Failure preserves the already accepted message.
+    """
+    from ouroboros.contracts.chat_id_policy import is_project_chat_id
+
+    if (row.get("direction") != "in" or row.get("source") != "web" or row.get("user_id") != 1
+            or not is_project_chat_id(row.get("chat_id"))):
+        return
+    from ouroboros.projects_registry import PROJECT_ACTIVE, list_reserved_projects, update_project
+
+    try:
+        address = row.get("chat_id")
+        project = next((p for p in list_reserved_projects(drive_root, strict=True)
+                        if p.get("lifecycle") == PROJECT_ACTIVE and p.get("chat_id") == address), None)
+        if project and "closed" in project:
+            update_project(drive_root, project["id"], closed=None)
+    except Exception:
+        log.warning("Accepted owner message could not reopen project room %s", row.get("chat_id"), exc_info=True)
+
+
 def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: bool = False,
              require_write: bool = False, ensure_record_boundary: bool = False, **fields: Any) -> Optional[dict]:
     """Store one chat row (``dialogue_store.append``): the stored row, or None on a best-effort
@@ -346,6 +369,8 @@ def log_chat(direction: str, chat_id: int, user_id: int, text: str, *, feed: boo
         return None
     from ouroboros.notice_receipts import record as record_notice_receipt
     record_notice_receipt(root, record)  # idempotent: a duplicate also repairs a receipt its first write lost
+    if not receipt.duplicate:
+        reopen_for_owner_message(root, receipt.row)
     return receipt.row
 
 
@@ -374,6 +399,7 @@ def accept_chat(chat_id: int, user_id: int, text: str, *, dispatch: Optional[Dic
     if not receipt.duplicate:
         from ouroboros.notice_receipts import record as record_notice_receipt
         record_notice_receipt(root, record)
+        reopen_for_owner_message(root, receipt.row)
     return receipt
 
 

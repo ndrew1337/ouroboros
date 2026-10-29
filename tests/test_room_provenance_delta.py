@@ -91,8 +91,12 @@ def test_unknown_address_never_defaults_to_main(entry, label):
 
 
 def test_actual_main_context_names_every_room_by_its_registry_label(tmp_path):
-    """Main keeps its own rows verbatim and names every other live room in one labelled line;
+    """Main keeps its own rows; quiet rooms share an aggregate with an exact labelled directory;
     the registry is only read, A2A never enters and the hidden partition is not Main's."""
+    from types import SimpleNamespace
+
+    from ouroboros.tools.chronicle import _memory_read
+
     root = _drive(tmp_path)
     path = _registry(root, [{"id": "alpha", "chat_id": 1500, "name": "Alpha"}])
     ts = "2026-01-01T00:0{}:00+00:00"
@@ -112,9 +116,19 @@ def test_actual_main_context_names_every_room_by_its_registry_label(tmp_path):
     assert "] MAIN" in room and "] MISSING" in room and room.index("] MAIN") < room.index("] MISSING")
     assert "] UNKNOWN" in room  # a non-Project chat's unbound row is Main's too
     assert "PROJECT" not in changing and "HIDDEN" not in room and "A2A EXCLUDED" not in changing
-    for label in ("### Project Alpha [chat_id=1500] — open", "### Unknown room [chat_id=987654] — open"):
-        assert label in live, label
+    assert "3 open rooms;" in live and "memory_read(room_id='*', start=0)" in live
+    reader = SimpleNamespace(drive_root=root)
+    directory = _memory_read(reader, room_id="*", start=0)
+    for label, chat_id in (("Project Alpha [chat_id=1500]", "1500"),
+                          ("Unknown room [chat_id=987654]", "987654"), ("Hidden [chat_id=0]", "0")):
+        assert label not in live
+        assert f"- {label};" in directory
+        assert f"memory_read(room_id='{chat_id}', rows=true)" in directory
     assert "Main — open" not in live  # the current room is not one of the other rooms
+    project_rows = _memory_read(reader, room_id="1500", rows=True)
+    assert "] PROJECT" in project_rows and "] MAIN" not in project_rows
+    assert "] UNKNOWN" in _memory_read(reader, room_id="987654", rows=True)
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("ambiguous", [False, True])
