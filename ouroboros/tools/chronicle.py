@@ -210,8 +210,29 @@ def _task_rows(root: Path, room: str, task_ids: Iterable[Any]) -> List[Tuple[Dic
     return sorted(selected, key=lambda entry: entry[2])
 
 
+def _note_covers(root: Path, room: str, ids: Any) -> tuple:
+    """A page may close selected notes even when no chat row remains open; no mark is affected."""
+    if (not isinstance(ids, list) or not ids or any(not isinstance(i, str) or not i.strip() for i in ids)
+            or len(set(ids)) != len(ids)):
+        raise ValueError("covers.note_ids is a non-empty array of distinct note ids")
+    store = _activated(root)
+    notes = [store.get(ident) for ident in ids]
+    if any(not note or note.get("kind") != "note" or str(note.get("room_id")) != room for note in notes):
+        raise ValueError("covers.note_ids must resolve to notes of this room")
+    tasks = list(dict.fromkeys(str(note["task_id"]) for note in notes if note.get("task_id")))
+    covers = {"room_id": room, "mode": "notes", "request": {"note_ids": ids},
+              "rows": [f"note:{ident}" for ident in ids], "first": None, "last": None, "count": 0,
+              "task_ids": tasks, "note_ids": ids, "stream_span": [-1, -1],
+              "ts_span": source_time_span(note.get("ts") for note in notes)}
+    return covers, {"rows": 0, "notes": len(notes), "by_author": {}}, []
+
+
 def _expand(root: Path, room: str, lineage: Dict[str, Any], *, from_addr: Any = None, to_addr: Any = None,
-            task_ids: Any = None) -> Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[Dict[str, Any], Dict[str, Any], int]]]:
+            task_ids: Any = None, note_ids: Any = None) -> Tuple[Dict[str, Any], Dict[str, Any], List[Tuple[Dict[str, Any], Dict[str, Any], int]]]:
+    if note_ids is not None:
+        if task_ids is not None or from_addr or to_addr:
+            raise ValueError("covers.note_ids is a separate coverage choice, without row bounds or task_ids")
+        return _note_covers(root, room, note_ids)
     if task_ids is not None and (from_addr or to_addr):
         raise ValueError("covers is either {from, to}, {to} or {task_ids}, not both")
     if task_ids is not None:
@@ -258,7 +279,7 @@ def _expand(root: Path, room: str, lineage: Dict[str, Any], *, from_addr: Any = 
 
 
 def page_covers(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: Any = None,
-                task_ids: Any = None) -> Dict[str, Any]:
+                task_ids: Any = None, note_ids: Any = None) -> Dict[str, Any]:
     """The exact row set a page request names, with its coverage facts and the rows read.
 
     ``{"covers", "coverage_facts", "rows": [(address, row), ...]}``. ``from_addr``/``to_addr``
@@ -267,7 +288,7 @@ def page_covers(root: Any, room_id: Any, *, from_addr: Any = None, to_addr: Any 
     raise ``chat_chain.RowAddressError``.
     """
     covers, facts, rows = _expand(Path(root), str(room_id), row_lineage(Path(root)), from_addr=from_addr,
-                                  to_addr=to_addr, task_ids=task_ids)
+                                  to_addr=to_addr, task_ids=task_ids, note_ids=note_ids)
     return {"covers": covers, "coverage_facts": facts, "rows": [(address, row) for address, row, _p in rows]}
 
 
@@ -324,11 +345,11 @@ def check_quotes(root: Any, quotes: Any) -> Tuple[bool, Optional[int]]:
 def _write_page(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
     covers_arg = a["covers"]
     if not isinstance(covers_arg, dict):
-        return _arg_error(ctx, "a page needs covers: {from, to} row addresses, {to} alone or {task_ids}")
+        return _arg_error(ctx, "a page needs covers: {from, to} row addresses, {to}, {task_ids} or {note_ids}")
     room, lineage = _room(ctx, root, a["room_id"]), row_lineage(root)
     try:
         covers, facts, rows = _expand(root, room, lineage, from_addr=covers_arg.get("from"),
-                                      to_addr=covers_arg.get("to"), task_ids=covers_arg.get("task_ids"))
+                                      to_addr=covers_arg.get("to"), task_ids=covers_arg.get("task_ids"), note_ids=covers_arg.get("note_ids"))
     except chat_chain.RowAddressError as exc:
         return _refused(ctx, "target_missing", f"a covers bound does not resolve: {exc.resolution.get('status')}")
     stamp = host_stamp(root, covers["task_ids"], rows=rows)
@@ -341,7 +362,8 @@ def _write_page(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, A
         return _published(ctx, result)
     statuses = Counter(entry["status"] or "unknown" for entry in stamp["tasks"])
     return _published(ctx, result, rows=covers["count"], notes=len(covers["note_ids"]), coverage_facts=facts,
-                      first=chat_chain.format_address(covers["first"]), last=chat_chain.format_address(covers["last"]),
+                      first=chat_chain.format_address(covers["first"]) if covers["first"] else None,
+                      last=chat_chain.format_address(covers["last"]) if covers["last"] else None,
                       stamp=dict(sorted(statuses.items())))
 
 
@@ -919,6 +941,14 @@ def _memory_read(ctx: Any, node_id: str = "", room_id: Any = None, after_seq: in
             text = _read_source(root, source_ref, start, limit)
         elif str(room_id) == "*":
             text = _read_rooms(root, store, start, limit)
+        elif str(room_id) in {"late_reviews", "notes"}:
+            from ouroboros.memory_view import _notes_by_room
+            from ouroboros.memory_waiting import listing
+
+            with capture(root, tail="none"):
+                head, body = listing(str(room_id), store.active_marks(None) if room_id == "late_reviews" else (),
+                                     _notes_by_room(store) if room_id == "notes" else {})
+            text = _window(head, body, start, limit, lambda n: f"memory_read(room_id='{room_id}', start={n})")
         elif node_id:
             text = _read_node(root, str(node_id), start, limit, str(revision or ""))
         elif rows:
@@ -1079,8 +1109,9 @@ def chronicle_tools() -> List[ToolEntry]:
         "room_id": room,
         "text": {"type": "string", "description": "The record in my own words. No length limit; it is read back through memory_read pages."},
         "covers": {"type": "object", "additionalProperties": False,
-                   "description": "page: {from, to} row addresses (inclusive, this room's rows between them), {to} alone (every row of this room still open up to that address, the ones the view counts as open — the host leaves out what pages already seal and what came after; it defines the page's coverage, not proof that the rows were read) or {task_ids} (those tasks' rows and the owner's words bound to them). The host expands it into the exact row set; rows another page already seals are refused (already_sealed).",
-                   "properties": {"from": address, "to": address, "task_ids": {"type": "array", "items": string}}},
+                   "description": "page: {from, to} row addresses (inclusive), {to} alone (this room's still-open rows up to it), {task_ids} (those tasks' rows and bound owner words), or {note_ids} (selected notes of this room, even without open rows). The host expands the exact coverage; it proves no reading. Already sealed members are refused. Pages never release marks.",
+                   "properties": {"from": address, "to": address, "task_ids": {"type": "array", "items": string},
+                                  "note_ids": {"type": "array", "items": string, "minItems": 1, "uniqueItems": True}}},
         "member_ids": {"type": "array", "items": string, "description": "part: adjacent unfolded records of one kind in one room; default room is theirs."},
         "quotes": quotes,
         "task_id": {"type": "string", "description": "note: the task it belongs to (default: this task)."},
@@ -1097,7 +1128,7 @@ def chronicle_tools() -> List[ToolEntry]:
     }
     read = {
         "node_id": {"type": "string", "description": "One record: as it acts now, its host stamp, coverage, original text, corrections and decisions."},
-        "room_id": {**room, "description": room["description"] + " '*' lists rooms as directory lines (label, period, counts, reader)."},
+        "room_id": {**room, "description": room["description"] + " '*' lists all open rooms (label, period, counts, reader); 'late_reviews' lists unreleased host review marks; 'notes' lists unsealed mind notes. Lists name ids, rooms, dates and exact readers, oldest first."},
         "after_seq": {"type": "integer", "minimum": 0, "description": "Room records and active marks after this sequence (the previous page's next_after_seq)."},
         "rows": {"type": "boolean", "description": "true: the room's chat rows verbatim, one header line each, filtered by from/to, task_id, period, in stored order (the order from/to and next: from= follow). A room holding imported earlier messages reads by send time in its view and chat_history; here each stands where it was stored."},
         "from": address, "to": address,

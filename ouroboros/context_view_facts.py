@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from ouroboros import memory_floor as floor, memory_view as mv
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
+from ouroboros.memory_waiting import text as waiting_text
 
 
 def memory_snapshot(plan):
@@ -28,7 +29,8 @@ def memory_facts(plan, mode):
     on the owner's Max with a known window, the host's measure of the start's Max room part by part (books, core,
     knowledge and runtime facts, assignment, reply reserve, work room, tool schemas) and how the start settled;
     my memory: the story with its pages no part or account holds yet (how many, their tokens, the rooms holding
-    most of them) and the rooms' lines; what this view shows only by address; the marks in view.
+    most of them) and the rooms' lines; what this view shows only by address; marks and waiting classes
+    with their count, oldest date, list reader and closure act.
     Counted from the captured snapshot and its receipt; measures only, no advice and no
     threshold. Without a Max room fact (the owner's Low or Nano, an unknown window) it names the memory alone."""
     snapshot = memory_snapshot(plan)
@@ -46,7 +48,8 @@ def memory_facts(plan, mode):
             "route": "; Low, a disclosed fact of this route: folding memory or dropping tool schemas cannot make room here",
         }[room["cause"]]
     shown = floor.addressed_text((receipt.get("floor") or {}).get("steps") or {})
-    return line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
+    return (line + (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}"
+            + waiting_text(snapshot.waiting))
 
 
 def low_start_line(plan, mode, task_id):

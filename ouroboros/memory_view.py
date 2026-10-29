@@ -277,6 +277,7 @@ class MemoryViewSnapshot:
     legacy_blocks: Dict[str, Any] = dataclasses.field(default_factory=dict)  # the story status facts
     fallback_refusals: Tuple[Dict[str, Any], ...] = ()
     owner_words: str = ""  # the rendered block of the owner's words that caused a helper's work
+    waiting: Dict[str, Any] = dataclasses.field(default_factory=dict)
 
     @property
     def active(self) -> bool:
@@ -598,6 +599,7 @@ def _notes_by_room(store: ChronicleStore) -> Dict[str, List[Dict[str, Any]]]:
     for room in sorted(by_room):
         sealed = store.sealed_row_refs(room)
         kept = [{"id": record["id"], "date": _minute(record.get("ts")).split(" ")[0],
+                 "author_kind": str(_mapping(record.get("author")).get("kind") or ""),
                  "task_id": str(record.get("author", {}).get("task_id") or ""),
                  "role": str(_mapping(_mapping(record.get("author")).get("focus")).get("role") or "mind"),
                  "origin": dict(_mapping(_mapping(record.get("author")).get("focus"))),
@@ -793,7 +795,7 @@ def _late_review_entry(mark: Mapping[str, Any], label: Callable[..., str], *, ow
                             "sha256": str(target.get("sha256") or ""), "own_room": own_room}}
 
 
-def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., str]) -> List[Dict[str, Any]]:
+def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., str], marks=None) -> List[Dict[str, Any]]:
     """The acting marks a role keeps in view: every room's, or this room's and the global ones.
 
     Late review feedback the host keeps in view belongs to the room of its work whatever the role's
@@ -802,7 +804,7 @@ def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., s
     """
     if spec.marks == "none":
         return []
-    marks = store.active_marks(None)
+    marks = store.active_marks(None) if marks is None else marks
     if spec.marks == "room_and_global":
         marks = [mark for mark in marks if mark.get("scope") == "global" or str(mark.get("room_id")) == spec.room_id]
     entries = []
@@ -823,10 +825,11 @@ def _capture_marks(store: ChronicleStore, spec: ViewSpec, label: Callable[..., s
 
 
 def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label: Callable[..., str],
-                  story: List[Dict[str, Any]] = ()) -> Tuple[Optional[Dict[str, Any]], List[Dict[str, Any]], List[Dict[str, Any]]]:
-    """``(this room, live rooms, marks)`` of one capture, from one read of the open rows."""
+                  story: List[Dict[str, Any]] = ()) -> tuple:
+    """``(this room, live rooms, marks, waiting)`` from the same captured rows, notes and active marks."""
     lineage = row_lineage(root)
-    notes = _notes_by_room(store) if spec.room_id is not None or spec.live_rooms != "none" else {}
+    integrating = spec.role not in DELEGATED_FOCUS_ROLES
+    notes = _notes_by_room(store) if integrating or spec.room_id is not None or spec.live_rooms != "none" else {}
     gaps: Dict[str, set] = {}  # by room, what its open rows may lack (``room_appearances.GAP_DETAILS``)
     quiet: Dict[str, List[Entry]] = {}
     if spec.live_rooms != "none":
@@ -841,7 +844,21 @@ def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story, gaps)
             if spec.room_id is not None else None)
     live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps, quiet) if spec.live_rooms != "none" else []
-    return room, live, _capture_marks(store, spec, label)
+    marks = store.active_marks(None) if spec.marks != "none" or integrating else []
+    waiting = {}
+    if integrating:
+        from ouroboros.memory_waiting import measure
+        from ouroboros.projects_registry import list_projects
+        from ouroboros.store import StoreError
+
+        try:
+            projects = list_projects(root, strict=True, closed=False, oldest_first=True)
+        except (OSError, ValueError, StoreError) as exc:
+            # An unavailable project census does not make readable room history unavailable.
+            log.warning("memory view: project waiting facts unavailable (%s)", type(exc).__name__)
+            projects = None
+        waiting = measure(marks, notes, projects)
+    return room, live, _capture_marks(store, spec, label, marks), waiting
 
 
 def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec) -> MemoryViewSnapshot:
@@ -867,7 +884,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         with capture(root, tail=tail) as derived:
             frontier = legacy_frontier(store)
             story, story_status, refusals = capture_story(store, root, label) if spec.story else ([], {}, [])
-            room, live, marks = _capture_live(store, root, spec, label, story)
+            room, live, marks, waiting = _capture_live(store, root, spec, label, story)
         if room:
             from ouroboros.owner_words import task_governing_words
 
@@ -890,7 +907,7 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
                               story=tuple(story), room=room, live_rooms=tuple(r for r in live if r["live"]),
-                              other_rooms=tuple(r for r in live if not r["live"]), marks=tuple(marks),
+                              other_rooms=tuple(r for r in live if not r["live"]), marks=tuple(marks), waiting=waiting,
                               legacy_blocks=story_status, fallback_refusals=tuple(refusals), owner_words=owner_words)
 
 
