@@ -1,7 +1,7 @@
 ---
 name: live_conversation
 description: Talk with Ouroboros using this room's ordinary memory, tools and controls.
-version: 0.1.16
+version: 0.1.17
 type: extension
 runtime: python3
 entry: plugin.py
@@ -58,6 +58,6 @@ the switch. Only transport failure or a stale fit falls back; typed refusals end
 without another attempt. Committed room mail keeps its answer opportunity across
 a handoff, and an interrupted answer proves the connection just as a completed one does.
 
-On a weak upload the microphone goes first. Provider frames wait for an empty socket; newer frames replace waiting ones per source. The shared transport measures drainage, sizes only delivery copies to its physical audio-buffer bound, and paces them with spare microphone capacity. Exact original files remain readers. The mind gets one slow-upload fact and one recovery fact; a queued frame is not sight. Requested looks obey the same limit.
+On a weak upload the microphone goes first. One provider image is in flight until its WebSocket pong; newer waiting frames replace older ones per source. The first image is the smallest delivery copy, then measured image throughput sizes copies within half the existing microphone buffer. A pong before the write waits for earlier microphone bytes to catch up; audio never waits for the image lock. Originals remain exact readers. The mind gets one slow-upload fact and one recovery fact; a queued frame is not sight. Requested looks share the same cap.
 
-Requested looks and streamed frames share one upload owner. Recovery follows a successful full write for every constrained source; a small camera cannot clear a reduced screen. Muting the last microphone releases its reservation, restored before resumed audio. A fresh socket replays requested looks as exact readers until it has measured upload credit. Failed or cancelled offers retain their place ahead of newer facts.
+Recovery follows a successful full write for every constrained source; a small camera cannot clear a reduced screen. Stopping a source retires its pending completion claims. Muting the last microphone releases its reservation, restored before resumed audio. A fresh socket replays requested looks as exact readers while live pixels begin with a bounded first copy. Failed or cancelled offers retain their place ahead of newer facts.

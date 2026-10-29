@@ -82,7 +82,9 @@ def test_attend_silent_or_look_continues_through_driver_and_native_session(packa
             wire = wires[0]
             if look:
                 from ouroboros import call_protocol as cp
-                host.hub.events.append(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', b'look-pixels'))
+                from tests._live_stack_page import jpeg
+                pixels = jpeg('synthetic requested look')
+                host.hub.events.append(cp.PeerVideo('source', cp.PEER_OWNER, 'image/jpeg', pixels))
                 await until(lambda: host.state['attention'].frames)
             args = {'see':None, 'look':look}
             if engine == 'gemini':
@@ -97,6 +99,8 @@ def test_attend_silent_or_look_continues_through_driver_and_native_session(packa
             await asyncio.sleep(.05)
             assert bool(host.hub.audio) == look, 'silent consideration must not create another spoken response'
             assert len(wires) == 1
+            if look:
+                assert (tmp_path / 'look.jpg').read_bytes() == pixels
             if look and engine == 'gemini':
                 frame_index = next(i for i,v in enumerate(wire.sent) if 'video' in v.get('realtimeInput', {}))
                 result_index = next(i for i,v in enumerate(wire.sent) if 'toolResponse' in v)
