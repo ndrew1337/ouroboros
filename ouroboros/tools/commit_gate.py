@@ -1288,11 +1288,13 @@ def bind_author_commit_candidate(ctx: ToolContext, commit_message: str, pre_fing
                             neutral_allowed=_neutral_commit_allowed(ctx))
 
 
-def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_at: float, before: dict, after: dict) -> None:
+def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_at: float, before: dict, after: dict,
+                                commit_sha: str = "") -> None:
     """Persist the already-verified Git effect with its actual review/author facts.
 
     Landing is written here, after Git succeeded, and nowhere earlier. A failed
-    Git command never reaches this function, so it is not a commit.
+    Git command never reaches this function, so it is not a commit. The created
+    ``commit_sha`` lands on this call's record with its own tree, read from Git.
     """
     import time
     from ouroboros.review_doctrine import attach_landing
@@ -1318,10 +1320,18 @@ def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_a
     subject = str(author.get("subject_hash") or "") if isinstance(author, dict) else ""
     landing = author.get("landing") if isinstance(author, dict) else None
     record_id = str(getattr(ctx, "_current_review_record_id", "") or "")
-    if isinstance(landing, dict) and record_id and post_fp == pre_fp == subject:
+    authored = isinstance(landing, dict) and post_fp == pre_fp == subject
+    if record_id and (authored or commit_sha):
         from ouroboros import review_ledger as ledger
 
-        ledger.note_commit_landing(ledger.ledger_root(ctx), record_id, landing)
+        try:  # the commit object's own tree, then its parents; unreadable leaves the relation unknown
+            tree, *parents = git_mod.run_cmd(["git", "rev-parse", f"{commit_sha}^{{tree}}", f"{commit_sha}^@"],
+                                             cwd=ctx.repo_dir).split() if commit_sha else [""]
+        except Exception:
+            tree, parents = "", []
+        ledger.note_commit_landing(ledger.ledger_root(ctx), record_id, landing if authored else None, {
+            "commit_sha": commit_sha, "tree_sha": tree, "parent_sha": (parents or [""])[0],
+            "author_subject": subject if authored else ""} if commit_sha else None)
 
 
 def prepare_author_commit_request(ctx: ToolContext, review_reference: Any, author_disposition: Any, review_rebuttal: str) -> Optional[str]:

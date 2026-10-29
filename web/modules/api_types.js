@@ -458,7 +458,14 @@
  *   there is no panel at all, keyed by its stable incident id, with the REAL host
  *   attempt count; absent when no preparation ever failed. The Reviews group is
  *   its only carrier (no card row, no toast); a `resolved` status clears the
- *   active warning and keeps the row as history.
+ *   active warning and keeps the row as history. A ledger panel's `commit_landings`
+ *   ({commit_sha, tree_sha, parent_sha, author_subject, author_disposition, author_reason, recorded_at,
+ *   reviewed_subject: "same"|"different"|"unknown"}, oldest first) names each commit that landed under that
+ *   record, whether its tree is the one the record reviewed, and the author decision that governed it (its
+ *   subject_hash, disposition and reason, as written when it landed), "" for none; the panel keeps the newest
+ *   16 and `commit_landings_omitted` counts the older ones its record (`source_ref`) keeps. Absent means no
+ *   landing was recorded, never that nothing landed or nobody reviewed.
+ * @property {Object[]=} body_adoptions The task's settled adoptions (TaskDetailResponse), on its summary rows.
  * @property {boolean=} worker_saturation_warning
  * @property {string=} source
  * @property {string=} sender_label
@@ -1220,6 +1227,9 @@
  * @property {OwnerHurryProjection=} owner_hurry
  * @property {OwnerHurryProjection[]=} owner_hurry_history
  * @property {{reason?:string, detail?:string, label?:string}=} project_admission_hold  // while the queue snapshot lists the row: its wait for original Project/scope evidence, or {}
+ * @property {Array<{adoption_id:string, outcome:'adopted'|'not_applied'|'superseded'|'unconfirmed', commit_sha:string, previous_sha:string, branch:string, note:string, settled_at:string, revision:number, commits?:string[], commits_complete?:boolean, commits_omitted?:number}>=} body_adoptions
+ *   Every adoption this task authorized, as boot settled them; `commits` (previous..candidate, newest first, bounded;
+ *   a cut range counts the rest in `commits_omitted`) only when adopted.
  * @property {string=} error
  * @property {ContinuationOffer=} continuation_offer
  */

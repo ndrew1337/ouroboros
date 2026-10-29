@@ -54,26 +54,40 @@ _READY_CAPTURE_STATUSES = frozenset({
     ARTIFACT_STATUS_READY_WITH_CHANGES, ARTIFACT_STATUS_READY_NO_CHANGES})
 
 
-def _manifest_capture_status(manifest_path: pathlib.Path) -> str:
-    """The status one capture manifest reports about ITSELF; "" when unreadable."""
+def _saved_manifest(manifest_path: pathlib.Path) -> Dict[str, Any]:
+    """One capture manifest as saved; {} when absent or unreadable."""
     try:
         loaded = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError, ValueError):
-        return ""
-    return str(loaded.get("status") or "") if isinstance(loaded, dict) else ""
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
 
 
-def _capture_failed_refusal(rid: str, cap_status: str, note: str) -> str:
+def _manifest_capture_status(manifest_path: pathlib.Path) -> str:
+    """The status one capture manifest reports about ITSELF; "" when unreadable."""
+    return str(_saved_manifest(manifest_path).get("status") or "")
+
+
+def _drifted_no_change(manifest: Dict[str, Any]) -> bool:
+    """A failed capture whose only private fact is its authority-drift record over a snapshot known to
+    hold no child changes: a reject discards nothing, so a neighboring edit cannot wedge custody."""
+    drift = manifest.get("authority_drift")
+    return (manifest.get("status") == "failed" and isinstance(drift, dict)
+            and manifest.get("authority_drift_source_status") == ARTIFACT_STATUS_READY_NO_CHANGES
+            and bool(drift.get("paths") or drift.get("error")))
+
+
+def _capture_failed_refusal(rid: str, cap_status: str, note: str, step: str = "") -> str:
     """The ONE typed refusal for disposing over a non-usable capture (C1-R3).
     Shared by the capture-at-disposition seam and the reject branch's own guard
-    so they cannot drift; no caller records a disposition over this message."""
+    so they cannot drift; no caller records a disposition over this message. Its
+    next step follows the cause (#1651): a blind repeat heals only a transient one."""
     return (
         f"⚠️ INTEGRATE_DELEGATED_CAPTURE_FAILED: run {rid}'s changes were never "
         f"usably captured, and the capture-at-disposition attempt did not "
-        f"produce a patch (status {cap_status or 'missing'!r}: {note[:300]}). "
-        "No disposition was recorded — the obligation stays open and the "
-        "private copy (if present) is kept. Inspect it directly, then retry "
-        "this call."
+        f"produce a patch (status {cap_status or 'missing'!r}: {note[:600]}). "
+        "No disposition was recorded — the obligation stays open and the private copy (if present) is "
+        "kept. " + (step or "Repeating this call fails the same way until that cause changes; once it has, call again.")
     )
 
 
@@ -112,34 +126,32 @@ def _capture_at_disposition(
     manifest replays as not-captured, and the core is asked to re-capture. An
     exception ESCAPING the core (its internal try covers only the diff itself)
     is the same typed refusal, never a raw traceback out of the tool.
+
+    A ``missing`` capture (the core first restores what a pin holds) is loss only on
+    ``result_loss`` proof (#1651): a reject passes to its branch, which records the loss,
+    and an apply is told that reject is the exit; an unproven loss names its carrier.
     """
-    if entry.patch_captured and _manifest_capture_status(manifest_path) in _READY_CAPTURE_STATUSES:
+    reject = str(decision or "").lower() == "reject"
+    if (entry.patch_captured and _manifest_capture_status(manifest_path) in _READY_CAPTURE_STATUSES
+            or reject and _drifted_no_change(_saved_manifest(manifest_path))):
         return ""
-    if str(decision or "").lower() == "reject":
-        try:
-            saved = json.loads(manifest_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError, ValueError):
-            saved = {}
-        if (isinstance(saved, dict) and saved.get("status") == "failed"
-                and saved.get("authority_drift_source_status") == ARTIFACT_STATUS_READY_NO_CHANGES
-                and isinstance(saved.get("authority_drift"), dict)
-                and (saved.get("authority_drift", {}).get("paths")
-                     or saved.get("authority_drift", {}).get("error"))):
-            # The private snapshot is known to contain no child changes. A
-            # reject only discards that empty result, so it remains safe and
-            # prevents a neighboring edit from wedging custody forever.
-            return ""
-    from ouroboros.tools.delegate_integration import capture_terminal_patch_for_drive
+    from ouroboros.tools.delegate_integration import capture_terminal_patch_for_drive, loss_refusal, result_loss
 
     try:
         block = capture_terminal_patch_for_drive(drive, entry) or {}
     except Exception as exc:
         log.warning("capture-at-disposition raised for run %s", rid, exc_info=True)
         block = {"status": "", "note": f"capture raised {type(exc).__name__}: {exc}"}
-    cap_status = str(block.get("status") or "")
+    cap_status, note = str(block.get("status") or ""), str(block.get("note") or "")
+    step = "A later call may capture it." if block.get("retry") == "transient" else ""
     if cap_status in _READY_CAPTURE_STATUSES:
         return ""
-    return _capture_failed_refusal(rid, cap_status, str(block.get("note") or ""))
+    if cap_status == "missing" and entry.authority_source != "skill_payload":  # a payload keeps its own reject
+        lost, why = result_loss(drive, entry)
+        if lost and reject:
+            return ""
+        note, step = loss_refusal(drive, entry, lost, why)
+    return _capture_failed_refusal(rid, cap_status, note, step)
 
 
 def _delegated_disposition_refusal(status: str, entry: Any, rid: str,
@@ -247,7 +259,7 @@ def _unwritten_disposition_text(rid: str, target_root: str, disposition: str,
     return (
         f"⚠️ INTEGRATE_DISPOSITION_UNWRITTEN: run {rid}'s patch was NOT applied "
         f"(disposition {disposition!r}), and the durable disposition row could not "
-        "be written. Nothing in your tree changed and the run's saved result is "
+        "be written. Nothing in your tree changed and any saved result of the run is "
         "preserved. Fix the drive/event log; this process already holds the "
         "disposition in memory (a repeat here answers ALREADY_DISPOSED), so the "
         "run reads as undisposed again only after a restart — repeat it then."
@@ -730,37 +742,38 @@ def _integrate_git_capture(ctx, entry, decision, reason, manifest, cap_dir, orph
                 f"recorded and nothing changed: apply or reject would release {entry.execution_root}, the last copy "
                 "of those files. Keep what you need from it (or remove what is not evidence), then repeat this call.")
 
-    def _dispose(disposition: str, cleanup: bool) -> tuple[bool, str]:
+    def _dispose(disposition: str, cleanup: bool, **row: Any) -> tuple[bool, str]:
         return _dispose_delegated(
             drive, entry, snapshot_key, reason, disposition, cleanup,
-            disposed_by=str(getattr(ctx, "task_id", "") or ""))
+            disposed_by=str(getattr(ctx, "task_id", "") or ""), **row)
 
     def _unwritten_disposition(disposition: str, applied: bool) -> str:
         return _unwritten_disposition_text(rid, str(entry.target_root), disposition, applied)
 
     capture_status = str(manifest.get("status") or "")
     if decision == "reject":
-        drifted_no_change = (
-            capture_status == "failed"
-            and manifest.get("authority_drift_source_status") == ARTIFACT_STATUS_READY_NO_CHANGES
-            and isinstance(manifest.get("authority_drift"), dict)
-            and (manifest["authority_drift"].get("paths")
-                 or manifest["authority_drift"].get("error"))
-        )
-        # A reject releases a ready capture. It may also release a failed
-        # no-change capture whose only private fact is the durable authority
-        # drift record: there are no child bytes to discard in that shape.
-        if capture_status not in _READY_CAPTURE_STATUSES and not drifted_no_change:
+        # A reject releases a ready capture, a drift-only failed no-change capture or a result proven
+        # lost (#1651, re-proven under this lock): none of them discards a child byte.
+        from ouroboros.tools.delegate_integration import lost_words, result_loss
+
+        keep = capture_status in _READY_CAPTURE_STATUSES or _drifted_no_change(manifest)
+        lost = {} if keep else result_loss(drive, entry)[0]
+        if not (keep or lost):
             return _capture_failed_refusal(
                 rid, capture_status, "a reject would release the snapshot over it")
         verdict_path = _si()._write_verdict(
-            ctx, f"run_{rid}", outcome="rejected", reason=reason, files=touched,
+            ctx, f"run_{rid}", outcome="result_lost" if lost else "rejected", reason=reason, files=touched,
             manifest=manifest, applied=False, conflicts=[], protected=[],
             target=str(entry.target_root),
         )
-        recorded, note = _dispose("rejected", cleanup=True)
+        recorded, note = _dispose("rejected", cleanup=lost.get("copy_record") != "absent",  # nothing left to clean
+                                  **({"result_lost": lost} if lost else {}))
         if not recorded:
             return _unwritten_disposition("rejected", applied=False)
+        if lost:
+            return (f"{orphan_note}🚫 Rejected delegated run {rid} as LOST: {lost_words(drive, entry, lost)}. This decision "
+                    "changed no files; what the run did outside its copy and what it cost stay as recorded, unknown where "
+                    f"unknown. Verdict: {verdict_path or '(unwritten)'}. Reason: {reason or '(none)'}.{note}")
         return (
             f"{orphan_note}🚫 Rejected delegated run {rid}'s captured patch ({len(touched)} file(s) not "
             f"applied); its private copy and pins are released. Verdict: {verdict_path or '(unwritten)'}. "

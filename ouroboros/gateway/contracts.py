@@ -276,6 +276,7 @@ class ChatOutbound(ChatReferenceFields, SharedRowFrame):
     # dict failure_details and current source selectors. gaps name failed records;
     # review_records_omitted is 0|"1+"|"unknown", never proof of a review by itself.
     review_projection: NotRequired[Dict[str, Any]]
+    body_adoptions: NotRequired[List[Dict[str, Any]]]  # the task's settled adoptions (TaskDetailResponse), on its summary
     worker_saturation_warning: NotRequired[bool]
     source: NotRequired[str]
     sender_label: NotRequired[str]
@@ -1169,6 +1170,9 @@ class TaskDetailResponse(TypedDict, total=False):
     owner_hurry_history: list[OwnerHurryProjection]
     # While the queue snapshot lists a non-final row: its hold {reason, detail, label} or {}.
     project_admission_hold: Dict[str, Any]
+    # Every adoption this task authorized, as boot settled them: {adoption_id, outcome, commit_sha, previous_sha, branch,
+    # note, settled_at, revision, commits?, commits_complete?, commits_omitted?}; commits (newest first) only when adopted.
+    body_adoptions: List[Dict[str, Any]]
     error: str
 
 
