@@ -31,6 +31,7 @@ NODE_BIN = (
     else "node"
 )
 WEB_ROOT = Path(__file__).resolve().parents[1] / "web"
+OTHER = "Ouroboros 7.9.0 is already running from /Users/me/Desktop/Ouroboros.app. Quit it, then open this copy."
 
 
 class Hook:
@@ -827,9 +828,6 @@ def test_macos_quit_requests_are_marked_before_pywebviews_closing_runs(monkeypat
     assert mac.MacStatusItem.confirm(None, window, "t", "m") is True
     assert window.calls[-1][2] == {"global.ok": "Keep running", "global.cancel": "Quit"}
     assert window.localization == {"global.ok": "OK", "global.cancel": "Cancel"}, "labels restored"
-
-
-OTHER = "Ouroboros 7.9.0 is already running from /Users/me/Desktop/Ouroboros.app. Quit it, then open this copy."
 
 
 @pytest.mark.parametrize("intent,answered,other,expected", [
