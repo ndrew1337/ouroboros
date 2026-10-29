@@ -1,9 +1,8 @@
 """Task-local context-fit projections for the ordinary Main model path.
 
-This module is deliberately data-only around the existing context builder and
-capability-evidence SSOT.  It does not own routing, provider retries, or global
-context-mode state; callers supply the captured context core and exact-route
-resolver so ``ouroboros.context`` remains the public compatibility surface.
+This data-only layer uses the existing context builder and capability-evidence SSOT.
+It owns neither routing, provider retries nor global context-mode state. Callers supply
+the captured core and exact-route resolver; ``ouroboros.context`` stays the public compatibility surface.
 """
 
 from __future__ import annotations
