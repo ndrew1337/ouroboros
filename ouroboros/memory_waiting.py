@@ -7,14 +7,17 @@ from ouroboros.chronicle_store import is_late_review_mark
 
 WAITING_CLASSES = MappingProxyType({
     "late_reviews": {"subject": "late reviews", "action": "memory_mark",
+                     "parameter": ("release_ids",),
                      "reader": "memory_read(room_id='late_reviews', start=0)",
                      "act": "memory_mark(release_ids=[...], reason=...)",
                      "focus": "integrating", "moment": "when folding"},
     "notes": {"subject": "unsealed mind notes", "action": "chronicle_write",
+              "parameter": ("covers", "note_ids"),
               "reader": "memory_read(room_id='notes', start=0)",
               "act": "chronicle_write(kind='page', room_id=..., covers={'note_ids': [...]})",
               "focus": "integrating", "moment": "when folding"},
     "projects": {"subject": "open projects", "action": "close_project",
+                 "parameter": ("project_id",),
                  "reader": "list_projects(closed=false, oldest_first=true)",
                  "act": "close_project(project_id=..., note=...)",
                  "focus": "integrating", "moment": "when folding"},
