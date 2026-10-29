@@ -5,7 +5,7 @@ import { apiFetch, fetchJson } from './modules/api_client.js';
 import { loadVersion } from './modules/utils.js';
 import { bindScrollFade } from './modules/scroll_fade.js';
 import { initChat, createChatInstance } from './modules/chat.js';
-import { createStateSnapshotSequencer } from './modules/chat_activity.js';
+import { createStateSnapshotSequencer, readStateSnapshot } from './modules/state_snapshots.js';
 import { IDLE_SUMMARY, buildProjectActivityIndex, markWords, reconcileProjectRooms } from './modules/project_activity.js';
 import { createStatusMark, markView, paintStatusMark, syncMarkPhases } from './modules/status_mark.js';
 import { bindRowMenuGesture } from './modules/row_menu_gesture.js';
@@ -1205,21 +1205,11 @@ document.getElementById('nav-projects-add')?.addEventListener('click', async (ev
 
 // Callers that must observe a read taken AFTER their own change (or after a
 // socket open) force one, coalesced behind an in-flight read; the boot prefetch
-// and the periodic poll join whatever page-wide read is in flight.
+// and the periodic poll join whatever page-wide read is in flight. Every read
+// settles within its lifetime, so the boot's socket connect never waits forever.
 async function refreshProjectsNav(force = true) {
     const request = await stateSnapshots.gate(force);
-    if (!request) return;
-    try {
-        const resp = await apiFetch(request.path || '/api/state', { cache: 'no-store' });
-        if (!resp.ok) {
-            stateSnapshots.fail(request);
-            return;
-        }
-        const data = await resp.json();
-        stateSnapshots.apply(request, data);
-    } catch {
-        stateSnapshots.fail(request);
-    }
+    if (request) await readStateSnapshot(stateSnapshots, request);
 }
 
 // A task bound to a project is ALREADY a project task. Main's chat instance owns

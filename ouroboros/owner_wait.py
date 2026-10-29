@@ -342,6 +342,12 @@ def governing_continuation(task: dict) -> str:
     return "working" if "_working_recovery" in task else ""
 
 
+def fresh_input(task: dict) -> bool:
+    """The task's own first attempt: no governing continuation, retry or reissue of another task."""
+    return not (governing_continuation(task) or int(task.get("_attempt") or 1) != 1
+                or task.get("original_task_id") or task.get("timeout_retry_from"))
+
+
 def load_owner_wait(ctx: Any, handoff: dict | None = None) -> dict:
     """Resolve a selected handoff; a stale snapshot cannot revive a spent wait."""
     handoff = handoff or getattr(ctx, "owner_wait_resume", None)

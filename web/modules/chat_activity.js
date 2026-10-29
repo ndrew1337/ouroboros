@@ -4,7 +4,7 @@
 import { META_PART_SEPARATOR, executorIdentityMarkup, executorModelText, formatCoordinatorProvenance, harnessPresentation } from './harness_presentation.js';
 import { effortChipMarkup } from './effort_chip.js';
 import { resultFilesItemHtml } from './result_files.js';
-import { taskSourceDownloadUrl, apiFetch } from './api_client.js';
+import { taskSourceDownloadUrl, readState } from './api_client.js';
 import { compactModel, formatLogDuration, modelExecutionView } from './log_events.js';
 import { connectionLabel, routeConnectionId } from './connection_labels.js';
 import { fitText, fullText } from './text_fit.js';
@@ -425,8 +425,7 @@ export function restartConfirmBody(activities) {
 }
 
 async function readLiveActivities() {
-    const resp = await apiFetch('/api/state', { cache: 'no-store' });
-    const data = resp?.ok ? await resp.json() : null;
+    const { state: data } = await readState();  // a refusal, an unparsable body or no answer is unknown, never "none"
     if (!Array.isArray(data?.active_chat_activities) || data.active_chat_activities_complete !== true
         || data.works_complete === false) {
         throw new Error('census unavailable');
@@ -917,95 +916,8 @@ export function isTerminalTaskPhase(phase = '', terminal = false) {
 
 // In-flight chat activity status (owner decisions 1A-5A; managed continuity).
 
-/**
- * One request/apply clock for every /api/state consumer on a page. Responses
- * may finish in either order; once generation N applies, an older generation
- * can no longer mutate any projection. requestedAt stays tied to request start
- * and is the barrier for the CARD scan (`lastLiveObservedAt`) only — activity
- * hydration is a plain projection of the census and has no barrier.
- *
- * `gate(force)` is the page-wide single-flight admission for the readers: it
- * resolves to a request when the caller may read now. A periodic tick that
- * lands while a read is in flight is never queued: it resolves to null once
- * that read settles, so a caller that only needs some fresh read to have
- * landed (the boot prefetch before the socket opens) may await it. A forced
- * caller that lands mid-flight is coalesced with every other forced caller
- * into ONE follow-up read that starts when the in-flight read settles — the
- * first forced caller receives that request, the others resolve to null once
- * the follow-up has applied or failed. Gated requests settle via `apply`/`fail` even if a callback throws.
- * Only `fail` fans out `onUnavailable`; socket changes and confirmed mutations `retire()` older bodies.
- *
- * Each request names its `path`: once a full `task_bindings` map arrived with its revision, the
- * next read asks `bindings_since=<revision>`, and a body answering `task_bindings_unchanged` is
- * filled with that held map for that exact revision only; any other answer drops the held map,
- * so the read after it asks for the whole map again.
- */
-export function createStateSnapshotSequencer(onApply, now = () => Date.now(), onUnavailable = () => {}) {
-    let requestedGeneration = 0;
-    let appliedGeneration = 0;
-    // Newest applied body until a failed read or retire() clears it (late-mount seed).
-    let latest = null;
-    let held = null;  // {revision, bindings}: the last full task_bindings map this page applied
-    let inflight = null;
-    let settled = null;
-    let followUp = null;
-    const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
-    const begin = () => ({ generation: ++requestedGeneration, requestedAt: now(),
-        path: held ? `/api/state?bindings_since=${encodeURIComponent(held.revision)}` : '/api/state' });
-    const withBindings = (data) => {
-        if (!data || typeof data !== 'object') return data;
-        const revision = typeof data.task_bindings_revision === 'string' ? data.task_bindings_revision : '';
-        if (data.task_bindings_unchanged === true && held && revision === held.revision) {
-            return { ...data, task_bindings: held.bindings };
-        }
-        held = revision && data.task_bindings && typeof data.task_bindings === 'object'
-            ? { revision, bindings: data.task_bindings } : null;
-        return data;
-    };
-    const open = () => { settled = deferred(); inflight = begin(); return inflight; };
-    const settle = (request) => {
-        if (!inflight || request !== inflight) return;
-        const done = settled;
-        const next = followUp;
-        inflight = settled = followUp = null;
-        if (next) next.resolve({ request: open(), done: settled.promise });
-        done.resolve();
-    };
-    return {
-        begin,
-        retire() { appliedGeneration = begin().generation; latest = null; held = null; },
-        gate(force = false) {
-            if (!inflight) return Promise.resolve(open());
-            if (!force) return settled.promise.then(() => null);
-            if (!followUp) { followUp = deferred(); return followUp.promise.then((f) => f.request); }
-            return followUp.promise.then((f) => f.done).then(() => null);
-        },
-        apply(request, data) {
-            try {
-                const generation = Number(request?.generation) || 0;
-                if (!generation || generation <= appliedGeneration) return false;
-                appliedGeneration = generation;
-                latest = data = withBindings(data);
-                onApply(data, request.requestedAt, generation);
-                return true;
-            } finally { settle(request); }
-        },
-        isCurrent(request) {
-            return (Number(request?.generation) || 0) > appliedGeneration;
-        },
-        fail(request) {
-            try {
-                const generation = Number(request?.generation) || 0;
-                if (!generation || generation <= appliedGeneration) return false;
-                appliedGeneration = generation;
-                latest = null;
-                onUnavailable(request.requestedAt, generation);
-                return true;
-            } finally { settle(request); }
-        },
-        latest: () => latest,
-    };
-}
+// The page's single-flight state read lives in state_snapshots.js; its sequencer keeps this public name.
+export { createStateSnapshotSequencer } from './state_snapshots.js';
 
 /**
  * Main-thread fan-out gate for a live WS frame.

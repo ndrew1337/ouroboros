@@ -12,7 +12,8 @@
  * journals record, and a date with no record is a gap, never zero.
  */
 import { allowanceLabel, formatUsd2 } from './utils.js';
-import { apiFetch } from './api_client.js';
+import { apiFetch, readState } from './api_client.js';
+import { readStateSnapshot } from './state_snapshots.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { chooseAndSendReview } from './review_command.js';
 import { tr } from './i18n.js';
@@ -658,18 +659,19 @@ export function initEvolution({ ws, state, mount, stateSnapshots = null, dialog 
         // back null, and that read's answer reaches hydrateStateSnapshot from app.js.
         const request = stateSnapshots ? await stateSnapshots.gate(true) : ++runtimeSeq;
         if (!request) return;
+        if (stateSnapshots) {
+            await readStateSnapshot(stateSnapshots, request);
+            return;
+        }
         let answer = null;
         try {
-            const response = await apiFetch('/api/state', { cache: 'no-store' });
-            if (!response.ok) throw new Error(`State API error ${response.status}`);
-            answer = await response.json();
+            const { response, state: body } = await readState();
+            if (!response.ok || body === undefined) throw new Error(`State API error ${response.status}`);
+            answer = body;
         } catch (error) {
             console.error('Evolution runtime state error:', error);
         }
-        if (stateSnapshots) {
-            if (answer) stateSnapshots.apply(request, answer);
-            else stateSnapshots.fail(request);
-        } else if (request === runtimeSeq) hydrateStateSnapshot(answer);
+        if (request === runtimeSeq) hydrateStateSnapshot(answer);
     }
 
     // One command at a time: Start and Pause stay disabled until the gateway answers
