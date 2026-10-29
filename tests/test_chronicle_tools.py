@@ -359,8 +359,9 @@ def test_part_correction_and_decision_go_through_the_store_rules(tmp_path):
                  expected_sequence=head)
     assert part["ok"] and part["room_id"] == "5"
     # The receipt measures what the fold did and names what it did not: this view and the Max room stay as they were.
-    assert part["effect"] == ("folded 1 record: 11 -> 30 characters. This task's view is not refreshed; the next start "
-                              "re-measures its Max room.")
+    assert part["effect"] == ("folded 1 record: 11 -> 30 characters. Originals remain readable by address. "
+                              "This task's view is not refreshed; the next start re-measures its Max room "
+                              "and rewrites the cached story from the first changed retelling.")
     refused = json.loads(_chronicle_write(ctx, kind="part", text="again", member_ids=["legacy-b00-r5"],
                                           expected_sequence=part["room_head"]))
     assert refused["reason"] == "already_folded" and "effect" not in refused

@@ -387,7 +387,8 @@ def _fold_effect(store: ChronicleStore, action: str, ids: Iterable[Any], text: s
     ids = [str(ident) for ident in ids]
     before = sum(len(str((store.get(ident) or {}).get("text") or "")) for ident in ids)
     return (f"{action} {len(ids)} record{'' if len(ids) == 1 else 's'}: {before:,} -> {len(text or ''):,} characters. "
-            "This task's view is not refreshed; the next start re-measures its Max room.")
+            "Originals remain readable by address. This task's view is not refreshed; the next start re-measures "
+            "its Max room and rewrites the cached story from the first changed retelling.")
 
 
 def _write_part(ctx: Any, root: Path, store: ChronicleStore, author: Dict[str, Any], a: Dict[str, Any]) -> str:
