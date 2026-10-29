@@ -173,6 +173,7 @@ HOST_ROW_CLASSES = {
     "finalization_notice": ("card_row", 2),
     "host_progress": ("card_row", 1),
     "initialization_notice": ("not_started", 1),
+    "low_start_notice": ("runtime_state", 1),  # a fresh start memory lowered to Low (owner 1B, 29.10)
     "managed_update_notice": ("runtime_state", 2),
     "model_capability_notice": ("runtime_state", 1),
     "owner_pause_notice": ("card_row", 1),

@@ -47,6 +47,19 @@ def memory_facts(plan, mode):
         f"; drafts awaiting a decision {drafts}" if drafts or snapshot.spec.role == "consciousness" else "")
 
 
+def low_start_line(plan, mode, task_id):
+    """The owner's Main line for one fresh start of an integrating focus that memory lowered to Low (owner decision
+    1B, 29.10): its Max room (which exists only on the owner's Max with a known window) is ``crowded`` while the
+    books, core, assignment, tool schemas, reply reserve and work room alone fit (``memory_floor.crowded_by_memory``).
+    The host's measure, no advice. "" for every other start: a route (the task's own facts disclose it), tool
+    schemas that tip it alone, a held start, a delegated child or nanny, the owner's Low or Nano, an unknown window."""
+    receipt = (plan.projection(mode).memory_facts or {}) if plan is not None else {}
+    room = receipt.get("max_room")
+    if receipt.get("role") in DELEGATED_FOCUS_ROLES or not floor.crowded_by_memory(room):
+        return ""
+    return f"Task {task_id} started in Low with chapter maps. The host's measure: {floor.measure_text(room)}."
+
+
 def window_projection(record):
     """Pure sourced projection shared by Main, Settings and terminal failures."""
     from dataclasses import asdict
