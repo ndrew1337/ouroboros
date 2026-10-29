@@ -247,3 +247,48 @@ def test_default_keepalive_detects_dead_peer_at_twenty_plus_twenty_seconds(provi
                 await asyncio.wait_for(session.ws.wait_closed(), 2)
                 assert transport.closed
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('recover', [False, True])
+def test_unanswered_upload_fence_uses_existing_twenty_plus_twenty_heartbeat(provider, monkeypatch, recover):
+    async def scenario():
+        loop = asyncio.get_running_loop()
+        clock, offset = loop.time, [0.]
+        monkeypatch.setattr(loop, 'time', lambda: clock() + offset[0])
+        async def advance(seconds):
+            offset[0] += seconds
+            for _ in range(10):
+                checkpoint = loop.create_future()
+                loop.call_later(0, checkpoint.set_result, None)
+                await checkpoint
+        async with connected(provider, monkeypatch, interval=20) as (session, transport):
+            transport.drop_pongs = True
+            await session.write({'setup': 'synthetic calibration'})
+            await transport.frame(Opcode.PING)
+            pending = session.upload.meter
+            try:
+                assert not pending.done()
+                transport.drop_pongs = not recover
+                await advance(20.1)
+                await transport.frame(Opcode.PING)
+                if recover:
+                    await pending
+                    assert session.upload.error is None and session.upload.backlog() == 0
+                    await session.write({'image': 'after recovery'}, image=True)
+                    assert not transport.closed
+                else:
+                    assert not pending.done()
+                    await advance(19)
+                    assert not transport.closed
+                    await advance(1.1)
+                    close = await transport.frame(Opcode.CLOSE)
+                    assert close.data == b'\x03\xf3keepalive ping timeout'
+                    await session.ws.wait_closed()
+                    await pending
+                    from websockets.exceptions import ConnectionClosed
+                    assert isinstance(session.upload.error, ConnectionClosed)
+                    from ouroboros.realtime_session import transport_loss
+                    assert transport_loss(session.upload.error)
+            finally:
+                await settle([pending])
+    asyncio.run(scenario())

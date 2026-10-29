@@ -247,9 +247,7 @@ class Upload:
         acknowledged = wire.acknowledged()
         if acknowledged is not None:
             return acknowledged
-        native = getattr(wire, 'native', None)
-        size = buffer_size(native)
-        return max(0, wire.written - size) if size is not None else None
+        return None  # Async buffer drainage is not network ACK progress.
 
     def measured_rate(self, rate):
         # If ongoing PCM leaves the queue empty, a sample slower than that PCM
@@ -305,18 +303,21 @@ class Upload:
                 elapsed -= rtt if rtt < elapsed else 0
                 # The poll can observe more than the fixed fence (ongoing audio).
                 # Price all observed progress over that interval, not an older byte count.
-                rate = (acknowledged - self.ack_start) / elapsed if acknowledged is not None else 0
+                rate = (acknowledged - self.ack_start) / max(elapsed, 1e-9) if acknowledged is not None else 0
                 if acknowledged is not None:
                     self.ack_bytes = logical_marker
                     self.measured_rate(rate)
                     return
             ping = getattr(self.session.ws, 'ping', None)
             if ping is not None:
-                count, marker = self.bytes, self.total_bytes
-                pong = await ping()
-                await pong
-                self.ack_bytes = marker
-                self.measured_rate(count / (time.monotonic() - self.started))
+                while True:
+                    count, marker = self.bytes, self.total_bytes
+                    pong = await ping()
+                    await pong
+                    self.ack_bytes = marker
+                    if marker >= self.fence_bytes:
+                        self.measured_rate(count / max(time.monotonic() - self.started, 1e-9))
+                        break
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -370,7 +371,14 @@ class Upload:
 
     def forget(self, source):
         self.pending.pop(source, None)
+        self.inflight.pop(source, None)  # a restarted source cannot inherit this write
         self.copies.pop(source, None)
+        for key, claims in tuple(self.deliveries.items()):
+            remaining = deque(claim for claim in claims if claim[0].source != source)
+            if remaining:
+                self.deliveries[key] = remaining
+            else:
+                self.deliveries.pop(key, None)
         self.notice(False, source)
 
     async def admit(self, frame):
@@ -423,7 +431,7 @@ class Upload:
             output.append({**row, 'content': parts, **({'_deferred_frame': True} if held else {})})
         return output
 
-    def written(self, payload):
+    def written(self, payload, claims=None):
         """Recognize the exact admitted pixels after the adapter's actual write.
 
         Gemini carries base64 data; OpenAI carries a data URL. Traversal is by
@@ -433,14 +441,14 @@ class Upload:
             return
         if isinstance(payload, dict):
             for value in payload.values():
-                self.written(value)
+                self.written(value, claims)
         elif isinstance(payload, list):
             for value in payload:
-                self.written(value)
+                self.written(value, claims)
         elif isinstance(payload, str):
             key = payload.split(';base64,', 1)[-1] if payload.startswith('data:') else payload
             deliveries = self.deliveries.get(key)
-            if deliveries:
+            if deliveries and (claims is None or any(deliveries[0] is claim for claim in claims.get(key, ()))):
                 self.completed(*deliveries.popleft())
                 if not deliveries:
                     self.deliveries.pop(key)
@@ -474,8 +482,9 @@ class Upload:
                 self.frame_task = asyncio.current_task()
                 try:
                     await self.session.send(prepared)
-                    done()
-                    self.completed(frame, prepared)
+                    if valid() and self.inflight.get(source) is frame:
+                        done()
+                        self.completed(frame, prepared)
                     # Admission still waits for the preceding image to leave the
                     # observable queue; loss of measurement cannot undo its write.
                     while True:
@@ -497,3 +506,4 @@ class Upload:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self.pending.clear()
+        self.deliveries.clear()

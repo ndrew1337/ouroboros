@@ -56,18 +56,29 @@ def test_delivery_copy_obeys_bytes_and_preserves_original(metadata):
     assert Image.open(io.BytesIO(original.data)).width == 1280
 
 
-@pytest.mark.parametrize('engine,rate', [('gemini', 50_000), ('openai', 80_000)])
-@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only'])
-def test_minute_sharing_keeps_microphone_and_reports_recovery(host_world, monkeypatch, engine, rate, measurement):
+def measurement_arm(monkeypatch, measurement):
+    from tests._live_upload_wire import LimitedTransport
     if measurement != 'native':
         from ouroboros.live_upload import WireMeter
-        monkeypatch.setattr(WireMeter, 'unsent', lambda self: None)
-        if measurement == 'no_kernel':
-            monkeypatch.setattr(WireMeter, 'acknowledged', lambda self: None)
-    asyncio.run(sharing(host_world, monkeypatch, engine, rate))
+        monkeypatch.setattr(WireMeter, 'unsent', lambda _: None)
+        if measurement != 'ack_only':
+            monkeypatch.setattr(WireMeter, 'acknowledged', lambda _: None)
+    if measurement == 'hidden':
+        monkeypatch.setattr(LimitedTransport, 'get_write_buffer_size',
+            lambda self: max(0, self.queued - 256 * 1024) + self.native.get_write_buffer_size())
+    if measurement == 'opaque':
+        # All three unavailable: keeping this accessor would miss the fixed pong fallback.
+        monkeypatch.setattr('ouroboros.live_upload.buffer_size', lambda _: None)
 
 
-async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
+@pytest.mark.parametrize('engine,thinking,rate', [('gemini', False, 50_000), ('gemini', True, 50_000), ('openai', False, 80_000)])
+@pytest.mark.parametrize('measurement', ['native', 'no_kernel', 'ack_only', 'hidden', 'opaque'])
+def test_minute_sharing_keeps_microphone_and_reports_recovery(host_world, monkeypatch, engine, thinking, rate, measurement):
+    measurement_arm(monkeypatch, measurement)
+    asyncio.run(sharing(host_world, monkeypatch, engine, rate, thinking=thinking, measurement=measurement))
+
+
+async def sharing(host_world, monkeypatch, engine, rate, seconds=60, *, thinking=False, measurement="native"):
     links = limit_connector(monkeypatch, rate)
     original = screen()
     audio_times, sizes = [], []
@@ -82,7 +93,7 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
             sizes.append(len(image))
         await native_send(wire, raw)
     monkeypatch.setattr(NativeWire, 'send', observe)
-    async with stack(host_world, monkeypatch, engine) as run:
+    async with stack(host_world, monkeypatch, engine, thinking=thinking) as run:
         run.call.attention.mode = 'stream'
         run.page.send({'type':'share', 'sharing':True, 'kind':'screen'})
         # Continuous page-rate input, including silence, with the page's actual
@@ -110,27 +121,38 @@ async def sharing(host_world, monkeypatch, engine, rate, seconds=60):
         assert time.monotonic() - audio_times[-1] < 1, ([v for v in run.page.controls if v.get('type') == 'state'], run.call.renewing, run.call.provider_closed, run.call.quiet_blockers())
         assert not run.running.done(), run.result if hasattr(run, 'result') else run.page.closed
         gaps = [b-a for a,b in zip(audio_times[first_audio:], audio_times[first_audio+1:])]
+        print('UPLOAD_PRESSURE', engine, dict(thinking=thinking, measurement=measurement, rate=rate,
+              sizes=list(sizes), max_audio_gap=max(gaps) if gaps else None))
         assert gaps and max(gaps) < 1, (engine, max(gaps), sizes)
         assert 0 < len(sizes) < seconds and max(sizes) < len(original), (sizes, run.call.session.upload.rate, run.call.session.upload.audio_rate, run.call.session.upload.budget())
         facts = [r.get('content','') for r in run.host.messages]
         assert sum(SLOW in str(r) for r in facts) == 1, facts
         before = len(sizes)
+        slow_sizes = list(sizes)
         for link in links:
             link.rate = 10_000_000
-        # Distinct next frame is only sent after audio has measured the recovered link.
-        # New frames demonstrate recovered throughput; application-limited audio
-        # alone cannot measure a faster line. Keep the actual one-second cadence.
-        for number in range(10):
-            recovery = original[:2] + b'\xff\xfe\x00\x03' + bytes([number]) + original[2:]
-            run.page.video(recovery)
-            await asyncio.sleep(1)
-            if len(sizes) > before and sizes[-1] == len(recovery):
-                break
-        print('RECOVERY', engine, dict(rate=run.call.session.upload.rate, audio_rate=run.call.session.upload.audio_rate, backlog=run.call.session.upload.backlog(), sizes=sizes))
-        await run.wait(lambda: len(sizes) > before and sizes[-1] == len(recovery))
+        # Keep the page's changing source at its actual cadence throughout the
+        # recovery observation. Stopping after ten captures can strand the last
+        # reduced copy just before its receipt learns the recovered capacity.
+        async def recovering():
+            import itertools
+            for number in itertools.count():
+                comment = str(number).encode()
+                recovery = original[:2] + b'\xff\xfe' + (len(comment)+2).to_bytes(2, 'big') + comment + original[2:]
+                run.page.video(recovery)
+                await asyncio.sleep(1)
+                if len(sizes) > before and sizes[-1] == len(recovery):
+                    return
+        print('UPLOAD_SLOW', engine, dict(thinking=thinking, measurement=measurement, rate=rate,
+              sizes=slow_sizes, max_audio_gap=max(gaps)))
+        try:
+            await asyncio.wait_for(recovering(), 120)  # the harness's existing hang bound
+        finally:
+            print('RECOVERY', engine, dict(rate=run.call.session.upload.rate, audio_rate=run.call.session.upload.audio_rate,
+                  backlog=run.call.session.upload.backlog(), budget=run.call.session.upload.budget(), sizes=sizes))
         await run.wait(lambda: sum(RECOVERED in str(r) for r in run.host.messages) == 1)
         assert sum(SLOW in str(r) for r in run.host.messages) == 1
-        print('UPLOAD', engine, dict(seconds=seconds, rate=rate, source_bytes=len(original),
+        print('UPLOAD', engine, dict(seconds=seconds, thinking=thinking, measurement=measurement, rate=rate, source_bytes=len(original), slow_sizes=slow_sizes,
               delivered_frames=len(sizes), sizes=sizes, audio_wire_rate=run.call.session.upload.audio_rate,
               max_audio_gap=max(gaps), max_page_unsent_audio_seconds=unsent_max[0] / 96000))
     assert run.result[1]['execution_status'] == 'ok', run.result

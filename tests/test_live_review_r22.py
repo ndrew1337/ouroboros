@@ -217,6 +217,10 @@ def test_gemini_attend_delivers_pixels_or_explicit_deferred_words(host_world, mo
             run.call.attention.mode = 'asked'
             upload = run.call.session.upload
             await run.wait(lambda: upload.rate is not None)
+            # This grammar probe controls upload pressure explicitly below.
+            # Mute the synthetic microphone so its incidental write cannot choose the deferred arm.
+            run.page.send({'type': 'mute', 'muted': True})
+            await run.wait(lambda: upload.audio_rate == 0 and upload.backlog() == 0)
             if deferred:
                 monkeypatch.setattr(upload, 'capacity', lambda: 0)
             run.page.video(jpeg('synthetic requested look'))
@@ -224,6 +228,8 @@ def test_gemini_attend_delivers_pixels_or_explicit_deferred_words(host_world, mo
             start = len(run.wire.sent)
             await run.tool('review-look', 'attend', {'look': True})
             await run.wait(lambda: 'review-look' in run.wire.outputs)
+            await run.wait(lambda: any(video_bytes(v) is not None for v in run.wire.sent[start:])
+                           or 'These pixels have not been delivered' in json.dumps(run.wire.sent[start:]))
             sent = run.wire.sent[start:]
             delivered = any(video_bytes(v) is not None for v in sent)
             words = json.dumps(sent)
