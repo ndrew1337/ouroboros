@@ -612,13 +612,12 @@ def sync_runtime_dependencies(reason: str) -> Tuple[bool, str]:
         if synced == fingerprint:
             return True, "unchanged:" + source
         from ouroboros.platform_layer import kill_process_tree, subprocess_new_group_kwargs
-        from ouroboros.tools.shell import _active_subprocesses, _subprocess_lock
+        from ouroboros.tools.shell_process import _active_subprocesses, _subprocess_lock, tracked_start
 
-        proc = subprocess.Popen(
-            cmd, cwd=str(_go().REPO_DIR), **subprocess_new_group_kwargs()
-        )
-        with _subprocess_lock:
-            _active_subprocesses.add(proc)
+        with tracked_start() as publish:
+            proc = publish(subprocess.Popen(
+                cmd, cwd=str(_go().REPO_DIR), **subprocess_new_group_kwargs()
+            ))
         try:
             returncode = proc.wait(timeout=120)
         except subprocess.TimeoutExpired:

@@ -461,13 +461,15 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str,
     except Exception as _e:
         _log_worker_crash(wid, _drive, "make_agent", _e, _tb.format_exc())
         return
-    # The birth is measured first, in its own try: a failing checkout read must
-    # neither leave it unbound for the idle probe nor suppress readiness. An empty
+    # The births are measured first, in their own try: a failing checkout read must
+    # neither leave them unbound for the idle probe nor suppress readiness. An empty
     # birth is honest; the parent then matches this child by its own Process pid.
-    birth = ""
+    birth = kernel_birth = ""
     try:
         from ouroboros.platform_layer import process_start_time
+        from ouroboros.process_identity import process_kernel_birth
 
+        kernel_birth = process_kernel_birth(_os.getpid()) or ""  # never raises
         birth = str(process_start_time(_os.getpid()) or "")
     except Exception:
         log.warning("Worker %s could not measure its own process birth", wid, exc_info=True)
@@ -480,7 +482,8 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str,
         _branch, _sha = _get_git_info(_pathlib.Path(repo_dir))  # best-effort, diagnostic only
         _append_jsonl(_drive / "logs" / "events.jsonl", {
             "ts": _utc_now_iso(), "type": "worker_ready", "worker_id": wid,
-            "pid": _os.getpid(), "process_birth": birth, "git_branch": _branch, "git_sha": _sha,
+            "pid": _os.getpid(), "process_birth": birth, "kernel_birth": kernel_birth,
+            "git_branch": _branch, "git_sha": _sha,
         })
     except Exception as _e:
         _log_worker_crash(wid, _drive, "worker_ready", _e, _tb.format_exc())
@@ -516,7 +519,8 @@ def worker_main(wid: int, in_q: Any, out_q: Any, repo_dir: str, drive_root: str,
                     log.warning("Idle probe could not prove local quiescence", exc_info=True)
                 if probe is None:
                     out_q.put({"type": "worker_quiescent", "worker_id": wid, "pid": _os.getpid(),
-                               "process_birth": birth, "token": str(task.get("token") or ""),
+                               "process_birth": birth, "kernel_birth": kernel_birth,
+                               "token": str(task.get("token") or ""),
                                "retained_rows": _retained_rows_after_drain()})
                 continue
             probe = None

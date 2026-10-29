@@ -8,7 +8,10 @@ Windows keeps its one icon for the whole desktop run, because system notificatio
 balloons on it (owner decision 1A); macOS shows its item only while background is on.
 Until the owner decides, the first close asks once and stores the answer; dismissing
 the question quits. A quit request (the indicator's Quit, Cmd+Q, sign-out, shutdown)
-and Panic never reach the question and are never cancelled. An alert never raises a
+and Panic never reach the question and are never cancelled. A quit latches shutdown at
+once and runs the launcher's close body once, off the UI/STA thread that received it; the
+window, its event loop and the indicator with its Panic stay until that body's terminal
+exit, which an accepted Panic overrides (``exit_launcher``, ``leave``). An alert never raises a
 window hidden on purpose. Linux and other hosts have no indicator: closing quits.
 
 Second launch: a manual one shows the running window (``activate_running_instance`` -> ``Background.listen``),
@@ -336,7 +339,10 @@ class Background:
 
     def __init__(self, exit_launcher, read_port, shutdown_event, *, panic_child=lambda: (None, None)) -> None:
         cls = indicator_class()
-        self.exit_launcher = exit_launcher  # stop the agent, clean up, os._exit
+        self._close = exit_launcher  # the launcher's close body: stop the agent, clean up, ``leave``
+        self._closing = False  # that body runs now, on the one closer thread
+        self._closer_lock = threading.Lock()
+        self._terminal = threading.Lock()  # orders the ordinary exit against an accepted Panic; held for no I/O
         self.read_port = read_port
         self.panic_child = panic_child  # snapshot of this launcher's Popen and optional Job, not a PID scan
         self.shutdown = shutdown_event
@@ -412,12 +418,42 @@ class Background:
             self.indicator.show_if_unavailable(self.window)
 
     def closing(self):
-        """pywebview ``closing``; False keeps the process, every other outcome quits."""
+        """pywebview ``closing``; False keeps the window (hidden, asking, or quitting through the closer)."""
         if self.indicator is None or not self.native_ready or self.quit.is_set():
             return self.exit_launcher()
         if self.indicator.decides_natively:
             return None  # Windows: its FormClosing handler holds the close reason
         return self.window_closed()
+
+    def exit_launcher(self):
+        """Quit: latch shutdown now and run the close body, off the calling UI/STA thread and never twice
+        at once. False: the caller's window and event loop stay, so Panic keeps its ingress until the
+        body's exit. A body that returned without exiting (a startup close) lets a later quit run it again."""
+        self.shutdown.set()
+        with self._closer_lock:
+            if self._closing:
+                return False
+            self._closing = True
+        try:  # not a daemon: a main() that returns meanwhile still lets the body finish its stop
+            threading.Thread(target=self._run_close, name="ouroboros-quit", daemon=False).start()
+        except RuntimeError:
+            self._run_close()  # thread admission failure cannot turn the owner's quit into a no-op
+        return False
+
+    def _run_close(self) -> None:
+        try:
+            self._close()
+        finally:
+            with self._closer_lock:
+                self._closing = False
+
+    def leave(self, release_lock, code: int = 0) -> None:
+        """The close body's terminal exit: remove the icon, release the lock, then exit, unless an accepted
+        Panic owns persistence and the exit (it is decided under the lock Panic is accepted under)."""
+        stop_tray_before_exit(release_lock)
+        with self._terminal:
+            if not self.panic.is_set():
+                os._exit(code)
 
     def window_closed(self):
         """The owner closed the window (never a quit request). False cancels the close."""
@@ -431,7 +467,7 @@ class Background:
         return self.exit_launcher()
 
     def request_quit(self) -> None:
-        """The indicator's Quit: a plain exit; no Panic flag, sign-in startup untouched."""
+        """The indicator's Quit: a plain exit; no Panic flag, sign-in startup untouched. Returns at once."""
         self.shutdown.set()
         self.quit.set()
         self.exit_launcher()
@@ -441,13 +477,15 @@ class Background:
 
         No callback registration, server port, HTTP request or reconnect is needed.
         The upstream emergency coordinator owns installation custody and hard exit.
+        Accepted under the terminal lock: an ordinary exit either already committed or never will.
         """
-        if self.panic.is_set():
-            return
         from ouroboros.launcher_bootstrap import source_handoff
 
-        source_handoff.claim_stop()  # serialize with normal handoff exit, never with Popen
-        self.panic.set()
+        with self._terminal:
+            if self.panic.is_set():
+                return
+            source_handoff.claim_stop()  # serialize with normal handoff exit, never with Popen
+            self.panic.set()
         self.shutdown.set()
         self.quit.set()
         request_tray_cleanup()
