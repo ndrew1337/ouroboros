@@ -2,7 +2,7 @@
 // the routing authority; account and context choices belong to the exact role.
 // Catalog arrival only enriches choices. It never authors an assignment.
 import { apiClient, fetchJson } from './api_client.js';
-import { MODEL_CATALOG_TIMEOUT_MS, catalogReadNote, mergeModelCatalog } from './settings_catalog.js';
+import { MODEL_CATALOG_TIMEOUT_MS, catalogReadNote, mergeModelCatalog, withConnectionCatalogs } from './settings_catalog.js';
 import { accountRows, bindStatusSurface, claudexorStatus } from './claudexor_status_store.js';
 import { parseModelSource, composeModelSource, apiConnections, configuredApiProviders, indexProfilesByHarness,
     profileOptionsFor, routeChoiceGroups, selectHtml, mintStableId, unavailableConnectionState, API_CHOICE_PREFIX,
@@ -504,8 +504,9 @@ export function createModelRolesEditor({ hostId, store = claudexorStatus,
                 listener: updateCatalogViews });
             render();
         },
-        adoptCatalog(data = {}) {
-            catalog = mergeModelCatalog(catalog, data);
+        adoptCatalog(data = {}, { connectionCatalogs } = {}) {
+            // The wizard supplies its already-merged general snapshot plus unsaved server reads.
+            catalog = connectionCatalogs ? withConnectionCatalogs(data, connectionCatalogs) : mergeModelCatalog(catalog, data);
             if (Array.isArray(data.items)) {
                 for (const row of rows) void refreshRow(row, { force: true });
             }

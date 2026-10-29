@@ -130,6 +130,7 @@ export function onboardingSettingsDraft({
 } = {}) {
     const clean = (value) => trim(value);
     return {
+        OUROBOROS_CONNECTIONS: state.connections || [],
         ...Object.fromEntries(providerFields.map(
             (field) => [field.settingKey, clean(state[field.stateKey])],
         )),
