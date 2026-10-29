@@ -220,6 +220,11 @@ def export_colab_env(repo_dir: pathlib.Path, data_dir: pathlib.Path, settings_pa
     # export it explicitly here and respect an explicit override.
     start_method = (os.environ.get("OUROBOROS_WORKER_START_METHOD") or "forkserver").strip().lower()
     env = {"OUROBOROS_APP_ROOT": str(pathlib.Path(data_dir).parent), "OUROBOROS_REPO_DIR": str(repo_dir), "OUROBOROS_DATA_DIR": str(data_dir), "OUROBOROS_SETTINGS_PATH": str(settings_path), "OUROBOROS_WORKER_START_METHOD": start_method, "PYTHONUNBUFFERED": "1", "PYTHONPATH": str(repo_dir)}
+    # Disposable worktrees stay on local disk, never Drive FUSE, for existing and new installs alike;
+    # a new install's projects (their git clones included) and Deliverables follow APP_ROOT onto Drive
+    # so they persist with its memory (#1239). A saved setting or the operator's own export wins.
+    if not os.environ.get("OUROBOROS_SUBAGENT_WORKTREE_ROOT"):
+        env["OUROBOROS_SUBAGENT_WORKTREE_ROOT"] = os.path.expanduser(os.path.join("~", "Ouroboros", "subagent_worktrees"))
     os.environ.update(env)
     return env
 

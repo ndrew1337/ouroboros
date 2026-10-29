@@ -185,3 +185,25 @@ def test_a_deleted_note_leaves_the_index_and_the_memo(tmp_path, monkeypatch):
 
     assert "**beta**" not in store.knowledge_index_view(address)
     assert {held.topic for held in store._NAVIGATION if held.shelf == address.shelf} == {"alpha"}
+
+
+def test_a_whole_listing_prunes_its_memo_while_another_reader_keeps_a_row(tmp_path, monkeypatch):
+    """An extension's paged shelf read keeps rows from a route thread while a whole listing prunes: the prune walks a
+    snapshot of the memo, so the other row lands and nothing raises mid-iteration."""
+    from ouroboros import utils
+
+    monkeypatch.setattr(utils, "_RACY_NS", 0)
+    monkeypatch.setattr(store, "_NAVIGATION", {})
+    address = _shelf(tmp_path, {"alpha": "# Alpha\n", "beta": "# Beta\n"})
+    other = _shelf(tmp_path / "other", {"gamma": "# Gamma\n"})
+    elsewhere = store.resolve_knowledge_address(other.canonical_root, "gamma")
+    assert "**beta**" in store.knowledge_index_view(address)
+    (address.shelf / "beta.md").unlink()
+
+    class Interleaved:  # a held row whose comparison is the moment another thread's read keeps its own row
+        shelf = property(lambda _held: store._navigation_row(elsewhere) and elsewhere.shelf)
+
+    store._NAVIGATION[Interleaved()] = (None, {})
+    assert "**beta**" not in store.knowledge_index_view(address)
+    held = {(row.shelf, row.topic) for row in store._NAVIGATION if isinstance(row, store.KnowledgeAddress)}
+    assert held == {(address.shelf, "alpha"), (elsewhere.shelf, "gamma")}

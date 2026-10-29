@@ -193,8 +193,10 @@ another width (from 75 % up to the size that still leaves 320 CSS px); a browser
 on a computer keeps its own zoom, which no page can set, and the control names
 its keys; where neither exists (a Mini App in Telegram for Android, Telegram
 Desktop) the size stays 100 % and the control says so. A size applies when the
-slider is let go; a size the device cannot keep lasts until the page closes. Ouroboros
-sees the size in the owner's surface fact and can say where to change it, never changes it.
+slider is let go; a size the device cannot keep lasts until the page closes, and one the
+desktop window has not taken (on its way, refused or unanswered) stays the owner's choice on
+the slider, which says so and can be chosen again. Ouroboros sees the size in the owner's
+surface fact (the desktop window's once it took it) and can say where to change it, never changes it.
 
 Appearance belongs to one installation in one browser profile or desktop client on
 one host name, never an account or server, and stays when the server moves to another
@@ -258,7 +260,7 @@ Rules:
   document in the reader (§5 "Document reading"). Nothing else changes
   size: controls, labels, cards and page chrome keep the four sizes, and so
   do the compact surfaces (a Skill Review report, a task timeline) and the
-  other rich-content cards (the question card, the update letter).
+  other rich-content cards (the question card, the update description).
 
 ## 2. Hierarchy rule
 
@@ -275,7 +277,7 @@ steps down. Concretely:
   browser default is a defect: it lands at bold 16px full white and ties with,
   or beats, the content it introduces.
 - A Markdown heading is a subsection heading too — a `--type-body` semibold
-  label in a Skill Review report, the question card and the update letter,
+  label in a Skill Review report, the question card and the update description,
   and its row's own size in a task timeline — except inside a full rich chat
   answer, which is reading text and follows the §1 ladder instead.
 
@@ -1138,7 +1140,7 @@ preference when it opens and on every reconnect; there is no file watcher.
   label, and in a task card's timeline a heading renders inline, without
   block margins, at its row's own size, with a copyable line break before
   the following paragraph. Other rich-content cards (the question card, the
-  update letter) keep `--type-body` semibold labels. Bold text in chat
+  update description) keep `--type-body` semibold labels. Bold text in chat
   Markdown and rich-content cards is semibold, so a bold lead sentence never
   outweighs a heading. The page-size `md-h1` belongs to non-chat surfaces
   only.
@@ -2575,9 +2577,9 @@ the desktop runs one. Not yet allowed, denied, unavailable or failed is a typed
 answer, never silence (an error the system returns instead of asking is that
 error, not a denial): that alert falls back to the browser banner or the in-app
 toast. One the system took without answering in time may still appear, so
-nothing else is shown; its click opens the newest accepted source on that icon. In-app
-updates do not replace the desktop app, so an app built before this capability
-falls back and Settings says that system notifications need the current app.
+nothing else is shown; its click opens the newest accepted source on that icon.
+A window without the system-notification method falls back; Settings names that
+missing method, without inferring the app's age or an update remedy.
 Android's host keeps its own channel for its own service; its page has no system
 notifications and says so.
 
@@ -2647,8 +2649,8 @@ notification, including a denied permission, and in the desktop app it is the
 gesture that lets the system ask. The status line names the surface this client
 is using — the system's notifications, a browser banner or the in-app toast —
 keeps the system's permission apart from what became of the last alert (taken,
-unconfirmed or fallen back), and, in an older desktop app, says that system
-notifications need the current app.
+unconfirmed or fallen back), and names a missing desktop method without
+prescribing an update or reinstall.
 
 **Known limits of this version**, stated rather than discovered later:
 

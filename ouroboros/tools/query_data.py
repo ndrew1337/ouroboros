@@ -33,7 +33,8 @@ _FILES = {"review_ledger": "state/review_ledger/{id}.json", "advisory_review": "
           "verification_receipts": "task_results/artifacts/{id}/verification_receipts.jsonl",
           "storage": "state/storage_measurement.json",  # the last two finished counts (installation-wide) + removers
           "knowledge_history": "memory/knowledge_history.jsonl",  # global knowledge writes, bodies left out
-          "update_letter": "state/update_letter.json",  # the letter with its whole range qualification
+          "update_letter": "state/update_letter.json",  # the description with its whole range qualification
+          "update_material": "state/update_material.json",  # the offered range's commits, rows and read recipe
           **{name + "_log": f"logs/{name}.jsonl" for name in ("supervisor", "events", "tools", "chat")}}
 _ID_KINDS = {"task_result", "run", "review_ledger", "skill_state", "verification_receipts"}
 # op=blob reads the observability CAS by digest. The digest in a task-source handle's name is that file's own
@@ -61,6 +62,12 @@ class SelectorError(ValueError):
 
 def _canonical(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def selected_bytes(value) -> int:
+    """The smallest ``max_bytes`` that returns ``value`` as a selection: the output check counts
+    its canonical JSON, whatever ``format`` is (a producer that advertises a budget uses this)."""
+    return len(_canonical(value))
 
 
 def _name(value):
@@ -406,7 +413,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 hint = f"; {rows} bounds rows for op={op}" if rows and {"tail", "max_rows"} & {n for n, _ in named} else ""
                 raise ValueError(f"{', '.join(_arg(*item) for item in named)} {'applies' if len(named) == 1 else 'apply'} "
                                  f"only to {owner}; omit {'it' if len(named) == 1 else 'them'}{hint}")
-        if kind in {"storage", "update_letter"} and child_task_id:
+        if kind in {"storage", "update_letter", "update_material"} and child_task_id:
             raise ValueError(f"{kind} is installation-wide; it has no child selector")
         if kind == "knowledge_history" and child_task_id:
             raise ValueError("knowledge_history is the installation's global knowledge; it has no child selector")
@@ -487,7 +494,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 # The installation queue lives with its owner; child_task_id keeps child-local meaning.
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
-            elif kind in {"storage", "knowledge_history", "update_letter"}:
+            elif kind in {"storage", "knowledge_history", "update_letter", "update_material"}:
                 root, plane = canonical, owner
                 _plane_path(ctx, plane, root, _FILES[kind], caller)
             values, remaining, retained = {}, sql.MAX_BYTES, 0
@@ -526,7 +533,7 @@ def _query_data(ctx: ToolContext, *, op: str, db="current", query="", kind="", i
                 if not isinstance(value, str):
                     raise ValueError("format=text requires exactly one selected string")
                 raw = value.encode("utf-8")
-            if (need := max(len(raw), len(_canonical(value)))) > max_bytes:
+            if (need := max(len(raw), selected_bytes(value))) > max_bytes:
                 # Both the exact bytes and their canonical JSON must fit; format=text strings differ.
                 sizes = f"{len(raw)} bytes" + (f" ({len(_canonical(value))} as canonical JSON)" if need != len(raw) else "")
                 raise_to = (f"raise max_bytes to at least {need} (at most {sql.MAX_BYTES})" if need <= sql.MAX_BYTES
