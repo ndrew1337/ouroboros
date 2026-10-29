@@ -2904,6 +2904,17 @@ html[data-layout="docked"] .app-page-lead .files-crumb-sep { flex: none; font-si
     overflow-wrap: anywhere;
 }
 
+/* A record's relation to the code that landed is read whole at every width (a narrow card's clamp included). */
+.review-line.review-line-whole {
+    display: block;
+    overflow: visible;
+    -webkit-line-clamp: none;
+    line-clamp: none;
+    white-space: normal;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+}
+
 .review-line-quiet,
 .review-line-by { color: var(--text-meta); }
 

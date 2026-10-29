@@ -32,7 +32,7 @@ from ouroboros.skill_loader import (
     save_review_state,
 )
 from ouroboros.skill_peer_inventory import discover_skill_peers
-from tests._shared import clean_extension_runtime_state
+from tests._shared import clean_extension_runtime_state, current_python_env
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SEEDS = REPO / "skills"
@@ -328,7 +328,7 @@ def windows_installed(data, monkeypatch):
                                  installed_by="owner")["ok"]
     installs, reconciles = [], []
     monkeypatch.setattr("ouroboros.marketplace.isolated_deps._install_python_packages",
-                        lambda packages, *args, **kwargs: installs.append(list(packages)) or [])
+                        lambda packages, env_root, *args, **kwargs: installs.append(list(packages)) or current_python_env(env_root) or [])
     monkeypatch.setattr("ouroboros.extension_loader.reconcile_extension",
                         lambda name, *args, **kwargs: reconciles.append(name) or {"action": "extension_loaded"})
     from ouroboros import skill_lifecycle_actions
@@ -379,7 +379,7 @@ def test_a_failed_install_names_the_failure_and_the_next_boot_retries(windows_in
     assert reconciles == [WINDOWS]
 
     monkeypatch.setattr("ouroboros.marketplace.isolated_deps._install_python_packages",
-                        lambda packages, *args, **kwargs: installs.append(list(packages)) or [])
+                        lambda packages, env_root, *args, **kwargs: installs.append(list(packages)) or current_python_env(env_root) or [])
     assert _dependency_pass(data, [WINDOWS], log) == [WINDOWS]
     assert installs == [["comtypes==1.4.17"]] and load_enabled(data, WINDOWS) is True
 
@@ -630,7 +630,7 @@ def test_a_builtin_installed_after_the_receipt_retries_its_dependencies_at_the_n
     assert _dependency_pass(drive, [WINDOWS], log) == [WINDOWS] and not load_enabled(drive, WINDOWS)
 
     monkeypatch.setattr("ouroboros.marketplace.isolated_deps._install_python_packages",
-                        lambda packages, *args, **kwargs: installs.append(list(packages)) or [])
+                        lambda packages, env_root, *args, **kwargs: installs.append(list(packages)) or current_python_env(env_root) or [])
     skill_builtin.ensure_builtin_skills(drive, repo_dir=repo, log_obj=log)  # the network is back
     assert installs == [["comtypes==1.4.17"]] and load_enabled(drive, WINDOWS) is True
     assert receipt(drive) is not None  # the seed receipt certifies the bundle, not package work
@@ -754,7 +754,7 @@ def _boot(drive, monkeypatch):
 def lifecycle(monkeypatch):
     installs = []
     monkeypatch.setattr("ouroboros.marketplace.isolated_deps._install_python_packages",
-                        lambda packages, *args, **kwargs: installs.append(list(packages)) or [])
+                        lambda packages, env_root, *args, **kwargs: installs.append(list(packages)) or current_python_env(env_root) or [])
     _stub_lifecycle_effects(monkeypatch)
     return installs
 

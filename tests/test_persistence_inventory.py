@@ -877,7 +877,10 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 429 -> 430: adds ``state/update_material.json`` and ``state/update_letter.lock``;
 # the scan no longer yields the legacy ``state/usage_attempts.lock`` spelling.
 # 430 -> 431: checkout-specific preflight heads, registered in the review-ledger row.
-EXPECTED_SCAN_PATHS = 431
+# 431 -> 432: ``state/pycache.noindex``, the bytecode prefix born unindexed; the legacy ``state/pycache``
+# stays a scanned path, renamed once or retired whole (the bytecode row).
+# 432 -> 433: ``state/private_copies/*``, scanned on the target (#2502) before this pin moved (its private-copies row).
+EXPECTED_SCAN_PATHS = 433
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

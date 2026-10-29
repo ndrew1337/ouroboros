@@ -375,8 +375,17 @@ def collect_terminal(root, run_id: str, *, gateway=None, detail: dict | None = N
                      or named.get("retry") == "transient" else "changed_input" if output_owed(fresh) else "")
             if due or retry_output:
                 record_attempt(root, fresh, generation=generation, retry=retry, errors=errors, output=output_attempt)
+            shown = capture
+            if capture and not is_in_place_run(fresh) and fresh.resource_ref.get("workspace_kind") != "directory":
+                # With its recorded decision, as capture_projection shows it. A decided run's capture still owed
+                # to maintenance has read nothing yet: its saved capture is shown, with readers for the task this
+                # delivery is staged for, and ``capture`` stays pending for the wake below (#1651).
+                shown = (capture_projection(root, fresh, reader_task_id=staging_task_id)
+                         if fresh.patch_result_lost or (capture.get("status") == "pending"
+                                                       and fresh.patch_disposed in ("applied", "rejected"))
+                         else _decided(fresh, capture))
             return {"status": "collected" if not collection_pending(fresh) else "pending",
-                    "settlement": money, "workspace_capture": capture, "output_retention": retention, "errors": errors}
+                    "settlement": money, "workspace_capture": shown, "output_retention": retention, "errors": errors}
         return {"status": "unavailable", "reason": "custody_missing"}
     finally:
         release_exclusive_file_lock(lock, fd)
@@ -399,11 +408,37 @@ def retained_payload(root, entry, *, require_complete: bool = True) -> dict | No
         return None
 
 
+def _decided(entry, block: dict, *, unread=False) -> dict:
+    """A recorded apply or reject, with who recorded it (#1651): the current custody fact, never a
+    chain replay; a row reduced before the disposer was projected reads ``not_recorded``. Nothing
+    is owed after it, so the undecided capture's note no longer applies. A loss over a failed capture
+    that saved file changes says they stay (its block counts them); ``unread`` (a saved manifest that
+    exists but cannot be read) leaves that count unknown, so no loss note then says nothing was kept."""
+    if entry.patch_disposed not in ("applied", "rejected"):
+        return block
+    by = entry.patch_disposed_by
+    who = (f"its starter {by}" if by == entry.task_id else f"task {by}, not its starter {entry.task_id}") \
+        if by else "a task not recorded"
+    kept = int(block.get("file_output_count") or 0)
+    what = (entry.patch_disposed if not entry.patch_result_lost else
+            f"rejected as lost: its private copy was gone before a patch was captured; the {kept} file change"
+            f"{'s' * (kept != 1)} its failed capture saved {'is' if kept == 1 else 'are'} kept and never applied" if kept else
+            "rejected as lost: its private copy was gone before a patch was captured; its saved capture cannot be "
+            "read, so whether file changes it saved are kept is unknown, and nothing was applied" if unread else
+            "rejected as lost: its private copy was gone and no saved or pinned result named it, so nothing "
+            "was kept or applied")
+    return {**block, "disposition": entry.patch_disposed, "disposed_by": by or "not_recorded",
+            **({"result_lost": True} if entry.patch_result_lost else {}),
+            **({"file_output_count": kept} if entry.patch_result_lost and not unread else {}),
+            "note": f"Decided by {who}: {what}. No apply or reject is owed."}
+
+
 def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
     """Existing captured manifest or an honest pending fact; never triggers capture.
 
     A Git run's saved named-evidence summary rides along, so saved-result and
-    retry-successor delivery keep its status and reader."""
+    retry-successor delivery keep its status and reader. A Git or skill run's recorded
+    decision rides with its disposer; an engine directory keeps its own block."""
     from ouroboros.delegate_directory import in_place_block
 
     if is_in_place_run(entry):
@@ -414,12 +449,17 @@ def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
     cap_dir = c.delegated_capture_dir(root, entry.task_id, entry.run_id if directory else c.capture_key(entry))
     try:
         manifest = json.loads((cap_dir / "workspace_patch.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        if not isinstance(manifest, dict):  # well-formed JSON that is no manifest reads as unreadable
+            raise ValueError("a capture manifest is a JSON object")
+    except (OSError, ValueError) as exc:
         from ouroboros.delegate_registration_policy import evidence_only
 
         if evidence_only(entry):  # no author decision is owed
             return {"status": "pending", "note": "Body capture is still owed; evidence only, never applied.",
                     "patch_disposition": entry.patch_disposed or "not_applicable"}
+        if not directory and entry.patch_disposed in ("applied", "rejected"):  # decided: nothing is owed
+            # Only an absent manifest shows that no capture saved anything.
+            return _decided(entry, {"status": "missing"}, unread=not isinstance(exc, FileNotFoundError))
         return {"status": "pending", "note": "Body capture is still owed; no patch was applied. integrate_delegated_patch "
                 "prepares a finished run's capture itself and returns it for inspection first.",
                 "patch_disposition": entry.patch_disposed or "pending"}
@@ -438,7 +478,7 @@ def capture_projection(root, entry, *, reader_task_id="") -> dict | None:
         for kind in ("patch", "manifest"):
             if block.get(f"{kind}_read") and block.get(f"{kind}_artifact"):
                 block[f"{kind}_read"] = {"root": "artifact_store", "path": block[f"{kind}_artifact"]}
-    return block
+    return block if directory else _decided(entry, block)
 
 
 _RUNTIMES: dict[str, "BodyRuntime"] = {}
