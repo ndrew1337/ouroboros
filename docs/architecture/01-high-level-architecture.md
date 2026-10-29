@@ -208,7 +208,7 @@ ouroboros/ — agent core and shared runtime (§6)
   chat_chain.py, chat_references.py, chronicle_store.py, chronicle_quotes.py — addressed dialogue reads: content identities, legacy `(gen, line)` hints, Reply facts, `retain_memory_source`; append-only chronicle: pages/parts, version-bound accounts, separate common-view selections, disposable index (§6)
   mark_anchors.py — a mark tied to a tool (optional call text) or a path trails that call's result once per task (§6 Post-task work)
   chronicle_import.py, memory_nomination_receipts.py, memory_inventory.py — one model-free import of prior dialogue memory as `legacy` records; nominations imported once as marks; what is open or folded (§6)
-  consolidator.py, memory_fallback.py — shared Light transport and scratchpad compression, writes no knowledge; one signed Light helper draft per root task (§6)
+  consolidator.py, memory_fallback.py — shared Light transport, writes no knowledge; one signed Light helper draft per root task (§6)
   memory.py — scratchpad, identity, chat history
   knowledge.py, memory_publication.py — linked-Markdown notes, shelf indexes and revision-checked writes; per-file revision-checked identity/world-map/registry publication, atomic source replacement and origin-stamped history (§6)
   project_facts.py — project_id resolution and per-project knowledge under `projects/<id>/knowledge`, isolated from `memory/knowledge`
@@ -566,7 +566,7 @@ ouroboros/ — agent core and shared runtime (§6)
 
 ### Devtools boundary
 
-`devtools/` is excluded from runtime imports and package discovery; review applies and outputs stay external. A benchmark launcher stamps the isolated-benchmark sentinel into its throwaway data root, turning off JSONL log rotation there (`supervisor/state.py`). Each benchmark's own README keeps its module map and methodology: `devtools/benchmarks/cybergym/` pauses dispatch on three typed gates (dead gateway transport, refused budget claim, a sibling's unresolved workspace-custody gate) and keeps never-dispatched ids row-free; `devtools/benchmarks/cowork_bench/` keeps scoring authority in its audit (`METHODOLOGY.md`); `devtools/benchmarks/osworld/` splits runners from their owner leaves. `devtools/e2e_live/` is the live E2E stand: isolated real servers running the owner-shaped scenarios SM1, SW1 and SK1, judged on durable artifacts and a browser probe (manual `devtools/e2e_live/README.md`; the one rule binding runtime changes: DEVELOPMENT "Live E2E stand").
+`devtools/` is excluded from runtime imports and package discovery; review applies; outputs stay external. A benchmark launcher stamps the isolated-benchmark sentinel in its throwaway data root, turning off JSONL log rotation there (`supervisor/state.py`). Each devtool's README keeps its module map and methodology: `devtools/benchmarks/cybergym/` pauses dispatch on three typed gates (dead gateway transport, refused budget claim, a sibling's unresolved workspace-custody gate) and keeps never-dispatched ids row-free; `devtools/benchmarks/cowork_bench/` keeps scoring authority in its audit (`METHODOLOGY.md`); `devtools/benchmarks/osworld/` splits runners from their owner leaves; `devtools/macos_wkwebview/` is the optional system-WKWebView composer check. `devtools/e2e_live/` is the live E2E stand: isolated real servers running owner-shaped scenarios SM1, SW1 and SK1, judged on durable artifacts and a browser probe (runtime rule: DEVELOPMENT "Live E2E stand").
 
 ### Gateway Boundary v1
 
@@ -698,7 +698,7 @@ Default root (overrides: §7). This tree orients; `docs/PERSISTENCE.md` register
 │   ├── claudexor/                 ← Ouroboros-owned Claudexor home (`CLAUDEXOR_CONFIG_DIR`)
 │   ├── memory/
 │   │   ├── identity.md            ← durable identity
-│   │   ├── scratchpad.md          ← rendered from scratchpad_blocks.json, bounded
+│   │   ├── scratchpad.md          ← rendered from scratchpad_blocks.json
 │   │   ├── dialogue_blocks.json   ← chronicle import source, with dialogue_summary.md
 │   │   ├── dialogue_meta.json     ← chronicle import cursor and nomination source
 │   │   ├── chronicle/             ← records.jsonl (append-only authority), index.sqlite3 (disposable)

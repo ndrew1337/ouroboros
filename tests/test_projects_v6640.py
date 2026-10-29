@@ -651,7 +651,7 @@ def test_direct_routing_keeps_annotation_and_final_in_history_projection(tmp_pat
     )
     monkeypatch.setattr(message_bus, "_send_markdown", lambda *args, **kwargs: (True, ""))
     for name in (
-        "_run_scratchpad_consolidation",
+        "_run_memory_fallback_draft",
         "_run_post_task_processing_async",
     ):
         monkeypatch.setattr(pipeline, name, lambda *args, **kwargs: None)

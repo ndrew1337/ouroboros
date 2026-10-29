@@ -12,6 +12,12 @@ from tests.test_tool_effects import published_tool as _published_tool
 published_tool = _published_tool
 
 
+def _only(facts):
+    """The sole destination row: call facts carry rows, never a top-level copy of one."""
+    assert len(facts["places"]) == 1 and "place_id" not in facts and "sends_as" not in facts
+    return facts["places"][0]
+
+
 @pytest.fixture
 def places(monkeypatch, tmp_path):
     rows = [Place("quiet", "connector", "service", "account", "C1", "Quiet", "silent",
@@ -110,7 +116,8 @@ def test_broad_place_uses_resolved_account_for_author_lease(published_tool, tmp_
     lease.bind_author("author")
     try:
         assert "tell_task(task_id='author'" in guard.dispatch_refusal(ctx, name, args, ext_tool=tool)
-        assert guard.call_place_facts(ctx, name, args, ext_tool=tool)["conversation_key"] == "service:resolved-account:C2:T"
+        assert _only(guard.call_place_facts(ctx, name, args, ext_tool=tool))["conversation_key"] == (
+            "service:resolved-account:C2:T")
         ctx.task_id = "author"
         assert guard.dispatch_refusal(ctx, name, args, ext_tool=tool) == ""
         ctx.task_id = "caller"
@@ -123,19 +130,17 @@ def test_broad_place_uses_resolved_account_for_author_lease(published_tool, tmp_
         lease.release()
 
 
-def test_supervisor_facts_keep_every_place_and_note_author(published_tool, places):
+def test_supervisor_facts_keep_every_place_once(published_tool, places):
     _, ctx = places
     name, tool = published_tool("message", target=["to", "cc"])
     facts = guard.call_place_facts(ctx, name, {"to": "C2", "cc": "C1"}, ext_tool=tool)
     assert facts["declared"] and facts["effect"] == "message"
     assert {row["place_id"] for row in facts["places"]} == {"active", "quiet"}
     reply = guard.call_place_facts(ctx, "place_reply", {"place_id": "quiet", "text": "hi"})
-    assert reply["place_state"] == "silent" and reply["effect"] == "message"
-    assert [note["author"] for note in reply["notes"]] == ["owner", "ouroboros"]
-    reply = guard.call_place_facts(ctx, "place_reply", {"place_id": "quiet", "text": "hi",
-                                                       "account_id": "A", "conversation_id": "C3", "thread_id": "T"})
-    assert reply["conversation_key"] == "service:A:C3:T"
-    assert reply["targets"] == {"account_id": ["A"], "conversation_id": ["C3"], "thread_id": ["T"]}
+    assert _only(reply)["place_state"] == "silent" and reply["effect"] == "message"
+    # Notes are standing delegation: the Supervisor's bundle carries them once (test_safety_place_evidence).
+    assert "notes" not in _only(reply) and "notes" not in reply
+    assert _only(reply)["conversation_key"] == "service:account:C1:0"
 
 
 def test_actual_registry_callsite_blocks_and_allows(published_tool, places):
@@ -185,11 +190,9 @@ def test_call_facts_use_captured_identity_and_user_owner_match(published_tool, p
     name, tool = published_tool("message", target="room", conversation="room")
     facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
     if kind:
-        assert facts["sends_as"] == identity["sends_as"] and facts["sends_as_owner"] is owner
-        assert facts["places"][0]["sends_as"] == facts["sends_as"]
+        assert _only(facts)["sends_as"] == identity["sends_as"] and _only(facts)["sends_as_owner"] is owner
     else:
-        assert "sends_as" not in facts and "sends_as_owner" not in facts
-        assert "sends_as" not in facts["places"][0]
+        assert "sends_as" not in _only(facts) and "sends_as_owner" not in _only(facts)
     assert guard.call_place_facts(ctx, "read_file", {}) == {}
 
 
@@ -204,7 +207,7 @@ def test_call_facts_pick_the_named_accounts_identity_out_of_the_places_window(pu
     name, tool = published_tool("message", target=["room", "account_id"], conversation="room")
     for account, expected in (("A", mine), ("B", other)):
         facts = guard.call_place_facts(ctx, name, {"room": "C2", "account_id": account}, ext_tool=tool)
-        assert facts["sends_as"] == expected["sends_as"], account
+        assert _only(facts)["sends_as"] == expected["sends_as"], account
 
 
 @pytest.mark.parametrize("root_source", ["drive_root", "budget_drive_root", "metadata"])
@@ -224,7 +227,7 @@ def test_call_identity_uses_context_root_not_configured_root(published_tool, pla
             ctx.budget_drive_root = root
     name, tool = published_tool("message", target="room", conversation="room")
     facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
-    assert facts["sends_as"]["label"] == "Call mailbox"
+    assert _only(facts)["sends_as"]["label"] == "Call mailbox"
 
 
 @pytest.mark.parametrize("kind", ["user", "bot", None])
@@ -237,13 +240,13 @@ def test_safety_call_uses_focus_snapshot_only_for_its_target(published_tool, pla
     for place in rows:
         seed_identity_arrival(ctx.drive_root, place, captured)
     name, tool = published_tool("message", target="room", conversation="room")
-    facts = guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
+    facts = _only(guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool))
     if kind:
         assert facts["sends_as"] == event["sends_as"]
         assert facts["sends_as_owner"] is (kind == "user")
     else:
         assert "sends_as" not in facts and "sends_as_owner" not in facts
         del ctx.task_metadata["focus"]["identity"]  # A legacy focus has no declaration either.
-        assert "sends_as" not in guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool)
-    facts = guard.call_place_facts(ctx, name, {"room": "C1"}, ext_tool=tool)
+        assert "sends_as" not in _only(guard.call_place_facts(ctx, name, {"room": "C2"}, ext_tool=tool))
+    facts = _only(guard.call_place_facts(ctx, name, {"room": "C1"}, ext_tool=tool))
     assert facts["sends_as"] == captured["sends_as"] and facts["sends_as_owner"] is False
