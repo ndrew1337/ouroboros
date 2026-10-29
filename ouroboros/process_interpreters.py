@@ -195,14 +195,15 @@ def _reviewed_skill_python(
 
     A dispatch binding is authoritative and loads exactly its physical payload
     against its canonical state root.  Legacy task metadata is consulted only
-    when a non-registry/direct caller supplied no binding.  A skill blocked only
-    by its packages' environment naming another Python reports
-    ``reviewed_skill_environment_stale``: another interpreter would run it
-    without them, so the launch is refused rather than resolved further.
+    when a non-registry/direct caller supplied no binding.  A skill that declares
+    Python packages without a usable env python reports
+    ``skill_env_python_unavailable``: another interpreter would run it without
+    them, so the launch is refused rather than resolved further.
     """
 
     try:
         from ouroboros.marketplace.isolated_deps import python_runtime_binary, read_deps_state
+        from ouroboros.skill_dependencies import unusable_python_env
         from ouroboros.skill_loader import find_skill, load_skill
         from ouroboros.skill_readiness import skill_readiness_for_execution
 
@@ -223,12 +224,12 @@ def _reviewed_skill_python(
             loaded = find_skill(drive_root, skill_name)
         if loaded is None:
             return "", "reviewed_skill_environment_unavailable"
-        readiness = skill_readiness_for_execution(drive_root, loaded)
+        if unusable_python_env(drive_root, loaded):
+            return "", "skill_env_python_unavailable"
+        if not skill_readiness_for_execution(drive_root, loaded).ready:
+            return "", "reviewed_skill_environment_unavailable"
         deps_state = read_deps_state(drive_root, loaded.name, loaded.skill_dir)
-        if deps_state.get("python_env") and not readiness.ready and all(
-                action.get("phase") == "dependencies" for action in getattr(readiness, "next_actions", None) or []):
-            return "", "reviewed_skill_environment_stale"
-        if not readiness.ready or str(deps_state.get("status") or "") != "installed":
+        if str(deps_state.get("status") or "") != "installed":
             return "", "reviewed_skill_environment_unavailable"
         candidate = python_runtime_binary(loaded.skill_dir)
         usable = _usable_executable(str(candidate or ""))
@@ -383,7 +384,7 @@ def resolve_process_python(
             **_trace_target(binding),
         )
         return _replace_request(name, original, argv, skill_python), trace
-    if skill_reason == "reviewed_skill_environment_stale":
+    if skill_reason == "skill_env_python_unavailable":
         return original, PythonResolutionTrace(
             tool=name, requested_interpreter=requested, resolved_interpreter=requested, surface="reviewed_skill",
             environment="isolated_skill", reason=skill_reason, error_reason=skill_reason, **_trace_target(binding))

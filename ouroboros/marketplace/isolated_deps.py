@@ -90,15 +90,16 @@ def rebind_python_env(skill_dir: pathlib.Path, timeout_sec: int = _DEFAULT_TIMEO
 
     ``venv --upgrade`` keeps an interpreter entry that exists, even a dangling link, so the
     environment's own entries (links, copied binaries, Windows launchers) go first; one run
-    of its lexical python then proves the result starts."""
+    of its lexical python then proves it starts as this environment (its ``sys.prefix``)."""
     venv = isolated_env_dir(skill_dir) / "python"
     bin_dir = venv / ("Scripts" if os.name == "nt" else "bin")
     for entry in (bin_dir.iterdir() if bin_dir.is_dir() else ()):
         if re.fullmatch(r"pythonw?(?:_d)?(?:3(?:\.\d+)?)?(?:\.exe)?", entry.name, re.IGNORECASE) and not entry.is_dir():
             entry.unlink()
     env = _installer_env(venv.parent, ecosystem="python")
+    probe = "import os, sys; sys.exit(os.path.normcase(os.path.realpath(sys.prefix)) != os.path.normcase(os.path.realpath(sys.argv[1])))"
     for cmd in ([sys.executable, "-m", "venv", "--upgrade", "--without-pip", str(venv)],
-                [str(bin_dir / ("python.exe" if os.name == "nt" else "python")), "-c", "pass"]):
+                [str(bin_dir / ("python.exe" if os.name == "nt" else "python")), "-c", probe, str(venv)]):
         result = _run(cmd, cwd=venv.parent, env=env, timeout_sec=timeout_sec)
         if result["returncode"] != 0:
             raise RuntimeError("python environment rebind failed" + (f": {result['stderr_tail']}" if result.get("stderr_tail") else ""))

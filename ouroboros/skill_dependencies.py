@@ -173,6 +173,19 @@ def skill_deps_not_ready(drive_root: pathlib.Path, loaded: Any, *, strict: bool 
         return "", ""
 
 
+def unusable_python_env(drive_root: pathlib.Path, loaded: Any) -> str:
+    """The binding (``moved``, ``absent``, ...) when ``loaded`` declares Python packages and its env python
+    cannot run them on this interpreter, else ``""``: such a skill never runs on another interpreter
+    (``skill_exec`` and the process-tool resolver refuse); a skill without Python packages is unaffected."""
+    from ouroboros.marketplace.isolated_deps import python_env_binding
+
+    if not any(str(spec.get("kind") or "").strip().lower() in {"pip", "pipx", "uv"}
+               for spec in auto_install_specs_for_skill(drive_root, loaded) if isinstance(spec, dict)):
+        return ""
+    binding = python_env_binding(loaded.skill_dir)
+    return "" if binding == "current" else binding
+
+
 # One owner sentence per typed dependency code (the toast and the card prefix the skill name).
 _DEPENDENCY_SENTENCES = {
     "deps_missing": "Its packages are not installed.",

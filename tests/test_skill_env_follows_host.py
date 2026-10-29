@@ -165,3 +165,52 @@ def test_extensions_import_only_this_interpreters_site_packages(tmp_path):
     for path in (mine, older):
         path.mkdir(parents=True)
     assert _isolated_python_site_dirs(tmp_path) == [mine.resolve()], "an older Python's packages are not importable here"
+
+
+def test_a_half_repaired_env_is_not_current_and_only_package_skills_are_refused(skill, tmp_path):
+    from ouroboros.skill_dependencies import unusable_python_env
+
+    assert unusable_python_env(skill.drive, skill.loaded) == ""
+    _move_host(skill)
+    cfg = skill.venv / "pyvenv.cfg"  # home rewritten to this host, the interpreter entry still dead
+    base = os.path.dirname(os.path.abspath(getattr(sys, "_base_executable", "") or sys.executable))
+    cfg.write_text(re.sub(r"(?m)^home = .*$", f"home = {base}", cfg.read_text(encoding="utf-8")), encoding="utf-8")
+    expected = "current" if WINDOWS else "moved"  # Windows: home and version decide; POSIX: the entry must resolve too
+    assert isolated_deps.python_env_binding(skill.loaded.skill_dir) == expected
+    assert unusable_python_env(skill.drive, skill.loaded) == ("" if WINDOWS else "moved")
+    (tmp_path / "plain").mkdir()
+    plain = SimpleNamespace(name="plain", skill_dir=tmp_path / "plain", source="local", manifest=SimpleNamespace(raw_extra={}))
+    assert unusable_python_env(skill.drive, plain) == "", "no Python packages: today's interpreter choice"
+
+
+@pytest.mark.skipif(WINDOWS, reason="a POSIX link stands in for an upgrade that did not take")
+def test_the_repair_probe_proves_the_python_runs_as_this_environment(skill, monkeypatch):
+    """Starting is not enough: a python that runs as another prefix would import none of the env's packages."""
+    real_run = isolated_deps._run
+
+    def upgrade_without_cfg(cmd, **kwargs):
+        if "--upgrade" not in cmd:
+            return real_run(cmd, **kwargs)
+        (skill.bin / "python").symlink_to(getattr(sys, "_base_executable", "") or sys.executable)
+        return {"returncode": 0}  # an upgrade that linked the interpreter but left no pyvenv.cfg
+
+    monkeypatch.setattr(isolated_deps, "_run", upgrade_without_cfg)
+    (skill.venv / "pyvenv.cfg").unlink()
+    with pytest.raises(RuntimeError, match="rebind failed"):  # `-c pass` alone exits 0 here
+        isolated_deps.rebind_python_env(skill.loaded.skill_dir)
+
+
+def test_skill_exec_never_runs_a_package_skill_on_another_python(tmp_path, monkeypatch):
+    """The refusal rests on the facts, not on the dependency probe (which reads as ready when it fails)."""
+    from ouroboros.tools import skill_exec as skill_exec_mod
+    from tests.test_skill_exec import _build_skill, _make_ctx, _mark_reviewed_and_enabled, _valid_script_manifest
+
+    skills_root = tmp_path / "skills"
+    manifest = _valid_script_manifest("alpha").replace("scripts:\n", "install_specs:\n  - kind: pip\n    package: wheel\nscripts:\n")
+    _mark_reviewed_and_enabled((ctx := _make_ctx(tmp_path)).drive_root, _build_skill(skills_root, "alpha", manifest=manifest), "alpha")
+    _mark_reviewed_and_enabled(ctx.drive_root, _build_skill(skills_root, "plain"), "plain")
+    monkeypatch.setenv("OUROBOROS_SKILLS_REPO_PATH", str(skills_root))
+    monkeypatch.setattr(skill_exec_mod, "_skill_deps_not_ready", lambda *_args, **_kwargs: ("", ""))
+    blocked = skill_exec_mod._handle_skill_exec(ctx, skill="alpha", script="hello.py")
+    assert "SKILL_EXEC_BLOCKED" in blocked and "(absent)" in blocked, "the old code ran PATH python without the packages"
+    assert "hello from skill" in skill_exec_mod._handle_skill_exec(ctx, skill="plain", script="hello.py")

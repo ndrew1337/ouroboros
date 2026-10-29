@@ -1053,7 +1053,11 @@ def _handle_skill_exec(
     runtime_binary, runtime_unavailable_reason = _resolve_runtime_binary(runtime)
     try:
         from ouroboros.marketplace.isolated_deps import python_runtime_binary
+        from ouroboros.skill_dependencies import unusable_python_env
         if runtime in {"python", "python3"}:
+            if unusable := unusable_python_env(drive_root, loaded):  # never another interpreter without its packages
+                return (f"⚠️ SKILL_EXEC_BLOCKED: skill {skill_name!r} declares Python packages, but their environment does "
+                        f"not run on this host's Python ({unusable}); toggle_skill enabled=true re-points or reinstalls it.")
             isolated = python_runtime_binary(loaded.skill_dir)
             runtime_binary = str(isolated) if isolated is not None else runtime_binary
     except Exception:
