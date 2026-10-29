@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parents[1]
-PHRASE = "I see what awaits my decision; I choose when and by which act to bring it to an outcome, and settle what waits when I fold."
+PHRASE = "I see what waits, choose its closure and timing, and settle it when I fold."
 
 
 def assert_practice(system, wake):
