@@ -84,7 +84,6 @@ _SCHEMA = """
         room TEXT NOT NULL, target TEXT NOT NULL, body TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS room_records ON records(room, kind, sequence);
     CREATE INDEX IF NOT EXISTS target_records ON records(target, sequence);
-    CREATE INDEX IF NOT EXISTS page_authors ON records(json_extract(body, '$.author.task_id')) WHERE kind='page';
     CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS active_marks (
         id TEXT PRIMARY KEY, room TEXT NOT NULL, scope TEXT NOT NULL,
@@ -1397,21 +1396,6 @@ class ChronicleStore:
             cache: Dict[str, Tuple[Any, ...]] = {}
             effective = [r for r in (self._interpret(look, row) for row in rows) if r.get("status") not in ("rejected", "candidate")]
             return sorted(effective, key=lambda r: self._order_key(look, r, cache))
-
-    def pending_candidates(self, room_id: Any = None) -> List[Dict[str, Any]]:
-        """Signed drafts visible to a wake for decision (one room's when named), without acting
-        coverage or story residency."""
-        return [r for r in self.interpreted(room_id, kinds=("page",), author_kind="helper")
-                if r.get("status") == "candidate"]
-
-    def mind_page_authors(self, task_ids: Iterable[str]) -> set:
-        """Which of these tasks published a page as the mind: an addressed lookup on the page
-        author index, never a read of every page."""
-        with self._index() as db:
-            return {author for (author,) in db.execute(
-                "SELECT DISTINCT json_extract(body, '$.author.task_id') FROM records WHERE kind='page' "
-                "AND json_extract(body, '$.author.task_id') IN (SELECT value FROM json_each(?)) "
-                "AND json_extract(body, '$.author.kind')='mind'", (_json(sorted(map(str, task_ids))),))}
 
     def accounts(self) -> List[Dict[str, Any]]:
         """Every account, interpreted (sources with their later changes, the acting selection), in publication order."""

@@ -1174,11 +1174,10 @@ def test_chat_history_tool_uses_canonical_budget_root_and_archive_pagination(tmp
 
 
 def test_memory_view_main_names_the_bound_room_and_the_project_task_sees_its_rows(tmp_path):
-    """One mind, rooms by membership (memory view): the rows of a task bound to a Project are
-    that room's. Main keeps its own words verbatim and names the Project in one line of
-    ``## Live rooms`` (its rows one memory_read away); the Project task reads them in its own
-    room, and Main's words stay out of its view."""
+    """Main keeps its words and aggregates the quiet Project with an exact room directory;
+    the bound task reads its own room, with original rows available through memory_read."""
     from ouroboros.projects_registry import bind_task_to_project, create_project
+    from ouroboros.tools.chronicle import _memory_read
     from tests._memory_view_context import blocks, section
     from tests.test_cache_optimization import _make_env_and_memory
 
@@ -1187,25 +1186,26 @@ def test_memory_view_main_names_the_bound_room_and_the_project_task_sees_its_row
     proj = create_project(root, "promoted", name="Promoted")
     pchat = int(proj["chat_id"])
     bind_task_to_project(root, "task-7", "promoted", pchat, origin={"absent": "system"})
-    rows = [
-        {"direction": "in", "text": "plain-main", "chat_id": 1, "ts": "2026-09-01T00:00:00+00:00"},
-        {"direction": "out", "text": "bound-task-row", "chat_id": 1, "task_id": "task-7",
-         "ts": "2026-09-01T00:01:00+00:00"},
-    ]
-    for row in rows:
-        dialogue_store.append(root, "chat", row)
+    dialogue_store.append(root, "chat", {"direction": "in", "text": "plain-main", "chat_id": 1, "ts": "2026-09-01T00:00:00+00:00"})
+    dialogue_store.append(root, "chat", {"direction": "out", "text": "bound-task-row", "chat_id": 1,
+                                        "task_id": "task-7", "ts": "2026-09-01T00:01:00+00:00"})
 
     _a, _b, main_ctx, _cap = blocks(env, mem, {"id": "main-turn", "chat_id": 1})
     assert "] plain-main" in section(main_ctx, "## This room (Main)")
     assert "bound-task-row" not in main_ctx
-    assert f"### Project Promoted [chat_id={pchat}] — open" in section(main_ctx, "## Live rooms")
+    live = section(main_ctx, "## Live rooms")
+    assert "1 open rooms;" in live and "memory_read(room_id='*', start=0)" in live
+    assert f"Project Promoted [chat_id={pchat}]" not in live
+    reader = types.SimpleNamespace(drive_root=root)
+    assert f"- Project Promoted [chat_id={pchat}];" in _memory_read(reader, room_id="*", start=0)
 
     _a, _b, proj_ctx, _cap = blocks(env, mem, {"id": "task-7", "chat_id": 1})  # bound: its room is the Project
     room = section(proj_ctx, f"## This room (Project Promoted [chat_id={pchat}])")
-    # An outgoing row with no delegation lineage before the lineage epoch is a host fact of its
-    # task (lane 2, never "Ouroboros" in lane 1): one line, its address one read away.
+    # A pre-lineage outgoing row is a host fact of its task, with its address one read away.
     assert "; host; task task-7] " in room and "get_task_result(task_id='task-7')" in room
     assert "plain-main" not in proj_ctx
+    history = _memory_read(reader, room_id=str(pchat), rows=True)
+    assert "bound-task-row" in history and "plain-main" not in history
 
 
 def test_restart_drain_defers_then_completes_without_sleeping(tmp_path, monkeypatch):

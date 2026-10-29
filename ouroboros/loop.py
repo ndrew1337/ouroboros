@@ -500,6 +500,25 @@ def _load_working_recovery(ctx: Any, messages: List[Dict[str, Any]]) -> Dict[str
         return {}
 
 
+def _note_low_start(ctx: Any, plan: Any, mode: str, task_id: str, event_queue: Any) -> None:
+    """The owner's one Main line for a fresh start that memory lowered to Low (owner 1B, 29.10: ``low_start_line``),
+    owed through the terminal outbox under one id per task attempt; no line when Max returns. Never raises."""
+    from ouroboros.context_view_facts import low_start_line
+
+    try:
+        root, text = canonical_data_root(ctx), low_start_line(plan, mode, task_id)
+        if root is not None and text:
+            from supervisor.schedule_notes import owner_chat_id
+            from supervisor.terminal_delivery import enqueue_terminal_delivery_outcome
+
+            attempt = getattr(ctx, "task_attempt", None) or 1
+            enqueue_terminal_delivery_outcome(root, {
+                "type": "send_message", "chat_id": owner_chat_id(root), "task_id": "", "text": text, "role": "system",
+                "system_type": "low_start_notice", "delivery_id": f"low_start:{task_id}:{attempt}"}, event_queue=event_queue)
+    except Exception:
+        log.warning("The Low-start line of task %s was not queued", task_id, exc_info=True)
+
+
 @task_timing_scope(reuse=True)
 def run_llm_loop(
     messages: List[Dict[str, Any]], tools: ToolRegistry, llm: LLMClient,
@@ -532,9 +551,8 @@ def run_llm_loop(
     if not saved and not saved_pause and not saved_working:
         accumulated_usage["initial_model_request"] = {"model": active_model, "use_local": active_use_local}
         _emit_physical_mode(event_queue, task_id, drive_logs, context_fit_plan, active_context_mode)
-        from ouroboros.memory_max import observe_task_start  # every fresh start: the lost-Max episode
-        observe_task_start(ctx, context_fit_plan, active_context_mode, task_id=task_id or str(getattr(ctx, "task_id", "") or ""),
-                           event_queue=event_queue)
+        _note_low_start(ctx, context_fit_plan, active_context_mode, task_id or str(getattr(ctx, "task_id", "") or ""),
+                        event_queue)
     cost_ceiling = _resolve_task_cost_ceiling(ctx, budget_remaining_usd)
     if cost_ceiling.root_cap_usd is not None:
         # Resumed/late-started members see tree spend before their first pacing surface.

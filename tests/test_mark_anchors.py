@@ -80,7 +80,7 @@ def test_released_and_foreign_room_marks_stay_silent_and_a_new_mark_acts_next_ca
     assert foreign["ok"] and glob["ok"]
     seen = anchored_note(ctx, "read_file", {"path": "docs/ARCHITECTURE.md"})
     assert "Global: docs are English." in seen and "Only for room two." not in seen
-    released = json.loads(_memory_mark(ctx, release_id=glob["mark_id"], reason="no longer holds"))
+    released = json.loads(_memory_mark(ctx, release_ids=[glob["mark_id"]], reason="no longer holds"))
     assert released["ok"], released
     later = ctx_for(tmp_path, task_id="root0003")
     assert anchored_note(later, "read_file", {"path": "docs/ARCHITECTURE.md"}) == ""
