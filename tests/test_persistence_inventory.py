@@ -890,8 +890,8 @@ def scan_data_paths(root: pathlib.Path = REPO) -> frozenset[str]:
 # 429 -> 430: adds ``state/update_material.json`` and ``state/update_letter.lock``;
 # the scan no longer yields the legacy ``state/usage_attempts.lock`` spelling.
 # 430 -> 431: checkout-specific preflight heads, registered in the review-ledger row.
-# 431 -> 434: union of target paths and the three call wire/import-lock/tariff paths.
-EXPECTED_SCAN_PATHS = 434
+# 433 target paths plus the three call wire/import-lock/tariff paths.
+EXPECTED_SCAN_PATHS = 436
 
 # Scanned paths that must always be present — guards the scanner itself
 # against a silent regression that would shrink coverage while keeping counts

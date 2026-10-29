@@ -90,9 +90,15 @@ RECLAIM_LOW_WATER_DIVISOR = 8
 WHOLE_CATEGORY = 2**31 - 1
 REFUSAL_PASSES = (("host_copies", "bodies"), ("floor", "books", "unseen_bodies"))
 
-def start_room_levels(role: str, *, focus_wake: bool = False, direct_chat: bool = False) -> int:
-    """Every new work starts with one eighth, including roots and wakes (owner, 27 October)."""
-    return 1
+def start_room_levels(role: str, *, direct_chat: bool = False) -> int:
+    """Roots (an integrating task that is not a direct chat turn) leave two eighths for their work; a wake
+    (consciousness or a Presence focus), a direct chat turn, another Presence turn and a helper leave one.
+
+    A wake is one turn of the mind beside its whole memory, as a direct chat turn is; work it starts runs as
+    its own root (owner decision 2026-10-29, question 3 = A). Decided from task facts, never the task type
+    (``memory_view.start_room`` reads them).
+    """
+    return 2 if role == "integrator" and not direct_chat else 1
 
 
 def context_mode_limits(mode: str, owner_mode: str, output_reserve_tokens: int, *,
@@ -382,25 +388,12 @@ LIVE_IMAGE_BLOCKS_HIGH_WATER = 10
 NANO_LIVE_IMAGE_BLOCKS = 2
 NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER = 4
 
-# --- Scratchpad size thresholds (SSOT; previously scattered literals) -------
-# Context-section soft budget for the rendered scratchpad (warn-only).
+# --- Context-section soft budgets (warn-only log lines; no section is cut by them) ---
+# The rendered scratchpad: tier-0, always whole. No count, size or age cap evicts or
+# compresses its blocks; only a fold the mind accepts replaces them (#918).
 SCRATCHPAD_SECTION_BUDGET_CHARS = 90_000
 # Context-section soft budget for the mind's world map (warn-only; `update_world` notices above it).
 WORLD_SECTION_BUDGET_CHARS = 16_000
-# Block-storage consolidation trigger (consolidator compresses oldest blocks).
-SCRATCHPAD_CONSOLIDATION_THRESHOLD_CHARS = 30_000
-# Source-side content cap for Memory.append_scratchpad_block (ibl-2b09abdadd25).
-# SINGLE SOURCE OF TRUTH for the new content cap; obeys the ordering invariant
-#   SCRATCHPAD_CONSOLIDATION_THRESHOLD_CHARS (30_000)
-#     < SCRATCHPAD_MAX_CONTENT_CHARS (60_000)
-#     <= SCRATCHPAD_SECTION_BUDGET_CHARS (90_000) - RENDERING_HEADROOM
-# Pinned at 60_000 so the consolidator (trigger at >30_000) still fires before
-# this cap kicks in, AND the rendered section's framing (header + per-block
-# '### [...]' / '---' / journal-pointer lines) fits under the section budget
-# at the 10-block cap. Measured in characters (len(str)), matching the family
-# naming convention. The count cap (_SCRATCHPAD_MAX_BLOCKS in ouroboros/memory.py)
-# is AND'd with this cap (single-pass eviction), not replaced by it.
-SCRATCHPAD_MAX_CONTENT_CHARS = 60_000
 
 
 def estimate_message_chars(messages: Any) -> int:

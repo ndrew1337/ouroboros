@@ -333,6 +333,7 @@ def _capture_declared_context_core(
     the work right after its receipt, ahead of the dated runtime facts: the block
     a shared child reads, rendered from the task's own frozen record.
     """
+    from ouroboros.safety_config import owner_rules_section
     from ouroboros.memory_view import _owner_words_block  # the shared child's block, byte for byte
     from ouroboros.subagent_work_order import declared_inputs_carry_owner_words, input_source_selection_receipt
     from ouroboros.subagent_metrics import fact_line
@@ -363,9 +364,10 @@ def _capture_declared_context_core(
             catalog_text = subagent_catalog_section(catalog)
     except Exception:
         log.debug("Failed to build Available subagents catalog", exc_info=True)
-    review_text = ""
+    review_text, review_activity = "", []
     try:
-        review_text = review_facts_block()
+        review_text = review_facts_block(activity_out=review_activity)
+        parts.extend(review_activity)  # each seat's price and last review change: never the cached prefix
         parts.extend(filter(None, (
             review_records_block(drive_root=canonical_root, task_id=str(task["id"])),
             subagent_supervision_fact_line(task, ctx=ctx, catalog=catalog),
@@ -373,11 +375,13 @@ def _capture_declared_context_core(
         )))
     except Exception:
         log.warning("Failed to build the Review block", exc_info=True)
+    standing_rules = owner_rules_section()
     return _ContextCore(
         base_prompt=sources["base_prompt"], bible_md=sources["bible_md"],
         architecture_md=sources["architecture_md"], development_md=sources["development_md"],
-        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text) if part),
-        semi_stable_sections=capture_sections((part for part in (catalog_text, review_text) if part), prefix='stable'),
+        # The owner's standing rules are governance like SYSTEM.md, not a selectable case input.
+        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text, standing_rules) if part),
+        semi_stable_sections=capture_sections((part for part in (catalog_text, review_text, standing_rules) if part), prefix='stable'),
         dynamic_text="\n\n".join(parts),
         dynamic_sections=capture_sections(parts, prefix='dynamic'),
         user_content_json=json.dumps(user_builder(task), ensure_ascii=False, sort_keys=True),

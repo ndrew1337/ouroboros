@@ -551,9 +551,11 @@ function closeNotificationReaders() {
 }
 
 mainChat = initChat(ctx);
-initFiles(ctx);
-// Skills' contributions (CLIENT_CONTRACT §11): one store, read now and on every lifecycle change; their message actions join
-// the row registry, and their page modules mount unless this start skips them (host_modules.js). Voice (voice_controls.js) reads their speech engines: the dictation mic, "+" → Add dictation… and Read aloud.
+initFiles({ ...ctx, layers });
+
+// Skills' contributions (CLIENT_CONTRACT §11): one store, read now and on every lifecycle change; their message
+// actions join the row registry, and their page modules mount unless this start skips them (host_modules.js). Voice
+// (voice_controls.js) reads their speech engines: the dictation mic, "+" → Add dictation… and Read aloud.
 const contributions = getContributions();
 contributions.attach({ ws });
 const visibleDraft = draftPort(() => projectInstances.get(navState.activeProjectId) || mainChat);

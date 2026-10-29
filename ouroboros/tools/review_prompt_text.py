@@ -461,3 +461,18 @@ def format_prompt_code_block(content: str, language: str = "") -> str:
     fence = _make_fence(content)
     lang = language or ""
     return f"{fence}{lang}\n{content}\n{fence}"
+
+
+def round_material() -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): the later-round sections
+    rendered over fixed placeholder records in these branches (rebuttal, author questions, earlier rounds with and
+    without open obligations and the convergence rule). The records are data; their frames and rules count."""
+    from types import SimpleNamespace
+
+    finding = {"severity": "critical", "tag": "⟨tag⟩", "model": "⟨model⟩", "obligation_id": "⟨id⟩",
+               "item": "⟨item⟩", "reason": "⟨reason⟩", "detail": "⟨detail⟩"}
+    rounds = [{"attempt": 1, "commit_message": "⟨message⟩", "critical": [finding], "advisory": [finding],
+               "detail": "⟨detail⟩"}, {}]
+    held = [SimpleNamespace(obligation_id="⟨id⟩", item="⟨item⟩", severity="⟨severity⟩", reason="⟨reason⟩")]
+    return [build_rebuttal_section("⟨rebuttal⟩"), author_questions_block(["⟨question⟩"]),
+            *(build_review_history_section(rounds[:count], obligations) for count in (1, 2) for obligations in (None, held))]

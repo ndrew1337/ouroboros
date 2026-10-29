@@ -368,25 +368,20 @@ def note_author_decision(drive_root: Any, record_id: str, decision: Dict[str, An
         return None
 
 
-def note_commit_landing(drive_root: Any, record_id: str, landing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Record that this candidate's Git command succeeded. Same landing twice is a no-op."""
-    from ouroboros.review_doctrine import validate_landing, with_landing
+def note_commit_landing(drive_root: Any, record_id: str, landing: Optional[Dict[str, Any]],
+                        commit: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Record what this record's successful Git command landed (``review_doctrine.landed_record``):
+    the commit against the reviewed tree, and the author's landing on a decision it holds. A repeat is a no-op."""
+    from ouroboros.review_doctrine import landed_record
+    from ouroboros.review_history import retain_author_decision
 
     try:
-        checked = validate_landing(landing)
-        current = load_record(drive_root, record_id) if checked is not None else None
-        author = current.get("author_decision") if isinstance(current, dict) else None
-        if checked is None or not isinstance(author, dict) or author.get("landing") == checked:
+        current = load_record(drive_root, record_id)
+        if current is None or landed_record(current, landing, commit, recorded_at="") is None:
             return current
-
-        def _mutate(payload: Dict[str, Any]) -> Dict[str, Any]:
-            from ouroboros.review_history import retain_author_decision
-
-            payload["author_decision"] = retain_author_decision(
-                drive_root, payload, with_landing(payload.get("author_decision") or {}, checked))
-            return payload
-
-        return revise_record(drive_root, record_id, _mutate)
+        return revise_record(drive_root, record_id, lambda payload: landed_record(
+            payload, landing, commit, recorded_at=utc_now_iso(),
+            retain=lambda body, decision: retain_author_decision(drive_root, body, decision)) or payload)
     except (OSError, ValueError):
         log.warning("review ledger commit landing not recorded on %s", record_id, exc_info=True)
         return None
@@ -1164,16 +1159,16 @@ def _assigned_rows(assigned: Any) -> List[str]:
     return sorted(rows)
 
 
-def reuse_key_digest(*, surface: str, kind: str, root: str, diff_sha: str, tree_sha: str, rules_sha: str, layer: str,
+def reuse_key_digest(*, surface: str, kind: str, root: str, diff_sha: str, tree_sha: str, layer: str,
                      assigned: Any, enforcement: str, contract_fp: str, round_sha: str = "") -> str:
-    """sha256 of the reuse identity (§6 "Subject operation", identity a): surface,
-    subject kind/root/diff/tree, the rules source, the checklist layer, the assigned
-    composition, the enforcement and the review contract — plus the logical round
-    (``review_subject.review_round_sha``: rebuttal, author questions, goal, scope,
-    resolved base/head), so only the IDENTICAL request reuses a settled answer."""
+    """sha256 of the reuse identity (§6 "Subject operation", identity a): surface, subject
+    kind/root/diff/tree, checklist layer, assigned composition, enforcement and review contract,
+    plus the logical round (``review_subject.review_round_sha``: rebuttal, author questions, goal,
+    scope, resolved base/head), so only the IDENTICAL request reuses a settled answer. Governance
+    text never enters (DEVELOPMENT 05): the record keeps the rules it was judged by as provenance."""
     fields = {"surface": str(surface or ""), "kind": str(kind or ""), "root": str(root or ""),
-              "diff_sha": str(diff_sha or ""), "tree_sha": str(tree_sha or ""), "rules_sha": str(rules_sha or ""),
-              "layer": str(layer or ""), "assigned": _assigned_rows(assigned), "enforcement": str(enforcement or ""),
+              "diff_sha": str(diff_sha or ""), "tree_sha": str(tree_sha or ""), "layer": str(layer or ""),
+              "assigned": _assigned_rows(assigned), "enforcement": str(enforcement or ""),
               "contract_fp": str(contract_fp or ""), "round_sha": str(round_sha or "")}
     return hashlib.sha256(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -1288,7 +1283,7 @@ def build_wave_record(facts: Dict[str, Any], *, surface: str, record_id: str = "
     enforcement, contract_fp = str(facts.get("enforcement") or ""), str(facts.get("review_contract_fingerprint") or "")
     reuse_key = str(facts.get("reuse_key") or structured.get("reuse_key") or "") or reuse_key_digest(
         surface=surface, kind=subject["kind"], root=subject["root"], diff_sha=subject["diff_sha"], tree_sha=subject["tree_sha"],
-        rules_sha=checklist["rules_source"]["sha"], layer=checklist["layer"], assigned=rows, enforcement=enforcement,
+        layer=checklist["layer"], assigned=rows, enforcement=enforcement,
         contract_fp=contract_fp, round_sha=round_sha_of(
             rebuttal_sha=str(facts.get("rebuttal_sha256") or ""), questions=facts.get("author_questions") or [],
             goal=str(facts.get("goal") or ""), scope=str(facts.get("scope") or ""),

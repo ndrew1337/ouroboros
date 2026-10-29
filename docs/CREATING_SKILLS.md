@@ -452,7 +452,9 @@ flowchart LR
   context, never as approval.
 - **Isolated deps** (pip / npm / uv / node) install into
   `data/skills/<bucket>/<name>/.ouroboros_env/`. Status is recorded
-  in `data/state/skills/<name>/deps.json`.
+  in `data/state/skills/<name>/deps.json`. Its Python venv names the app's interpreter: after
+  the app moves or brings another Python minor, Enable or the next startup re-points or rebuilds
+  it; until then the skill's Python is refused, never swapped for another interpreter.
   In-process extension scopes are non-reentrant: no-dependency handlers of
   DIFFERENT skills share a read lease and overlap, the handlers of ONE skill
   run one at a time (your callbacks stay sequential, as under the old

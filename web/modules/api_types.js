@@ -83,7 +83,8 @@
  * @property {string} status  // disabled | stopped | thinking | due | sleeping | waiting_for_first_conversation | allowance_exhausted | allowance_unknown | wake_rejected | wake_failed | wake_paused | wake_outcome_unknown
  * @property {string} detail  // one honest owner-readable line (e.g. "Sleeping until 14:05.")
  * @property {string} level  // observe | act | full
- * @property {string} next_wake_at  // ISO instant; "" when unknown
+ * @property {string} next_wake_at  // next attempt, moved by skips/refusals; ISO instant or ""
+ * @property {string} appointment_at  // scheduled time, retained through retries; "" on legacy state
  * @property {string} last_wake_at  // ISO instant; "" before the first wake of this process
  * @property {string} last_wake_task_id
  * @property {string} last_wake_outcome  // running | done | paused | pausing | unknown | failed | rejected:<reason> | skipped:<reason>
@@ -93,7 +94,8 @@
  * @property {string} allowance_resets_at  // ISO instant the oldest counted spend leaves the 24 h window
  * @property {number} tasks_running  // live roots consciousness started
  * @property {number} max_tasks
- * @property {string} live_wake_task_id  // "" when no wake-up is running
+ * @property {string} live_wake_task_id  // own wake through direct custody, queue and settlement; "" when absent
+ * @property {boolean} live_wake_held  // own wake in PENDING: paused, held or awaiting dispatch
  * @property {number} unknown_unmetered  // window rows without a price: spent_24h_usd is then a floor ("at least")
  * @property {boolean} integrity_degraded  // the ledger was quarantined/repaired; the numbers are best-effort
  */
@@ -452,7 +454,14 @@
  *   there is no panel at all, keyed by its stable incident id, with the REAL host
  *   attempt count; absent when no preparation ever failed. The Reviews group is
  *   its only carrier (no card row, no toast); a `resolved` status clears the
- *   active warning and keeps the row as history.
+ *   active warning and keeps the row as history. A ledger panel's `commit_landings`
+ *   ({commit_sha, tree_sha, parent_sha, author_subject, author_disposition, author_reason, recorded_at,
+ *   reviewed_subject: "same"|"different"|"unknown"}, oldest first) names each commit that landed under that
+ *   record, whether its tree is the one the record reviewed, and the author decision that governed it (its
+ *   subject_hash, disposition and reason, as written when it landed), "" for none; the panel keeps the newest
+ *   16 and `commit_landings_omitted` counts the older ones its record (`source_ref`) keeps. Absent means no
+ *   landing was recorded, never that nothing landed or nobody reviewed.
+ * @property {Object[]=} body_adoptions The task's settled adoptions (TaskDetailResponse), on its summary rows.
  * @property {boolean=} worker_saturation_warning
  * @property {string=} source
  * @property {string=} sender_label
@@ -747,6 +756,11 @@
  * @property {boolean=} with_workspace
  */
 
+/** @typedef {Object} ProjectClosure
+ * @property {string} at
+ * @property {string} by  // owner or ouroboros:<focus task id>
+ * @property {string} note
+ */
 /**
  * A registry project row: list rows are the compact projection (with `has_thread_activity`);
  * a create/update answer is the full row (`created: false`: an idempotent repeat create).
@@ -763,6 +777,7 @@
  * @property {string=} created_at
  * @property {string=} last_active_at
  * @property {"active"|"deleting"|"tombstoned"=} lifecycle
+ * @property {ProjectClosure=} closed  // absent means open; independent of routing lifecycle
  * @property {number=} routing_generation
  * @property {string=} routing_incarnation
  * @property {number=} visible_revision
@@ -1208,6 +1223,9 @@
  * @property {OwnerHurryProjection=} owner_hurry
  * @property {OwnerHurryProjection[]=} owner_hurry_history
  * @property {{reason?:string, detail?:string, label?:string}=} project_admission_hold  // while the queue snapshot lists the row: its wait for original Project/scope evidence, or {}
+ * @property {Array<{adoption_id:string, outcome:'adopted'|'not_applied'|'superseded'|'unconfirmed', commit_sha:string, previous_sha:string, branch:string, note:string, settled_at:string, revision:number, commits?:string[], commits_complete?:boolean, commits_omitted?:number}>=} body_adoptions
+ *   Every adoption this task authorized, as boot settled them; `commits` (previous..candidate, newest first, bounded;
+ *   a cut range counts the rest in `commits_omitted`) only when adopted.
  * @property {string=} error
  * @property {ContinuationOffer=} continuation_offer
  */

@@ -61,13 +61,18 @@ def test_handoff_and_restart_finish_the_same_logical_wake_once(clock, monkeypatc
     deadline = clock.clock.next_wake_at
     clock.clock._wake_finished("wake0001", True)
     assert clock.clock.next_wake_at == deadline and LAST_WAKE_STATE_KEY not in clock.store
+    assert clock.clock._in_flight == "" and clock.clock.live_wake() == "wake0001"
     restarted = BackgroundConsciousness(clock.root, clock.root / "repo", lambda: 7, now=T0 + 1000)
     monkeypatch.setattr(clock_module.time, "time", lambda: T0 + 5000)
     result = {"execution_owner": {"kind": "pooled"}, "metadata": OWN, "status": "completed"}
     ctx = SimpleNamespace(consciousness=restarted)
     finish_pooled_wake(ctx, "wake0001", {**result, "metadata": FOCUS})
     assert LAST_WAKE_STATE_KEY not in clock.store
+    monkeypatch.setattr(queue, "RUNNING", {"wake0001": {"task": queue.PENDING.pop()}})
     finish_pooled_wake(ctx, "wake0001", result)
+    assert restarted.live_wake() == "wake0001"
+    queue.RUNNING.clear()
+    assert restarted.live_wake() == ""
     assert restarted.next_wake_at == T0 + 5000 + DEFAULT
     finish_pooled_wake(ctx, "wake0001", {**result, "status": "failed"})
     assert restarted.next_wake_at == T0 + 5000 + DEFAULT
@@ -115,21 +120,44 @@ def test_pool_callback_filters_cause_before_calling_the_clock():
     assert calls == [(("own", True), {"metadata": OWN, "pooled": True})]
 
 
-def test_focus_and_descendants_do_not_delay_an_overdue_clock_but_owner_does(clock, monkeypatch):
+def test_held_census_and_snapshot_use_only_pending_own_wakes(clock, monkeypatch):
+    from supervisor import queue
+
+    _launched(clock)
+    monkeypatch.setattr(queue, "PENDING", [_task("wake0001", OWN), _task("focus", FOCUS), _task("owner", OWNER)])
+    monkeypatch.setattr(queue, "RUNNING", {"other": {"task": _task("other", OWN)}})
+    assert queued_wakes(held_only=True) == ["wake0001"]
+    assert queued_wakes() == ["wake0001", "other"]
+    assert clock.clock.status_snapshot()["live_wake_held"] is True
+    queue.RUNNING["wake0001"] = {"task": queue.PENDING.pop(0)}
+    assert queued_wakes(held_only=True) == []
+    assert clock.clock.status_snapshot()["live_wake_held"] is False
+    assert "owner_turn_live" not in clock.clock.status_snapshot()
+
+
+def test_pooled_terminal_leaves_direct_custody_until_its_callback_returns(clock, monkeypatch):
+    finished = _launched(clock)
+    monkeypatch.setattr(clock_module.time, "time", lambda: T0 + 5000)
+    clock.clock._wake_finished("wake0001", True, metadata=OWN, pooled=True)
+    assert clock.clock.live_wake() == "wake0001"
+    settled = clock.clock.next_wake_at
+    finished("wake0001", False)
+    assert clock.clock.live_wake() == "" and clock.clock.next_wake_at == settled
+
+
+def test_focus_descendants_and_owner_do_not_delay_an_overdue_clock(clock, monkeypatch):
     from supervisor import queue
     monkeypatch.setattr(queue, "PENDING", [_task("focus-pooled", FOCUS), _task("kid", STARTED)])
     monkeypatch.setattr(queue, "RUNNING", {})
     turns = {tid: _task(tid, FOCUS) for tid in ("focus1", "focus2")}
     _direct(monkeypatch, turns)
-    assert queued_wakes() == [] and clock.clock.live_turns() == ("", False)
+    assert queued_wakes() == [] and clock.clock.live_wake() == ""
     turns["owner"] = _task("owner", OWNER)
     get_direct_activity_registry().register("owner", 7)
-    assert clock.clock.live_turns() == ("", True)
-    assert clock.clock.tick(T0 + FLOOR + 1) == "owner_turn_live"
-    get_direct_activity_registry().unregister("owner")
-    assert clock.clock.tick(clock.clock.next_wake_at) == "launched"
+    assert clock.clock.live_wake() == ""
+    assert clock.clock.tick(T0 + FLOOR + 1) == "launched"
     queue.PENDING.append(_task("wake0001", OWN))
-    assert queued_wakes() == ["wake0001"] and clock.clock.live_turns()[0] == "wake0001"
+    assert queued_wakes() == ["wake0001"] and clock.clock.live_wake() == "wake0001"
 
 
 def test_counted_roots_are_exactly_autonomous_independent_roots(tmp_path, monkeypatch):

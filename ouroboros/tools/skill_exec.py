@@ -20,7 +20,7 @@ from ouroboros.platform_layer import merge_hidden_kwargs, subprocess_new_group_k
 from ouroboros.provider_models import MODEL_PROVIDER_CREDENTIAL_KEYS
 from ouroboros.skill_catalogue import LIST_SKILLS_SCHEMA as _LIST_SCHEMA
 from ouroboros.skill_catalogue import list_skills_payload
-from ouroboros.skill_dependencies import skill_deps_not_ready as _skill_deps_not_ready
+from ouroboros.skill_dependencies import skill_deps_not_ready as _skill_deps_not_ready, unusable_python_env
 from ouroboros.skill_loader import (
     SkillPayloadUnreadable,
     compute_content_hash,
@@ -47,6 +47,7 @@ from ouroboros.tools.shell import (
     _kill_process_group,
     _subprocess_lock,
 )
+from ouroboros.tools.shell_process import tracked_start
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result, completed_local_read
 from ouroboros.usage_accounting import current_usage_scope, record_unmetered_external_dispatch
 from ouroboros.utils import append_jsonl, utc_now_iso
@@ -214,8 +215,9 @@ def _run_skill_subprocess(
     confirmed = external_handoff("skill_process")
     proc = None
     try:
-        with operation_start():
+        with tracked_start() as publish, operation_start():
             proc = Popen(cmd, **popen_kwargs)  # noqa: S603 — cmd is a vetted list, not shell
+            publish(proc)
     except OSError as exc:
         if proc is None:
             confirmed()
@@ -228,10 +230,8 @@ def _run_skill_subprocess(
         raise
     except BaseException:
         if proc is None:
-            confirmed()  # the final gate refused before Popen returned
+            confirmed()  # the final gate or a closed admission refused before Popen returned
         raise
-    with _subprocess_lock:
-        _active_subprocesses.add(proc)
     try:
         if target is not None:
             record_task_group(*target, proc.pid)
@@ -890,8 +890,11 @@ def _handle_review_skill(
 
 def _skill_deps_exec_block(drive_root: pathlib.Path, loaded: Any) -> str:
     deps_status, reason = _skill_deps_not_ready(drive_root, loaded)
-    if not reason:
-        return ""
+    if not reason:  # ready, yet never another interpreter without its packages; a failed check runs nothing
+        python = str(getattr(loaded.manifest, "runtime", "") or "").strip().lower() in {"python", "python3"}
+        unusable = python and unusable_python_env(drive_root, loaded)
+        return (f"⚠️ SKILL_EXEC_BLOCKED: skill {loaded.name!r} declares Python packages, but their environment does not "
+                f"run on this host's Python ({unusable}); toggle_skill enabled=true re-points or reinstalls it.") if unusable else ""
     return (
         f"⚠️ SKILL_EXEC_BLOCKED: skill {loaded.name!r} isolated "
         f"dependencies are not ready (status={deps_status!r}). "

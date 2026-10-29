@@ -151,6 +151,36 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
 )
 
 
+def _project_tool_entries() -> List[ToolEntry]:
+    """Reversible project decisions and their paginated reader, beside work placement."""
+    return [
+        ToolEntry("close_project", {
+            "name": "close_project",
+            "description": "Close a finished project with a note, or reopen it. Its room and history stay; a new owner message or task reopens it.",
+            "parameters": {"type": "object", "properties": {
+                "project_id": {"type": "string"},
+                "note": {"type": "string", "description": "Why I close or reopen this project."},
+                "reopen": {"type": "boolean", "default": False},
+            }, "required": ["project_id", "note"], "additionalProperties": False},
+        }, _close_project, safety_policy="skip"),
+        ToolEntry("list_projects", {
+            "name": "list_projects",
+            "description": (
+                "List projects with id, name, last_active_at, closed record and activity — read-only. "
+                "Follow the next-page call to enumerate every match. "
+                "Use it in a main-chat turn to decide whether a message belongs to an existing "
+                "project, then place this work there with move_to_project."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
+                "start": {"type": "integer", "minimum": 0, "default": 0, "description": "Offset in the filtered, sorted list; use the returned next-page call."},
+                "closed": {"type": "boolean", "description": "False: open projects; true: closed projects; omit for both."},
+                "oldest_first": {"type": "boolean", "default": False, "description": "List by last_active_at from oldest to newest."},
+            }},
+        }, _list_projects),
+    ]
+
+
 def get_tools() -> List[ToolEntry]:
     from ouroboros.subagent_inspection import inspect_subagent_tool
     from ouroboros.tools.control_maintenance import maintenance_tool_entries
@@ -246,17 +276,7 @@ def get_tools() -> List[ToolEntry]:
                 "required": [],
             },
         }, _move_to_project),
-        ToolEntry("list_projects", {
-            "name": "list_projects",
-            "description": (
-                "List the owner's projects (id, name, recency, running flag) — read-only. "
-                "Use it in a main-chat turn to decide whether a message belongs to an existing "
-                "project, then place this work there with move_to_project."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
-            }},
-        }, _list_projects),
+        *_project_tool_entries(),
         ToolEntry("tell_task", {
             "name": "tell_task",
             "description": "Send a note to another work, with optional exact owner quotes selected from "
@@ -314,14 +334,17 @@ def get_tools() -> List[ToolEntry]:
         }, _chat_history),
         ToolEntry("update_scratchpad", {
             "name": "update_scratchpad",
-            "description": "Append a block to your working memory (scratchpad). Each call adds a "
-                           "timestamped block; oldest blocks are auto-evicted when either cap is reached "
-                           "(10 blocks, 60000 characters of content). "
-                           "Write what matters NOW — active tasks, decisions, observations. "
-                           "Persists across sessions, read at every task start. "
-                           "Project rooms included — the scratchpad is the same working memory in every room.",
+            "description": "Write working memory (scratchpad): append a timestamped block, or with replaces fold the "
+                           "named blocks (the sha256 after each heading; an earlier fold too) into one text you "
+                           "accept, placed where the oldest was. Originals are journaled first, unnamed blocks stay, a "
+                           "stale or ambiguous selection changes nothing; nothing leaves by count, size or age. Write "
+                           "what matters NOW — active tasks, decisions, observations. Persists across sessions, read "
+                           "whole at every task start. Project rooms included: one working memory in every room.",
             "parameters": {"type": "object", "properties": {
-                "content": {"type": "string", "description": "Content for this scratchpad block"},
+                "content": {"type": "string", "description": "The new block, or the accepted text of a fold"},
+                "replaces": {"type": "array", "items": {"type": "string"}, "description": "Fold: sha256 of each "
+                             "active block this text replaces (a byte-identical block once per copy); omit to append"},
+                "draft_source": {"type": "string", "description": "Source of a helper draft you accept (its task id)"},
             }, "required": ["content"]},
         }, _update_scratchpad),
         ToolEntry("send_user_message", {
@@ -467,6 +490,7 @@ from ouroboros.tools.control_routing import (  # noqa: E402, F401 -- intentional
     _attach_client_surface,
     _attach_origin_from_metadata,
     _finish_swarm_handoff,
+    _close_project,
     _list_projects,
     _start_task,
 )

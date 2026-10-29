@@ -83,9 +83,10 @@ _FOCUS = {"initiator": "consciousness", "usage_category": "consciousness", "wake
     ({"id": "c1", "type": "task", "chat_id": 1, "delegation_role": "subagent", **API_ROUTE}, 1),
     ({"id": "n1", "type": "task", "chat_id": 1, "delegation_role": "subagent", **NANNY_ROUTE}, 1),
     ({"id": "r1", "root_task_id": "r1", "delegation_role": "root", "type": "task", "chat_id": 1,
-      "source": "promote_chat_to_task"}, 1),
-    ({"id": "e1", "type": "evolution", "chat_id": 1, "metadata": {"evolution_transaction": {}}}, 1),
-    ({"id": "s1", "type": "deep_self_review", "chat_id": 1, "_require_worker_pool": True}, 1),
+      "source": "promote_chat_to_task"}, 2),
+    ({"id": "e1", "type": "evolution", "chat_id": 1, "metadata": {"evolution_transaction": {}}}, 2),
+    ({"id": "s1", "type": "deep_self_review", "chat_id": 1, "_require_worker_pool": True}, 2),
+    # A wake leaves one eighth, as a direct turn does; the work it starts is a root of its own (owner, 29.10).
     ({"id": "w1", "metadata": {"initiator": "consciousness", "usage_category": "consciousness"}}, 1),
     ({"id": "f1", "type": "presence", "source": "presence", "chat_id": 7, "_is_direct_chat": True,
       "_presence_turn": True, "metadata": {**PRESENCE, **_FOCUS}}, 1),  # a focus wake
@@ -398,7 +399,7 @@ def test_a_page_seals_rows_only_in_its_room_and_a_row_in_two_rooms_stays_open_in
     assert lane1.startswith("### Open conversation since 2026-09-05 10:03")
     assert _addr(rows[18]) in lane1  # sealed in the transport room, still open in Main
     wake, wake_text = _view(tmp_path, {"id": "w1", "chat_id": 1, "metadata": {"usage_category": "consciousness"}})
-    transport = next(room for room in wake.live_rooms if room["room_id"] == "777")["facts"]
+    transport = next(room for room in wake.other_rooms if room["room_id"] == "777")["facts"]
     assert (transport["rows"], transport["people"], transport["pages"]) == (1, 0, 1)
 
 
@@ -455,7 +456,7 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     live = _section(text, "## Live rooms")
     assert (f"### Project Beta [chat_id={beta}] — open 2026-09-05 10:15 → 2026-09-05 10:16; people 1, mine 1, task facts 0, "
             f"~20 chars; my notes not yet sealed: 0; no page of this room yet\nmemory_read(room_id='{beta}', rows=true)") in live
-    quiet = [room for room in snapshot.live_rooms if not room["notes"] and not room["words"]]
+    quiet = [room for room in (*snapshot.live_rooms, *snapshot.other_rooms) if not room["notes"] and not room["words"]]
     assert [room["room_id"] for room in quiet] == [str(rooms["alpha"]), beta, "777"]
     assert mv._rooms_line(quiet) == (
         "3 open rooms; open 2026-09-05 10:13 → 2026-09-05 10:20; people 3, mine 2, task facts 1, "
@@ -477,7 +478,7 @@ def test_a_rooms_standing_facts_are_the_inventorys_in_its_header_its_live_line_a
     assert (f"{head}task facts 9, ~{chars - sealed} chars; my notes not yet sealed: 1; pages of this room: 1, "
             "last covered row 2026-09-05 10:10\n") in text
     assert "sealed up to" not in text and "sealed through" not in text and "frontier" not in text
-    quiet = [room for room in snapshot.live_rooms if not room["notes"] and not room["words"]]
+    quiet = [room for room in (*snapshot.live_rooms, *snapshot.other_rooms) if not room["notes"] and not room["words"]]
     assert mv._rooms_line(quiet).startswith(
         "3 open rooms; open 2026-09-05 10:13 → 2026-09-05 10:17; people 2, mine 2, task facts 1, ")
     assert "; pages of these rooms: 1, last covered row 2026-09-05 10:20; memory_read(" in mv._rooms_line(quiet)

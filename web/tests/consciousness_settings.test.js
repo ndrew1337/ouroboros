@@ -139,7 +139,7 @@ test('Safety Supervisor: two rows of Off · Light · Full, the short copy, the r
     assert.match(html, /data-policy-state="supervisor_consciousness"/);
     assert.match(html, />Check consciousness fully</);
     assert.match(html, /Not measured yet: no replay of real checks exists\./);
-    assert.match(html, /Rules the Safety Supervisor reads on every check\. Rules for one place live in that place's notes\./);
+    assert.match(html, /Ouroboros and the Safety Supervisor read these in every task and check\. Rules for one place live in that place's notes\./);
     assert.match(html, /outside Cyber Pro, Ouroboros cannot lower its own checks/);
     assert.match(html, /id="s-safety-skip-counter"/);
 });

@@ -114,3 +114,57 @@ export function bindSecretReveal(input, button, { savedSelector, savedLabel = ()
     reset();
     return controller;
 }
+
+export function bindSecretInputs(root) {
+    root.querySelectorAll('.secret-toggle, .secret-clear').forEach((button) => {
+        const input = root.querySelector(`#${button.dataset.target}`);
+        if (!input) return;
+        button.setAttribute('aria-controls', input.id);
+        const label = input.labels?.[0];
+        if (label) {
+            label.id ||= `${input.id}-label`;
+            button.setAttribute('aria-describedby', label.id);
+        }
+    });
+    root.querySelectorAll('.secret-input').forEach((input) => {
+        input.addEventListener('input', () => {
+            if (input.value.trim()) delete input.dataset.forceClear;
+        });
+    });
+
+    root.querySelectorAll('.secret-toggle').forEach((button) => {
+        const input = root.querySelector(`#${button.dataset.target}`);
+        if (!input) return;
+        const customRow = input.closest('[data-custom-secret-row]');
+        const keyInput = customRow?.querySelector('[data-custom-secret-key]');
+        bindSecretReveal(input, button, {
+            savedSelector: () => {
+                // A key added in a card is read by its connection and field; a draft has nothing saved.
+                const added = input.closest('[data-connection-row][data-uid]');
+                if (added) return added.dataset.draft === '1' ? null
+                    : { connection: `${added.dataset.kind}@${added.dataset.name}`, field: input.dataset.connectionField };
+                const key = customRow?.dataset.originalKey || input.dataset.secretSetting;
+                return key ? { key } : null;
+            },
+            savedLabel: () => keyInput && keyInput.value.trim().toUpperCase() !== customRow.dataset.originalKey
+                ? `Saved value for ${customRow.dataset.originalKey}` : '',
+            identityInputs: keyInput ? [keyInput] : [],
+        });
+    });
+
+    root.querySelectorAll('.secret-clear').forEach((button) => {
+        button.addEventListener('click', () => {
+            const target = root.querySelector(`#${button.dataset.target}`);
+            if (!target) return;
+            target.value = '';
+            target.type = 'password';
+            target.dataset.forceClear = '1';
+            const toggle = root.querySelector(`.secret-toggle[data-target="${button.dataset.target}"]`);
+            if (toggle) toggle.textContent = 'Show';
+            // Programmatic value changes fire no 'input' event, but a Clear is
+            // an edit like any other: the provider-test verdict-expiry listener
+            // must see it, or a stale OK keeps vouching for a cleared key.
+            target.dispatchEvent(new Event('input', { bubbles: true }));
+        });
+    });
+}

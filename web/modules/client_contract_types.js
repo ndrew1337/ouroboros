@@ -154,6 +154,7 @@
  * The wizard's starting values; besides these keys it carries one key per `contract.providerFields[].stateKey`
  * (a configured secret reads as `secretPlaceholder`), `contract.budgetFields[].stateKey` and `contract.modelSlots[].stateKey`.
  * @typedef {Object} SetupInitialState
+ * @property {Object[]} connections Masked OUROBOROS_CONNECTIONS rows, keyed by kind/name.
  * @property {string} safetyModel
  * @property {string} providerProfile
  * @property {string} reviewEnforcement
@@ -675,10 +676,12 @@
  */
 
 /**
- * `POST /api/projects/{project_id}/update`: name and/or pin; at least one.
+ * `POST /api/projects/{project_id}/update`: name, pin or closure; at least one.
+ * `closed`: true closes as owner; false reopens.
  * @typedef {Object} ProjectUpdateRequest
  * @property {string=} name
  * @property {boolean=} pinned
+ * @property {boolean=} closed
  */
 
 /**

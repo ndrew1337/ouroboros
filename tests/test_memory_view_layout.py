@@ -292,7 +292,7 @@ def test_the_view_fact_reaches_the_cap_info_the_task_context_and_one_event(tmp_p
     assert facts["role"] == "integrator" and facts["room_id"] == "1"
     assert facts["store_status"] == {"state": "active", "tail_facts": "filling"}  # open rows read live, no fill yet
     assert facts["legacy_frontier_status"] == "exact"
-    assert facts["spec"]["live_rooms"] == "lines" and facts["blocks"]["live_rooms"] == 4
+    assert facts["spec"]["live_rooms"] == "lines" and facts["blocks"]["live_rooms"] == 2
     assert facts["blocks"]["story_tokens"] > 0 and facts["blocks"]["room_tokens"] > 0
     assert facts["floor"]["mode"] == "max" and facts["floor"]["steps"] == {}
     assert ctx.memory_view_facts == {key: facts[key] for key in ("role", "room_id", "floor", "story_status", "max_room")}

@@ -219,6 +219,8 @@ _REVIEW_SURFACES = {
     "system_review": "/review: one enabled catalog row, default Main",
 }
 
+# The changing part's block of each review seat's price and last review (``review_facts_block``).
+REVIEW_ACTIVITY_HEADER = "## Review seat activity"
 # A session seat is paid in subscription time, not route money (THESIS2 §3).
 SESSION_SEAT_COST_HINT = "uses a session seat and time"
 COST_UNKNOWN_HINT = "cost unknown"
@@ -310,17 +312,23 @@ def _review_migration_facts(settings: Mapping[str, Any]) -> dict[str, str]:
     return {key: value for key, value in facts.items() if value}
 
 
-def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None) -> str:
+def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None, *,
+                       activity_out: Optional[list[str]] = None) -> str:
     """``## Review``: the review POOL this task's settings snapshot serves — the enabled catalog rows the owner
     marked as reviewers, read through the same builder every review surface runs (``review_pool_slots``), never
     live settings or the last execution; ``None`` reads the bound task scope. Each seat is named by its catalog
     handle (the same handle ``## Available subagents`` shows and ``review_change(reviewers=[…])`` accepts); its
-    ``seat_id`` is the stored row id the records carry. Every row retains delivery, measured recent cost
-    and its last-review status; these facts never rank seats or change routing. ``source`` is ``structured`` (a non-empty pool), ``empty`` (a readable catalog
+    ``seat_id`` is the stored row id the records carry. Every row retains its model, effort and delivery.
+    ``source`` is ``structured`` (a non-empty pool), ``empty`` (a readable catalog
     with no marked row — a loud, configured fact whose one seat is the Main model reviewing alone,
     ``main_self_review: true``) or ``error`` (a malformed catalog or a refused migration). A seat without a
-    catalog row (the Main seat) is named by its ``seat_id``. Stable for the task (cache-marked prefix); the
-    task's recent ledger records ride separately in the changing part (:func:`review_records_block`)."""
+    catalog row (the Main seat) is named by its ``seat_id``. Stable for the task (cache-marked prefix B).
+
+    What every settled review on the install changes — each seat's measured price (``cost_hint``), its
+    cost facts and its last-review status — would rewrite that prefix for every later start, so it is
+    one ``## Review seat activity`` block appended to ``activity_out`` for the changing part (C), beside
+    the task's recent ledger records (:func:`review_records_block`). These facts never rank seats or
+    change routing; a pool without seats appends nothing."""
     from ouroboros import reviewer_slot_config as rs
     from ouroboros.config import get_review_enforcement, get_runtime_mode, runtime_settings, task_settings_scope
     from ouroboros.configured_subagents import SUBAGENTS_SETTING, parse_configured_subagents
@@ -334,6 +342,7 @@ def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None) -> str:
         state = rs.review_pool_state(settings.get(SUBAGENTS_SETTING))
         source, error = state["state"], state["error"]
         pool: list[dict[str, Any]] = []
+        activity: list[dict[str, Any]] = []
         slots: list[Any] = []
         without_credentials: list[str] = []
         recent = rs.reviewer_slot_last_executions()
@@ -353,6 +362,9 @@ def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None) -> str:
                     "subagent_id": handles.get(slot.subagent_id, slot.subagent_id) or slot.slot_id,
                     "model": slot.model, "effort": slot.effort,
                     "delivery": "session" if session else ("native" if slot.native_retrieval else "packet"),
+                })
+                activity.append({
+                    "seat_id": slot.slot_id,
                     "cost_hint": SESSION_SEAT_COST_HINT if session else _api_review_cost_hint(slot),
                     **rs.review_cost_facts(last.get("cost_usd"), route=str(slot.route.value), model=slot.model),
                     "last_review": {key: last[key] for key in ("ts", "status", "failure_code", "cost_kind", "cost_usd") if key in last}
@@ -388,10 +400,14 @@ def review_facts_block(snapshot: Optional[TaskSettingsSnapshot] = None) -> str:
         **({"no_pool_row_has_credentials": True} if without_credentials and len(without_credentials) == seats else {}),
         "surfaces": _REVIEW_SURFACES,
         "omitted": {"rows": 0},
-        "full_source": {"pool": "GET /api/review-pool", "records": "## Review records"},
+        "full_source": {"pool": "GET /api/review-pool", "activity": REVIEW_ACTIVITY_HEADER,
+                        "records": "## Review records"},
     }
     if migration.get("snapshot"):
         facts["migration_snapshot"] = migration["snapshot"]
+    if activity_out is not None and activity:
+        activity_out.append(f"{REVIEW_ACTIVITY_HEADER}\n\n" + json.dumps(
+            {"seats": activity}, ensure_ascii=False, separators=(",", ":")))
     return review_pool_host_section(facts)
 
 

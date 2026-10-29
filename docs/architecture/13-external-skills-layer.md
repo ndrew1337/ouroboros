@@ -32,7 +32,7 @@ Updates compare candidate/optional local digests: Replace keeps `.previous`, Kee
 
 A changed built-in payload must bump its manifest version, or existing installs keep the old files; owner-edited copies remain protected.
 
-ClawHub lands atomically with file hashes; direct review attempts precede `skill_dependencies.ensure_skill_dependencies`, callers own deferred review/acceptance. It uses current hash-bound admission despite review errors. Accepted specs allow literal build/check argv (`marketplace/install_specs.py`); manual steps are guidance. Caches: `state/skills/<name>/dependency_cache`; results: `deps.json`; absent checks stay unknown, drift invalidates readiness. `removal_action` names removal; `provenance.py` clears only the local receipt. Runtimes: `tools/skill_exec.py`, `docs/CREATING_SKILLS.md`.
+ClawHub lands atomically with file hashes; direct review attempts precede `skill_dependencies.ensure_skill_dependencies`, callers own deferred review/acceptance. It uses current hash-bound admission despite review errors. Accepted specs allow literal build/check argv (`marketplace/install_specs.py`); manual steps are guidance. Caches: `state/skills/<name>/dependency_cache`; results: `deps.json`; absent checks stay unknown; drift, or a venv on another host Python, voids readiness. `removal_action` names removal; `provenance.py` clears only the local receipt. Runtimes: `tools/skill_exec.py`.
 
 ### Tool result views
 

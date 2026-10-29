@@ -26,7 +26,8 @@ def _registry():
 
 def test_registry_matches_the_init_map_and_the_page_sections():
     app_js = _read("web/app.js")
-    inits = set(re.findall(r"\b(init[A-Z][A-Za-z]+)\(ctx\)", app_js))
+    # A page may take more than the shared context (Files takes the shell's layer stack): `initFiles({ ...ctx, layers })`.
+    inits = set(re.findall(r"\b(init[A-Z][A-Za-z]+)\((?:ctx\)|\{ \.\.\.ctx[,}])", app_js))
     rows = _registry()
     assert [r[0] for r in rows] == ["chat", "files", "skills", "widgets", "dashboard", "settings"]
     for page_id, label, _icon, _zone, init in rows:

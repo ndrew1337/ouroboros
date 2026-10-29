@@ -175,6 +175,33 @@ export function clockText(value) {
     return new Date(time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+/** The chip's clock in the viewer's zone; only an unexplained due wake names its appointment. */
+export function deadlineWords(snapshot, now = Date.now()) {
+    if (snapshot.liveWakeTaskId || snapshot.liveWakeHeld || snapshot.enabled === false || snapshot.enabled === null) {
+        return '';
+    }
+    const nextAt = snapshot.status === 'allowance_exhausted'
+        ? snapshot.allowanceResetsAt || snapshot.nextWakeAt : snapshot.nextWakeAt;
+    const next = Date.parse(nextAt);
+    if (!Number.isFinite(next)) return '';
+    const due = next <= now;
+    if (due && snapshot.status !== 'due') return '';
+    const value = due ? snapshot.appointmentAt : nextAt;
+    const at = new Date(value);
+    if (!Number.isFinite(at.getTime())) return due ? tr('consciousness.due', 'due') : '';
+    const date = at.toDateString() === new Date(now).toDateString() ? ''
+        : `${at.toLocaleDateString([], { month: 'short', day: 'numeric' })} `;
+    const time = date + clockText(value);
+    return due ? fmt('since {time}', { time }) : time;
+}
+
+/** Own wakes and all place wakes keep their order within their separate lists. */
+export function splitWakes(wakes) {
+    const own = [], places = [];
+    for (const wake of Array.isArray(wakes) ? wakes : []) (wake.cause === 'focus' ? places : own).push(wake);
+    return { own, places };
+}
+
 /** A duration between two instants in words: «40 s», «3 min», «2 h»; '' when either is unknown. */
 export function durationText(from, to) {
     const start = Date.parse(String(from || ''));

@@ -25,9 +25,9 @@ def test_focus_and_arbitrary_place_arguments_are_not_destinations(supervisor, mo
     data = bundle(h, name, {"place_id": "target", "text": "unrelated work"})
     assert data["subject"]["place"] == {} and not data["standing_delegation"]["place_notes"]
     assert data["occasion"]["focus"]["place_id"] == "focus-room" and not reads
-    monkeypatch.setattr(place_guard, "call_place_facts", lambda *_a: {"place_id": "target"})
+    monkeypatch.setattr(place_guard, "call_place_facts", lambda *_a: {"places": [{"place_id": "target"}]})
     data = bundle(h, name, {"text": "resolved work"})
-    assert data["subject"]["place"]["place_id"] == "target"
+    assert data["subject"]["place"]["places"][0]["place_id"] == "target"
     assert data["standing_delegation"]["place_notes"][0]["standing_delegation"] is True
 
 
