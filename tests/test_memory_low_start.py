@@ -36,9 +36,11 @@ def sent(monkeypatch):
 
 
 def test_a_start_memory_lowered_to_low_names_the_hosts_measure_without_advice():
-    line = low_start_line(_plan(_room()), "low", "root1")
-    assert line.startswith("Task root1 started in Low with chapter maps. The host's measure: window 1,000,000;")
-    assert "tool schemas 70,000" in line and "with no memory shown headroom 100,000" in line
+    room = _room()
+    line = low_start_line(_plan(room), "low", "root1")
+    assert line == (f"Task root1 started in Low with chapter maps: its memory ({room['story'] + room['room']:,} tokens) "
+                    f"did not fit the {room['allowance']:,} tokens left beside the full books.")
+    assert len(line.splitlines()) == 1 and "my memory" not in line
     assert not any(word in line for word in ("may bring", "should", "must", "fold", "episode", "again"))
 
 
@@ -59,7 +61,7 @@ def test_a_measured_crowded_start_gets_its_line(monkeypatch):
     held = _fact(_start(core, 2_000_000, monkeypatch))
     plan = _start(core, _crowded_window(held), monkeypatch)
     assert plan.initial_mode == "low" and _fact(plan)["cause"] == "crowded"
-    assert low_start_line(plan, plan.initial_mode, "wake").startswith("Task wake started in Low with chapter maps.")
+    assert low_start_line(plan, plan.initial_mode, "wake").startswith("Task wake started in Low with chapter maps:")
     assert low_start_line(_start(core, 2_000_000, monkeypatch), "max", "wake") == ""
 
 

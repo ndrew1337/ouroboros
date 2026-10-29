@@ -66,7 +66,8 @@ def low_start_line(plan, mode, task_id):
     room = receipt.get("max_room")
     if receipt.get("role") in DELEGATED_FOCUS_ROLES or not floor.crowded_by_memory(room):
         return ""
-    return f"Task {task_id} started in Low with chapter maps. The host's measure: {floor.measure_text(room)}."
+    return (f"Task {task_id} started in Low with chapter maps: its memory ({room['story'] + room['room']:,} tokens) "
+            f"did not fit the {room['allowance']:,} tokens left beside the full books.")
 
 
 def window_projection(record):
