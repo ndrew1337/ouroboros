@@ -453,3 +453,15 @@ from ouroboros.review_evidence_sections import (  # noqa: E402, F401 -- intentio
     _accept_verification_summary,
     _owner_content_projection,
 )
+
+
+def evidence_material(deliveries: tuple) -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): the optional task-evidence
+    exhibit over a placeholder record for each of ``deliveries``, every source state and compaction. The record is
+    data."""
+    base = {"task_id": "⟨task⟩", "selected_count": 1, "unselected_count": 1, "source_complete": True, "gap_count": 0,
+            "source_chars": 9, "source_ref": {"path": "⟨path⟩", "sha256": "⟨sha⟩"}, "session_relative_path": "⟨path⟩",
+            "preview": "⟨preview⟩"}
+    return [commit_review_evidence_section({**base, "source_status": status, "session_source_status": status},
+                                           delivery=delivery, compact=compact)
+            for delivery in deliveries for status in ("ready", "⟨other⟩") for compact in (False, True)]
