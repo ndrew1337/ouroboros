@@ -41,7 +41,7 @@ def floor_elements(snapshot: mv.MemoryViewSnapshot) -> List[Tuple[str, str, str,
         return []
     room = snapshot.room or {}
     lane1, lane2 = room.get("lane1") or [], room.get("lane2") or []
-    quiet = [r for r in snapshot.live_rooms if not r["notes"] and not r["words"] and (
+    quiet = [r for r in snapshot.live_rooms if not r.get("live") and not r["notes"] and not r["words"] and (
         not r.get("directory") or not (r["facts"].get("people") or r["facts"].get("mine") or r.get("focus")))]
     others = [r for r in snapshot.live_rooms if r not in quiet]
     mine = sorted((i for i in lane1 if i["kind"] == "ouroboros"), key=lambda i: i["pos"])

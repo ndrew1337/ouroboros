@@ -272,6 +272,7 @@ class MemoryViewSnapshot:
     story: Tuple[Dict[str, Any], ...] = ()  # legacy records, pages, parts and selected accounts; told_by keeps source addresses, in story order
     room: Optional[Dict[str, Any]] = None  # the current room's facts and texts
     live_rooms: Tuple[Dict[str, Any], ...] = ()
+    other_rooms: Tuple[Dict[str, Any], ...] = ()  # open rows alone keep an address, not a live-room line
     marks: Tuple[Dict[str, Any], ...] = ()
     legacy_blocks: Dict[str, Any] = dataclasses.field(default_factory=dict)  # the story status facts
     fallback_refusals: Tuple[Dict[str, Any], ...] = ()
@@ -282,7 +283,7 @@ class MemoryViewSnapshot:
         return self.store_status.get("state") == "active"
 
 
-_TUPLES = ("story", "live_rooms", "marks", "fallback_refusals")
+_TUPLES = ("story", "live_rooms", "other_rooms", "marks", "fallback_refusals")
 
 
 def snapshot_json(snapshot: MemoryViewSnapshot) -> str:
@@ -674,19 +675,27 @@ def _capture_room(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
 
 
 def _room_focus(root, by_room, notes):
-    """Latest authored focus per room, including its bound tasks whose rows are already sealed."""
+    """Latest authored focus and running work, from the same addressed task display views."""
     from ouroboros.focus import compact_focus
-    from ouroboros.task_store import display_documents
+    from ouroboros.task_store import display_documents, task_versions
 
     ids = {room: {str(row.get("task_id") or "") for _a, row, _p in entries}
            for room, entries in by_room.items()}
     for room, entries in notes.items():
         ids.setdefault(room, set()).update(note.get("task_id", "") for note in entries)
-    for task_id, room in memory_inventory.membership_facts(root).bindings.items():
+    bindings = memory_inventory.membership_facts(root).bindings
+    unseen = {task: str(room) for task, room in bindings.items() if str(room) not in ids}
+    # Empty rooms have no row naming their work: read only the already-known binding ids' typed status,
+    # never task bodies or a history scan. Only running work joins the existing display read.
+    for task, (_version, status, _synthesis) in (task_versions(root, unseen) if unseen else {}).items():
+        if status == "running":
+            ids.setdefault(unseen[task], set()).add(task)
+    for task_id, room in bindings.items():
         if str(room) in ids:
             ids[str(room)].add(task_id)
     documents = display_documents(root, set().union(*ids.values()) if ids else ())
-    focus = {task_id: compact_focus(json.loads(text).get("focus")) for task_id, text in documents.items()}
+    documents = {task_id: json.loads(text) for task_id, text in documents.items()}
+    focus = {task_id: compact_focus(doc.get("focus")) for task_id, doc in documents.items()}
     dated = {}
     for task_id, line in focus.items():
         try:
@@ -699,20 +708,24 @@ def _room_focus(root, by_room, notes):
         if candidates:
             line = max(candidates, key=lambda item: (dated[item["author_task_id"]], item["author_task_id"]))
             latest[room] = f"{line['text']} (task {line['author_task_id']}, {_minute(line['authored_at'])})"
-    return latest
+    running = {room: sorted(t for t in tasks if documents.get(t, {}).get("status") == "running")
+               for room, tasks in ids.items()}
+    return latest, running
 
 
 def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label: Callable[..., str],
                 by_room: Mapping[str, List[Entry]], notes: Mapping[str, List[Dict[str, Any]]],
-                lineage: Mapping[str, Any], gaps: Optional[Mapping[str, set]] = None) -> List[Dict[str, Any]]:
-    """Every other room with open rows, notes not yet sealed or a gap in its open rows, oldest last activity first,
-    with its standing facts."""
+                lineage: Mapping[str, Any], gaps: Optional[Mapping[str, set]] = None,
+                quiet: Optional[Mapping[str, List[Entry]]] = None) -> List[Dict[str, Any]]:
+    """All other open rooms, with a live verdict; an inactive room keeps only its directory address."""
     from ouroboros.dialogue_provenance import row_provenance
+    from ouroboros.memory_room_activity import considered_through, unconsidered_people
 
     rooms = []
-    focus = _room_focus(root, by_room, notes) if spec.live_rooms == "directory" else {}
+    focus, running = _room_focus(root, by_room, notes)
     shown = {entry[0]["row_sha256"] for entry in by_room.get(spec.room_id, [])} if spec.room_lanes else set()
-    for room in sorted((set(by_room) | set(notes) | {room for room, kinds in (gaps or {}).items() if kinds})
+    for room in sorted((set(by_room) | set(notes) | {room for room, kinds in (gaps or {}).items() if kinds}
+                        | {room for room, tasks in running.items() if tasks})
                        - {spec.room_id}):
         entries = by_room.get(room, [])
         words = []
@@ -727,6 +740,8 @@ def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label
         sample = next((meta for _address, meta, _pos in reversed(entries)
                        if meta.get("transport") or meta.get("presence_provenance")), None)
         facts = _with_gaps(memory_inventory.room_facts(store, room, entries, lineage, len(notes.get(room, ()))), gaps, room)
+        facts["unconsidered_people"] = unconsidered_people(entries, lineage, considered_through((quiet or {}).get(room, ()), lineage))
+        facts["running_tasks"] = running.get(room, [])
         # A room can have only notes left after its rows are sealed. Its writer's
         # typed origin still keeps those place notes out of the integrating view.
         if not facts.get("place"):
@@ -738,6 +753,7 @@ def _live_rooms(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, label
                                   "conversation_key": origin.get("conversation_key", ""),
                                   "answered_events": 0, "last_address": "no open rows"}
         rooms.append({"room_id": room, "label": label(room, sample), "key": entries[-1][2] if entries else -1,
+                      "live": bool(facts["unconsidered_people"] or facts["notes"] or facts["running_tasks"] or facts.get("gaps")),
                       "facts": facts, "directory": spec.live_rooms == "directory", "focus": focus.get(room, ""),
                       "notes": list(notes.get(room, ())), "words": words})
     return sorted(rooms, key=lambda item: (item["key"], item["room_id"]))
@@ -812,17 +828,19 @@ def _capture_live(store: ChronicleStore, root: pathlib.Path, spec: ViewSpec, lab
     lineage = row_lineage(root)
     notes = _notes_by_room(store) if spec.room_id is not None or spec.live_rooms != "none" else {}
     gaps: Dict[str, set] = {}  # by room, what its open rows may lack (``room_appearances.GAP_DETAILS``)
+    quiet: Dict[str, List[Entry]] = {}
     if spec.live_rooms != "none":
-        by_room = memory_inventory.open_rows_by_room(root, gaps=gaps)
+        by_room = memory_inventory.open_rows_by_room(root, gaps=gaps, quiet=quiet)
     elif spec.room_id is not None:  # the room's facts are counted from its open rows whatever the view prints of them
         by_room = {spec.room_id: memory_inventory.open_room_rows(root, spec.room_id, gaps=gaps.setdefault(spec.room_id, set()))}
     else:
         by_room = {}
     # The authors of rows written before the lineage epoch, read at once for every room (not one task at a time).
     warm_lineage(lineage, ((meta, pos) for entries in by_room.values() for _address, meta, pos in entries))
+    warm_lineage(lineage, ((meta, pos) for entries in quiet.values() for _address, meta, pos in entries))
     room = (_capture_room(store, root, spec, label, by_room.get(spec.room_id, []), notes, lineage, story, gaps)
             if spec.room_id is not None else None)
-    live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps) if spec.live_rooms != "none" else []
+    live = _live_rooms(store, root, spec, label, by_room, notes, lineage, gaps, quiet) if spec.live_rooms != "none" else []
     return room, live, _capture_marks(store, spec, label)
 
 
@@ -871,7 +889,8 @@ def capture_memory_view(drive_root: Any, task: Mapping[str, Any], spec: ViewSpec
         status = {**status, "tail_facts": "filling"}  # its rows were read live: the stored tail is not complete
     return MemoryViewSnapshot(spec=spec, store_status=status,
                               frontier={"status": frontier.get("status"), "pos": frontier.get("pos")},
-                              story=tuple(story), room=room, live_rooms=tuple(live), marks=tuple(marks),
+                              story=tuple(story), room=room, live_rooms=tuple(r for r in live if r["live"]),
+                              other_rooms=tuple(r for r in live if not r["live"]), marks=tuple(marks),
                               legacy_blocks=story_status, fallback_refusals=tuple(refusals), owner_words=owner_words)
 
 
@@ -985,6 +1004,8 @@ def _facts_text(facts: Mapping[str, Any], of: str = "this room") -> str:
             f"mine {facts['mine']}, task facts {facts['task_facts']}, ~{facts['chars']} chars" if facts["rows"]
             else "no open rows")
     rows += "".join(f"; incomplete: {_GAP_WORDS.get(kind, kind)}" for kind in facts.get("gaps") or ())
+    if facts.get("running_tasks"):
+        rows += "; running work: " + ", ".join(f"get_task_result(task_id='{task}')" for task in facts["running_tasks"])
     notes = f"; my notes not yet sealed: {facts['notes']}" if of == "this room" else ""
     pages = (f"pages of {of}: {facts['pages']}, last covered row {_minute(facts['last_covered'])}" if facts["pages"]
              else f"no page of {of} yet")
@@ -1131,11 +1152,11 @@ def _marks_text(marks: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _live_text(rooms: Tuple[Dict[str, Any], ...], gone: Mapping[str, List[str]]) -> str:
+def _live_text(rooms: Tuple[Dict[str, Any], ...], gone: Mapping[str, List[str]], other: Tuple[Dict[str, Any], ...] = ()) -> str:
     aggregate = set(gone.get("F1b", ())) | set(gone.get("F6a", ()))
-    lines = ["## Live rooms", "", "Other rooms with open rows or notes not yet sealed, oldest last activity first."]
-    if aggregate:
-        lines += ["", _rooms_line([room for room in rooms if room["room_id"] in aggregate])]
+    lines = ["## Live rooms", "", "Other rooms with human words still unconsidered, my unsealed notes, running work or gaps."]
+    if aggregate or other:
+        lines += ["", _rooms_line([*other, *(room for room in rooms if room["room_id"] in aggregate)])]
     for room in rooms:
         ident = room["room_id"]
         if ident not in aggregate:
@@ -1198,8 +1219,8 @@ def render_room(snapshot: MemoryViewSnapshot, level: FloorLevel = FULL_VIEW, *, 
         parts.append(_late_reviews_text(late, snapshot.spec.role))
     if len(late) < len(snapshot.marks):
         parts.append(_marks_text([mark for mark in snapshot.marks if not mark.get("late_review")]))
-    if snapshot.live_rooms:
-        parts.append(_live_text(snapshot.live_rooms, gone))
+    if snapshot.spec.live_rooms != "none" and (snapshot.live_rooms or snapshot.other_rooms):
+        parts.append(_live_text(snapshot.live_rooms, gone, snapshot.other_rooms))
     if room:
         parts.append(_room_text(room, gone))
     parts.append(floor_note)

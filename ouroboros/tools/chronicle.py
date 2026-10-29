@@ -890,10 +890,11 @@ def _read_rooms(root: Path, store: ChronicleStore, start: int, limit: int) -> st
 
     spec = mv.ViewSpec("integrator", room_id=None)
     with capture(root):  # one state of the chronicle for every room's facts
-        rows, lineage = memory_inventory.open_rows_by_room(root), row_lineage(root)
-        rooms = mv._live_rooms(store, root, spec, mv.room_labeler(root), rows, mv._notes_by_room(store), lineage)
+        gaps, quiet = {}, {}
+        rows, lineage = memory_inventory.open_rows_by_room(root, gaps=gaps, quiet=quiet), row_lineage(root)
+        rooms = mv._live_rooms(store, root, spec, mv.room_labeler(root), rows, mv._notes_by_room(store), lineage, gaps, quiet)
     body = "\n".join(mv._directory_room(room) for room in rooms)
-    return _window(f"Live rooms: {len(rooms)}", body, start, limit,
+    return _window(f"Open rooms: {len(rooms)}; live {sum(room['live'] for room in rooms)}", body, start, limit,
                    lambda n: f"memory_read(room_id='*', start={n})")
 
 
