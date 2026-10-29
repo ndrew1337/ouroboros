@@ -105,6 +105,9 @@ def test_the_settled_fact_names_cause_cuts_and_gap(mode, floor_need, cause):
     assert settled["cause"] == cause and settled["short"] == 230 and "headroom" not in settled
     assert settled["cuts"] == (["F6a", "F2"] if cause == "held" else [])
     assert mf.with_max_room(facts, None, mode) == facts
+    # Memory took the books' room only when everything else fits: here the tool schemas tip it (zero_need > window).
+    assert not mf.crowded_by_memory(settled) and not mf.crowded_by_memory(None)
+    assert mf.crowded_by_memory({**settled, "zero_need": 1_000}) is (cause == "crowded")
     words = mf.lowered_line("low", "max", fact) + mf.measure_text(fact, parts=True)
     assert "with no memory shown over by 100" in words
     assert not any(word in words for word in ("must", "should", "please", "failure"))  # measures and a possibility

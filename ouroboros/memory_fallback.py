@@ -1,8 +1,9 @@
 """One signed Light draft: with consciousness on, a candidate from unsealed failed/cancelled work's own rows.
 
-With consciousness off (or unknown), an open lost-Max episode that folding my memory can end
-(``memory_max.memory_can_help``) comes first: one room's oldest run of unfolded pages, whoever
-wrote them, folded into a part (``max_episode_units``); then the existing acting-draft selection:
+With consciousness off (or unknown), a root whose own start memory lowered to Low while everything
+else fit the window (``crowded_start``: its view fact's Max room, ``memory_floor.crowded_by_memory``)
+comes first: one room's oldest run of unfolded pages, whoever wrote them, folded into a part
+(``max_room_units``); then the existing acting-draft selection:
 
 1. The task's view showed this room's open rows only by address (``shortage_from_trace``,
    ``open_rows``): the room's oldest open segment, up to the newest addressed row (a
@@ -45,7 +46,8 @@ from ouroboros.chronicle_store import ChronicleStore, PublishResult, draft_signe
 from ouroboros.consolidator import LIGHT_ANSWER_CEILING_TOKENS
 from ouroboros.dialogue_provenance import (memory_row_header, recorded_finality, render_memory_row, render_row_text,
                                            row_class)
-from ouroboros.memory_inventory import OpenSegment, ShortageFact, shortage_from_trace
+from ouroboros.memory_floor import crowded_by_memory
+from ouroboros.memory_inventory import VIEW_TRACE_KEY, OpenSegment, ShortageFact, shortage_from_trace
 from ouroboros.utils import extract_trailing_json_object, utc_now_iso
 
 log = logging.getLogger(__name__)
@@ -250,8 +252,16 @@ def _legacy_units(root: pathlib.Path, store: ChronicleStore) -> Iterator[Fallbac
                                head_sequence=segment.head_sequence)
 
 
-def max_episode_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
-    """While my memory keeps Max lost (``memory_max.memory_can_help``): a room's runs of unfolded pages no shown
+def crowded_start(trace: Any) -> bool:
+    """This root's own start was lowered to Low by memory: the view fact its trace keeps (``VIEW_TRACE_KEY``) names a
+    Max room ``crowded`` while everything but memory fit the window (``memory_floor.crowded_by_memory``). No fact,
+    a held start, a route, or tool schemas that tipped it alone: ``False``."""
+    fact = trace.get(VIEW_TRACE_KEY) if isinstance(trace, Mapping) else None
+    return crowded_by_memory(fact.get("max_room") if isinstance(fact, Mapping) else None)
+
+
+def max_room_units(store: ChronicleStore) -> Iterator[FallbackUnit]:
+    """After a root's start that memory crowded (``crowded_start``): a room's runs of unfolded pages no shown
     account tells (the view's ``told_map``), oldest first, whoever wrote them, the room holding most such text
     first; one page is a run too, Light judges whether folding it helps, and a run it kept as it is leaves the
     next one in turn (``select_unit``). Never an account across rooms: that is the mind's."""
@@ -778,10 +788,9 @@ def run_fallback_draft(env: Any, task: Mapping[str, Any], llm: Any, drive_logs: 
             return fitted[0]
 
         shortage, allow_legacy = shortage_from_trace(trace), not task.get("_is_direct_chat")
-        from ouroboros.memory_max import memory_can_help  # the open lost-Max episode memory could end
         units = (failed_work_units(root, store) if candidate else itertools.chain(
-            max_episode_units(store), candidate_units(root, store, shortage, allow_legacy=allow_legacy))
-            if memory_can_help(root) else None)
+            max_room_units(store), candidate_units(root, store, shortage, allow_legacy=allow_legacy))
+            if crowded_start(trace) else None)
         chosen = select_unit(root, store, shortage, allow_legacy=allow_legacy, binding=binding, fit=fit, units=units)
         if chosen is None:
             return FallbackRun("nothing")

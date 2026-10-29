@@ -138,6 +138,14 @@ def with_max_room(facts: Mapping[str, Any], fact: Optional[Mapping[str, Any]], m
                                   "cuts": [step for step in LADDER if cause == "held" and step not in _ORDINARY and steps.get(step)]}}
 
 
+def crowded_by_memory(fact: Optional[Mapping[str, Any]]) -> bool:
+    """A settled Max room (``with_max_room``) that memory lowered to Low: ``crowded`` while everything but memory
+    (books, core, assignment, tool schemas, reply reserve and work room: ``zero_need``) fits the window, so folding
+    memory can give a later start its books back. A route, or tool schemas that tip a start alone, are not memory's."""
+    return (isinstance(fact, Mapping) and fact.get("cause") == "crowded" and isinstance(fact.get("zero_need"), int)
+            and isinstance(fact.get("window"), int) and fact["zero_need"] <= fact["window"])
+
+
 CROWDED_POSSIBILITY = "Folding memory or fewer tool schemas may bring the books back."
 ROUTE_FACT = ("its window cannot hold the books beside my core, assignment, reply reserve and the work's room (needs "
               "{need:,} > {window:,}: {parts}); folding memory or dropping tool schemas cannot make room here.")
