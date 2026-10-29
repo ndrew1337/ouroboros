@@ -136,7 +136,6 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     toggle.type = 'button';
     head.append(headWords, toggle);
     const coverageNote = element('p', 'cx-wakes-coverage');
-    coverageNote.setAttribute('data-i18n-authored', '');
     const groups = [
         ['own', tr('consciousness.own_wakes', 'Its own wakes'),
             tr('consciousness.no_own_wakes', 'No own wakes with a recorded model call in the last 48 h.')],
@@ -204,6 +203,8 @@ export function createConsciousnessStatus({ bar, ws = null, openDashboardTab = n
     function paintWakes(list, coverage = '', failed = false) {
         coverageNote.textContent = coverage || (failed ? 'Recent wakes could not be read.'
             : !Array.isArray(list) ? 'Reading recent wakes…' : '');
+        if (coverage) coverageNote.setAttribute('data-i18n-authored', '');  // the host's words; the client's are translated
+        else coverageNote.removeAttribute('data-i18n-authored');
         coverageNote.hidden = !coverageNote.textContent;
         const split = splitWakes(list);
         for (const group of groups) {

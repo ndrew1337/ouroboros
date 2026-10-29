@@ -205,6 +205,14 @@ test('Shade keeps three own wakes and three place wakes, with independent empty 
         await new Promise((resolve) => setTimeout(resolve, 0));
         assert.deepEqual(status.shade.querySelectorAll('.cx-wakes-coverage').map((node) => node.textContent), [coverage]);
         assert.ok(status.shade.querySelectorAll('.cx-wakes-note').every((node) => node.hidden));
+        assert.ok(status.shade.querySelector('.cx-wakes-coverage').hasAttribute('data-i18n-authored'));  // the host's words
+        status.chip.click();
+        coverage = '';
+        status.chip.click();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const fallback = status.shade.querySelector('.cx-wakes-coverage');
+        assert.equal(fallback.textContent, 'Recent wakes could not be read.');
+        assert.equal(fallback.hasAttribute('data-i18n-authored'), false);  // the client's own sentence is translated
         coverage = 'wakes that reached a model call in the last 48 h';
         for (const cause of ['focus', 'own', 'none']) {
             status.chip.click();

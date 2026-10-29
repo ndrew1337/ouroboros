@@ -1902,7 +1902,7 @@ The headline reports server state apart from wakes, with the host sentence as it
 shows no deadline. “Its own wakes” precedes “Wakes in places”, sharing 50 ledger
 roots over 48 h, with unused share reassigned. Each list has its own empty line:
 “No own wakes with a recorded model call in the last 48 h.” / “No wakes in places
-in the last 48 h.” Unavailable reads retain rows with a warning; neither means Off.
+in the last 48 h.” Unavailable reads retain rows with an authored warning; neither means Off.
 Coverage or a read failure appears once above both lists. Coverage says “wakes that
 reached a model call in the last 48 h”; a full page names the 50-row cap for one kind
 or the actual counts of its own wakes and wakes in places when both occur.
@@ -2896,12 +2896,12 @@ or `since HH:MM` only for `due` (appointment, `due` if unknown), with the `still
 Its word uses the viewer's zone and a short date when not today; passed explained
 outcomes and passed allowance resets show no time.
 `Evolving` replaces the word during a campaign, even when off; Off is grey.
-Running shows moving dots; held shows pause bars without time; unknown a ring,
+Running shows moving dots, never a breathing glyph; held shows pause bars without time; unknown a ring,
 failure a red dot, amber only the owner's move (§4). The word stays visible at every width, except where a
 Project's name still cut on its second line leaves the chip its brain and mark (above).
 Its accessible name and the Shade state use the host sentence without adding a clock.
-A press opens the Shade under the
-capsules: state, Start/Stop, `$X of $Y in the last 24 hours`, “Its own wakes” then
+A press opens its own sheet of the work list's material (the Shade), hung under the
+capsules, and switches nothing: state, Start/Stop, `$X of $Y in the last 24 hours`, “Its own wakes” then
 “Wakes in places” (three rows each, Dashboard's empty sentences, one coverage or failure above both), `Dashboard ›`
 and, during a campaign, `Evolution ›`
 (`web/modules/consciousness_status.js`). Evolve and Review live in Dashboard › Evolution (`Run review…` opens
