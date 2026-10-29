@@ -35,6 +35,7 @@
  * @property {StorageRest} rest
  * @property {(number|null)=} growth_bytes
  * @property {'unreadable'=} growth_flag  // either count had unreadable items here
+ * @property {string=} undecided  // why its default folder cannot be chosen: unknown, never empty
  */
 
 /**
@@ -74,7 +75,7 @@
  * @property {number} places_total
  * @property {number} bytes
  * @property {number} files
- * @property {StoragePart[]} done  // `name` is the finished place's id
+ * @property {StoragePart[]} done  // known-size finished places; `name` is the place's id
  */
 
 /**

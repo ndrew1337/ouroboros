@@ -105,6 +105,60 @@ test('progress invalidation refreshes an apply but cannot certify boot completio
     assert.equal(listeners.size, 0);
 });
 
+test('the requested description task ends through its own task_done, which alone reads the status again', () => {
+    const listeners = new Map();
+    const ws = { on(name, fn) { listeners.set(name, fn); return () => listeners.delete(name); } };
+    let phase = '';
+    let requested = 'd3adb33f';
+    const reads = [];
+    const binding = bindUpdateRefreshEvents({ ws, getPhase: () => phase, loadStatus: (value) => reads.push(value),
+        reconcileRestart: () => {}, getRequestTaskId: () => requested });
+    const log = listeners.get('log');
+    log({ data: { type: 'task_done', task_id: 'other-task' } });
+    log({ data: { type: 'task_heartbeat', task_id: 'd3adb33f' } });
+    log({ data: { type: 'task_done', task_id: 'd3adb33f', _historical: true } });
+    assert.deepEqual(reads, [], 'another task, another event or a replayed frame is not this request ending');
+    log({ data: { type: 'task_done', task_id: 'd3adb33f' } });
+    assert.deepEqual(reads, [{ fetchRemote: false, preservePhase: true }]);
+    // A host retry ends under its own id with the request as its root; a child of the request does not end it.
+    log({ data: { type: 'task_done', task_id: 'd3adb33f-retry', root_task_id: 'd3adb33f', parent_task_id: 'd3adb33f' } });
+    assert.equal(reads.length, 1);
+    log({ data: { type: 'task_done', task_id: 'd3adb33f-retry', root_task_id: 'd3adb33f' } });
+    assert.equal(reads.length, 2);
+    reads.pop();
+    requested = '';
+    log({ data: { type: 'task_done', task_id: 'd3adb33f' } });
+    phase = 'restarting';
+    requested = 'd3adb33f';
+    log({ data: { type: 'task_done', task_id: 'd3adb33f' } });
+    assert.equal(reads.length, 1, 'no request, or a restart in progress, reads nothing');
+    binding.dispose();
+    assert.equal(listeners.size, 0);
+});
+
+test('Continue admitted in another client refreshes both panels and follows its terminal', () => {
+    const clients = [0, 1].map(() => {
+        const listeners = new Map(), reads = [];
+        const ws = { on(name, fn) { listeners.set(name, fn); return () => listeners.delete(name); } };
+        let current = 'original';
+        const binding = bindUpdateRefreshEvents({ ws, getPhase: () => '', reconcileRestart() {},
+            getRequestTaskId: () => current,
+            loadStatus: (options) => { reads.push(options); current = 'successor'; } });
+        return { listeners, reads, binding };
+    });
+    // The host's existing log frame reaches both sockets. No document-local event is sent.
+    for (const client of clients) {
+        client.listeners.get('log')({ data: { type: 'owner_continue_admitted', predecessor_task_id: 'other' } });
+        assert.equal(client.reads.length, 0);
+        client.listeners.get('log')({ data: { type: 'owner_continue_admitted', task_id: 'successor', predecessor_task_id: 'original' } });
+        assert.equal(client.reads.length, 1);
+        client.listeners.get('log')({ data: { type: 'task_done', task_id: 'successor' } });
+        assert.equal(client.reads.length, 2);
+        client.binding.dispose();
+        assert.equal(client.listeners.size, 0);
+    }
+});
+
 const refusal = {
     operation_id: 'attempt-a', generation: 'server-a', current_generation: true, stage: 'draining_writers',
     active: false, result: 'failed', outcome: 'not_applied', outcome_at: '2026-10-21T00:20:00Z',

@@ -396,11 +396,11 @@ def _forget_checkout(repo_dir: Path, wt_path: Path) -> None:
 
 def _remove_paths(repo_dir: Path, wt_path: Path, branch: str, *, allowed_root: Optional[Any] = None) -> bool:
     """Forget a deleted checkout's Git registration and branch (the caller deleted its files; a
-    surviving directory returns False, so its record and pin stay: ``removal_failed``). With
-    ``allowed_root``, a path not strictly inside it is never touched: a record names no arbitrary path."""
+    surviving directory returns False, so its record and pin stay: ``removal_failed``). With ``allowed_root``,
+    a path not strictly inside it is never touched: while it exists it is kept like a survivor, else forgotten."""
     wt_path = Path(wt_path)
     if allowed_root is not None and not _deletable(wt_path, Path(allowed_root)):
-        return True  # not ours to delete: the malformed record is forgotten, the path untouched
+        return not os.path.lexists(wt_path)  # not ours: no git runs on a path a record names (#1239)
     if wt_path.exists():
         return False
     _forget_checkout(repo_dir, wt_path)
@@ -1385,8 +1385,8 @@ def remove_execution_snapshot(
 ) -> bool:
     """Remove a disposed snapshot: its checkout (if still there), its baseline and
     result pins and its record. Call only after explicit disposition or GC's
-    ownership/custody proof. A surviving tree keeps its record and pins;
-    unchanged failures wait until a new process.
+    ownership/custody proof. A surviving tree, or one outside the worktree root,
+    keeps its record and pins; unchanged failures wait until a new process.
     """
     entry = find_execution_snapshot(snapshot_id, data_dir)
     if entry is None or worktree_removal.unchanged(entry):
@@ -1396,8 +1396,8 @@ def remove_execution_snapshot(
     with _record_lock(wt_path, data_dir, op="remove", task_id=str(entry.get("task_id") or "")):
         if _deletable(wt_path, root) and wt_path.exists():
             _force_rmtree(wt_path)
-        if _deletable(wt_path, root) and wt_path.exists():
-            # The directory survived its removal: the record and the pins stay for the next pass.
+        if wt_path.exists() if _deletable(wt_path, root) else os.path.lexists(wt_path):
+            # It survived its removal, or lies outside this worktree root: record and pins stay.
             _mark_removal_failed(entry, data_dir)
             return False
         if not entry.get("standalone"):
