@@ -23,6 +23,9 @@ def record_session_view(host, evidence, manifest_ref):
     receipt = getattr(host.ctx, '_context_view_receipt', None)
     if receipt and receipt.get('status') == 'applied':
         receipt['sent_fit'] = {**evidence['fit']['measurement'], 'wire_sha256': evidence['wire_sha256']}
+    if not host._session_opened:
+        from ouroboros.loop import _note_low_start
+        _note_low_start(host.ctx, host.plan, host.ctx.active_context_mode, host.ctx.task_id, host.event_queue)
     host._session_opened = True
 
 
