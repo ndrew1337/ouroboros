@@ -1385,6 +1385,7 @@ def _operator_lane(args, host_ctx, commit_message: str, *, goal: str, scope: str
     open after the cycle."""
     from ouroboros.tools.commit_gate import preflight_reviewer_error
     from ouroboros.tools.git import _run_non_committing_review_cycle
+    from ouroboros.tools.registry import ToolRegistry
     from ouroboros.tools.review_subject import ReviewSubjectSpec, isolated_checkout
 
     refusal = preflight_reviewer_error(args.preflight_reviewer.strip()) if args.preflight_reviewer.strip() else ""
@@ -1393,6 +1394,10 @@ def _operator_lane(args, host_ctx, commit_message: str, *, goal: str, scope: str
         _write_json(output_dir / "outcome.json", {"exit_code": 2, "outcome": {
             "status": "failed", "block_reason": "tool_arg_error", "message": f"TOOL_ARG_ERROR: {refusal}"}})
         return 2
+    # Like a worker, load every tool module before the gate mints its test proof: the browser module's
+    # packaged-browser default joins the environment that proof binds, and the panel's first registry
+    # would otherwise change it before the record reads the tests fact (#2363).
+    ToolRegistry(repo_dir=host_ctx.repo_dir, drive_root=review_drive_root)
     spec = ReviewSubjectSpec(root_kind="system_repo", root=str(REPO), kind="index", surface="commit_gate")
     retained: dict = {}
     outcome: dict = {}
