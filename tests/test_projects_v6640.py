@@ -471,12 +471,13 @@ def test_project_activity_stays_out_of_main_static_contract():
     chat = (root / "web" / "modules" / "chat.js").read_text(encoding="utf-8")
 
     # Main's number is its room revision against its read cursor, the comparison a Project row makes (owner Q1 = B,
-    # 19.10.2026); no frame of any room counts in the browser (tests/test_main_unread_counter.py: another room's
-    # message never moves Main's revision).
+    # 19.10.2026), less the messages the host recorded as read in full in another room (owner A, 28.10.2026); no
+    # frame of any room counts in the browser (tests/test_main_unread_counter.py: another room's message never moves
+    # Main's revision).
     assert "incrementUnreadIfNeeded" not in chat and "unreadCount" not in chat
     app = (root / "web" / "app.js").read_text(encoding="utf-8")
     assert "observeMainRevision(data.main_visible_revision);" in app
-    assert "Math.max(0, revision - seen)" in app
+    assert "unreadCount(revision, seen, readAheadFor(1))" in app
 
     # Main has its own compact host-stamped completion row. Project progress,
     # logs and ordinary summaries never enter its live fan-out.
@@ -500,7 +501,9 @@ def test_project_activity_stays_out_of_main_static_contract():
     assert "if (msg && msg.project_thread) return false;" in main_gate
     assert "projectChatIds.has(cid)" in main_gate
     assert "if (isMain) return mainThreadAccepts(msg, projectChatIds);" in shared_gate
-    assert "return Number(msg?.chat_id ?? 1) === chatId;" in shared_gate
+    # A Project instance also takes the one frame of a row it shows outside its written room (`also_rooms`).
+    assert ("return Number(msg?.chat_id ?? 1) === chatId || (Array.isArray(msg?.also_rooms) "
+            "&& msg.also_rooms.map(Number).includes(chatId));") in shared_gate
     assert "PROJECT_ROW_TYPES.has(msg.system_type)" in fanout
     assert "appendTaskSummaryToLiveCard(msg);" in fanout
     assert "updateLiveCardFromProgressMessage(msg, { grantCancelAuthority: true });" in fanout

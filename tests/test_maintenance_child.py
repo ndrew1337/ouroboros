@@ -304,6 +304,12 @@ def _setup_job(name, data, monkeypatch):
 
         assert ChronicleStore(data).ensure_activated()["kind"] == "activation"  # its frontier at the stream's start
         dialogue_store.append(data, "chat", {"chat_id": 1, "direction": "in", "text": "after the frontier"})
+    elif name == "room_appearances":
+        from ouroboros import dialogue_store
+
+        # An older body's notice: no appearance keys, the derivation mark left behind it.
+        dialogue_store.append(data, "chat", {"chat_id": 1, "direction": "out", "type": "main_notice", "task_id": "t",
+                                             "text": "an older body's notice"}, feed=True, appearances=None)
     elif name == "hot_facts":
         from ouroboros import store
 

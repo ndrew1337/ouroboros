@@ -634,22 +634,24 @@ ROUTING_REFUSAL_CAUSES: Dict[str, str] = {
     "target_not_found": "that project does not exist",
 }
 
-# Host routing refusals stay in the issuing chat regardless of the target's
-# Project binding (room_membership); they are never terminal task facts.
+# Rows that stand alone in the chat that issued them, whatever the named task's room: host
+# routing refusals and a relay's answer (also its work's speech: WORK_SPEECH_ELSEWHERE_TYPES).
+# Never terminal task facts.
 ORIGIN_ADDRESSED_NOTICE_TYPES = frozenset({"task_not_started", "task_start_unconfirmed", "steer_not_delivered", "relay_reply"})
 
-# A root's deliberate plain-text notice to Main (send_user_message
-# destination="main"); never a task's final answer.
+# A root's deliberate notice to Main (send_user_message destination="main"); never a task's final answer.
 MAIN_NOTICE_TYPE = "main_notice"
-# Rows pinned to Main whatever the sender's Project binding: the supervisor
-# send handler and room_membership replay read this one set.
-MAIN_PINNED_ROW_TYPES = frozenset({"project_started", "project_handoff", "project_completion_summary", MAIN_NOTICE_TYPE})
-# Rows whose address is the producer's, never their task's room: Main pins, the
-# origin-addressed refusals and the Main question pointer. The bus write seam
-# (``message_bus.send_with_budget``) reads this one set; the readers above keep
-# each component's own reading.
-ROOM_FIXED_ROW_TYPES = MAIN_PINNED_ROW_TYPES | ORIGIN_ADDRESSED_NOTICE_TYPES | frozenset({
-    "project_question_pointer", "relay_reply"})
+# Host rows about an act in Main, pinned there whatever the task's Project binding.
+MAIN_PINNED_ROW_TYPES = frozenset({"project_started", "project_handoff", "project_completion_summary"})
+# Model-authored work speech written to a fixed address (Main, a relay's source room): one row,
+# also a member of its work's room (``room_membership.row_rooms``), so a Project keeps its whole
+# conversation. Presence private contact stays Main-only.
+WORK_SPEECH_ELSEWHERE_TYPES = frozenset({MAIN_NOTICE_TYPE, "relay_reply"})
+# Rows whose written address is the producer's, never their task's room. The bus write seam
+# (``message_bus.send_with_budget``) and the supervisor send handler read this one set;
+# membership is ``room_membership.row_rooms``.
+ROOM_FIXED_ROW_TYPES = (MAIN_PINNED_ROW_TYPES | ORIGIN_ADDRESSED_NOTICE_TYPES | WORK_SPEECH_ELSEWHERE_TYPES
+                        | frozenset({"project_question_pointer"}))
 
 # Statuses of an act that LANDED (or is still in flight): no cause sentence.
 _LANDED_ROUTING_STATUSES = frozenset({"scheduled", "delivered", "read", "pending", "dispatch_pending", "accepted"})

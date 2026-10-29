@@ -445,10 +445,11 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
     """Send a separate owner reply without completing the ongoing task.
 
     ``destination="main"`` addresses the owner's main chat from an owner-visible
-    root room: the row is typed ``main_notice``, which the supervisor
-    and history replay pin to Main whatever the sender's Project binding, and
-    which never counts as the task's final answer. When to send one is the
-    model's judgment (BIBLE P5); no host counter or timer triggers it.
+    root room: the row is typed ``main_notice``, written to Main whatever the
+    sender's Project binding and shown by that Project too (one row,
+    ``room_membership.row_rooms``); it never counts as the task's final answer.
+    When to send one is the model's judgment (BIBLE P5); no host counter or
+    timer triggers it.
     """
     chat_id = getattr(ctx, "current_chat_id", None)
     if chat_id is None or chat_id == "":  # 0 is a real hidden session, not absence
@@ -514,9 +515,9 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         chat_id, system_type = relay["source"]["chat_id"], "relay_reply"
         reply_meta = {"reply_to": resolve_reply(canonical_data_root(ctx), relay["source"]["address"]),
                       "reply_to_relay": relay["relay_id"]}
-    from ouroboros.tools.owner_delivery import deliver_owner_event
+    from ouroboros.tools.owner_delivery import deliver_owner_event, stamp_lineage
     from ouroboros.utils import append_jsonl
-    mode = deliver_owner_event(ctx, {
+    event = stamp_lineage(ctx, {
         "type": "send_message",
         "chat_id": chat_id,
         "text": text,
@@ -525,7 +526,19 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         "system_type": system_type,
         "progress_meta": reply_meta,
         "ts": utc_now_iso(),
-    })
+    })  # the producer before the debt and the dispatch: a replayed answer is the same work's
+    if relay:
+        # A relay's answer is owed before the queue sees it (the terminal outbox, as Presence Main contact is):
+        # a send that fails after enqueue is retried under this id, and the open return retires only once owed.
+        from supervisor.terminal_delivery import register_pending_delivery
+        from ouroboros.tool_access import canonical_data_root
+
+        event["delivery_id"] = f"relay-return:{relay['relay_id']}:{getattr(ctx, 'task_id', '') or ''}"
+        if not register_pending_delivery(canonical_data_root(ctx), event):
+            return publish_no_effect(ctx, ToolResult(status="unavailable", code="CAPABILITY_UNAVAILABLE", text=(
+                f"⚠️ RELAY_RETURN_NOT_OWED: the answer to relay {relay['relay_id']} could not be recorded for delivery. "
+                "Nothing was sent and the relay stays open; retry the same words."), meta={"reason_code": "RELAY_RETURN_NOT_OWED"}))
+    mode = deliver_owner_event(ctx, event)
     append_jsonl(ctx.drive_logs() / "events.jsonl", {
         "ts": utc_now_iso(),
         "type": "proactive_message",
@@ -539,6 +552,8 @@ def _send_user_message(ctx: ToolContext, text: str, reason: str = "", destinatio
         ctx._open_relays.pop(relay["relay_id"], None)
         from ouroboros.owner_relay import persist_held_state
         persist_held_state(ctx)
+        return (f"OK: answer to relay {relay['relay_id']} owed to {relay['source'].get('label') or 'its source room'} "
+                f"(delivery {event['delivery_id']}); the outbox retries it until sent.")
     if target == "main":
         return "OK: notice sent to the main chat." if mode == "live" else "OK: notice queued for delivery to the main chat."
     if mode == "live":
