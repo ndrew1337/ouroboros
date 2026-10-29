@@ -1217,7 +1217,7 @@ def _capture_context_core(
         try:
             from ouroboros.review_state import format_status_section, load_state
             advisory_state = load_state(canonical_root)
-            if advisory_state.advisory_runs or advisory_state.latest_attempt():
+            if advisory_state.latest_attempt():
                 advisory_section = format_status_section(
                     advisory_state,
                     repo_dir=pathlib.Path(env.repo_dir),
