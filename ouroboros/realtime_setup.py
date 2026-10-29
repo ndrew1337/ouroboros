@@ -183,6 +183,15 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
 
     if fresh is None:
         fresh = not options.resume_handle
+    if fresh:
+        import copy
+        from ouroboros.context_images import evict_stale_image_blocks
+        from ouroboros.tools.tool_discovery import update_resident_notice
+        messages = copy.deepcopy(messages)
+        evict_stale_image_blocks(messages, owner_mode=plan.preferred_mode, readable_only=True)
+        update_resident_notice(host.tools, schemas, messages)
+        if canonical_rows is not None:
+            canonical_rows[:] = messages
     if _room_fact and fresh:
         from ouroboros.context_source_view import fresh_room_rows
         messages, source = fresh_room_rows(messages, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
@@ -243,6 +252,43 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
     return session, request, evidence, window
 
 
+def _publish_room_reader(host, plan, prior, rows, factory, options, evidence):
+    """Publish the exact reader only for the selected send or refusal evidence."""
+    from ouroboros.context_source_view import fresh_room_rows
+    from ouroboros.context_budget import bound_host_row
+    import copy
+    from ouroboros.context_images import evict_stale_image_blocks
+    current = copy.deepcopy(prior)
+    evict_stale_image_blocks(current, owner_mode=plan.preferred_mode, readable_only=True)
+    _, placeholder = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
+    _, reader = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
+    if not reader:
+        return None
+    rows[-1] = bound_host_row('ouroboros_context_facts', rows[-1]['content'].replace(placeholder, reader))
+    session, request, sealed, window = measure_session_wire(host, plan, rows, host.schemas, factory, options, _room_fact=False)
+    sealed.update({key: evidence[key] for key in ('work_room', 'recovery')})
+    sealed['fit']['automatic_pass_used'] = evidence['fit']['automatic_pass_used']
+    return session, request, sealed, window
+
+
+def _accept_session_candidate(host, plan, rows, options, physical_window, raw):
+    """Publish this privately fitted view; the serving canonical prefix changes at adoption."""
+    facts = host.model.facts
+    complete = [*rows, *([{"role": "system", "content": options.instructions}] if options.instructions else [])]
+    host._renewal_window, host._renewal_facts = _renewal_window(physical_window, facts), facts
+    host._session_instructions = options.instructions
+    host._selected_text_estimate = text_input_estimate(complete, host.schemas)
+    has_media = any(isinstance(row.get('content'), list) and any(
+        not isinstance(part, dict) or part.get('type') != 'text' for part in row['content']) for row in complete)
+    # Only text-only native envelopes can teach density from the complete sealed denominator.
+    host._density_input = host._selected_text_estimate if has_media else raw
+    host._selected_raw_estimate = raw
+    host.plan = host.ctx.context_fit_plan = plan
+    host.messages[:] = rows
+    host._context_changed()
+    host.ctx.active_context_mode = plan.initial_mode
+
+
 def session_candidate(host, factory, options, *, observation_fp=None):
     """Refit current canonical rows through the ordinary window ladder, then seal.
 
@@ -257,9 +303,6 @@ def session_candidate(host, factory, options, *, observation_fp=None):
     from ouroboros.context_window import WindowLimit, WindowRecord, resolve_window
     from ouroboros.llm_attempt import main_context_fit_refusal
 
-    if any(row.get('_host_context_kind') == 'tool_manifest' for row in host.messages):
-        from ouroboros.tools.tool_discovery import update_resident_notice
-        update_resident_notice(host.tools, host.schemas, host.messages)
     plan, facts = host.plan, host.model.facts
     known = facts.conversation_window_tokens is not None
     window = facts.conversation_window_tokens or 0
@@ -334,35 +377,12 @@ def session_candidate(host, factory, options, *, observation_fp=None):
                     continue
         if refusal is None:
             if room_facts:
-                from ouroboros.context_source_view import fresh_room_rows
-                _, placeholder = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
-                _, reader = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
-                if not reader:
-                    room_facts = False  # retain the old view; do not append an unreadable fact
+                published = _publish_room_reader(host, plan, current, sent_rows, factory, options, evidence)
+                if published is None:
+                    room_facts = False
                     continue
-                sent_rows[-1] = bound_host_row('ouroboros_context_facts', sent_rows[-1]['content'].replace(placeholder, reader))
-                session, request, sealed, physical_window = measure_session_wire(
-                    host, plan, sent_rows, host.schemas, factory, options, _room_fact=False)
-                sealed.update({key: evidence[key] for key in ('work_room', 'recovery')})
-                sealed['fit']['automatic_pass_used'] = bool(receipts)
-                evidence = sealed
-            current = sent_rows
-            rows = [*current, *extra]
-            host._renewal_window, host._renewal_facts = _renewal_window(physical_window, facts), facts
-            host._session_instructions = options.instructions
-            host._selected_text_estimate = text_input_estimate(rows, host.schemas)
-            # A text-only response measures the complete text envelope, including
-            # provider framing. Learning from the smaller pre-envelope denominator
-            # would price an identical accepted renewal above its own acceptance.
-            # Media bytes cannot teach text density; retain the text-only basis there.
-            has_media = any(isinstance(row.get('content'), list) and any(
-                not isinstance(part, dict) or part.get('type') != 'text' for part in row['content']) for row in rows)
-            host._density_input = host._selected_text_estimate if has_media else raw
-            host._selected_raw_estimate = raw
-            host.plan = host.ctx.context_fit_plan = plan
-            host.messages[:] = current
-            host._context_changed()
-            host.ctx.active_context_mode = plan.initial_mode
+                session, request, evidence, physical_window = published
+            _accept_session_candidate(host, plan, sent_rows, options, physical_window, evidence['fit']['measurement']['raw_input_tokens'])
             return session, request, evidence
         rung = next(steps, None)
         if rung is not None:
@@ -415,6 +435,12 @@ def session_candidate(host, factory, options, *, observation_fp=None):
             if after < measured:
                 receipts.append({'rung': rung, 'before_tokens': measured, 'after_tokens': after})
             continue
+        if room_facts:
+            published = _publish_room_reader(host, plan, current, sent_rows, factory, options, evidence)
+            if published is None:
+                room_facts = False
+                continue
+            session, request, evidence, physical_window = published
         from ouroboros.observability import persist_physical_candidate
         evidence.update(reason="context_capacity", refusal=refusal,
                         deficit_tokens=max(1, -refusal["free_tokens"] + 1))

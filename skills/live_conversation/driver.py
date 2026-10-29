@@ -202,6 +202,7 @@ class _Call:
         self.peer_info = {}
         self.share_kinds = self.attention.kinds
         self.renewing = self.resume = self.provider_closed = False
+        self.connection_resumed = False
         self.renewal_deadline = None
         self.input_rate = self.output_rate = 0
         self.unproven_resumes = 0  # provider drops since the last completed/interrupted answer
@@ -493,6 +494,10 @@ class _Call:
         self.failed_preparation_revision = revision if revision is not None else self.preparing_revision
         self.renewing = self.resume = False
         self.renewal_deadline = None
+        current = getattr(self.host, "_history_version", None)
+        if revision is not None and current is not None and revision != current:
+            self.request_renewal()  # the changed view gets its fit before the old socket can refuse
+            return
         self.host.state.pop('refit', None)
         self.tool_refit.clear()
         await self.release_serving()
@@ -513,7 +518,14 @@ class _Call:
         # Obligations leave custody only after a successful fitting delivery.
         while self.deferred_tool_outputs:
             output, offers = self.deferred_tool_outputs[0]
-            await self.guard_serving(output.messages)
+            try:
+                await self.guard_serving(output.messages)
+            except RealtimeSetupError:
+                fallback = getattr(self.host, 'tool_result_fallback', None)
+                rows = await fallback(output.messages, self.serving_catalog()) if fallback else None
+                if rows is None:
+                    raise
+                output = ToolOutputs(tuple(rows), self.serving_catalog(), silent=output.silent)
             if any(row.get('tool_call_id') not in output.silent for row in output.messages if row.get('role') == 'tool'):
                 self.response_open = True
             await self.send(ToolOutputs(output.messages, self.serving_catalog(), silent=output.silent))
@@ -724,6 +736,8 @@ class _Call:
                         self.host.state["greeted"] = True
                         await self.session.send(Respond(self.host.opening))
                     self.connected.set()
+                    if self.connection_resumed:
+                        await self.release_serving()  # mail received while disconnected precedes its answer pointer
                 elif event.kind == "audio":
                     if data["rate"] != self.output_rate:
                         raise RealtimeSetupError("audio_rate", "provider changed its output rate")

@@ -121,7 +121,9 @@ def test_fresh_candidates_outgrow_window_then_continue_by_exact_physical_cut(hos
     checkpoint = json.loads(read_actor_source_bytes(host.ctx.drive_root, host.ctx.task_id, source))
     assert all(row in checkpoint for row in original)
     assert newest in host.messages
-    assert host.messages[-2]['content'] == 'Current tail.'  # passive fact follows
+    tail = [row for row in host.messages if row.get('_host_context_kind') not in {'tool_manifest', 'ouroboros_context_facts'}]
+    assert tail[-1]['content'] == 'Current tail.'
+    assert sum(row.get('_host_context_kind') == 'tool_manifest' for row in host.messages) == 1  # passive fact follows
     # The untouched newer suffix remains exactly the delivered bytes, not a host retelling.
     remaining = [row for row in host.messages if row in original]
     assert remaining == original[len(original)-len(remaining):]
@@ -280,3 +282,56 @@ def test_passive_fact_needs_no_new_attribute_on_an_external_provider_session(hos
     session, request, _ = session_candidate(host, factory, LiveOptions())
     assert json.loads(session.selected.messages_json)[-1]['content'] == host.messages[-1]['content']
     assert request.prompt_tokens_estimate > 0
+
+
+@pytest.mark.parametrize('refused', [False, True])
+def test_published_candidate_room_reader_always_resolves(host_world, refused):
+    import re
+    from ouroboros.evidence_packs import handle_bytes
+    from ouroboros.observability import read_call_payload
+    from ouroboros.realtime_setup import session_candidate
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    host = host_world.host
+    if refused:
+        host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=10001))
+        with pytest.raises(RealtimeSetupError, match='context_capacity'):
+            session_candidate(host, host_world.provider['session'], LiveOptions())
+        event = host.trace['fit_refusal']
+        _, wire, _ = read_call_payload(host.ctx.drive_root, task_id=host.ctx.task_id,
+                                      call_id=event['manifest_ref']['call_id'])
+    else:
+        session, _, _ = session_candidate(host, host_world.provider['session'], LiveOptions())
+        wire = session.wire
+    text = json.dumps(wire)
+    # Decode the actual content string, not JSON's quote escapes.
+    def strings(value):
+        if isinstance(value, str): yield value
+        elif isinstance(value, dict):
+            for item in value.values(): yield from strings(item)
+        elif isinstance(value, list):
+            for item in value: yield from strings(item)
+    paths = [path for value in strings(wire) for path in re.findall(r"path=(\"[^\"]*room-[^\"]+\")", value)]
+    assert paths, text[:100]
+    for path in paths:
+        assert json.loads(handle_bytes(host.ctx.drive_root, host.ctx.task_id, json.loads(path)))
+
+
+@pytest.mark.parametrize('all_loaded', [False, True])
+def test_fresh_fit_restates_manifest_after_exact_old_row_cut(host_world, monkeypatch, all_loaded):
+    from ouroboros.context_budget import bound_host_row
+    from ouroboros.context_renewal import physical_window_cut
+    from ouroboros.artifacts import read_actor_source_bytes
+    from ouroboros.context_fit import estimate_context_prompt_tokens
+    from ouroboros.realtime_setup import measure_session_wire
+    host = host_world.host
+    old = bound_host_row('tool_manifest', 'Old exact manifest. ' * 2000)
+    rows = [*host.messages[:2], old, bound_host_row('owner_words', 'Latest question')]
+    kept, receipt = physical_window_cut(rows, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id,
+        measure=estimate_context_prompt_tokens, usable=estimate_context_prompt_tokens(rows)-1000)
+    assert receipt and old not in kept
+    assert old in json.loads(read_actor_source_bytes(host.ctx.drive_root, host.ctx.task_id, receipt['source']))
+    schemas = host.tools.schemas() if all_loaded else host.schemas
+    captured = []
+    measure_session_wire(host, host.plan, kept, schemas, host_world.provider['session'], LiveOptions(), canonical_rows=captured)
+    notices = [row for row in captured if row.get('_host_context_kind')=='tool_manifest']
+    assert bool(notices) is not all_loaded

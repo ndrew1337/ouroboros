@@ -167,3 +167,4 @@ def test_new_fit_ports_keep_old_host_defaults():
     old = OldHost()
     assert old.fitted_frame_rows() == ()
     assert asyncio.run(old.delivery_fits([], [])) is False
+    assert asyncio.run(old.tool_result_fallback([], [])) is None

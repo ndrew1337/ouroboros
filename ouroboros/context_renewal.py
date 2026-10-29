@@ -210,6 +210,22 @@ def renewal_view(messages, *, observation, drive_root, task_id, measure):
     return seed, {"source": source, **left}
 
 
+def _current_feedback_positions(messages):
+    # The current index keeps decisions whole. Delivery notices from superseded
+    # rounds are ordinary rows; retain the newest notice for each review family.
+    latest, unknown = {}, set()
+    for i, row in enumerate(messages):
+        feedback = row.get('review_feedback')
+        if not feedback:
+            continue
+        if not isinstance(feedback, list) or not all(isinstance(item, dict) for item in feedback):
+            unknown.add(i)
+            continue
+        for item in feedback:
+            latest[(item.get('surface', ''), item.get('task_id', ''))] = i
+    return unknown | set(latest.values())
+
+
 def _cut_units(messages):
     """Oldest eligible atomic units; protection is independent of dialogue kind."""
     from ouroboros import context_compaction as cc
@@ -223,9 +239,10 @@ def _cut_units(messages):
     while latest > first + 1 and messages[latest - 1].get(HOST_CONTEXT_KIND_KEY) == OWNER_WORDS_KIND:
         latest -= 1
     obsolete = set(obsolete_review_index_positions(messages))
+    feedback = _current_feedback_positions(messages)
     protected = {i for i, row in enumerate(messages) if i <= first or i >= latest or row.get('role') == 'system'
         or _is_note(row) or _restored_address(row) or row.get(HOST_CONTEXT_KIND_KEY) == PREDECESSOR_NOTES_NAME
-        or row.get('review_feedback') or (row.get(REVIEW_CONTEXT_INDEX_KEY) and i not in obsolete)
+        or i in feedback or (row.get(REVIEW_CONTEXT_INDEX_KEY) and i not in obsolete)
         or row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut'}
     prior = {i for i, row in enumerate(messages) if first < i < latest
              and row.get(HOST_CONTEXT_KIND_KEY) == 'context_physical_cut' and host_row_intact(row)}
@@ -242,11 +259,22 @@ def _cut_units(messages):
     return groups, prior
 
 
+def _position_runs(positions):
+    runs = []
+    for position in positions:
+        if runs and position == runs[-1][1] + 1:
+            runs[-1][1] = position
+        else:
+            runs.append([position, position])
+    return ', '.join(str(a) if a == b else f'{a}-{b}' for a, b in runs)
+
+
 def physical_window_cut(messages, *, drive_root, task_id, measure, usable):
     """Cut the oldest whole units under physical pressure, never protected judgment.
 
-    Price the monotone prefix search without writes. Only a fitting result gets
-    its exact checkpoint; bisection leaves the same smallest cut as a linear walk.
+    Search prefixes in order, bisecting only intervals with unchanged images.
+    Batched image floors can raise the price when an image leaves. An expensive
+    last prefix proves nothing about an earlier interval. Publish one exact cut.
     """
     from ouroboros.artifacts import actor_source_reference, store_actor_source_bytes
     before = measure(messages)
@@ -263,24 +291,33 @@ def physical_window_cut(messages, *, drive_root, task_id, measure, usable):
         gone = set(positions) | prior
         address = bound_host_row('context_physical_cut', (
             "[Host record: this window's physical cut, not a summary or an authored fold.] "
-            f"Oldest whole rows left the working view: zero-based positions {positions}. "
-            + (f"Earlier physical-cut address records at positions {sorted(prior)} remain exact in that checkpoint. " if prior else '')
+            f"Oldest whole rows left the working view: zero-based positions {_position_runs(positions)}. "
+            + (f"Earlier physical-cut address records at positions {_position_runs(sorted(prior))} remain exact in that checkpoint. " if prior else '')
             + "Newest owner turn, assignment, core, notes and current tail stay. "
             f"Read the exact original rows in this checkpoint JSON array: {json.dumps(source, sort_keys=True)}."))
         rows = [address if i == positions[0] else row for i, row in enumerate(messages)
                 if i == positions[0] or i not in gone]
         return rows, positions, measure(rows)
-    low, high = 1, len(groups)
-    best = candidate(high)
-    if best[2] > usable:
+    from ouroboros.context_images import image_positions
+    image_rows = {i for i, _ in image_positions(messages)}
+    starts = sorted({1, len(groups) + 1, *(n for n, group in enumerate(groups, 1) if image_rows.intersection(group))})
+    best = None
+    for start, end in zip(starts, starts[1:]):
+        low, high = start, end - 1
+        trial = candidate(high)
+        if trial[2] > usable:
+            continue
+        best = trial
+        while low < high:
+            middle = (low + high) // 2
+            trial = candidate(middle)
+            if trial[2] <= usable:
+                high, best = middle, trial
+            else:
+                low = middle + 1
+        break
+    if best is None:
         return messages, None
-    while low < high:
-        middle = (low + high) // 2
-        trial = candidate(middle)
-        if trial[2] <= usable:
-            high, best = middle, trial
-        else:
-            low = middle + 1
     try:
         store_actor_source_bytes(drive_root, task_id, **args)
     except OSError:

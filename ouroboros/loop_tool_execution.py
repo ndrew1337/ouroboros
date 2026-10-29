@@ -1168,6 +1168,7 @@ def handle_tool_calls(
     *,
     fit_candidate: Optional[FitCandidate] = None,
     tool_schemas: Optional[list] = None,
+    project_results: Optional[Callable] = None,
 ) -> int:
     """Execute tool calls, append results, and return error count.
 
@@ -1284,7 +1285,7 @@ def handle_tool_calls(
             executor.shutdown(wait=batch_raised, cancel_futures=True)
 
     errors = process_tool_results(results, messages, llm_trace, emit_progress, tools=tools,
-                                  fit_candidate=fit_candidate, tool_schemas=tool_schemas)
+                                  fit_candidate=fit_candidate, tool_schemas=tool_schemas, project_results=project_results)
     if substantive_tool_calls(llm_trace.get("tool_calls", [])[initial_count:]):
         tools._ctx._skill_finalization_injected = False
     return errors
@@ -1396,6 +1397,7 @@ def process_tool_results(
     *,
     fit_candidate: Optional[FitCandidate] = None,
     tool_schemas: Optional[list] = None,
+    project_results: Optional[Callable] = None,
 ) -> int:
     """Append tool results to messages/trace and return error count.
 
@@ -1434,7 +1436,7 @@ def process_tool_results(
     history_count = len(messages)
     image_observations = [_maybe_auto_attach_image(row, tools, staged_messages=image_history) for row in results]
     image_messages = image_history[history_count:]
-    views = _deliver_tool_results(ctx, results, image_history[:history_count], tool_schemas, fit_candidate, llm_trace,
+    views = (project_results or _deliver_tool_results)(ctx, results, image_history[:history_count], tool_schemas, fit_candidate, llm_trace,
                                   [*review_updates, *dialogue_updates, *image_messages])
     messages[:] = image_history[:history_count]
 

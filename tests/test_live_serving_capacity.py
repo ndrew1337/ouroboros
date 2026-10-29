@@ -1,4 +1,4 @@
-"""R25 regressions adapted from Astra: serving custody and failed snapshot identity."""
+"""Serving custody and failed snapshot identity."""
 import asyncio
 import json
 from dataclasses import replace
@@ -247,3 +247,73 @@ def test_serving_delivery_prices_its_body_even_after_an_authored_view_shrank(hos
     rows = [{'role':'tool','tool_call_id':'finished','content':'new '* (2000 if large else 10)}]
     host.messages.extend(rows)
     assert asyncio.run(host.delivery_fits(rows, tuple(host.schemas))) is not large
+
+
+def test_changed_view_gets_fresh_fit_before_old_socket_refuses_deferred_result(host_world, record_property):
+    from ouroboros.contracts.realtime import RealtimeSetupError
+    from skills.live_conversation.driver import _Call
+    from tests.test_context_source_view import _tool
+    host=host_world.host
+    host.model=replace(host.model,facts=replace(host.model.facts,conversation_window_tokens=50000,working_reserve_tokens=10000))
+    async def consume(session):
+        host.response_done("native-held",usage={"text_input_tokens":host._selected_raw_estimate,
+            "audio_input_tokens":39000-host._selected_raw_estimate},raw_usage={},status="completed")
+        await host.caption("owner", "Large current owner turn. "*6000, "large")
+        outputs=_tool("chosen",invocation="chosen-once",text="Chosen exact read. "*5000)
+        outputs[0]["tool_calls"][0]["function"]={"name":"read_file","arguments":json.dumps({"path":"synthetic.txt","max_chars":95000})}
+        host.messages.extend(outputs);host._context_changed()
+        call=_Call(host);call.session=session;call.connected.set()
+        actual_prepare=host.prepare_session
+        failed,release=asyncio.Event(),asyncio.Event()
+        attempts=[]
+        async def delayed(options):
+            attempts.append(host._history_version)
+            try: return await actual_prepare(options)
+            except RealtimeSetupError as exc:
+                assert exc.code=="context_capacity"
+                failed.set();await release.wait();raise
+        host.prepare_session=delayed
+        call.deferred_tool_outputs.append((ToolOutputs(tuple(outputs),tuple(host.schemas)),[]))
+        call.request_renewal()
+        await asyncio.wait_for(failed.wait(),30)
+        await host.caption("ouroboros","Response before next question.","reply",completed=True)
+        await host.caption("owner","Next question makes the old turn cuttable.","new")
+        release.set();await asyncio.gather(call.preparing,return_exceptions=True)
+        lease=await actual_prepare(LiveOptions())
+        try:
+            assert lease.request.prompt_tokens_estimate+lease.request.working_reserve_tokens<=50000
+            record_property("changed_pending",json.dumps({"source_revision":attempts[0],"current_revision":host._history_version,"fresh_input":lease.request.prompt_tokens_estimate,"old_fits":await host.delivery_fits(outputs,tuple(host.schemas))}))
+        finally: await lease.close()
+        assert not await host.delivery_fits(outputs,tuple(host.schemas))
+        try:
+            await call.check_preparation()
+            call.request_renewal()
+            await asyncio.sleep(0)
+            assert len(attempts)==2
+        finally: await call.close_preparation()
+    asyncio.run(host.session(consume,LiveOptions()))
+
+
+
+@pytest.mark.parametrize('pending', [False, True])
+def test_native_resume_delivers_room_rows_before_answer_pointer(host_world, pending):
+    from types import SimpleNamespace
+    from ouroboros.contracts.live_conversation import ContextUpdate, LiveEvent
+    from skills.live_conversation.driver import _Call
+    async def run():
+        host=host_world.host
+        host.state['greeted']=True
+        call=_Call(host); call.connection_resumed=True
+        rows=[{'role':'user','content':'Mail accepted while disconnected.'}] if pending else []
+        call.pending_context_rows.extend(rows)
+        sent=[]
+        async def send(command): sent.append(command)
+        batches=iter([[LiveEvent('ready',dict(input_rate=16000,output_rate=24000))]])
+        async def receive():
+            try: return next(batches)
+            except StopIteration: raise asyncio.CancelledError
+        call.session=SimpleNamespace(receive=receive, send=send, selected=SimpleNamespace(tools_json='[]'))
+        with pytest.raises(asyncio.CancelledError): await call.provider()
+        assert not call.pending_context_rows
+        assert [list(command.messages) for command in sent if isinstance(command,ContextUpdate)] == ([rows] if pending else [])
+    asyncio.run(run())

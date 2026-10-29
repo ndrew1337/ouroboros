@@ -17,7 +17,7 @@ def image_positions(messages):
             if isinstance(block, dict) and block.get('type') in {'image_url', 'image'}]
 
 
-def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max'):
+def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max', readable_only=False):
     """Nano chosen by the owner batches >4 to 2; Max/Low keep their >10 to 5 floor."""
     from ouroboros.context_budget import (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER,
                                           NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER)
@@ -26,9 +26,13 @@ def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max'):
     total = len(positions) + max(0, int(incoming))
     if total <= high:
         return False
+    changed = False
     for mi, bi in positions[:total - keep]:
+        if readable_only and not messages[mi]['content'][bi].get('_source_path'):
+            continue
         messages[mi]['content'][bi] = image_placeholder(messages[mi]['content'][bi])
-    return True
+        changed = True
+    return changed
 
 
 def fresh_call_images(messages, *, owner_mode='max'):

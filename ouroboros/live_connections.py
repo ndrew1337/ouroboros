@@ -198,6 +198,9 @@ class PreparedConnection:
                 view._density_input = 0  # the initial wire and catch-up are distinct text envelopes
                 view.observe('host', canonical_json({'type': 'call.catchup', 'rows': tail, 'fit': evidence['fit']}))
             host.messages[:] = [*view.messages, *tail]
+            if not self.options.resume_handle:
+                from ouroboros.context_images import evict_stale_image_blocks
+                evict_stale_image_blocks(host.messages, owner_mode=view.plan.preferred_mode, readable_only=True)
             host.schemas[:] = view.schemas
             from ouroboros.tools.tool_discovery import bind_resident_schemas
             enabled = set(host.ctx._actor_loaded_tool_names) | set(view.ctx._actor_loaded_tool_names)

@@ -77,6 +77,11 @@ async def drain_exposure(host):
 
 
 def serving_delivery_fits(host, rows, schemas):
+    room = serving_delivery_room(host, rows, schemas)
+    return room is None or room >= 0
+
+
+def serving_delivery_room(host, rows, schemas):
     """Price the serving connection's held input plus undelivered canonical growth.
 
     Its delivered catalog is authoritative after a failed declaration refit. New
@@ -92,7 +97,7 @@ def serving_delivery_fits(host, rows, schemas):
     if host._renewal_window is not None and host._renewal_facts == facts:
         window, reserve = host._renewal_window.total_equivalent, host._renewal_window.reserve
     if not window:
-        return True  # no measured window has been declared
+        return None  # no measured window has been declared
     density = getattr(host._physical_context, 'measurement_density', 1.0) if facts.basis == 'provider' else 1.0
     held = host._held_input or math.ceil(host._selected_raw_estimate * density)
     current = list(host.messages)
@@ -110,7 +115,7 @@ def serving_delivery_fits(host, rows, schemas):
     pending = math.ceil(max(0, estimate_context_prompt_tokens(current, schemas) - host._history_at_receipt) * density)
     # A canonical fold cannot free the serving socket: price the delivery itself too.
     pending = max(pending, math.ceil(estimate_context_prompt_tokens(rows) * density))
-    return held + pending + host._growth + reserve <= window
+    return window - held - pending - host._growth - reserve
 
 
 def apply_context_view(host):
@@ -155,3 +160,91 @@ def apply_context_view(host):
     host.observe('host', canonical_json({'type': 'call.context_view', 'receipt': receipt}))
     host.checkpoint('ready')
     return old != (context_reclaim_transcript_sha256(host.messages), host.schemas)
+
+
+def record_response_context(host, key, usage, raw_usage, status):
+    """Cost receipts may aggregate passes; only a physically possible input teaches residency."""
+    from ouroboros.live_usage import input_token_witness
+    facts = host.model.facts
+    axes = [usage.get(axis) for axis in ('text_input_tokens', 'audio_input_tokens', 'image_input_tokens', 'video_input_tokens')]
+    total = max(input_token_witness(raw_usage) or 0, sum(value for value in axes if type(value) is int and value >= 0))
+    supported = not (facts.basis == 'provider' and not facts.acceptance_can_raise
+                     and facts.conversation_window_tokens and total > facts.conversation_window_tokens)
+    host._record_text_density(key, usage if supported else {}, raw_usage if supported else {})
+    if status in {'completed', 'interrupted'}:
+        record_live_exposure(host, key)
+    if status == 'completed' and supported:
+        from ouroboros.realtime_setup import observe_live_input
+        observe_live_input(host, raw_usage)
+    measured = 0
+    if facts.basis == 'estimator':
+        measured = host._selected_raw_estimate + max(0, host._text_estimate() - host._selected_text_estimate)
+    elif supported and any(value is not None for value in axes) and all(value is None or type(value) is int and value >= 0 for value in axes):
+        measured = sum(value or 0 for value in axes)
+    if measured:
+        if host._held_input:
+            host._growth = max(host._growth, measured - host._held_input)
+        host._held_input = measured
+        host._history_at_receipt = host._history_estimate()
+
+
+def _call_tool_row(result, view, *, reader_available=True):
+    from ouroboros.tool_result_delivery import with_delivery_note, with_producer_source, typed_result_facts
+    from ouroboros.tool_result_record import TOOL_RESULT_RECORD_KEY, make_tool_result_record
+    if not reader_available and result.get('producer_source_ref'):
+        result = {**result, 'producer_source_ref': {
+            key:value for key,value in result['producer_source_ref'].items() if key != 'read'}}
+    text = with_delivery_note(result, with_producer_source(result, str(view['result'])))
+    return {'role':'tool', 'tool_call_id':result['tool_call_id'], 'content':text,
+            TOOL_RESULT_RECORD_KEY:make_tool_result_record(result, text, facts=typed_result_facts(result),
+                                                           source_ref=view.get('result_source_ref') or {})}
+
+
+def project_call_tool_results(host, ctx, results, messages, schemas, fit_candidate, trace, pending_messages=None):
+    """Keep a complete result for the fresh fit; retain the ordinary range as fallback only."""
+    from ouroboros.loop_tool_execution import _deliver_tool_results
+    whole = [_call_tool_row(result, result) for result in results]
+    if serving_delivery_fits(host, [*whole, *(pending_messages or [])], schemas):
+        return results
+    def measure(candidate, tools):
+        facts = dict(fit_candidate(candidate, tools))
+        room = serving_delivery_room(host, candidate[len(messages):], tools)
+        window = host._renewal_window.total_equivalent if host._renewal_window else host.model.facts.conversation_window_tokens
+        reserve = host._renewal_window.reserve if host._renewal_window else host.model.facts.working_reserve_tokens or 0
+        if room is not None:
+            facts.update(estimated_input_tokens=window-reserve-room, capacity_total_tokens=window,
+                         target_total_tokens=window, response_reserve_tokens=reserve)
+        return facts
+    views = _deliver_tool_results(ctx, results, messages, schemas, measure, {}, pending_messages)
+    saved = getattr(host, '_tool_delivery_fallbacks', None)
+    if saved is None:
+        saved = host._tool_delivery_fallbacks = {}
+    for result, view in zip(results, views):
+        if view.get('result_partial'):
+            saved[result['tool_call_id']] = result, view
+    host.state['refit'] = True
+    return results  # receipts and the next fitted rows carry the complete effect, never a second execution
+
+
+def fallback_call_tool_results(host, rows, schemas):
+    from ouroboros.tool_result_delivery import reader_text, render_result_view
+    saved = getattr(host, '_tool_delivery_fallbacks', {})
+    reader_available = any(schema.get('function', {}).get('name') == 'read_file' for schema in schemas)
+    replacements = {}
+    for row in rows:
+        if row.get('tool_call_id') not in saved:
+            continue
+        result, view = saved[row['tool_call_id']]
+        allocation = view['result_source_view']
+        start, end = allocation['omitted_ranges'][0]
+        full = reader_text(result['result'])
+        text, _ = render_result_view(full, head_chars=start, tail_chars=len(full)-end,
+            tool_name=result['fn_name'], source_ref=view['result_source_ref'],
+            facts=allocation['facts'], delivery=allocation.get('delivery'), reader_available=reader_available)
+        replacements[row['tool_call_id']] = _call_tool_row(result, {**view, 'result':text}, reader_available=reader_available)
+    if not replacements:
+        return None
+    candidate = [copy.deepcopy(replacements.get(row.get('tool_call_id'), row)) for row in rows]
+    view = copy.copy(host)
+    view.messages = [replacements.get(row.get('tool_call_id'), row) for row in host.messages]
+    return candidate if serving_delivery_fits(view, candidate, schemas) else None

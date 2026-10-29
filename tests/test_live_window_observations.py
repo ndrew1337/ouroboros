@@ -13,7 +13,7 @@ from tests.test_live_usage import token_usage
 
 @pytest.mark.parametrize('window,basis,can_raise,accepted', [
     (133554, 'provider', True, 150000),
-    (92000, 'provider', False, 150000),
+    (92000, 'provider', False, 0),
     (80000, 'estimator', False, 0),
 ])
 def test_completed_input_keeps_units_reserve_and_active_account(
@@ -219,3 +219,38 @@ def test_acceptance_belongs_to_the_account_the_connector_opened(host_world, monk
     _, returning, _ = session_candidate(host, factory, LiveOptions())
     assert (accepted(first_scope), accepted(actual_scope),
             returning.physical_context.capacity_total_tokens) == (0, 150000, 133554)
+
+
+@pytest.mark.parametrize('aggregate', [False, True])
+@pytest.mark.parametrize('first', [False, True])
+def test_multi_pass_receipt_is_cost_only_not_held_size_or_density(host_world, monkeypatch, aggregate, first):
+    host = host_world.host
+    host.model = replace(host.model, facts=replace(host.model.facts,
+        conversation_window_tokens=92000, working_reserve_tokens=10000, acceptance_can_raise=False))
+    densities = []
+    monkeypatch.setattr(ce, 'record_token_density', lambda *a, **kw: densities.append(kw))
+    settled = []
+    monkeypatch.setattr('ouroboros.live_usage.settle_live_response', lambda *a, **kw: settled.append(kw))
+    async def consume(session):
+        from ouroboros.live_connections import connection_for
+        view = connection_for(host)
+        if not first:
+            host.response_started('before')
+            host.response_done('before', usage=token_usage(text_input_tokens=10000),
+                               raw_usage={'promptTokenCount':10000}, status='completed')
+        densities.clear()
+        before = view._held_input, view._growth
+        text, audio, image = (238606, 413, 1080) if aggregate else (18606, 413, 1080)
+        host.response_started('sample')
+        host.response_done('sample', usage=token_usage(text_input_tokens=text, audio_input_tokens=audio, image_input_tokens=image,
+            cached_input_tokens=156884 if aggregate else 0), raw_usage={
+                'promptTokenCount':240302 if aggregate else text+audio+image, 'cachedContentTokenCount':156884 if aggregate else 0,
+                'promptTokensDetails':[{'modality':'TEXT','tokenCount':text},{'modality':'AUDIO','tokenCount':audio},{'modality':'IMAGE','tokenCount':image}]}, status='completed')
+        assert settled[-1]['usage']['text_input_tokens'] == text  # cost is never discarded
+        if aggregate:
+            assert (view._held_input, view._growth) == before
+            assert not densities and not host.renewal_due()
+        else:
+            assert view._held_input == text + audio + image
+            assert bool(densities) is first
+    asyncio.run(host.session(consume, LiveOptions()))

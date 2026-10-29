@@ -1,4 +1,4 @@
-"""R25: any old whole row can leave by address; candidate prices never write."""
+"""Any old whole row can leave by address; candidate prices never write."""
 import copy
 import json
 import math
@@ -163,3 +163,108 @@ def test_gemini_real_layout_continues_non_owner_bulk(host_world, packages, shape
     assert tail in host.messages
     remaining = [row for row in host.messages if row in old]
     assert remaining == old[len(old)-len(remaining):]
+
+
+from dataclasses import replace
+from ouroboros.context_renewal import _position_runs
+from ouroboros.context_fit import estimate_context_prompt_tokens
+from ouroboros.contracts.live_conversation import LiveOptions
+
+@pytest.mark.parametrize("mode,count", [("nano", 5), ("max", 11), ("low", 11)])
+def test_smallest_cut_survives_image_batch_discontinuity(tmp_path, record_property, mode, count):
+    from tests.test_context_image_floors import images
+    from ouroboros.realtime_setup import rows_for_engine
+    from ouroboros.artifacts import actor_source_reference
+    from hashlib import sha256
+    rows = [{"role":"system","content":"Core"}, {"role":"user","content":"Assignment"},
+            {"role":"assistant","content":"Old reply. "*5000}, *images(count, source=""),
+            bound_host_row("owner_words", "Newest question")]
+    raw = json.dumps(rows, ensure_ascii=False, sort_keys=True, default=str).encode()
+    source = actor_source_reference(category="context_checkpoints",source_id=sha256(raw).hexdigest(),data=raw,extension="json")
+    def trial(positions):
+        address=bound_host_row("context_physical_cut", (
+            "[Host record: this window's physical cut, not a summary or an authored fold.] "
+            f"Oldest whole rows left the working view: zero-based positions {_position_runs(positions)}. "
+            "Newest owner turn, assignment, core, notes and current tail stay. "
+            f"Read the exact original rows in this checkpoint JSON array: {json.dumps(source, sort_keys=True)}."))
+        return [address if i==positions[0] else row for i,row in enumerate(rows) if i==positions[0] or i not in positions]
+    def measure(view):
+        return estimate_context_prompt_tokens(rows_for_engine(view,vision=True,fresh=True,owner_mode=mode))
+    usable=measure(trial([2]))
+    assert measure(rows)>usable
+    assert measure(trial([2,3]))>usable, "crossing the high-water floor must increase measured pixels"
+    seals=[]
+    def priced(view):
+        seals.append(1)
+        return measure(view)
+    started=time.monotonic()
+    kept, receipt=physical_window_cut(rows,drive_root=tmp_path,task_id="image-cut",measure=priced,usable=usable)
+    record_property("image_cost", json.dumps(dict(mode=mode,seals=len(seals),seconds=round(time.monotonic()-started,6))))
+    record_property("image_cut",json.dumps({"mode":mode,"usable":usable,"one_row":measure(trial([2])),"two_rows":measure(trial([2,3])),"selected":receipt["positions"] if receipt else None,"selected_tokens":measure(kept)}))
+    assert receipt and receipt["positions"]==[2], "a fitting older-whole-row prefix must not be skipped"
+
+
+@pytest.mark.parametrize('provider_id,model_index', [('gemini_live:gemini', 0),
+    ('gemini_live:gemini', 1), ('openai_realtime:openai', 0), ('grok_realtime:grok', 0)])
+def test_native_envelope_does_not_skip_smaller_fitting_image_cut(host_world, packages, tmp_path,
+                                                               record_property, provider_id, model_index):
+    from hashlib import sha256
+    from ouroboros.artifacts import actor_source_reference
+    from ouroboros.realtime_setup import loaded_provider, measure_session_wire
+    from tests.test_context_image_floors import images
+    host=host_world.host
+    provider=loaded_provider(provider_id)
+    host.model=provider['catalog'].models[model_index]
+    host.turn.native_model=host.model.id
+    host.plan=replace(host.plan,preferred_mode='nano')
+    pictures=images(5, source='')
+    # Actual tiny PNG, entirely synthetic. No file or provider access is needed to seal a candidate.
+    png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lL8AAAAASUVORK5CYII='
+    for row in pictures:
+        row['content'][0]['image_url']['url']='data:image/png;base64,'+png
+    rows=[{'role':'system','content':'Core'},{'role':'user','content':'Assignment'},
+          {'role':'assistant','content':'Old reply. '*5000},pictures[0],
+          bound_host_row('owner_words','Newest question'),*pictures[1:]]
+    raw=json.dumps(rows,ensure_ascii=False,sort_keys=True,default=str).encode()
+    source=actor_source_reference(category='context_checkpoints',source_id=sha256(raw).hexdigest(),data=raw,extension='json')
+    def trial(positions):
+        address=bound_host_row('context_physical_cut', (
+            "[Host record: this window's physical cut, not a summary or an authored fold.] "
+            f'Oldest whole rows left the working view: zero-based positions {_position_runs(positions)}. '
+            'Newest owner turn, assignment, core, notes and current tail stay. '
+            f'Read the exact original rows in this checkpoint JSON array: {json.dumps(source,sort_keys=True)}.'))
+        return [address if i==positions[0] else row for i,row in enumerate(rows) if i==positions[0] or i not in positions]
+    def measure(view):
+        return measure_session_wire(host,host.plan,view,host.schemas,provider['session'],LiveOptions())[1].prompt_tokens_estimate
+    usable=measure(trial([2]))
+    assert measure(rows)>usable
+    kept,receipt=physical_window_cut(rows,drive_root=tmp_path,task_id='native-cut',measure=measure,usable=usable)
+    record_property('native_image_cut',json.dumps({'route':provider_id,'model':host.model.id,
+        'one_row':usable,'two_rows':measure(trial([2,3])),
+        'selected':receipt['positions'] if receipt else None,'selected_tokens':measure(kept)}))
+    assert receipt and receipt['positions']==[2]
+
+
+def test_superseded_feedback_leaves_but_current_notices_and_decisions_stay(tmp_path):
+    from types import SimpleNamespace
+    from ouroboros.context_renewal import renew_after_refusal
+    rows = [{'role':'system','content':'Core'}, {'role':'user','content':'Assignment'}]
+    for i in range(40):
+        rows.extend([{'role':'user','content': f'Review {i}: ' + 'Superseded finding. '*120,
+                      'review_feedback':[{'surface':'commit','task_id':'author','round':i}]},
+                     {'role':'assistant','content':f'Addressed round {i}.'}])
+    current = rows[-2]
+    plan = {'role':'user','content':'Current plan notice', 'review_feedback':[{'surface':'plan','task_id':'author'}]}
+    index = {'role':'user','content':'Current index has every operative decision.', '_review_context_index':True}
+    rows.extend([plan, index, bound_host_row('owner_words','Newest turn')])
+    ctx = SimpleNamespace(messages=rows, accumulated_usage={'_context_refusal_round':1,
+        '_context_capacity_total_tokens':tokens(rows)//2,'_context_response_reserve_tokens':100},
+        drive_root=tmp_path,drive_logs=tmp_path/'logs', task_id='reviews', round_idx=1,event_queue=None,tool_schemas=[])
+    assert renew_after_refusal(ctx, SimpleNamespace(_ctx=SimpleNamespace(messages=rows)))
+    assert all(row in rows for row in (current, plan, index))
+    assert sum(bool(r.get('review_feedback')) for r in rows) < 40
+
+
+def test_position_runs_preserve_every_exact_index():
+    assert _position_runs([2,3,4,7,9,10]) == '2-4, 7, 9-10'
+    assert _position_runs(list(range(2,336))) == '2-335'

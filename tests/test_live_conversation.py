@@ -384,6 +384,7 @@ def test_provider_density_uses_only_selected_text_and_estimator_stays_raw(host_w
     from ouroboros.contracts.live_conversation import LiveOptions
     from ouroboros.realtime_setup import session_candidate
     host = host_world.host
+    host.model = replace(host.model, facts=replace(host.model.facts, conversation_window_tokens=500000))
     options = LiveOptions(instructions='Feature instructions', languages=('ru-RU', 'en-US'))
     _, cold, _ = session_candidate(host, host_world.provider['session'], options)
     assert cold.physical_context.measurement_density == 1.0

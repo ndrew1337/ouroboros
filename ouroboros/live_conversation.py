@@ -579,6 +579,10 @@ class ConversationHost:
         snapshot.messages = copy.deepcopy(self.messages)
         return await asyncio.to_thread(serving_delivery_fits, snapshot, rows, schemas)
 
+    async def tool_result_fallback(self, rows, schemas):
+        from ouroboros.live_context_view import fallback_call_tool_results
+        return await asyncio.to_thread(fallback_call_tool_results, self, rows, schemas)
+
     async def prepare_session(self, options: LiveOptions):
         """Open a silent successor from a private ordinary fit; adoption stays explicit."""
         from ouroboros.live_connections import PreparedConnection
@@ -659,26 +663,8 @@ class ConversationHost:
         self.completed.add(key)
         self.observe("response", canonical_json({"response_id": response_id, "usage": dict(usage),
                                               "raw_usage": dict(raw_usage), "status": status}))
-        self._record_text_density(key, usage, raw_usage)
-        if status in {"completed", "interrupted"}:
-            from ouroboros.live_context_view import record_live_exposure
-            record_live_exposure(self, key)
-        if status == "completed":
-            from ouroboros.realtime_setup import observe_live_input
-            observe_live_input(self, raw_usage)
-        held = [usage.get(axis) for axis in ("text_input_tokens", "audio_input_tokens", "image_input_tokens", "video_input_tokens")]
-        measured = 0
-        if self.model.facts.basis == "estimator":
-            # This route's native usage omits instructions. Its canonical text,
-            # including provider-envelope overhead, stays in estimator units.
-            measured = self._selected_raw_estimate + max(0, self._text_estimate() - self._selected_text_estimate)
-        elif any(value is not None for value in held) and all(value is None or type(value) is int and value >= 0 for value in held):
-            measured = sum(value or 0 for value in held)
-        if measured:
-            if self._held_input:
-                self._growth = max(self._growth, measured - self._held_input)
-            self._held_input = measured
-            self._history_at_receipt = self._history_estimate()
+        from ouroboros.live_context_view import record_response_context
+        record_response_context(self, key, usage, raw_usage, status)
         if self._caption_dirty:
             self.checkpoint("ready")
             self._caption_dirty = False
@@ -712,7 +698,9 @@ class ConversationHost:
         version = owner._history_version if self.messages is owner.messages else self._history_version
         if self._history_cached_version != version:
             extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
-            self._history_tokens = estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+            from ouroboros.realtime_setup import rows_for_engine
+            projected = rows_for_engine(self.messages, vision=self.model.vision, fresh=True, owner_mode=self.plan.preferred_mode)
+            self._history_tokens = estimate_context_prompt_tokens([*projected, *extra], self.schemas)
             self._history_cached_version = version
         return self._history_tokens
 
@@ -795,6 +783,7 @@ class ConversationHost:
 
             async def run():
                 from ouroboros.loop import handle_tool_calls, _measure_tool_result_batch, _resolve_loop_max_rounds
+                from ouroboros.live_context_view import project_call_tool_results
                 from ouroboros.tool_call_log import invocation_scope
                 self.rounds += 1
                 maximum = _resolve_loop_max_rounds(self.ctx)
@@ -811,7 +800,8 @@ class ConversationHost:
                     try:
                         await joined(asyncio.to_thread(handle_tool_calls, ordinary, self.tools,
                             self.ctx.drive_root / "logs", self.ctx.task_id, self.executor, self.messages, self.trace,
-                            self.ctx.emit_progress_fn, tool_schemas=self.schemas, fit_candidate=functools.partial(
+                            self.ctx.emit_progress_fn, tool_schemas=self.schemas,
+                            project_results=functools.partial(project_call_tool_results, self), fit_candidate=functools.partial(
                                 _measure_tool_result_batch, self.ctx, round_id=self.ctx.task_id + ":call-tools")))
                     finally:
                         # Ordinary tools also edit existing rows and enable schemas.
@@ -965,6 +955,10 @@ class ConversationHost:
         if pending_connections:
             await joined(asyncio.gather(*pending_connections, return_exceptions=True))
         await drain_exposure(self)
+        from ouroboros.context_images import evict_stale_image_blocks
+        if evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode, readable_only=True):
+            self._context_changed()
+            await joined(asyncio.to_thread(self.checkpoint, "ready"))
         with _active_hosts_lock:
             _active_hosts.discard(self)
         try:

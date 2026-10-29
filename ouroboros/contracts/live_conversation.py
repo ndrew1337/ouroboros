@@ -310,6 +310,10 @@ class LiveHost(Protocol):
         """Whether held input plus pending delivery fits this connection; unknown declines fallback."""
         return False
 
+    async def tool_result_fallback(self, rows, schemas) -> list[dict] | None:
+        """Optional fitting range of a retained complete result after a failed fresh fit."""
+        return None
+
     def renewal_due(self) -> bool:
         """Held input + pending history/schema growth + working reserve needs a refit.
 

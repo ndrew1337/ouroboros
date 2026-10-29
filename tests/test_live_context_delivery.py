@@ -61,9 +61,10 @@ def test_prepared_catchup_prices_images_already_held_without_retroactive_project
         async def consume(session):
             # The first connection already holds its projected prefix. A new
             # image cannot retroactively turn those delivered pixels into text.
+            # Price delivered rows without adding another fresh-fit manifest.
             delivered = [*json.loads(session.selected.messages_json), *rows_for_engine(tail, vision=True)]
             _, actual, _, _ = measure_session_wire(host, host.plan, delivered, host.schemas,
-                host_world.provider['session'], LiveOptions(), _room_fact=False)
+                host_world.provider['session'], LiveOptions(), _room_fact=False, fresh=False)
             assert host._prepared_view[0]['fit']['measurement']['estimated_input_tokens'] == actual.prompt_tokens_estimate
         try:
             await lease.run(consume)
