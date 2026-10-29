@@ -461,6 +461,39 @@ def frame_focus_content(task: Mapping[str, Any], content: Any) -> Any:
     return text if isinstance(content, str) else [{"type": "text", "text": text}, *[item for item in content if item.get("type") != "text"]]
 
 
+def focus_frame_sources(metadata: Mapping[str, Any], recorded: Any) -> dict | None:
+    """The typed records behind one recorded FOCUS frame; ``None`` unless they render it exactly.
+
+    A reader outside the turn (the Safety Supervisor) may take these instead of the frame: the
+    correspondent's exact text, the connector's event, what was already said and started here and the
+    place's notes as they stood at the event. Only a frame this renderer reproduces byte for byte from
+    those records and the bare event text qualifies; anything else the recorded frame carries (an
+    attachment manifest, image notes or blocks, an empty-text placeholder, another turn's inputs) is
+    absent from the records, so the caller keeps that row whole. The allowance line is the mind's
+    budget, not the event."""
+    presence = metadata.get("presence") if isinstance(metadata.get("presence"), Mapping) else {}
+    if (metadata.get("wake_cause") != "focus" or not isinstance(recorded, str) or "observed_text" not in presence
+            or not isinstance(presence.get("event"), Mapping)):
+        return None
+    try:
+        rendered = frame_focus_content({"metadata": metadata}, str(presence["observed_text"]).strip())
+    except Exception:  # records this renderer cannot read prove nothing; the row stays whole
+        return None
+    if rendered != recorded:
+        return None
+    place = presence.get("place") if isinstance(presence.get("place"), Mapping) else {}
+    optional = {"previous_turn": presence.get("previous_turn"), "open_turns": presence.get("open_turns"),
+                "work_here": metadata.get("focus_work_here"), "working_folder": place.get("working_folder"),
+                "notes_at_event": place.get("notes")}
+    return {"message_text": presence["observed_text"], "event": dict(presence["event"]),
+            "place_at_event": {"place_id": presence.get("place_id"),
+                               "label": place.get("label") or place.get("provider") or place.get("place_id"),
+                               "state": place.get("state") or "unknown",
+                               "matched_wakes": [w for w in place.get("wakes", [])
+                                   if w["fact"] in (metadata.get("focus", {}).get("matched_wakes") or [])]},
+            **{key: value for key, value in optional.items() if value}}
+
+
 def focus_topics(drive_root: Path, presence: Mapping[str, Any]) -> str:
     sections = []
     for raw in presence.get("context_topics") or []:

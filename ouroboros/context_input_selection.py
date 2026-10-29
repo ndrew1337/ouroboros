@@ -330,6 +330,7 @@ def _capture_declared_context_core(
     might bias this case. Rebuilds read the same durable task selection, while
     retries and fitting operate on the resulting immutable ContextCore.
     """
+    from ouroboros.safety_config import owner_rules_section
     from ouroboros.subagent_work_order import input_source_selection_receipt
     from ouroboros.subagent_metrics import fact_line
     from ouroboros.subagent_runtime import (
@@ -367,7 +368,8 @@ def _capture_declared_context_core(
     return _ContextCore(
         base_prompt=sources["base_prompt"], bible_md=sources["bible_md"],
         architecture_md=sources["architecture_md"], development_md=sources["development_md"],
-        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text) if part),
+        # The owner's standing rules are governance like SYSTEM.md, not a selectable case input.
+        semi_stable_text="\n\n".join(part for part in (catalog_text, review_text, owner_rules_section()) if part),
         dynamic_text="\n\n".join(parts),
         user_content_json=json.dumps(user_builder(task), ensure_ascii=False, sort_keys=True),
         docs_need_development=_task_requires_self_body_docs(task),

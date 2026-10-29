@@ -79,7 +79,8 @@ def test_only_declared_reads_skip(supervisor, monkeypatch):
 def test_bundle_authorship_scope_and_no_reasoning_dump(supervisor, monkeypatch):
     h = supervisor
     from ouroboros import places, place_guard
-    monkeypatch.setattr(place_guard, "call_place_facts", lambda *a, **kw: {"place_id": "room", "targets": {"to": ["audience"]}})
+    monkeypatch.setattr(place_guard, "call_place_facts", lambda *a, **kw: {"places": [{
+        "place_id": "room", "place_label": "Friends", "place_state": "active"}], "targets": {"to": ["audience"]}})
     monkeypatch.setattr(places, "load_places", lambda root: [places.Place("room", "connector", "chat", label="Friends",
         notes=(places.NoteEntry("owner permission", "owner"), places.NoteEntry("old permission", "migration"),
                places.NoteEntry("mind idea", "ouroboros")))])

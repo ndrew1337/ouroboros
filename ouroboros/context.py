@@ -1125,6 +1125,8 @@ def _capture_context_core(
     skills = discover_context_skills(canonical_root)  # one view: the always-on block here, the catalog below
     if always_on := always_in_context_section(skills):
         semi_stable_parts.append(always_on)
+    from ouroboros.safety_config import owner_rules_section
+    semi_stable_parts.append(owner_rules_section())  # the Supervisor's read, for every focus and child
     # Knowledge leads the changing block (its edits never cost the cached story) and
     # rides only where the view holds it: a child or nanny reads it by knowledge_read.
     head_parts = (build_knowledge_sections(context_env, project_id=resolve_project_id(task))

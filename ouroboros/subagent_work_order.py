@@ -432,17 +432,19 @@ def session_host_references(ctx: Any, *, target_root: str, source_root: str,
                             private_copy: bool = False, payload_skill: str = "", service: Any = None) -> str:
     """Host references pinned in a session's start request, computed once at first start.
 
-    Own-body DESIGN navigation and BIBLE path, and the installed instruction-skill index for any workspace;
+    Own-body DESIGN navigation and BIBLE path, the owner's standing rules for every session (declared
+    inputs included: they govern the work, as BIBLE does), and the installed instruction-skill index for any workspace;
     a skill-payload builder also gets the serving host's skill contract, whatever its input
     selection, and any other private copy its environment facts: dependency files read at the
     copy's repository root, the environment placed where the session may write (``source_root``,
     possibly a folder below that root, or the scratch ``service`` grants); a read-only session
     has no copy, so it gets neither. A retry replays the recorded bytes."""
+    from ouroboros.safety_config import owner_rules_section
     from ouroboros.skill_catalogue import session_skill_index, skill_contract_references  # lazy skill reads
 
     text = (session_design_navigation(ctx, target_root=target_root, source_root=source_root)
             + session_constitution_pointer(ctx, target_root=target_root, source_root=source_root)
-            + session_skill_index(ctx))
+            + owner_rules_section(session=True) + session_skill_index(ctx))
     if payload_skill:
         from ouroboros.body_candidate import serving_repo_dir_for
 
