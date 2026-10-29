@@ -34,6 +34,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import signal
 import sys
 import threading
@@ -158,7 +159,8 @@ def other_copy_line(lock_path, port_file, bundle_dir) -> str:
     """The one line a manual second launch of a packaged copy shows first when the running instance is another
     copy, from that instance's own report: its command line names its copy (the text after its last
     ``--seed-bundle``, which the source handoff appends, else its executable) and its ``/api/health`` its
-    ``app_version``. ``""`` when this copy's path occurs in that command line (the same copy), for an
+    ``app_version``. ``""`` when this copy's path occurs in that command line as a whole path (at its start or
+    after a space or a quote, so ``~/Applications/Ouroboros.app`` is not ``/Applications/Ouroboros.app``), for an
     unreadable instance, a source run (no bundle manifest here), or this app's own AppImage, whose per-launch
     mount names no copy. ``ps`` joins argv without quoting, so the command line is never split into arguments."""
     from ouroboros.desktop_autostart import app_copy, own_appimage
@@ -172,7 +174,7 @@ def other_copy_line(lock_path, port_file, bundle_dir) -> str:
     except (OSError, ValueError):
         return ""
     mine = app_copy(bundle)
-    if not command or any(os.path.normcase(path) + os.sep in os.path.normcase(command)
+    if not command or any(re.search(r'(?:^|[\s"])' + re.escape(os.path.normcase(path) + os.sep), os.path.normcase(command))
                           for path in (str(mine), os.path.realpath(mine))):
         return ""
     _, seeded, tail = command.rpartition(" --seed-bundle ")

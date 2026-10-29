@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 import os
+import pathlib
 import subprocess
 
 from ouroboros import launcher_background as lb
@@ -81,3 +82,13 @@ def test_a_source_run_names_no_other_copy(tmp_path, monkeypatch):
     checkout.mkdir()
     lock, port = _running(tmp_path, monkeypatch, "/usr/bin/python3", str(checkout / "launcher.py"))
     assert lb.other_copy_line(lock, port, checkout) == ""
+
+
+def test_a_copy_whose_path_ends_like_this_ones_is_another_copy(tmp_path, monkeypatch):
+    """This copy in /Applications, the running one in ~/Applications: only a whole path (at the start of the command,
+    after a space or a quote) makes the same copy, never a path that merely ends like this one."""
+    this = _copy(tmp_path / "Applications", "Ouroboros.app")
+    other = pathlib.Path(f"/Users/me{this}")  # this copy's path below another folder
+    lock, port = _running(tmp_path, monkeypatch, *_handed_off(other))
+    assert lb.other_copy_line(lock, port, this) == (
+        f"Ouroboros 7.9.0 is already running from {other.parents[1]}. Quit it, then open this copy.")
