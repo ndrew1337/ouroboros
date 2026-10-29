@@ -2897,7 +2897,8 @@ Its word uses the viewer's zone and a short date when not today; passed explaine
 outcomes and passed allowance resets show no time.
 `Evolving` replaces the word during a campaign, even when off; Off is grey.
 Running shows moving dots; held shows pause bars without time; unknown a ring,
-failure a red dot, amber only the owner's move (§4). The word stays visible at every width.
+failure a red dot, amber only the owner's move (§4). The word stays visible at every width, except where a
+Project's name still cut on its second line leaves the chip its brain and mark (above).
 Its accessible name and the Shade state use the host sentence without adding a clock.
 A press opens the Shade under the
 capsules: state, Start/Stop, `$X of $Y in the last 24 hours`, “Its own wakes” then
