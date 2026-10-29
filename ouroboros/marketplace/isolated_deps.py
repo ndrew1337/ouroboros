@@ -132,6 +132,7 @@ def _run(cmd: List[str], *, cwd: pathlib.Path, env: Dict[str, str], timeout_sec:
     from subprocess import Popen
     from ouroboros.platform_layer import merge_hidden_kwargs, subprocess_new_group_kwargs
     from ouroboros.tools.shell import _active_subprocesses, _kill_process_group, _subprocess_lock
+    from ouroboros.tools.shell_process import tracked_start
 
     stderr_tail: Dict[str, bytes] = {}
     kwargs: Dict[str, Any] = {
@@ -142,20 +143,19 @@ def _run(cmd: List[str], *, cwd: pathlib.Path, env: Dict[str, str], timeout_sec:
         "stdin": subprocess.DEVNULL,
     }
     kwargs.update(subprocess_new_group_kwargs())
-    proc = Popen(cmd, **merge_hidden_kwargs(kwargs))  # noqa: S603 - argv template is controlled.
+    with tracked_start() as publish:  # published before the reader thread, the first step that can fail
+        proc = publish(Popen(cmd, **merge_hidden_kwargs(kwargs)))  # noqa: S603 - argv template is controlled.
     stderr_thread = None
-    if getattr(proc, "stderr", None) is not None:
-        stderr_thread = threading.Thread(
-            target=_pipe_tail,
-            args=(proc.stderr, stderr_tail, "stderr", _INSTALLER_STDERR_TAIL_BYTES),
-            daemon=True,
-        )
-        stderr_thread.start()
-    with _subprocess_lock:
-        _active_subprocesses.add(proc)
     try:
+        if getattr(proc, "stderr", None) is not None:
+            stderr_thread = threading.Thread(
+                target=_pipe_tail,
+                args=(proc.stderr, stderr_tail, "stderr", _INSTALLER_STDERR_TAIL_BYTES),
+                daemon=True,
+            )
+            stderr_thread.start()
         proc.wait(timeout=timeout_sec)
-    except subprocess.TimeoutExpired:
+    except BaseException:  # the deadline or a reader that could not start: never an untracked live child
         _kill_process_group(proc)
         raise
     finally:

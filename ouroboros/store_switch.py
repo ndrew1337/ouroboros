@@ -635,7 +635,8 @@ def switch_at_restart(root: Any, repo_dir: Any, cleanup: Any) -> Dict[str, Any]:
     census: ``worker_exits`` the pool's kill census (``supervisor.workers.last_worker_exit_census``),
     ``live_children`` the handles still alive after it, ``owned_stop`` ``stop_owned_work``'s
     outcome; an unconfirmed stop in any of them (a missing census included) is a blocker the
-    seam refuses on, never a wait. Never raises."""
+    seam refuses on, never a wait. After that stop the door owner's bounded Git runs as this
+    exit's own finalization (``shell_process.exit_finalization``); Panic still ends it. Never raises."""
     root = pathlib.Path(root)
     owner = None
     if read_switch_intent(root) is None:
@@ -659,8 +660,11 @@ def switch_at_restart(root: Any, repo_dir: Any, cleanup: Any) -> Dict[str, Any]:
         ("owned_work_unconfirmed", stop.get("state") != "completed" or bool(stop.get("unconfirmed"))),
     ) if blocked]
     try:
-        outcome = run_switch_seam(root, repo_dir=repo_dir, owner=owner, blockers=blockers,
-                                               restore_handles=evidence_packs.restore_checkpoint_handles)
+        from ouroboros.tools.shell_process import exit_finalization
+
+        with exit_finalization():
+            outcome = run_switch_seam(root, repo_dir=repo_dir, owner=owner, blockers=blockers,
+                                      restore_handles=evidence_packs.restore_checkpoint_handles)
     except Exception as exc:
         log.critical("Authority switch at the restart exit raised; the intent waits for the next boot", exc_info=True)
         outcome = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}

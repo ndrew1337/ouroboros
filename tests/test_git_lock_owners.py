@@ -982,14 +982,23 @@ def test_a_store_less_target_the_switch_did_not_reach_is_never_replayed_or_final
     assert lock.exists() is (lock_at_next_boot == "still_held")
 
 
-def test_the_store_switch_itself_still_reaches_a_store_less_target(replace_scene):
-    from ouroboros import store_switch
+@pytest.mark.parametrize("door", ["seam", "restart_exit"])
+def test_the_store_switch_itself_still_reaches_a_store_less_target(replace_scene, door):
+    """At the restart exit the replace owner's rescue and checkout Git start after the begun stop."""
+    from ouroboros import owned_shutdown, store_switch
     from ouroboros.store_import import ensure_current_store
 
     scene = replace_scene
     ensure_current_store(scene.data)
     assert scene.apply(scene.storeless)[0] == 200
-    assert store_switch.run_switch_seam(scene.data, repo_dir=scene.repo)["status"] == "switched"
+    if door == "restart_exit":  # server._check_restart: the generation's one stop, then the seam
+        owned_shutdown.begin_owned_stop(scene.data, cause="restart_requested")
+        census = {"worker_exits": {"unconfirmed": []}, "live_children": [],
+                  "owned_stop": owned_shutdown.stop_owned_work(scene.data)}
+        outcome = store_switch.switch_at_restart(scene.data, scene.repo, census)
+    else:
+        outcome = store_switch.run_switch_seam(scene.data, repo_dir=scene.repo)
+    assert outcome["status"] == "switched", outcome
     assert _git(scene.repo, "rev-parse", "HEAD") == scene.storeless
 
 

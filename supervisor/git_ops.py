@@ -240,27 +240,31 @@ def _run_git_process_bounded(
     process's stdin and the pipe is closed — the batch-stdin git plumbing
     (e.g. ``git cat-file --batch``) rides the same timeout/kill semantics."""
     from ouroboros.platform_layer import kill_process_tree, subprocess_new_group_kwargs
-    from ouroboros.tools.shell import _active_subprocesses, _subprocess_lock
+    from ouroboros.tools.shell_process import (
+        CommandAdmissionClosed,
+        _active_subprocesses,
+        _subprocess_lock,
+        tracked_start,
+    )
 
     limit = float(timeout)
     empty = "" if text else b""
     try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=str(cwd or current_repo_dir()),
-            stdin=subprocess.PIPE if input_data is not None else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=text,
-            env=env,
-            **subprocess_new_group_kwargs(),
-        )
-    except OSError as exc:
+        with tracked_start() as publish:
+            proc = publish(subprocess.Popen(
+                cmd,
+                cwd=str(cwd or current_repo_dir()),
+                stdin=subprocess.PIPE if input_data is not None else None,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=text,
+                env=env,
+                **subprocess_new_group_kwargs(),
+            ))
+    except (OSError, CommandAdmissionClosed) as exc:  # no Git process started
         detail = str(exc)
         return 127, empty, detail if text else detail.encode("utf-8", "replace")
 
-    with _subprocess_lock:
-        _active_subprocesses.add(proc)
     try:
         try:
             stdout, stderr = proc.communicate(input=input_data, timeout=limit)
