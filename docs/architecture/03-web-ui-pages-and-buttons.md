@@ -91,7 +91,7 @@ Attach file/paste/drop stage attachments without count/size rejection; Send uplo
 
 #### Direct turns and the activity block
 
-Main/Project native turns have no queue rows. `supervisor.active_activity.DirectActivityRegistry` keeps actors through preparation/delivery; Stop/Hurry/quiz/steering address them, census/typing present them. They read Preparing · start step (census `turn_phase`), then the call's word (§6). Writer drain, custody and restart census include them; owner turns defer consciousness wakes.
+Main/Project native turns have no queue rows. `supervisor.active_activity.DirectActivityRegistry` keeps actors through preparation/delivery; Stop/Hurry/quiz/steering address them, census/typing present them. They read Preparing · start step (census `turn_phase`), then the call's word (§6). Writer drain, custody and restart census include them; owner turns never hold the own clock.
 
 `_is_direct_chat` survives result, terminal, summary, history and census, keeping Project-native replies local; managed/transferred turns stay mirror-eligible. `_emit_progress.narration` and history's `_PROGRESS_META_FIELDS` distinguish model words (titles/collapsed activity) from host notes (timeline only).
 
@@ -197,7 +197,7 @@ An out-of-process extension response streams through `extension_route_stream.py`
 
 Tabs share binding and own refresh; hidden panels run no expensive readers.
 
-Consciousness (`consciousness_dashboard.js`) shows server status, allowance, counted roots, Places and Recent wakes. `consciousness_api.js` normalizes rows; `consciousness_words.js` reuses card phases/costs. The ledger selects 48-hour wake roots; task facts supply time, summary and whole note. Native disclosure retains open nodes/reading position. `ouro:open-task {task_id, chat_id}` reaches Main's `task:<id>` history reader via `app.js`; place-room doors await a reader. Places reads `/api/places` on mount, show, change, shown skill lifecycle end or first-read retry. Words: DESIGN “Dashboard › Consciousness”; wire: CLIENT_CONTRACT “Recent wakes”/“Places”.
+Consciousness (`consciousness_dashboard.js`) shows status, allowance, own tasks, Places, Its own wakes and Wakes in places: a shared 50-row/48-hour window with unused share reassigned and one coverage/failure line. On this tab, the Shade and Activity the host sentence owns the time; only the chip formats its word (`consciousness_words.js`), visible at every width but a still-cut Project name's. Open notes keep position. `/api/places` is read on mount, show, change, shown skill end or failed-read retry. Words: DESIGN “Dashboard › Consciousness”; wire: CLIENT_CONTRACT “Recent wakes”/“Places”.
 
 Logs merges live WS with bounded REST backfill of events/tools/progress/supervisor logs: chronological, deduplicated across reconnect, grouped task cards and raw records via `log_events.js`. Failed sources get a status row while live events continue; Clear deletes no log. Mounted unfinished children refresh holds via `/api/tasks?queue_only=1`. `project_admission_hold` supplies label/reason/detail, not phase; unknown queue proves no recovery; parked phases, Stop and terminal outrank it (`chat_activity.js`).
 

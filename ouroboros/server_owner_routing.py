@@ -618,7 +618,6 @@ def _route_owner_message(bridge: Any, ctx: Any, incoming: Dict[str, Any]) -> Non
         task_metadata = _decision_turn_metadata(ctx, chat_id, client_message_id, task_metadata, roots)
 
     def _run_direct() -> None:
-        # The alarm clock reads the direct-activity census itself; nothing pauses it here.
         ctx.handle_chat_direct(
             chat_id,
             text or image_caption,

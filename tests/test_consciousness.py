@@ -42,7 +42,7 @@ def clock(monkeypatch, tmp_path):
     store = {"bg_consciousness_enabled": True, "owner_chat_id": 7}
     monkeypatch.setattr(state, "load_state", lambda: dict(store))
 
-    def update_state(mutator):
+    def update_state(mutator, **_kwargs):
         mutator(store)
         return dict(store)
 
@@ -111,7 +111,7 @@ def test_headline_while_the_launched_own_wake_runs(clock, monkeypatch):
     assert snapshot["next_wake_at"] == _iso(due)
     described = view.describe_consciousness_state(snapshot, True)
     assert described["status"] == "thinking"
-    assert described["detail"] == "Wake-up wake0001 is running as a Main turn."
+    assert described["detail"] == "Wake-up wake0001 is running."
 
 
 def test_status_details_and_launch_use_only_stored_places(clock, monkeypatch):
@@ -301,6 +301,7 @@ def test_inventory_source_failure_never_advances_accepted_boundary(clock, monkey
     path = artifacts.task_artifact_dir_path(clock.root, source['task_id']) / source['path']
     original = path.read_bytes()
     _chat_row(root=clock.root, ts=_iso(T0 - 100), direction='in', chat_id=1, source='web', text='late old row')
+    clock.clock._wake_finished('wake0001', True)
     clock.receipt['task_id'] = 'wake0002'
     with monkeypatch.context() as fault:
         if failure == 'corrupt_previous':
@@ -319,6 +320,7 @@ def test_inventory_source_failure_never_advances_accepted_boundary(clock, monkey
         if failure in {'corrupt_previous', 'missing_previous'}:
             assert 'unreadable_transition_source' in clock.launches[-1]['text']
     path.write_bytes(original)
+    clock.launches[-1]['on_finished']('wake0002', True)
     clock.receipt['task_id'] = 'wake0003'
     clock.clock._next_wake_at = T0 + 3 * FLOOR
     assert clock.clock.tick(T0 + 3 * FLOOR) == 'launched'
@@ -380,12 +382,14 @@ def test_first_failed_source_preserves_intervening_events(clock, monkeypatch, fa
     monkeypatch.setattr(clock_module.time, 'time', lambda: finish_at)
     clock.launches[-1]['on_finished']('wake0001', not restart)
     alarm = BackgroundConsciousness(clock.root, clock.root / 'repo', lambda: 7, now=finish_at + 1) if restart else clock.clock
+    clock.clock._wake_finished('wake0001', True)
     clock.receipt['task_id'] = 'wake0002'
     assert alarm.tick(alarm.next_wake_at) == 'launched'
     assert 'during first wake' in clock.launches[-1]['text']
     assert 'task intervening completed' in clock.launches[-1]['text']
     assert 'before bootstrap' not in clock.launches[-1]['text']
     assert clock.store[OBSERVATION_STATE_KEY]
+    clock.launches[-1]['on_finished']('wake0002', True)
     clock.receipt['task_id'] = 'wake0003'
     assert alarm.tick(alarm.next_wake_at + DEFAULT) == 'launched'
     assert 'during first wake' not in clock.launches[-1]['text']
@@ -406,11 +410,13 @@ def test_full_inventory_moves_out_of_hot_state_without_forgetting_closed_tasks(c
     header = json.loads(artifacts.read_actor_source_bytes(clock.root, source['task_id'], source).splitlines()[0])
     assert len(header['boundary']['transitions']['inventory']) == 160
     write_task_result(clock.root, 'new-old', 'completed', ts=_iso(T0 - 86400))
+    clock.clock._wake_finished('wake0001', True)
     clock.receipt['task_id'] = 'wake0002'
     clock.clock._next_wake_at = T0 + 2 * FLOOR
     assert clock.clock.tick(T0 + 2 * FLOOR) == 'launched'
     assert 'new-old completed' in clock.launches[-1]['text']
     assert 'closed-0 completed' not in clock.launches[-1]['text']
+    clock.launches[-1]['on_finished']('wake0002', True)
     clock.receipt['task_id'] = 'wake0003'
     clock.clock._next_wake_at = T0 + 3 * FLOOR
     assert clock.clock.tick(T0 + 3 * FLOOR) == 'launched'
@@ -445,10 +451,7 @@ def test_not_due_before_next_wake_at(clock):
     assert clock.launches == []
 
 
-def test_a_live_wake_or_owner_turn_defers_the_wake(clock):
-    _register("owner001")
-    assert clock.clock.tick(T0 + FLOOR + 1) == "owner_turn_live"
-    get_direct_activity_registry().clear()
+def test_a_live_own_wake_defers_the_wake(clock):
     _register("wakeXYZ", initiator="consciousness")
     assert clock.clock.tick(T0 + FLOOR + 1) == "wake_live"
     assert clock.clock.status_snapshot()["live_wake_task_id"] == "wakeXYZ"
@@ -584,6 +587,7 @@ def test_a_thin_allowance_still_wakes_and_only_known_exhaustion_skips(clock, mon
     monkeypatch.setattr(clock_module, "allowance_window", lambda root, now=None, **_display_read: dict(thin))
     assert clock.clock.tick(T0 + FLOOR + 1) == "launched"
     assert clock.launches[-1]["metadata"]["root_cost_ceiling_usd"] == 0.5
+    clock.clock._wake_finished("wake0001", True)
     clock.launches.clear()
     clock.clock._last_wake_task_id, clock.clock._next_wake_at = "", 0.0
     clock.live = None
@@ -631,28 +635,6 @@ def test_rejected_wake_is_typed_and_retried_on_its_schedule(clock):
     clock.clock._next_wake_at = now
     assert clock.clock.tick(now) == "rejected:admission_failed"
     assert clock.clock.next_wake_at == now + DEFAULT * 4
-
-
-def test_a_turn_admitted_in_the_same_instant_keeps_the_wake_due(clock, monkeypatch):
-    from supervisor import workers
-
-    def handle_wake_direct(*_a, **_k):
-        raise AssertionError("must not launch beside a live turn")
-
-    monkeypatch.setattr(workers, "handle_wake_direct", handle_wake_direct)
-    calls = {"n": 0}
-    real = clock.clock.live_turns
-
-    def live_turns(**kwargs):
-        calls["n"] += 1
-        if calls["n"] == 2:  # the re-check under the gate lock sees a just-admitted owner turn
-            _register("owner002")
-        return real(**kwargs)
-
-    monkeypatch.setattr(clock.clock, "live_turns", live_turns)
-    due = clock.clock.next_wake_at
-    assert clock.clock.tick(T0 + FLOOR + 1) == "owner_turn_live"
-    assert clock.clock.next_wake_at == due  # still due: the next pass after the turn launches it
 
 
 # --- finish -----------------------------------------------------------------------
@@ -774,7 +756,7 @@ def test_status_snapshot_carries_the_alarm_facts(clock):
         "enabled", "level", "next_wake_at", "last_wake_at", "last_wake_task_id",
         "last_wake_outcome", "last_error", "spent_24h_usd", "daily_usd", "allowance_resets_at",
         "tasks_running", "max_tasks", "live_wake_task_id", "unknown_unmetered", "integrity_degraded",
-        "spend_by_cause", "counted_roots", "places_brief", "owner_turn_live",
+        "spend_by_cause", "counted_roots", "places_brief", "appointment_at", "live_wake_held",
     }
     assert snapshot["enabled"] is True and snapshot["level"] == "act"
     assert snapshot["unknown_unmetered"] == 0 and snapshot["integrity_degraded"] is False
@@ -800,13 +782,17 @@ def test_the_status_view_may_ride_a_snapshot_and_a_wake_admission_never_does(clo
     assert reads[-1] == {"allow_stale": False}
 
 
-def test_start_after_a_long_off_period_never_announces_a_past_wake(clock, monkeypatch):
+@pytest.mark.parametrize("next_attempt", [T0 - 100, T0 + 6000])
+def test_start_after_a_long_off_period_never_announces_a_past_wake(clock, monkeypatch, next_attempt):
     clock.clock.stop()
-    clock.clock._next_wake_at = T0 - 100  # the clock did not advance while disabled
+    clock.clock._next_wake_at = next_attempt  # the clock did not advance while disabled
     monkeypatch.setattr(clock_module.time, "time", lambda: T0 + 5000)
     message = clock.clock.start()
-    assert clock.clock.enabled and clock.clock.next_wake_at == T0 + 5000
+    expected = max(next_attempt, T0 + 5000)
+    assert clock.clock.enabled and clock.clock.next_wake_at == expected
     assert "next wake-up at" in message
+    assert clock.store[NEXT_WAKE_STATE_KEY] == expected
+    assert clock.store[clock_module.APPOINTMENT_STATE_KEY] == expected
 
 
 @pytest.mark.parametrize("pause_state", ["paused", "pausing"])
