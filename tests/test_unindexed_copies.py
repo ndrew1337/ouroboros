@@ -227,4 +227,5 @@ def test_owner_projects_are_never_born_unindexed(tmp_path, monkeypatch):
     monkeypatch.setenv("OUROBOROS_DATA_DIR", str(data))
     project = trees.provision_genesis_project(repo_dir=system, task_id="genesis", projects_root=projects,
                                               data_dir=data)
-    assert _same(pathlib.Path(project.path).parent, projects) and SUFFIX not in project.path
+    # The name it is born with: the test's own root may itself be unindexed (scripts/safe_test.py).
+    assert _same(pathlib.Path(project.path).parent, projects) and SUFFIX not in pathlib.Path(project.path).name
