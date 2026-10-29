@@ -83,7 +83,8 @@
  * @property {string} status  // disabled | stopped | thinking | due | sleeping | waiting_for_first_conversation | allowance_exhausted | allowance_unknown | wake_rejected | wake_failed | wake_paused | wake_outcome_unknown
  * @property {string} detail  // one honest owner-readable line (e.g. "Sleeping until 14:05.")
  * @property {string} level  // observe | act | full
- * @property {string} next_wake_at  // ISO instant; "" when unknown
+ * @property {string} next_wake_at  // next attempt, moved by skips/refusals; ISO instant or ""
+ * @property {string} appointment_at  // scheduled time, retained through retries; "" on legacy state
  * @property {string} last_wake_at  // ISO instant; "" before the first wake of this process
  * @property {string} last_wake_task_id
  * @property {string} last_wake_outcome  // running | done | paused | pausing | unknown | failed | rejected:<reason> | skipped:<reason>
@@ -93,7 +94,8 @@
  * @property {string} allowance_resets_at  // ISO instant the oldest counted spend leaves the 24 h window
  * @property {number} tasks_running  // live roots consciousness started
  * @property {number} max_tasks
- * @property {string} live_wake_task_id  // "" when no wake-up is running
+ * @property {string} live_wake_task_id  // own wake through direct custody, queue and settlement; "" when absent
+ * @property {boolean} live_wake_held  // own wake in PENDING: paused, held or awaiting dispatch
  * @property {number} unknown_unmetered  // window rows without a price: spent_24h_usd is then a floor ("at least")
  * @property {boolean} integrity_degraded  // the ledger was quarantined/repaired; the numbers are best-effort
  */

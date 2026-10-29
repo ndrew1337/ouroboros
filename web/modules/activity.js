@@ -387,11 +387,10 @@ export function initActivity({ mount, ws, openDashboardTab = null } = {}) {
         const detail = esc(bg.detail || (enabled ? 'enabled' : 'disabled'));
         const facts = [
             bg.level ? `autonomy ${esc(bg.level)}` : '',
-            enabled && bg.next_wake_at ? `next wake ${esc(formatWhen(bg.next_wake_at))}` : '',
             bg.last_wake_at ? `last wake ${esc(formatWhen(bg.last_wake_at))}${bg.last_wake_outcome ? ` (${esc(bg.last_wake_outcome)})` : ''}` : '',
             allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded)
                 ? `allowance ${esc(allowanceLabel(bg.spent_24h_usd, bg.daily_usd, bg.unknown_unmetered, bg.integrity_degraded))} (24 h)` : '',
-            Number.isFinite(Number(bg.max_tasks)) ? `tasks ${Number(bg.tasks_running || 0)}/${Number(bg.max_tasks)}` : '',
+            Number.isFinite(Number(bg.max_tasks)) ? esc(fmt('own tasks {running}/{max}', { running: Number(bg.tasks_running || 0), max: Number(bg.max_tasks) })) : '',
         ].filter(Boolean).join(' · ');
         return `<div class="activity-row">
             <div class="activity-row-main">

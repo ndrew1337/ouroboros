@@ -10,6 +10,7 @@ has exactly one field-identical JSDoc twin among the browser modules.
 from __future__ import annotations
 
 import importlib
+from datetime import datetime, timedelta, timezone
 import json
 import pathlib
 import re
@@ -382,8 +383,9 @@ def test_recent_wake_read_unavailability_keeps_the_panel(client, monkeypatch, so
     document = seed_wake(root)
     clock = object.__new__(BackgroundConsciousness)
     clock._drive_root = root
+    next_wake = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     monkeypatch.setattr(clock, "status_snapshot", lambda: {
-        "enabled": True, "next_wake_at": "2027-01-15T12:30:00Z", "spent_24h_usd": 2.5, "places_brief": []})
+        "enabled": True, "next_wake_at": next_wake, "spent_24h_usd": 2.5, "places_brief": []})
     client.app.state.describe_consciousness = lambda: clock.details_snapshot(True)
     error = (usage_store.UsageLockUnavailable if source == "usage" else store.StoreBusy)("busy") if typed else ValueError("unexpected failure")
     calls = []
