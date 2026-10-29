@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { loadVersion } from '../modules/utils.js';
+import { readFileSync } from 'node:fs';
+
+import { lastAppVersion, loadVersion } from '../modules/utils.js';
+import { updateVerdict } from '../modules/updates.js';
 import { WS } from '../modules/ws.js';
 
 // The two version labels' one reader (utils.loadVersion, #2249) under a scripted /api/health:
@@ -198,4 +201,15 @@ test('every socket open re-reads the labels without holding up its state read, s
         ws._clearPostOpenRetryTimer();
         ws.ws = null;
     }
+});
+
+test('the Updates page shows the app version About reads as one App chip, and none without it', async () => {
+    labels();
+    await readOnce({ runtime_version: '7.9.0', app_version: '7.10.0' });
+    assert.equal(lastAppVersion(), '7.10.0');
+    assert.deepEqual(updateVerdict({}, '', lastAppVersion()).chips, [{ label: 'App', value: '7.10.0' }]);
+    await readOnce({ runtime_version: '7.9.0' });  // no app version reported: no chip
+    assert.deepEqual(updateVerdict({}, '', lastAppVersion()).chips, []);
+    const source = readFileSync(new URL('../modules/updates.js', import.meta.url), 'utf8');
+    assert.match(source, /updateVerdict\(latestStatus \|\| \{\}, phase, lastAppVersion\(\)\)/, 'the panel renders it');
 });

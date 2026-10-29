@@ -1,4 +1,4 @@
-import { escapeHtmlAttr as escapeHtml } from './utils.js';
+import { escapeHtmlAttr as escapeHtml, lastAppVersion } from './utils.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { showToast } from './toast.js';
 import { apiClient, apiFetch } from './api_client.js';
@@ -110,10 +110,11 @@ export function applyFailureText(err) {
 // humanizeCheckedAt reads Date.now for the "checked N ago" age). The button is always a real next action; facts
 // travel as status line, hint, and chips (ARCHITECTURE §3: unavailable,
 // divergent, dirty, unsafe, failed-check, rollback, and restart-required
-// states stay visible — they are just not buttons).
-export function updateVerdict(data = {}, phase = '') {
+// states stay visible — they are just not buttons). `appVersion` is the app (host) version About shows: the
+// headline names the code an update changes, the App chip the app that a new download changes.
+export function updateVerdict(data = {}, phase = '', appVersion = '') {
     const checkedAgo = humanizeCheckedAt(data.checked_at);
-    const chips = [];
+    const chips = appVersion ? [{ label: 'App', value: appVersion }] : [];
     if (data.official_repo_url) chips.push({ label: 'Official repo', value: repoSlug(data.official_repo_url) });
     if (data.target_ref) chips.push({ label: 'Target', value: data.target_ref });
     if (data.update_channel) chips.push({ label: 'Channel', value: data.update_channel, link: 'settings-advanced' });
@@ -855,7 +856,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     }
 
     function render() {
-        const verdict = updateVerdict(latestStatus || {}, phase);
+        const verdict = updateVerdict(latestStatus || {}, phase, lastAppVersion());
         dot.dataset.tone = verdict.tone;
         summary.textContent = verdict.headline;
         const hintText = [verdict.hint, ...(verdict.warnings || []).map((w) => `Warning: ${w}`)]
