@@ -7,7 +7,7 @@ of repeating the generation checks (2-20 s per boot in production on 13-14 Oct).
 process still writes its own ``worker_boot`` row.
 
 A worker also caches its bytecode, but only into a prefix inside its data dir (the
-launcher's ``state/pycache``): never beside a source, so never into a signed bundle (WA6),
+launcher's ``state/pycache.noindex``): never beside a source, so never into a signed bundle (WA6),
 and never into a prefix someone else set up (a developer's, this test harness's).
 """
 from __future__ import annotations
@@ -113,7 +113,7 @@ def test_a_worker_writes_bytecode_only_into_a_prefix_inside_its_data_dir(tmp_pat
     later imports are cached there; a prefix elsewhere (a developer's, this harness's) or none
     writes nothing anywhere."""
     data = tmp_path / "data"
-    pycache = {"data_dir": data / "state" / "pycache", "elsewhere": tmp_path / "pycache"}.get(prefix)
+    pycache = {"data_dir": data / "state" / "pycache.noindex", "elsewhere": tmp_path / "pycache"}.get(prefix)
     module = REPO / "ouroboros" / "preflight_receipts.py"
     beside = sorted((module.parent / "__pycache__").glob("preflight_receipts.*.pyc"))
     # An empty value is "no prefix" to Python (the test harness refills an absent one).
@@ -128,6 +128,6 @@ def test_a_worker_writes_bytecode_only_into_a_prefix_inside_its_data_dir(tmp_pat
     assert done.stdout.strip() == ("0" if prefix == "data_dir" else "1")
     cached = sorted(tmp_path.rglob("preflight_receipts.*.pyc"))
     assert bool(cached) is (prefix == "data_dir")
-    assert all(path.is_relative_to(data / "state" / "pycache") for path in cached)
+    assert all(path.is_relative_to(data / "state" / "pycache.noindex") for path in cached)
     assert sorted((module.parent / "__pycache__").glob("preflight_receipts.*.pyc")) == beside, \
         "nothing is ever written beside the source"

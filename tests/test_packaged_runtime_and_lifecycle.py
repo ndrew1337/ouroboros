@@ -100,7 +100,7 @@ def test_embedded_python_env_redirects_both_bundle_writes(tmp_path, monkeypatch)
     monkeypatch.setenv("PYTHONNOUSERSITE", "1")
     env = bootstrap_module.embedded_python_env(tmp_path)
     state = tmp_path / "state"
-    assert env["PYTHONPYCACHEPREFIX"] == str(state / "pycache")
+    assert env["PYTHONPYCACHEPREFIX"] == str(state / "pycache.noindex")
     assert env["PYTHONUSERBASE"] == str(state / "python-userbase")
     # An inherited no-user-site would install to the user site then refuse to import it.
     assert "PYTHONNOUSERSITE" not in env

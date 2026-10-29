@@ -78,7 +78,7 @@ def _bind_worker_repo_root(repo_dir: str, drive_root: str = "") -> None:
 def write_bytecode_to_prefix_only(drive_root: str) -> None:
     """Let this worker cache its bytecode, only into a prefix inside its data dir.
 
-    The launcher points the prefix at ``data/state/pycache``, and with a prefix Python
+    The launcher points the prefix at ``data/state/pycache.noindex``, and with a prefix Python
     writes bytecode only there, never beside a source and so never into a signed bundle
     (WA6, the reason the launcher sets ``PYTHONDONTWRITEBYTECODE``); the next worker then
     loads its import graph instead of recompiling it on every boot. No prefix, or one

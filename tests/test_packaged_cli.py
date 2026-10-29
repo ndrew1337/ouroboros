@@ -263,7 +263,7 @@ def test_packaged_cli_inner_env_ignores_inherited_repo_and_data(tmp_path, monkey
     assert env["OUROBOROS_DATA_DIR"] == str(runtime.data_dir)
     assert env["OUROBOROS_URL"] == "http://127.0.0.1:9000"
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
-    assert env["PYTHONPYCACHEPREFIX"] == str(runtime.data_dir / "state" / "pycache")
+    assert env["PYTHONPYCACHEPREFIX"] == str(runtime.data_dir / "state" / "pycache.noindex")
 
 
 def test_installer_plan_chooses_user_local_path_dir(tmp_path, monkeypatch):
@@ -527,7 +527,7 @@ def test_posix_wrapper_ignores_poisoned_env_and_finds_internal_root(tmp_path, mo
     assert lines[0] == str(internal)
     assert lines[1] == "-m ouroboros.packaged_cli status"
     assert lines[2] == "1"
-    assert lines[3] == str(tmp_path / "cache" / "ouroboros" / "pycache")
+    assert lines[3] == str(tmp_path / "cache" / "ouroboros" / "pycache.noindex")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell wrapper test")

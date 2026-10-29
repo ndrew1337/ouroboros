@@ -114,6 +114,7 @@ from ouroboros.platform_layer import (
     terminate_job,
     terminate_process_group_id,
 )
+from ouroboros.unindexed import bytecode_prefix
 from ouroboros.utils import atomic_write_json, utc_now_iso
 
 MAX_CRASH_RESTARTS = 5
@@ -127,15 +128,10 @@ _DEPS_RETRY_DELAY_SEC = 5
 # WA6: globally suppress bytecode writes for the launcher process itself and any
 # naive os.environ.copy() child it spawns. A signed+notarized macOS .app must not
 # write __pycache__/*.pyc into its own bundle at runtime — that breaks the codesign
-# seal and triggers AppTranslocation. Uses the same data_dir/state/pycache
-# convention as launcher_bootstrap.embedded_python_env so caches land outside the
-# bundle. setdefault keeps any explicit caller override.
-_pycache_dir = DATA_DIR / "state" / "pycache"
-try:
-    _pycache_dir.mkdir(parents=True, exist_ok=True)
-except OSError:
-    pass
-os.environ.setdefault("PYTHONPYCACHEPREFIX", str(_pycache_dir))
+# seal and triggers AppTranslocation. Caches land in the data dir's unindexed prefix
+# (as in launcher_bootstrap.embedded_python_env), renamed from an older launcher's
+# before any child starts; any other explicit caller prefix is kept.
+os.environ["PYTHONPYCACHEPREFIX"] = bytecode_prefix(DATA_DIR, os.environ.get("PYTHONPYCACHEPREFIX", ""))
 
 _LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 _log_dir = DATA_DIR / "logs"

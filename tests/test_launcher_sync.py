@@ -620,7 +620,7 @@ def test_start_agent_windows_assigns_job_before_resume_and_records(monkeypatch, 
     assert proc.pid == 54321
     env = next(value for key, value in calls if key == "popen_env")
     assert env["PYTHONDONTWRITEBYTECODE"] == "1"
-    assert env["PYTHONPYCACHEPREFIX"] == str(data_dir / "state" / "pycache")
+    assert env["PYTHONPYCACHEPREFIX"] == str(data_dir / "state" / "pycache.noindex")
     lifecycle_calls = [call for call in calls if call[0] != "popen_env"]
     assert lifecycle_calls[:4] == [
         ("popen_flags", 0x204),
