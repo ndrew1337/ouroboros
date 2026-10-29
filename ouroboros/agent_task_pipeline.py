@@ -1381,6 +1381,7 @@ def build_review_context(env: Any) -> str:
             format_status_section,
             load_state,
             make_repo_key,
+            stale_marker_status,
         )
         from ouroboros.task_continuation import (
             list_review_continuations,
@@ -1397,8 +1398,7 @@ def build_review_context(env: Any) -> str:
         open_obs = state.get_open_obligations(repo_key=repo_key)
         open_debts = state.get_open_commit_readiness_debts(repo_key=repo_key)
         if (
-            not state.advisory_runs
-            and not state.latest_attempt()
+            not state.latest_attempt()
             and not continuations
             and not corrupt
             and not open_obs
@@ -1411,13 +1411,15 @@ def build_review_context(env: Any) -> str:
         # the panel, tests, custody and binding, none of which this section decides.
         lines: List[str] = ["## Review Continuity", f"- repo_key={repo_key}"]
 
-        stale_matches_repo = not state.last_stale_repo_key or state.last_stale_repo_key == repo_key
-        if state.last_stale_from_edit_ts and stale_matches_repo:
+        marker_current, look_unreadable = stale_marker_status(state, pathlib.Path(env.drive_root), repo_key)
+        if marker_current:
             lines.append(
                 f"- stale_marker={state.last_stale_from_edit_ts[:19]}: "
                 f"{_truncate_with_notice(state.last_stale_reason or 'worktree edit invalidated advisory freshness', 220)}"
             )
             lines.append(f"  invalidated_by={state.stale_marker_attribution_note()}")
+            if look_unreadable:
+                lines.append(f"  preflight_unreadable={_truncate_with_notice(look_unreadable, 220)} (marker unverified)")
 
         if open_debts:
             lines.append("- retry_anchor=commit_readiness_debt")

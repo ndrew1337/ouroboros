@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 REVIEW_LEDGER_SCHEMA_VERSION = 1
 LEDGER_SUBDIR = "review_ledger"
 INDEX_NAME = "index.jsonl"
+PREFLIGHT_HEADS_NAME = "preflight_heads.json"  # checkout key -> its newest preflight record id ("" = any)
 LEDGER_LOCK_NAME = "review_ledger.lock"
 INDEX_MAX_BYTES = 2_000_000  # hot-index rotation threshold; segments stay beside it
 UNKNOWN = "unknown"
@@ -294,6 +295,7 @@ def _payload(record: Any) -> Dict[str, Any]:
 
 def _write_and_index(drive_root: Any, path: pathlib.Path, payload: Dict[str, Any]) -> None:
     write_text_atomic(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    _keep_preflight_head(drive_root, payload)  # first, so a rotation cannot archive what the heads seed from
     _rotate_index_if_needed(drive_root)
     append_jsonl(index_path(drive_root), index_row(drive_root, payload))
 
@@ -562,26 +564,67 @@ def surface_records(drive_root: Any, surface: str) -> List[Dict[str, Any]]:
     return _index_rows(drive_root, surface=str(surface or ""))
 
 
-def latest_preflight_record(drive_root: Any, *, repo_key: str = "") -> Optional[Dict[str, Any]]:
-    """The newest ``surface=preflight`` record of one checkout — the look
-    ``review_status`` reports fresh or ``stale_from_edit`` and a worktree mutation
-    marks stale (D5-002). ``repo_key`` is ``review_state.make_repo_key`` of the
-    checkout; empty matches any. Reads the hot index only; a record that cannot be
-    read or names no root is skipped, never reported as a look."""
+def _head_keys(root: str) -> tuple:
+    """The heads a preflight record of ``root`` holds: any checkout's, and its own while it is on disk."""
     from ouroboros.review_state import make_repo_key
 
-    for row in recent_records(drive_root, limit=50, hot_only=True, surface="preflight"):
-        try:
-            record = load_record(drive_root, str(row.get("record_id") or ""))
-        except ValueError:
-            continue
+    return ("", make_repo_key(pathlib.Path(root))) if pathlib.Path(root).exists() else ("",)
+
+
+def _preflight_heads(drive_root: Any) -> Dict[str, Any]:
+    """Current pointers, or a bounded legacy view with explicit coverage; never
+    rebuild unreadable saved heads or infer absence from a partial import."""
+    path = ledger_dir(drive_root) / PREFLIGHT_HEADS_NAME
+    if path.exists():
+        data = _read_json(path)
+        if (data is None or not isinstance(data.get("heads"), dict)
+                or not isinstance(data.get("complete"), bool)
+                or any(not isinstance(v, str) or not v for v in data["heads"].values())):
+            raise ValueError(f"review ledger preflight heads {path} are unreadable")
+        return data
+    rows = recent_records(drive_root, limit=50, hot_only=True, surface="preflight")
+    data = {"heads": {}, "complete": len(rows) < 50 and not archived_segments_exist(drive_root)}
+    for row in rows:
+        record_id = str(row.get("record_id") or "")
+        record = load_record(drive_root, record_id)
         root = str(((record or {}).get("subject") or {}).get("root") or "")
-        if not record or not root:
+        if not root:
+            data["complete"] = False
             continue
-        if repo_key and make_repo_key(pathlib.Path(root)) != repo_key:
-            continue
-        return record
-    return None
+        for key in _head_keys(root):
+            data["heads"].setdefault(key, record_id)
+    return data
+
+
+def _keep_preflight_head(drive_root: Any, payload: Dict[str, Any]) -> None:
+    """Publish under the ledger lock; pruning retains incomplete coverage."""
+    path = ledger_dir(drive_root) / PREFLIGHT_HEADS_NAME
+    root = str((payload.get("subject") or {}).get("root") or "") if payload.get("surface") == "preflight" else ""
+    if path.exists() and not root:
+        return
+    try:
+        data = _preflight_heads(drive_root)
+    except (OSError, ValueError):
+        log.warning("preflight heads not updated; source record and index retained", exc_info=True)
+        return
+    heads = data["heads"]
+    heads.update(dict.fromkeys(_head_keys(root) if root else (), payload["record_id"]))
+    kept = {key: record_id for key, record_id in heads.items() if not key or pathlib.Path(key).exists()}
+    data.update(heads=kept, complete=data["complete"] and len(kept) == len(heads))
+    write_text_atomic(path, json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
+
+
+def latest_preflight_record(drive_root: Any, *, repo_key: str = "") -> Optional[Dict[str, Any]]:
+    """Read the checkout's current look (empty key: any). An incomplete imported
+    window or unreadable source raises ValueError rather than declaring no look."""
+    data = _preflight_heads(drive_root)
+    record_id = data["heads"].get(repo_key, "")
+    if not record_id and not data["complete"]:
+        raise ValueError("preflight history incomplete for this checkout; the look may be outside the retained window")
+    record = load_record(drive_root, record_id) if record_id else None
+    if record_id and record is None:
+        raise ValueError(f"review ledger preflight head {record_id} names no record")
+    return record
 
 
 def normalize_model_name(text: Any) -> str:
