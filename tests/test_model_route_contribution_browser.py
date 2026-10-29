@@ -163,6 +163,7 @@ def test_response_maximum_preview_keeps_owner_draft(route_ui, edit_order):
     expect(maximum).to_have_value('4096')
     expect(note).to_contain_text('4,096 tokens · your maximum')
     roles.capture(page, f'maximum-preview-draft-{edit_order}')
+    route_ui['errors'].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     # A fresh, untouched control still reads the persisted owner maximum.
     page.reload()
     page.locator('[data-settings-tab="models"]').click()
@@ -187,7 +188,7 @@ def test_response_maximum_preview_keeps_owner_draft(route_ui, edit_order):
     main.locator('summary').click()
     expect(note).to_contain_text('Auto: maximum response unknown')
     expect(maximum).to_have_value('')
-    assert not route_ui['errors']
+    assert not route_ui['errors'].unexpected(), route_ui['errors'].report()
 
 
 def test_response_maximum_deferred_toggle_cannot_cancel_apply(route_ui):
