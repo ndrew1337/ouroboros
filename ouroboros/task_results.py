@@ -519,12 +519,15 @@ def write_task_result(
     stored = prepared_write(_write)
     if transition.get("admitted") and stored.get("project_id"):
         # The first committed admission, including a schedule receipt, opens the room once. Callers may
-        # hold Q, so an open project is read without the registry lock and never rewritten.
-        # Replayed receipts, status mirrors and restored work cannot undo a later closure.
+        # hold Q and the captured admission stays the address, so a lock-free display read only hints
+        # closure; the registry compares and writes. Replays cannot undo a later closure.
         try:
-            from ouroboros.projects_registry import get_reserved_project, update_project
-            if "closed" in (get_reserved_project(results_drive_root, stored["project_id"]) or {}):
-                update_project(results_drive_root, stored["project_id"], closed=None)
+            from ouroboros.project_admission import display_registry_snapshot
+            from ouroboros.projects_registry import update_project
+            pid = stored["project_id"]
+            if any(row.get("id") == pid and "closed" in row
+                   for row in display_registry_snapshot(results_drive_root).get("projects") or ()):
+                update_project(results_drive_root, pid, closed=None)
         except Exception:
             log.warning("Admitted task %s could not reopen its project", task_id, exc_info=True)
     if transition.get("terminal"):
