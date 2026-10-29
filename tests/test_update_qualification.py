@@ -360,3 +360,77 @@ def test_new_red_facts_land_beside_the_saved_prose_which_stays_current(tmp_path,
     assert result["letter"]["description_current"] is True and result["letter"]["text"] == "Old green description"
     assert result["qualification"]["github"]["runs"] == red["runs"]
     assert letter.read_record(tmp_path)["revision"] == 1
+
+
+def _fail(_url):
+    raise OSError("offline")
+
+
+def test_open_post_merge_reds_are_read_and_an_outage_never_reads_as_none_open():
+    urls = []
+
+    def get(url):
+        urls.append(url)
+        return [{"number": 2390, "title": "Post-merge red: tests/test_a.py::test_x", "created_at": "2026-10-28T08:00:00Z"},
+                {"number": 7, "title": "a pull request", "pull_request": {}}]
+
+    seen = qualification.post_merge_reds("https://github.com/owner/repo.git", get_json=get)
+    assert urls == ["https://api.github.com/repos/owner/repo/issues?labels=post-merge-red&state=open&per_page=100"]
+    assert seen["read"] == "observed" and seen["repository"] == "owner/repo" and seen["observed_at"]
+    assert seen["issues"] == [{"number": 2390, "title": "Post-merge red: tests/test_a.py::test_x",
+                               "opened": "2026-10-28T08:00:00Z"}]
+    # An outage keeps the last observation and its time; without one it lists nothing and dates nothing.
+    first = qualification.post_merge_reds("https://github.com/owner/repo", get_json=_fail)
+    assert (first["read"], first["issues"], first["observed_at"]) == ("unavailable", [], "")
+    down = qualification.kept_reds(first, seen)
+    assert (down["read"], down["issues"], down["observed_at"]) == ("unavailable", seen["issues"], seen["observed_at"])
+    assert qualification.kept_reds(first, None) == first and qualification.kept_reds(None, seen) == seen
+    assert qualification.kept_reds(seen, down) == seen
+    # Another source never wears the old list: a fork's failed read keeps nothing of the official observation.
+    fork = qualification.kept_reds(qualification.post_merge_reds("https://github.com/example/fork", get_json=_fail), seen)
+    assert (fork["repository"], fork["issues"], fork["observed_at"]) == ("example/fork", [], "")
+    full = qualification.post_merge_reds("https://github.com/owner/repo",
+                                         get_json=lambda _: [{"number": n} for n in range(100)])
+    assert full["read"] == "partial" and len(full["issues"]) == 100
+    other = qualification.post_merge_reds("https://gitlab.com/owner/repo",
+                                          get_json=lambda _: pytest.fail("no GitHub reader for another host"))
+    assert other["read"] == "unavailable" and other["issues"] == []
+
+
+def test_every_completed_check_shows_the_open_reds_to_an_up_to_date_install(tmp_path, monkeypatch):
+    """No update, so no range: the reds still reach the Runtime fact, and a later outage keeps them."""
+    monkeypatch.setattr(letter, "collect_range_material", lambda *a, **k: pytest.fail("no range without an update"))
+    monkeypatch.setattr(letter, "_default_git", lambda: lambda _: (1, "", ""))
+    monkeypatch.setattr(qualification, "_get_json", lambda _url: [
+        {"number": 2390, "title": "Post-merge red: tests/test_a.py::test_x", "created_at": "t0"}])
+    status = _status(available=False, latest_sha="", official_repo_url="https://github.com/razzant/ouroboros")
+    record = letter.refresh_after_check(status, drive_root=tmp_path)
+    assert [row["number"] for row in record["post_merge_reds"]["issues"]] == [2390]
+    cache = {"managed_update_cache": {"latest_sha": "", "available": False, "behind": 0, "ahead": 0, "checked_at": "t0"}}
+    fact = letter.official_update_projection("a" * 40, drive_root=tmp_path, state=cache)
+    assert fact["status"] == "up_to_date" and fact["letter"] is None
+    assert fact["post_merge_reds"]["read"] == "observed" and fact["post_merge_reds"]["issues"][0]["number"] == 2390
+    monkeypatch.setattr(qualification, "_get_json", _fail)
+    kept = letter.refresh_after_check(status, drive_root=tmp_path)["post_merge_reds"]
+    assert kept["read"] == "unavailable" and kept["issues"] == record["post_merge_reds"]["issues"]
+    monkeypatch.setattr(qualification, "_get_json", lambda _url: [])
+    assert letter.refresh_after_check(status, drive_root=tmp_path)["post_merge_reds"]["issues"] == []
+    monkeypatch.setenv("OUROBOROS_UPDATE_CHANNEL", "development")
+    switched = letter.official_update_projection("a" * 40, drive_root=tmp_path, state={"managed_update_cache": {
+        **cache["managed_update_cache"], "update_channel": "stable"}})
+    assert switched["status"] == "unchecked" and switched["post_merge_reds"]["read"] == "observed"
+
+
+def test_a_failed_read_keeps_the_observation_the_record_holds_under_the_lock():
+    """The check reads GitHub before the record lock; the facts land on the record read under it, so a
+    failed read keeps whatever observation the record holds by then."""
+    held = {"read": "observed", "repository": "razzant/ouroboros", "observed_at": "t1",
+            "issues": [{"number": 2412, "title": "Post-merge red: #2397 theme", "opened": "t1"}]}
+    failed = qualification.post_merge_reds("https://github.com/razzant/ouroboros", get_json=_fail)
+    key = {"base_sha": "a" * 40, "target_sha": "", "update_channel": "stable", "target_ref": "managed/main"}
+    record = letter._with_check_facts({"schema": 1, "state": "none", "post_merge_reds": held}, key,
+                                      {"post_merge_reds": failed}, running_sha="a" * 40, checkout_sha="a" * 40,
+                                      target_version="7.9.0")
+    assert record["post_merge_reds"]["read"] == "unavailable"
+    assert (record["post_merge_reds"]["issues"], record["post_merge_reds"]["observed_at"]) == (held["issues"], "t1")
+
