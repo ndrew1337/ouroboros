@@ -141,7 +141,7 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_TASK_REVIEW_MODE | auto | Result review mode: `auto` forces nothing, `required` runs the host's result review at a root delivery with produced material, `off` refuses `review_change(subject="result")` (§6 Result review) |
 | OUROBOROS_SAFETY_MODE | full | Safety supervision mode; a fresh desktop wizard may author `light`; lowering is owner-guarded (§6 Safety and runtime mode) |
 | OUROBOROS_CONSCIOUSNESS_SAFETY_MODE | full | Coverage for consciousness work (own wakes, places, what they start); existing installs copy the saved Safety level once |
-| OUROBOROS_SAFETY_OWNER_RULES | (empty) | The owner's standing rules, read by the Safety Supervisor on every check; owner-only |
+| OUROBOROS_SAFETY_OWNER_RULES | (empty) | The owner's standing rules for every mind and check; owner-only |
 | OUROBOROS_SAFETY_MAX_TOKENS | 2000 | Safety-check output budget |
 | OUROBOROS_SAFETY_CALL_TIMEOUT_SEC | 60 | Safety-check call ceiling |
 | OUROBOROS_WEBSEARCH_TIMEOUT_SEC | 480 | `web_search` ceiling |

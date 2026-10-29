@@ -143,9 +143,10 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
     "depth/cap limits. Children scheduled in one round run concurrently; on cache-write-priced routes each "
     "sibling started before the first responds pays a full prefix write. Native children can address you, "
     "siblings or any task in their tree; ongoing addressed turns need "
-    "objective/constraints stating what is interim, whom to address and what ends participation. Settled "
-    "sessions continue as new runs via delegate_start(continue_from=run_id): same session where possible, "
-    "else a new one with retained evidence; work may repeat. Retrieve the handoff with get_task_result, "
+    "objective/constraints stating what is interim, whom to address and what ends participation. Continue "
+    "settled sessions via delegate_start(subagent_id=id, continue_from=run_id, prompt=''): new run, "
+    "same session if possible, else a new one with retained evidence; work may repeat. "
+    "Retrieve the handoff with get_task_result, "
     "wait_task or wait_tasks before relying on it."
 )
 
