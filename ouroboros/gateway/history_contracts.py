@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from ouroboros.gateway.attachment_contracts import ChatAttachmentView
+from ouroboros.gateway.reference_contracts import ChatReplyReference
 
 try:
     from typing import Literal, Required, TypedDict
@@ -132,9 +133,10 @@ class ChatHistoryMessage(TypedDict, total=False):
     wait_ended_at: str
     row_address: str
     row_client_message_id: str  # an outgoing row's own saved name, the same as its client_message_id
-    reply_to: Dict[str, Any]
+    reply_to: ChatReplyReference
     relay: Dict[str, Any]
     reply_to_relay: str
+    room_revisions: Dict[str, int]  # a row shown in several rooms: the revision it took in each room it counted in
     history_id: str  # "<source>:<offset>": the stored row's identity in this core's retained history
     history_position: ChatHistoryPosition
     markdown: bool

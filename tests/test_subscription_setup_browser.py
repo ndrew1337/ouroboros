@@ -273,6 +273,7 @@ def test_cursor_login_and_catalog_are_not_execution_readiness(subscription_ui):
         "#harness-accounts-section").inner_text()
     cursor.scroll_into_view_if_needed()
     capture(page, "cursor-auth-only-settings")
+    ui["errors"].watch(page)  # leaving Settings may cut off the page's own reads (tests/ui_console_errors.py)
     page.goto(ui["url"] + "/onboarding")
     page.wait_for_function("() => document.querySelector('#agents-outcome')?.textContent.includes('Signed in to Cursor')")
     outcome = page.locator("#agents-outcome").inner_text()
@@ -489,6 +490,7 @@ def test_cursor_only_does_not_claim_model_access_and_api_only_finishes(subscript
     assert 'Main still needs Codex' in page.locator('#agents-outcome').inner_text()
     # Removing the optional agent gives the API-only path the same five steps.
     ui['fixture']['status']['profiles']['profiles'] = []
+    ui['errors'].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload()
     page.locator('[data-collapse="api-access"] > summary').click()
     page.locator('#openai-key').fill('fixture-api-credential')

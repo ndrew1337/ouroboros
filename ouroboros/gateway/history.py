@@ -304,7 +304,7 @@ def _chat_quota_predicate(row_matches_thread):
 def _history_identity(entry):
     from ouroboros.chat_references import projection_fields
     return {**({"row_address": entry["row_address"]} if entry.get("row_address") else projection_fields(entry)),
-            **{key: entry[key] for key in ("history_id", "history_position", "reply_to", "relay", "reply_to_relay") if key in entry}}
+            **{key: entry[key] for key in ("history_id", "history_position", "reply_to", "relay", "reply_to_relay", "room_revisions") if key in entry}}
 
 
 def _copy_task_summary_metadata(rec: Dict[str, Any], entry: Dict[str, Any]) -> None:

@@ -59,6 +59,7 @@ def test_theme_choice_reload_and_main_surfaces(subscription_ui):
         page.locator(f'[data-nav-page="{name}"]').click()
         page.wait_for_selector(f'#page-{name}.active')
         capture(page, f'theme-light-{name}')
+    ui['errors'].watch(page)  # the reloads may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload()
     page.wait_for_selector('#chat-input')
     assert page.locator('html').get_attribute('data-theme') == 'light'
@@ -150,6 +151,7 @@ def test_the_desktop_caption_hears_only_the_top_document(subscription_ui):
     # The page names itself by when it began; the reload that replaces it began later.
     began = page.evaluate('performance.timeOrigin')
     assert {token for _path, _theme, token, _sequence in calls} == {began}
+    ui['errors'].watch(page)  # the reload may cut off the page's own reads (tests/ui_console_errors.py)
     page.reload()
     page.wait_for_selector('#chat-input')
     page.evaluate("window.dispatchEvent(new CustomEvent('pywebviewready'))")
