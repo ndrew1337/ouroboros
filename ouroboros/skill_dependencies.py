@@ -198,17 +198,23 @@ def ensure_skill_dependencies(drive_root: pathlib.Path, loaded: Any, *, progress
     ``not_required`` (no auto specs), ``installed`` (already recorded for these specs, or
     installed now), ``not_admitted`` (the gate does not admit the bytes: nothing written),
     ``failed`` (the installer's text in ``detail``; ``deps.json`` keeps it, the verdict is
-    untouched, the next call retries). Idempotent; never takes the lifecycle lane.
+    untouched, the next call retries). An environment left on another host's Python
+    (``python_env`` of the reader) is re-pointed without pip when only its base moved and
+    rebuilt by the installer for another major.minor. Idempotent; never takes the lifecycle lane.
     """
     try:
         from ouroboros.marketplace.install_specs import install_specs_hash
-        from ouroboros.marketplace.isolated_deps import install_isolated_dependencies, read_deps_state
+        from ouroboros.marketplace.isolated_deps import install_isolated_dependencies, read_deps_state, rebind_python_env
 
         auto_specs = auto_install_specs_for_skill(drive_root, loaded)
         if not auto_specs:
             return "not_required", ""
+
+        def recorded(state: Dict[str, Any]) -> bool:
+            return str(state.get("status") or "") == "installed" and state.get("specs_hash") == install_specs_hash(auto_specs)
+
         state = read_deps_state(drive_root, loaded.name, loaded.skill_dir)
-        if str(state.get("status") or "") == "installed" and state.get("specs_hash") == install_specs_hash(auto_specs):
+        if recorded(state):
             if read_deps_state(drive_root, loaded.name).get("status") != "installed":
                 # A runtime record corroborated the live environment; finish its interrupted publication.
                 from ouroboros.marketplace.isolated_deps import DEPS_STATE_FILENAME
@@ -218,6 +224,10 @@ def ensure_skill_dependencies(drive_root: pathlib.Path, loaded: Any, *, progress
             return "installed", ""
         if not loaded.review.gate_for(loaded.content_hash)["executable_review"]:
             return "not_admitted", ""
+        if state.get("python_env") == "moved":
+            rebind_python_env(loaded.skill_dir)
+            if recorded(read_deps_state(drive_root, loaded.name, loaded.skill_dir)):
+                return "installed", ""
         if progress is not None:
             progress("Installing packages…")
         install_isolated_dependencies(drive_root, loaded.name, loaded.skill_dir, auto_specs)

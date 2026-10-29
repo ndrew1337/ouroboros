@@ -250,6 +250,32 @@ def test_reviewed_skill_environment_precedes_executor(tmp_path, monkeypatch):
     assert trace.environment == "isolated_skill"
 
 
+def test_a_ready_skill_whose_env_names_another_python_is_refused_not_rerouted(tmp_path, monkeypatch):
+    """The packages live in an env made by a vanished app: agent python would run the skill without them."""
+    import ouroboros.marketplace.isolated_deps as isolated_deps
+    import ouroboros.skill_loader as skill_loader
+    import ouroboros.skill_readiness as skill_readiness
+
+    ctx = _context(tmp_path)
+    ctx.task_metadata = {"skill": "demo"}
+    agent_python = _executable(tmp_path / "agent" / "bin" / "python")
+    monkeypatch.setenv("OUROBOROS_AGENT_PYTHON", str(agent_python))
+    monkeypatch.setattr(skill_loader, "find_skill", lambda *args, **kwargs: SimpleNamespace(name="demo", skill_dir=tmp_path))
+    deps_only = SimpleNamespace(ready=False, next_actions=[{"phase": "dependencies"}])
+    review_too = SimpleNamespace(ready=False, next_actions=[{"phase": "review"}, {"phase": "dependencies"}])
+    stale = {"status": "stale", "python_env": "moved"}
+    for readiness, state, expected in ((deps_only, stale, None), (review_too, stale, str(agent_python)),
+                                       (deps_only, {"status": "missing"}, str(agent_python))):
+        monkeypatch.setattr(skill_readiness, "skill_readiness_for_execution", lambda *a, readiness=readiness, **k: readiness)
+        monkeypatch.setattr(isolated_deps, "read_deps_state", lambda *a, state=state, **k: state)
+        resolved, trace = resolve_process_python(ctx, "run_command", _tool_args("run_command"), runtime_mode="advanced")
+        if expected is None:  # the typed pre-block: argv unchanged, nothing started (tool_resolution)
+            assert resolved == _tool_args("run_command") and trace.error_reason == "reviewed_skill_environment_stale"
+        else:  # a skill blocked by anything else keeps today's interpreter choice
+            assert resolved["cmd"][0] == expected and not trace.error_reason
+            assert trace.fallback_reason == "reviewed_skill_environment_unavailable"
+
+
 @pytest.mark.parametrize(
     ("tool_name", "args"),
     [
