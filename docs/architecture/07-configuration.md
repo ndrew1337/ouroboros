@@ -30,7 +30,7 @@ OpenRouter/Anthropic-compatible output budgets use `max_tokens`; direct OpenAI C
 | Main task loop (`loop_llm_call.MAIN_LOOP_MAX_TOKENS`) | 65,536 |
 | `LLMClient.vision_query()` and VLM tools (`analyze_screenshot`, `vlm_query`) | 32,768 |
 | Review synthesis dedup | 16,384 |
-| Scratchpad consolidation, Light memory drafts (`consolidator.LIGHT_ANSWER_CEILING_TOKENS`) | 16,384 |
+| Light memory drafts (`consolidator.LIGHT_ANSWER_CEILING_TOKENS`) | 16,384 |
 | Post-task evolution promotion decision (`post_task_evolution`) | 8,192 |
 | Skill publish PR body generation | 8,192 |
 | Project naming LIGHT one-shot (`project_naming.llm_project_name`) | 256 |

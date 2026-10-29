@@ -727,78 +727,20 @@ def _warn_if_over_budget(name: str, content: str) -> None:
         log.warning("Context section '%s' exceeds budget: %d chars > %d", name, len(content), budget)
 
 
-def _render_scratchpad_for_context(memory: "Memory", budget: int) -> str:
-    """Render the scratchpad SECTION BODY for context, with block-boundary degradation.
+def _scratchpad_for_context(memory: "Memory") -> Tuple[str, str]:
+    """``(source, body)``: the whole working memory, rendered from its canonical blocks.
 
-    ibl-2b09abdadd25: when scratchpad.md exceeds the consumer budget, return
-    the newest WHOLE blocks that fit (drop oldest-first) instead of the raw
-    file. Always retain the single newest block (even if it alone exceeds
-    budget) paired with an in-band gap marker (BIBLE P1 — never silent).
-    Falls back to raw markdown when scratchpad_blocks.json is absent/empty
-    (legacy flat scratchpad) so a missing source-switch does not introduce
-    silent amnesia. Block-boundary cuts only — never mid-block, never
-    mid-string. The caller wraps the returned body with the section header
-    ("## Scratchpad (from `memory/scratchpad.md` ...)") inline, same as before.
-
-    The kept slice is rendered by the writer's own
-    ouroboros.memory.render_scratchpad_markdown, so the degraded body is the
-    same markdown, in the same newest-first order, as the prefix of
-    scratchpad.md it stands in for.
+    The scratchpad is tier-0 core (``context_layout.TIER0_ALWAYS_FULL``): no build drops a
+    block for age or size (#918); a window too small for the core is ``memory_floor``'s
+    measured fact. Blocks render through the writer's own ``render_scratchpad_markdown``, so a
+    projection a failed regeneration left stale never hides an active block. With no blocks
+    (none yet, or a flat pre-block scratchpad) the file itself is the section.
     """
-    raw = memory.load_scratchpad()
-    if len(raw) <= budget:
-        return raw
-
     blocks = memory.load_scratchpad_blocks()
     if not blocks:
-        # Legacy fallback: scratchpad.md has content but blocks.json is
-        # missing or unparseable. Return raw unchanged; we cannot trim by
-        # block. _has_retired_flat_scratchpad_without_blocks elsewhere
-        # already prevents NEW writes on this state.
-        return raw
-
-    # Render through the writer's own renderer so a degraded build reads in
-    # the SAME order (newest-first) as the scratchpad.md it stands in for.
-    journal_pointer = memory.journal_path().exists()
-
-    def _build(kept: List[Dict[str, Any]]) -> str:
-        return render_scratchpad_markdown(kept, journal_pointer=journal_pointer)
-
-    n_total = len(blocks)
-    # Find the largest k (newest-first kept) such that the section fits.
-    n_kept = n_total
-    while n_kept > 1:
-        section = _build(blocks[-n_kept:])
-        if len(section) <= budget:
-            break
-        n_kept -= 1
-    # Always retain at least the single newest, even if it alone exceeds
-    # budget (BIBLE P1 — never silent, paired with the gap marker below).
-    n_kept = max(1, n_kept)
-    section = _build(blocks[-n_kept:])
-    omitted = n_total - n_kept
-    # Fire the gap marker whenever older blocks were dropped OR the retained
-    # newest block(s) alone still exceed budget (n_kept forced to 1 above) —
-    # both are a silent-looking truncation from the consumer's point of view
-    # and BIBLE P1 requires either be disclosed in-band, not just logged.
-    # The marker names the LIVE store: a context build retires nothing, so the
-    # dropped blocks are still in scratchpad.md (the journal only holds blocks
-    # the writer actually retired/replaced — pointing there cannot resolve).
-    if omitted > 0 or len(section) > budget:
-        if omitted > 0:
-            first_ts = str(blocks[0].get("ts", ""))[:16]
-            last_ts = str(blocks[omitted - 1].get("ts", ""))[:16]
-            reason = (
-                f"{omitted} oldest block(s) ({first_ts}..{last_ts}) omitted from "
-                "this context build for size; they are still live"
-            )
-        else:
-            reason = "newest block exceeds the section budget"
-        section += (
-            f"\n⚠️ [budget gap: {reason} — re-read the full working memory with "
-            "`read_file(root='runtime_data', path='memory/scratchpad.md', start_line=1)`.]\n"
-        )
-    return section
+        return "memory/scratchpad.md", memory.load_scratchpad()
+    return "memory/scratchpad_blocks.json", render_scratchpad_markdown(
+        blocks, journal_pointer=memory.journal_path().exists())
 
 
 def build_memory_sections(memory: Memory, partition: str = "all", *, include_scratchpad: bool = True,
@@ -810,20 +752,10 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
     include_volatile = partition in {"all", "volatile"}
 
     if include_volatile and include_scratchpad:
-        scratchpad_raw = memory.load_scratchpad()
-        # WARNING is preserved on the RAW (pre-trim) value: it signals the rot
-        # class is present, even when the helper trims it down for the consumer.
-        # ibl-2b09abdadd25 closes the gap where the trimmed output alone would
-        # never re-fire the warning.
-        _warn_if_over_budget("scratchpad", scratchpad_raw)
-        scratchpad_body = _render_scratchpad_for_context(memory, SCRATCHPAD_SECTION_BUDGET_CHARS)
-        # A trimmed body must not carry the "do not re-read" instruction: the
-        # omitted blocks are only reachable by re-reading the live file.
-        if scratchpad_body != scratchpad_raw:
-            header = "## Scratchpad (from `memory/scratchpad.md` — PARTIAL: trimmed to the section budget; re-read via read_file(root='runtime_data', path='memory/scratchpad.md') for the full working memory)"
-        else:
-            header = "## Scratchpad (from `memory/scratchpad.md` — already loaded; do not re-read via read_file(root='runtime_data', path='memory/scratchpad.md'))"
-        sections.append(header + "\n\n" + scratchpad_body)
+        source, scratchpad_body = _scratchpad_for_context(memory)
+        _warn_if_over_budget("scratchpad", scratchpad_body)  # a log line only: the section is never cut
+        sections.append(f"## Scratchpad (from `{source}` — already loaded; do not re-read via "
+                        "read_file(root='runtime_data', path='memory/scratchpad.md'))\n\n" + scratchpad_body)
 
     if include_stable:
         identity_raw = memory.load_identity()

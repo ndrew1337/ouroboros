@@ -222,7 +222,7 @@ def test_native_post_task_retains_activity_and_delivers_answer_early(monkeypatch
         phases.put("synthesis")
         release.wait()  # Only the observing test releases this phase, never a timer.
 
-    monkeypatch.setattr(pipeline, "_run_scratchpad_consolidation", consolidate)
+    monkeypatch.setattr(pipeline, "_run_memory_fallback_draft", consolidate)  # the first paid late stage
     monkeypatch.setattr(pipeline, "_record_task_facts", lambda *a, **kw: None)
     monkeypatch.setattr(post_task_evolution, "maybe_promote", lambda *a, **kw: None)
     env = SimpleNamespace(repo_dir=tmp_path / "repo", drive_root=tmp_path)
