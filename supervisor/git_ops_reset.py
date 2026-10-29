@@ -819,17 +819,50 @@ def _record_checkout_facts(facts: dict, *, invalidate_bootstrap: bool = True) ->
 
 
 def _dependency_fingerprint(req_path, cmd):
-    """Actual requirement bytes, install target/environment and interpreter."""
+    """Actual requirement bytes, install target/environment and interpreter.
+
+    A packaged host (``OUROBOROS_BUNDLE_DIR`` holding its bundle manifest) counts by content, not
+    location: paths under the bundle root are relative to it, and the app version, ``sys.version``,
+    cache tag, machine, manifest identity and bundled distributions are hashed, so the same app
+    moved, remounted or re-extracted keeps its receipt while another app or Python re-syncs. Paths
+    outside that root (a container's venv) stay absolute; a run without a manifest hashes as before."""
     import hashlib
+    import importlib.metadata
     import json
+    import platform
     import site
     import sysconfig
+    from ouroboros.utils import read_json_dict
     source = req_path.read_bytes() if req_path.exists() else b"openai>=1.0.0\nrequests"
-    facts = {"requirements_sha256": hashlib.sha256(source).hexdigest(), "command": cmd,
-             "interpreter": [sys.executable, sys.version, sys.prefix, sys.base_prefix],
-             "target": [site.getuserbase(), sysconfig.get_path("purelib")],
+    purelib = sysconfig.get_path("purelib")
+    bundle = os.environ.get("OUROBOROS_BUNDLE_DIR", "").strip()
+    manifest = (read_json_dict(pathlib.Path(bundle) / "repo_bundle_manifest.json") or {}) if bundle else {}
+
+    def at(path):
+        """``path`` relative to the bundle root when it lies under it (lexically or resolved)."""
+        if not manifest:
+            return path  # a source run keys on absolute paths, exactly as before
+        for root, text in ((bundle, path), (os.path.realpath(bundle), os.path.realpath(path))):
+            try:
+                relative = os.path.relpath(os.path.abspath(text), os.path.abspath(root))
+            except ValueError:  # another Windows drive
+                continue
+            if relative != os.pardir and not relative.startswith(os.pardir + os.sep):
+                return "<bundle>/" + relative.replace(os.sep, "/")
+        return path
+
+    facts = {"requirements_sha256": hashlib.sha256(source).hexdigest(), "command": [at(cmd[0]), *cmd[1:]],
+             "interpreter": [at(sys.executable), sys.version, at(sys.prefix), at(sys.base_prefix)],
+             "target": [site.getuserbase(), at(purelib)],
              "environment": {key: os.environ.get(key, "") for key in
                              ("PYTHONUSERBASE", "PIP_TARGET", "PIP_PREFIX", "PIP_USER", "PIP_CONFIG_FILE", "VIRTUAL_ENV")}}
+    if manifest:
+        bundled = at(purelib) != purelib  # the bundle's own packages, never a venv the sync itself writes
+        facts["host"] = {"app_version": os.environ.get("OUROBOROS_APP_VERSION", ""), "cache_tag": sys.implementation.cache_tag,
+                         "machine": platform.machine(), "source_sha": manifest.get("source_sha", ""),
+                         "bundle_sha256": manifest.get("bundle_sha256", ""),
+                         "distributions": sorted(f"{dist.metadata['Name']}=={dist.version}" for dist in
+                                                 importlib.metadata.distributions(path=[purelib])) if bundled else []}
     return hashlib.sha256(json.dumps(facts, sort_keys=True).encode("utf-8")).hexdigest()
 
 
