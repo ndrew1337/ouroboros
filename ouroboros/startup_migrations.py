@@ -10,9 +10,8 @@ cancel-latch, the question-publication and the retired-set generations.
 ``python -m ouroboros.startup_migrations`` is the explicit rebuild job, including
 its historical seal audit (no audit watermark). An owner-held obligation set whose producer
 this body retired (``RETIRED_SETS``) has no reader or remover left, so the first boot of its
-generation deletes the rows an older body kept there; the lines such a producer queued stay with
-the terminal outbox, which delivers or gives them up like any owed row and never counts them
-delivered unsent.
+generation deletes the rows an older body kept there. Its unsent outbox lines become exhausted
+with ``producer_retired`` through the shared storage owner; payloads remain, no delivery is invented.
 """
 from __future__ import annotations
 
@@ -29,7 +28,7 @@ log = logging.getLogger(__name__)
 SCHEMA_GENERATION = 7
 QUESTION_PUBLICATIONS_GENERATION = 1
 RETIRED_SETS = ("memory_max",)  # the lost-Max episode's one row, retired 29.10 with its producer
-RETIRED_SETS_GENERATION = 1  # a set joining RETIRED_SETS raises it: the next boot removes its rows once
+RETIRED_SETS_GENERATION = 2  # also retire the old episode's unsent outbox lines; generation 1 removed only its set
 
 
 def watermarks(root) -> dict:
@@ -156,9 +155,11 @@ def retire_sets(root, *, rebuild=False) -> int:
     Once per generation, stamped after success; a current stamp reads no row (the explicit rebuild
     repeats it, as after a return from an older body that kept such a row again). Returns the rows removed."""
     from ouroboros import obligations
+    from ouroboros.terminal_outbox import retire_producer
 
     if not rebuild and watermarks(root).get("retired_sets_generation") == RETIRED_SETS_GENERATION:
         return 0
+    retire_producer(root, delivery_prefix="memory_max:", system_type="memory_max_notice")
     removed = 0
     for name in RETIRED_SETS:
         for identity in obligations.members(root, name):

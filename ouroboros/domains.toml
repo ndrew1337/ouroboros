@@ -952,6 +952,7 @@ D20 = "Presence"
 "supervisor/task_reaper.py" = "D09"
 "supervisor/terminal_cascade.py" = "D09"
 "supervisor/terminal_delivery.py" = "D09"
+"ouroboros/terminal_outbox.py" = "D09"  # shared durable outbox owner, below transport and startup migration
 "supervisor/terminal_supersession.py" = "D09"
 "supervisor/update_candidate.py" = "D10"
 "supervisor/update_merge.py" = "D10"
