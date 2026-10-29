@@ -442,7 +442,7 @@ export function createWorkPortals({ isMain, feed, records, card, onDomWrite, isC
         if (!actions) return false;
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'btn btn-sm btn-default';
+        btn.className = 'btn btn-sm btn-default ui-hit-area';
         btn.dataset.turnIntoProject = '1';
         btn.textContent = liveCardLabel.turnIntoProject();
         btn.addEventListener('click', (event) => {

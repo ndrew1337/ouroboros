@@ -186,19 +186,20 @@ def _mind():
 
     mind = object.__new__(BackgroundConsciousness)
     mind._last_wake_task_id = ""
+    mind._own_wake, mind._in_flight = {}, ""
     return mind
 
 
-def test_consciousness_sees_an_owner_turn_live_until_all_native_work_returns():
+def test_consciousness_ignores_owner_turns_through_native_completion():
     mind = _mind()
     registry = get_direct_activity_registry()
     registry.register("first", 1)
     registry.register("second", 2)
-    assert mind.live_turns() == ("", True)
+    assert mind.live_wake() == ""
     registry.unregister("first")
-    assert mind.live_turns() == ("", True)
+    assert mind.live_wake() == ""
     registry.unregister("second")
-    assert mind.live_turns() == ("", False)
+    assert mind.live_wake() == ""
 
 
 def test_native_post_task_retains_activity_and_delivers_answer_early(monkeypatch, tmp_path):
@@ -264,7 +265,7 @@ def test_native_post_task_retains_activity_and_delivers_answer_early(monkeypatch
             assert workers.drain_repo_writers(0) == [task_id]
             assert _live_running_task_ids(SimpleNamespace(RUNNING={})) == [task_id]
             assert _has_running_agent_tasks() and _has_started_agent_tasks()
-            assert mind.live_turns() == ("", True)
+            assert mind.live_wake() == ""
             # Production early delivery ran before synthesis. The terminal
             # completion stays buffered until post-task work returns.
             early = bus.get_nowait()
@@ -285,7 +286,7 @@ def test_native_post_task_retains_activity_and_delivers_answer_early(monkeypatch
         assert workers.drain_repo_writers(0) == []
         assert _live_running_task_ids(SimpleNamespace(RUNNING={})) == []
         assert not _has_running_agent_tasks() and not _has_started_agent_tasks()
-        assert mind.live_turns() == ("", False)
+        assert mind.live_wake() == ""
         assert load_task_result(tmp_path, task_id)["root_phase_checkpoint"]["post_task_synthesis"] == "completed"
         # Retained final and early final use the existing delivery identity;
         # the supervisor deduplicates them. task_done reaches the bus last.

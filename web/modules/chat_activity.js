@@ -13,6 +13,7 @@ import { REUSABLE_TASK_IDS } from './task_control_menu.js';
 import { ownLiveDetail, paintLiveDetail } from './task_phase_chip.js';
 import { fmt, tr, tx } from './i18n.js';
 import { formatMsgTime } from './utils.js';
+import { placeIngressNote } from './chat_attachments.js';
 import { hostRowDisplayText } from './host_notice_text.js';
 export { bootPhase, startingStatus, supervisorReady } from './host_starting_status.js';
 import {
@@ -1207,7 +1208,7 @@ export function unconfirmedForegroundCardIds(cards, activeIds) {
 }
 
 // В9: the host stamps a typed `ingress_accepted: true` on an owner echo only after the durable chat write, so that
-// client_message_id's bubble says `Input saved` — never that work began. `ingress_pending` keeps that note
+// client_message_id's bubble carries `Input saved` (a tick by its time) — never read or begun. `ingress_pending` keeps that note
 // provisional until dispatch is confirmed or the ended host's delivery becomes unknown.
 export function markIngressSaved(root, row) {
     const cmid = String(row?.client_message_id || ''), state = row?.ingress_pending === true ? 'pending' : '';
@@ -1218,7 +1219,7 @@ export function markIngressSaved(root, row) {
     const note = Object.assign(document.createElement('div'), { className: 'msg-pending', textContent: 'Input saved' });
     note.dataset.ingressSaved = state;
     for (const doubt of [prior, bubble.querySelector('[data-ingress-unconfirmed]')]) doubt?.remove();  // the saved row settles a "Send again" doubt
-    bubble.insertBefore(note, bubble.querySelector('.msg-time'));
+    placeIngressNote(bubble, note);  // the plain saved fact: a quiet tick before the time
     return true;
 }
 

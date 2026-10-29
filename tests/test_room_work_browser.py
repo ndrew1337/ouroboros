@@ -14,6 +14,7 @@ facts read in the page go to ``OUROBOROS_UI_EVIDENCE_DIR`` when it is set.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 import os
 import time
 from pathlib import Path
@@ -21,6 +22,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
+from ouroboros.consciousness_view import describe_consciousness_state
 from tests import test_subscription_setup_browser as setup_browser
 from tests._work_projection_shared import work_fields
 
@@ -226,8 +228,10 @@ class Transport:
                 fences.setdefault(item.get("root_task_id") or task_id, {
                     "state": "requested" if pausing else "paused", "parked_members": [] if pausing else [task_id]})
         # Consciousness facts show each bar's chip: one more neighbour no word may move (DESIGN bible 6).
+        next_wake = datetime.now(timezone.utc) + timedelta(hours=1)
         return {"sha": "room-work-fixture", "supervisor_ready": ready, "active_chat_activities": rows,
-                "bg_consciousness_enabled": True, "bg_consciousness_state": {"status": "sleeping", "next_wake_at": "2026-10-25T14:20:00"},
+                "bg_consciousness_enabled": True, "bg_consciousness_state": describe_consciousness_state(
+                    {"next_wake_at": next_wake.isoformat()}, True),
                 "active_chat_activities_complete": self.complete, "projects": self.projects,
                 "project_chat_ids": [p["chat_id"] for p in self.projects],
                 **work_fields(rows, raw, results=self.results, fences=fences, complete=self.complete)}

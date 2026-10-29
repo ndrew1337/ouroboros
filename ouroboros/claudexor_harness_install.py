@@ -138,6 +138,7 @@ def install_missing_harness_cli(harness: str) -> None:
     # The same custody set /panic reaps (isolated_deps._run is the template):
     # an in-flight vendor installer must not survive an emergency stop.
     from ouroboros.tools.shell import _active_subprocesses, _kill_process_group, _subprocess_lock
+    from ouroboros.tools.shell_process import CommandAdmissionClosed, tracked_start
 
     try:
         command = get_runtime_manager().ensure_cli_command()
@@ -162,20 +163,19 @@ def install_missing_harness_cli(harness: str) -> None:
     kwargs = merge_hidden_kwargs(subprocess_new_group_kwargs())
     timeout_sec = get_claudexor_harness_install_timeout_sec()
     try:
-        # Registration is atomic WITH the spawn: /panic snapshots the tracked
-        # set under this same lock, so it can never observe the child alive
-        # but untracked (the round-2 reviewer's interleaving).
-        with _subprocess_lock:
-            proc = subprocess.Popen(
+        # Counted before Popen and published as it returns (``tracked_start``): Panic's lock-free
+        # request or a begun stop that misses the handle is seen by its publication, which stops it
+        # (the round-2 reviewer's interleaving), and Popen never runs under the registry lock.
+        with tracked_start() as publish:
+            proc = publish(subprocess.Popen(
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 env=env,
                 **kwargs,
-            )
-            _active_subprocesses.add(proc)
-    except OSError as exc:
+            ))
+    except (OSError, CommandAdmissionClosed) as exc:
         raise ClaudexorUnavailable(
             "harness_install_spawn_failed",
             f"managed Claudexor installer could not start: {type(exc).__name__}",

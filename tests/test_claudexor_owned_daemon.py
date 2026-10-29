@@ -1810,12 +1810,14 @@ def test_installer_invocation_is_exact_grouped_and_stdout_bounded(monkeypatch):
 
     import ouroboros.tools.shell as shell
     from ouroboros.claudexor_daemon import owned_config_dir
+    from ouroboros.tools import shell_process
 
     def popen(argv, **kwargs):
         seen["argv"], seen["kwargs"] = argv, kwargs
-        # /panic snapshots the tracked set under this lock: the spawn must be
-        # atomic with registration, so the lock is held HERE (round-2 finding).
+        # Counted before Popen, never under the registry lock (round-2 finding, tracked_start): the
+        # lock-free Panic request and a begun stop see the start through its count and publication.
         seen["lock_held_during_spawn"] = shell._subprocess_lock.locked()
+        seen["counted_during_spawn"] = shell_process._spawning_subprocesses
         return Process()
 
     monkeypatch.setattr(installer.subprocess, "Popen", popen)
@@ -1836,7 +1838,7 @@ def test_installer_invocation_is_exact_grouped_and_stdout_bounded(monkeypatch):
     assert env["CLAUDEXOR_CONFIG_DIR"] == str(owned_config_dir())
     assert "CLAUDEXOR_DAEMON_SOCK" not in env
     assert "CLAUDEXOR_CONTROL_PORT" not in env
-    assert seen["lock_held_during_spawn"] is True
+    assert seen["lock_held_during_spawn"] is False and seen["counted_during_spawn"] == 1
     output, state = bytearray(), {}
     installer._drain_installer_stdout(
         io.BytesIO(b"x" * (installer._HARNESS_INSTALL_STDOUT_LIMIT + 1)), output, state)

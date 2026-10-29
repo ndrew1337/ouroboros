@@ -47,6 +47,7 @@ from ouroboros.tools.shell import (
     _kill_process_group,
     _subprocess_lock,
 )
+from ouroboros.tools.shell_process import tracked_start
 from ouroboros.tools.tool_result import ToolResult, _publish_tool_result, completed_local_read
 from ouroboros.usage_accounting import current_usage_scope, record_unmetered_external_dispatch
 from ouroboros.utils import append_jsonl, utc_now_iso
@@ -214,8 +215,9 @@ def _run_skill_subprocess(
     confirmed = external_handoff("skill_process")
     proc = None
     try:
-        with operation_start():
+        with tracked_start() as publish, operation_start():
             proc = Popen(cmd, **popen_kwargs)  # noqa: S603 — cmd is a vetted list, not shell
+            publish(proc)
     except OSError as exc:
         if proc is None:
             confirmed()
@@ -228,10 +230,8 @@ def _run_skill_subprocess(
         raise
     except BaseException:
         if proc is None:
-            confirmed()  # the final gate refused before Popen returned
+            confirmed()  # the final gate or a closed admission refused before Popen returned
         raise
-    with _subprocess_lock:
-        _active_subprocesses.add(proc)
     try:
         if target is not None:
             record_task_group(*target, proc.pid)

@@ -568,7 +568,7 @@ def test_project_lifecycle_rows_render_design_system_action_static_contract():
     # The conversion button is built by the card's chrome sync from the record's facts (an HTML template
     # could not be re-derived when a turn is direct); the portal module owns it with the move it makes.
     chrome = portal[portal.index("function syncConvert(record, wanted) {"):portal.index("function row(msg, text, opts) {")]
-    assert "btn.className = 'btn btn-sm btn-default';" in chrome
+    assert "btn.className = 'btn btn-sm btn-default ui-hit-area';" in chrome  # a finger's target too (audit №4)
     assert "btn.dataset.turnIntoProject = '1';" in chrome
     assert "btn.textContent = liveCardLabel.turnIntoProject();" in chrome
     assert "portals.syncConvert(record," in chat

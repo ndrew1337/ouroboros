@@ -100,12 +100,32 @@ export function initCosts({ state, mount }) {
     const page = document.createElement('div');
     page.id = 'page-costs';
     page.className = 'settings-embedded-content settings-costs-panel';
+    // The known spend leads, and what leaves it incomplete stands in the same card (DESIGN §2, one primary thing); the
+    // composition, the open hold and the technical facts follow, then the limit it is set against, then the tables.
     page.innerHTML = `
         <div class="costs-scroll">
+            <section class="costs-lead stat-card" aria-label="Known spend">
+                <div class="costs-lead-head">
+                    <div class="label">Known spend / Limit</div>
+                    <button class="btn btn-default btn-sm costs-budget-refresh" id="btn-refresh-costs">Refresh</button>
+                </div>
+                <div class="value" id="cost-known-limit">Loading…</div>
+                <div class="costs-lead-facts">
+                    <div class="costs-fact"><div class="label">Cost final</div><div class="value" id="cost-final">Loading…</div></div>
+                    <div class="costs-fact"><div class="label">Unresolved upper bound</div><div class="value" id="cost-unresolved">—</div></div>
+                    <div class="costs-fact"><div class="label">Unknown / unmetered</div><div class="value" id="cost-unknown">—</div></div>
+                </div>
+            </section>
+            <div class="costs-stats-grid">
+                <div class="stat-card"><div class="label">Confirmed</div><div class="value" id="cost-confirmed">—</div></div>
+                <div class="stat-card"><div class="label">Estimated</div><div class="value" id="cost-estimated">—</div></div>
+                <div class="stat-card"><div class="label">Reserved</div><div class="value" id="cost-reserved">—</div></div>
+                <div class="stat-card costs-technical"><div class="label">Physical attempts</div><div class="value" id="cost-calls">—</div></div>
+                <div class="stat-card costs-technical"><div class="label">Top Model</div><div class="value cost-top-model" id="cost-top-model">-</div></div>
+            </div>
             <div class="costs-budget-card">
                 <div class="costs-budget-head">
                     <h3 class="costs-budget-title">Budget</h3>
-                    <button class="btn btn-default btn-sm costs-budget-refresh" id="btn-refresh-costs">Refresh</button>
                 </div>
                 <div class="costs-budget-fields">
                     <div class="form-field ui-field">
@@ -120,17 +140,6 @@ export function initCosts({ state, mount }) {
                 </div>
                 <button class="btn btn-save costs-budget-save" id="btn-save-budget">Save Budget</button>
                 <div id="budget-save-status" class="settings-inline-status"></div>
-            </div>
-            <div class="costs-stats-grid">
-                <div class="stat-card"><div class="label">Known spend / Limit</div><div class="value" id="cost-known-limit">Loading…</div></div>
-                <div class="stat-card"><div class="label">Confirmed</div><div class="value" id="cost-confirmed">—</div></div>
-                <div class="stat-card"><div class="label">Estimated</div><div class="value" id="cost-estimated">—</div></div>
-                <div class="stat-card"><div class="label">Reserved</div><div class="value" id="cost-reserved">—</div></div>
-                <div class="stat-card"><div class="label">Unresolved upper bound</div><div class="value" id="cost-unresolved">—</div></div>
-                <div class="stat-card"><div class="label">Unknown / unmetered</div><div class="value" id="cost-unknown">—</div></div>
-                <div class="stat-card"><div class="label">Cost final</div><div class="value" id="cost-final">Loading…</div></div>
-                <div class="stat-card"><div class="label">Physical attempts</div><div class="value" id="cost-calls">—</div></div>
-                <div class="stat-card"><div class="label">Top Model</div><div class="value cost-top-model" id="cost-top-model">-</div></div>
             </div>
             <div class="costs-tables-grid">
                 <div>

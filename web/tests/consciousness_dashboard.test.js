@@ -21,6 +21,38 @@ const fromState = () => normalizeConsciousness(FIXTURE.state.bg_consciousness_st
 const wake = (id) => full().recentWakes.find((row) => row.taskId === id);
 const strip = (html) => html.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 
+test('Dashboard keeps two titled wake lists and their separate empty sentences', () => {
+    for (const rows of [full().recentWakes, [], [wake('214a31b6')], [wake('w-focus-user')]]) {
+        const html = wakesCardHtml(rows, full().coverage);
+        assert.equal(html.split(full().coverage).length - 1, 1);
+        assert.ok(html.indexOf(full().coverage) < html.indexOf('<section '));
+        const groups = html.split('<section ').slice(1);
+        assert.deepEqual(groups.map((group) => group.match(/<h4[^>]*>([^<]+)</)[1]), ['Its own wakes', 'Wakes in places']);
+        for (const [n, cause, empty] of [[0, 'own', 'No own wakes with a recorded model call in the last 48 h.'],
+            [1, 'focus', 'No wakes in places in the last 48 h.']]) {
+            const expected = rows.filter((row) => row.cause === cause).map((row) => row.taskId);
+            assert.deepEqual([...groups[n].matchAll(/data-wake="([^"]+)"/g)].map((match) => match[1]), expected);
+            assert.equal(groups[n].includes(empty), expected.length === 0);
+        }
+    }
+});
+
+test('Dashboard keeps the host headline as its only clock', (t) => {
+    t.mock.method(Date, 'now', () => Date.parse('2027-01-15T12:00:00Z'));
+    for (const [status, detail, next_wake_at] of [
+        ['due', 'Due since 11:00; the wake-up has not started yet.', '2027-01-15T11:30:00Z'],
+        ['sleeping', 'Sleeping until 13:00.', '2027-01-15T13:00:00Z'],
+        ['wake_paused', 'Wake-up own is paused or waiting in the queue; its card shows why. The next wake-up follows it.', '2027-01-15T11:30:00Z'],
+    ]) {
+        const snapshot = normalizeConsciousness({ enabled: true, status, detail, next_wake_at,
+            appointment_at: '2027-01-15T11:00:00Z' });
+        const text = strip(summaryHtml(snapshot));
+        assert.equal(text.split(detail).length - 1, 1);
+        assert.doesNotMatch(text.replace(detail, ''), /\d\d:\d\d|[Dd]ue|since|[Nn]ext wake/);
+        assert.deepEqual(headlineView(snapshot), { text: detail, moving: false });
+    }
+});
+
 test('focus account stamps cross normalization and preserve the wake anatomy and authored note lead', () => {
     const raw = { ...FIXTURE.consciousness.recent_wakes.find((row) => row.task_id === '214a31b6'),
         cause: 'focus', place_label: 'Mailbox', chat_id: 1099511627777 };
@@ -57,7 +89,7 @@ test('server status alone owns the headline even with finished or active rows in
     assert.equal(headlineView(full()).moving, false);
     assert.ok(liveWake(full()).live);
     assert.equal(liveWake({ recentWakes: [wake('214a31b6')] }), null);
-    for (const [status, detail] of [['due', 'Due; waiting for current work.'],
+    for (const [status, detail] of [['due', 'Due; the wake-up has not started yet.'],
         ['wake_failed', 'The last wake-up failed.'], ['wake_rejected', 'The last wake-up was refused.'],
         ['wake_paused', 'The last wake-up returned while paused.'], ['disabled', 'Background consciousness is off.'],
         ['waiting_for_first_conversation', 'No owner chat is bound yet; the first conversation binds it.']]) {
@@ -311,7 +343,7 @@ function fakeMount() {
         innerHTML: '',
         regions,
         querySelector(selector) {
-            if (!regions.has(selector)) regions.set(selector, { innerHTML: '', textContent: '', dataset: {}, querySelector: () => null, closest: () => null });
+            if (!regions.has(selector)) regions.set(selector, { innerHTML: '', textContent: '', dataset: {}, querySelector: () => null, querySelectorAll: () => [], closest: () => null });
             return regions.get(selector);
         },
         addEventListener() {}, removeEventListener() {},
@@ -429,27 +461,29 @@ test('unavailable wakes keep the authored reason and painted rows, unlike an abs
     assert.equal(legacy.coverage, '');
     applyPayload({ language: 'ru', english: false, revision: 1, entries: {
         ['code:' + reason]: { text: 'Must not translate authored text' },
-        'code:consciousness.no_wakes_48h': { text: 'За последние 48 ч пробуждений нет.' },
+        'code:consciousness.no_own_wakes': { text: 'За последние 48 ч пробуждений нет.' },
     } });
     t.after(() => applyPayload({ language: '', english: true, revision: 0, entries: {} }));
     const unavailable = wakesCardHtml(snapshot.recentWakes, snapshot.coverage);
     assert.match(unavailable, /role="status" data-tone="warn" data-i18n-authored/);
-    assert.ok(unavailable.includes(reason));
+    assert.equal(unavailable.split(reason).length - 1, 1);
+    assert.equal((unavailable.match(/role="status"/g) || []).length, 1);
+    assert.ok(unavailable.indexOf(reason) < unavailable.indexOf('<section '));
     assert.doesNotMatch(unavailable, /Must not translate|does not report|No wakes/);
     assert.match(wakesCardHtml(legacy.recentWakes, legacy.coverage), /does not report its recent wakes yet/);
     assert.match(wakesCardHtml([]), /За последние 48 ч пробуждений нет/);
     const region = new NodeStub();
-    region.innerHTML = wakesCardHtml([wake('214a31b6')], full().coverage);
+    region.innerHTML = wakesCardHtml([wake('214a31b6')], full().coverage, 'own');
     const row = region.querySelector('[data-wake]');
     const put = (node, html) => { node.innerHTML = html; };
     paintWakeRows(region, null, reason, new Set(), put);
     assert.equal(region.querySelector('[data-wake]'), row, 'closed rows survive a failed read too');
-    assert.ok(region.querySelector('[role="status"]').textContent.includes(reason));
+    assert.equal(region.querySelector('[role="status"]'), null, 'the card owns the warning, not either list');
     paintWakeRows(region, [], full().coverage, new Set(), put);
     assert.equal(region.querySelector('[data-wake]'), null);
     assert.equal(region.querySelector('[role="status"]'), null, 'success clears the warning');
     applyPayload({ language: '', english: true, revision: 0, entries: {} });
-    assert.match(wakesCardHtml([]), /No wakes in the last 48 h\./);
+    assert.match(wakesCardHtml([]), /No own wakes with a recorded model call in the last 48 h\./);
     assert.doesNotMatch(wakesCardHtml([]), /No wakes yet/);
 });
 

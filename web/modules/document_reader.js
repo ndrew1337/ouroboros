@@ -303,9 +303,11 @@ const DIALOG_HTML = `
                         <button type="button" class="btn btn-default" data-reader-view="formatted" aria-pressed="true">Formatted</button>
                         <button type="button" class="btn btn-default" data-reader-view="source" aria-pressed="false">Source</button>
                     </div>
-                    <button type="button" class="btn btn-default" data-reader-action="copy" hidden>Copy</button>
-                    <button type="button" class="btn btn-default" data-reader-action="open">Open</button>
-                    <button type="button" class="btn btn-default" data-reader-action="download">Download</button>
+                    <div class="document-reader-file">
+                        <button type="button" class="btn btn-default" data-reader-action="copy" hidden>Copy</button>
+                        <button type="button" class="btn btn-default" data-reader-action="open">Open</button>
+                        <button type="button" class="btn btn-default" data-reader-action="download">Download</button>
+                    </div>
                 </div>
             </div>
             <button type="button" class="btn btn-default document-reader-close" data-reader-action="close" aria-label="Close document">Close</button>
