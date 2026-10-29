@@ -70,8 +70,24 @@ def test_packaged_cli_linux_relaunches_outer_appimage(tmp_path, monkeypatch):
     monkeypatch.setattr(packaged_cli, "IS_MACOS", False)
     monkeypatch.setattr(packaged_cli, "IS_WINDOWS", False)
     monkeypatch.setenv("APPIMAGE", str(appimage))
+    monkeypatch.setenv("APPDIR", str(tmp_path / "mount"))  # the runtime's mount holds this bundle
 
     assert packaged_cli._desktop_app_path(bundle_root) == appimage
+
+
+def test_run_start_never_opens_another_appimage_apps_file(tmp_path, monkeypatch):
+    """From another AppImage app's terminal APPIMAGE/APPDIR are that app's: this tar.gz copy opens itself."""
+    from ouroboros import packaged_cli
+
+    root = tmp_path / "Ouroboros"
+    (root / "_internal").mkdir(parents=True)
+    (root / "Ouroboros").write_bytes(b"app")
+    (tmp_path / "Editor.AppImage").write_bytes(b"another app")
+    monkeypatch.setattr(packaged_cli, "IS_MACOS", False)
+    monkeypatch.setattr(packaged_cli, "IS_WINDOWS", False)
+    monkeypatch.setenv("APPIMAGE", str(tmp_path / "Editor.AppImage"))
+    monkeypatch.setenv("APPDIR", str(tmp_path / ".mount_Editor"))
+    assert packaged_cli._desktop_app_path(root / "_internal") == root / "Ouroboros"
 
 
 def test_packaged_cli_linux_extract_relaunch_uses_private_temp_base(tmp_path, monkeypatch):
@@ -94,6 +110,7 @@ def test_packaged_cli_linux_extract_relaunch_uses_private_temp_base(tmp_path, mo
     monkeypatch.setattr(packaged_cli, "IS_MACOS", False)
     monkeypatch.setattr(packaged_cli, "IS_WINDOWS", False)
     monkeypatch.setenv("APPIMAGE", str(appimage))
+    monkeypatch.setenv("APPDIR", str(tmp_path / "mount"))
     monkeypatch.setenv("APPIMAGE_EXTRACT_AND_RUN", "1")
     monkeypatch.setenv("TMPDIR", str(original_tmp))
     monkeypatch.setattr(packaged_cli.tempfile, "mkdtemp", lambda **_kwargs: str(private_tmp))

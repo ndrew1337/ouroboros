@@ -484,9 +484,11 @@ def _desktop_app_path(bundle_root: pathlib.Path) -> pathlib.Path | None:
         # binary would let the CLI exit and release the payload underneath the
         # detached desktop process. Relaunch the stable AppImage path instead so
         # its own runtime owns the payload for the launcher's whole lifetime.
-        appimage = pathlib.Path(os.environ.get("APPIMAGE", "").strip())
-        if appimage.is_file():
-            return appimage
+        from ouroboros.desktop_autostart import own_appimage
+
+        appimage = own_appimage(bundle_root)  # not one inherited from another AppImage app's terminal
+        if appimage and pathlib.Path(appimage).is_file():
+            return pathlib.Path(appimage)
     for parent in (bundle_root, *bundle_root.parents):
         if IS_MACOS and parent.suffix == ".app":
             return parent
