@@ -26,7 +26,8 @@ _SCHEDULE_TAIL = (
     "each sibling started before the first responds pays a full prefix write",
     "Native children can address you, siblings or any task in their tree",
     "need objective/constraints stating what is interim, whom to address and what ends participation",
-    "delegate_start(continue_from=run_id): same session where possible, else a new one with retained evidence",
+    "delegate_start(subagent_id=id, continue_from=run_id, prompt=''): new run, "
+    "same session if possible, else a new one with retained evidence",
     "Retrieve the handoff with get_task_result, wait_task or wait_tasks before relying on it",
 )
 
