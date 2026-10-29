@@ -721,7 +721,7 @@ A nonce claims its fully compared predecessor binding before effects; replay ret
 
 `release_settled_continuations` and manual Resume observe custody/money off the queue lock, revalidate the exact candidate/fences/grant under it. Only proven unsent or `paused_before_dispatch` work is selectable; unknown stays held, newer Restart wins. Paid reviews keep their own waits/deadlines beyond the author (Pause: §6 Owner Pause).
 
-`main_context_authority` shows the brief once, walks no ancestor chain, and puts the predecessor's notes (its last fold's, else older selections, narratives) after the assignment as one foldable row, else a gap row. No plan/finish authority passes; an unreadable plan source becomes `plan_review_source_gap`; the successor still starts.
+`main_context_authority` shows the brief once, walks no ancestor chain and puts the predecessor's notes, or a gap row, after the assignment as one foldable row; a late answer's fresh head gets its asker's, dated. No plan/finish authority passes; an unreadable plan source becomes `plan_review_source_gap`; the successor still starts.
 
 #### Saved working state and application stops
 
