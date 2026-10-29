@@ -194,7 +194,8 @@ def test_the_section_renders_newest_first_like_the_file(tmp_path):
 
 def test_the_section_is_the_writers_rendering_of_every_block(tmp_path):
     mem, blocks = _oversized_labelled(tmp_path, n_blocks=4, each_chars=25_000)
-    assert _body(mem) == render_scratchpad_markdown(blocks, journal_pointer=mem.journal_path().exists())
+    assert _body(mem) == render_scratchpad_markdown(blocks, journal_pointer=mem.journal_path().exists(),
+                                                    journal_reader=mem.scratchpad_journal_reader())
     assert [scratchpad_block_sha256(block) for block in reversed(blocks)] == re.findall(
         r"sha256 ([0-9a-f]{64})", _body(mem))
 

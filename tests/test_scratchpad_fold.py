@@ -6,11 +6,14 @@ the canonical ``memory/scratchpad_blocks.json`` and ``memory/scratchpad_journal.
 leaves the active list by count, size, age or a post-task Light pass; a fold replaces exactly the
 blocks it names (their sha256 as the next context shows them), after the exact originals are
 journaled, and a failed, empty, stale or ambiguous fold leaves every active block in place.
+Every reader a fold emits opens those originals from the canonical drive and from a forked
+execution drive alike, within the follower's own restrictions.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import pathlib
 import re
 
 import pytest
@@ -335,6 +338,213 @@ def test_a_helper_draft_is_accepted_through_the_same_fold_with_its_source(instal
     assert fold["metadata"]["focus"]["task_id"] == "root-918"  # the accepting focus, not the helper
     section = _scratchpad_section(_next_request(env, memory))
     assert "helper draft: helper task c0ffee" in section
+
+
+# --- the exact originals open from every root --------------------------------------------
+
+_CALL = re.compile(r"read_file\([^)]*\)")
+
+
+@pytest.fixture(params=["light", "advanced", "pro", "cyber_pro"])
+def roots(tmp_path, monkeypatch, request, provider_catalog_offline):
+    """The canonical drive and a supported forked execution drive (a headless task's) below it;
+    the context builds stay local (no live provider catalog fetch)."""
+    from tests.test_cache_optimization import _make_env_and_memory
+
+    env, memory = _make_env_and_memory(tmp_path)
+    memory.scratchpad_path().unlink()
+    memory.ensure_files()
+    fork = env.drive_root / "state" / "headless_tasks" / "fold-reader" / "data"
+    fork.mkdir(parents=True)
+    monkeypatch.setenv("OUROBOROS_RUNTIME_MODE", request.param)
+    monkeypatch.setenv("OUROBOROS_USER_FILES_ROOT", str(tmp_path / "elsewhere"))
+    monkeypatch.setattr("ouroboros.config.DATA_DIR", env.drive_root)
+    return env, memory, fork
+
+
+def _rooted(env, drive_root, profile="root", **fields):
+    """A focus executing on ``drive_root`` whose canonical root is ``env.drive_root``."""
+    meta = {"budget_drive_root": str(env.drive_root), "delegation_role": "root", "root_task_id": "fold-reader"}
+    if profile != "root":
+        from ouroboros.contracts.task_constraint import TaskConstraint
+
+        work = env.drive_root.parent / "work"
+        work.mkdir(exist_ok=True)
+        meta.update(delegation_role="subagent", parent_task_id="parent", root_task_id="parent")
+        fields.update(task_constraint=TaskConstraint(mode=profile, surface="external_workspace", write_root=str(work)),
+                      workspace_root=work, workspace_mode="external", project_id="p1")
+    ctx = ToolContext(repo_dir=env.repo_dir, drive_root=drive_root, task_id="fold-reader",
+                      budget_drive_root=str(env.drive_root), task_metadata=meta, **fields)
+    registry = ToolRegistry(repo_dir=env.repo_dir, drive_root=drive_root)
+    registry.set_context(ctx)
+    return ctx, registry
+
+
+def _fold_from(registry, memory, label):
+    for index in range(3):
+        assert registry.execute_result("update_scratchpad", {"content": _note(index)}).status == "ok"
+    originals, accepted = _blocks(memory)[-3:-1], f"FOLD of notes 0 and 1 accepted on the {label} drive."
+    result = registry.execute_result("update_scratchpad", {
+        "content": accepted, "replaces": [scratchpad_block_sha256(block) for block in originals]})
+    assert result.status == "ok", result.text
+    [fold] = [block for block in _blocks(memory) if block["content"] == accepted]
+    return originals, fold, result.text
+
+
+def _reader_beside(text, entry_id):
+    """The one reader on the line that names ``entry_id``: its call, or the plain read of the
+    address a text composed without a focus names (``canonical_runtime_reader`` with no context)."""
+    [line] = [line for line in text.splitlines() if entry_id in line]
+    calls = _CALL.findall(line)
+    if calls:
+        [call] = calls
+        return call
+    [address] = re.findall(r"(\S+) \(no tool context here", line)
+    return f"read_file(path={address!r})"
+
+
+def _opened(text, entry_id):
+    """The source blocks the opened journal preserved for ``entry_id``; None when no journal row was read."""
+    rows = []
+    for line in text.splitlines():
+        body = line.split("\t", 1)[-1]  # read_file numbers each line
+        if body.startswith("{"):
+            try:
+                rows.append(json.loads(body))
+            except ValueError:
+                continue
+    return next((row["source_blocks"] for row in rows
+                 if row.get("type") == "fold_sources_preserved" and row.get("entry_id") == entry_id), None)
+
+
+def _follow(registry, read):
+    return registry.execute(read["tool"], dict(read["arguments"]))
+
+
+def _context_section(env, ctx):
+    """The scratchpad section of this focus's own next first request."""
+    from ouroboros.agent import Env
+    from ouroboros.context import build_llm_messages
+
+    drive = pathlib.Path(ctx.drive_root)
+    messages, _cap = build_llm_messages(
+        env=Env(repo_dir=env.repo_dir, drive_root=drive, budget_drive_root=env.drive_root),
+        memory=Memory(drive_root=drive, repo_dir=env.repo_dir),
+        task={"id": "fold-reader", "type": "task", "text": "hi", "budget_drive_root": str(env.drive_root)}, ctx=ctx)
+    return _scratchpad_section(messages[0]["content"][-1]["text"])
+
+
+@pytest.mark.parametrize("folding", ["canonical", "forked"])
+def test_every_emitted_reader_opens_the_exact_originals_from_the_canonical_and_a_forked_root(roots, folding):
+    """Astra's #918 reproduction: a fold accepted on a forked execution drive emitted a relative
+    ``runtime_data`` reader, and following it there returned DATA_NOT_YET_CREATED. The stored
+    ``source_ref``, the tool's success text, the next context's line and the persisted projection
+    each open the canonical journal's exact originals through real dispatch from either root."""
+    from tests.test_authored_memory import _run
+
+    env, memory, fork = roots
+    actors = {"canonical": _rooted(env, env.drive_root), "forked": _rooted(env, fork)}
+    originals, fold, said = _fold_from(actors[folding][1], memory, folding)
+    entry_id = fold["metadata"]["source_ref"]["entry_id"]
+    read = fold["metadata"]["source_ref"]["read"]
+    projection = memory.scratchpad_path().read_text(encoding="utf-8")
+    [preserved] = _journal(memory, "fold_sources_preserved")
+    assert preserved["source_blocks"] == originals and preserved["fold_block"] == fold
+    assert preserved["source_ref"] == fold["metadata"]["source_ref"]  # one recipe, journaled and stored
+    assert not (fork / "memory" / "scratchpad_journal.jsonl").exists()  # the fork holds no copy to fall back on
+
+    own_ctx, _own = actors[folding]
+    assert _opened(_run(own_ctx, _reader_beside(said, entry_id)), entry_id) == originals
+    sections = {}
+    for name, (ctx, registry) in actors.items():
+        assert _opened(_follow(registry, read), entry_id) == originals, name
+        assert _opened(_run(ctx, _reader_beside(projection, entry_id)), entry_id) == originals, name
+        sections[name] = _context_section(env, ctx)
+        assert _opened(_run(ctx, _reader_beside(sections[name], entry_id)), entry_id) == originals, name
+    # One canonical journal: the stored recipe names its absolute path; a focus is shown the existing
+    # canonical reader, relative on the canonical drive and absolute from a fork.
+    assert read == {"tool": "read_file", "arguments": {
+        "root": "runtime_data", "path": str(memory.journal_path()), "start_line": 1}}
+    shown = {"canonical": "read_file(root='runtime_data', path='memory/scratchpad_journal.jsonl')",
+             "forked": f"read_file(root='runtime_data', path={str(memory.journal_path())!r})"}
+    assert _reader_beside(said, entry_id) == shown[folding]
+    assert {name: _reader_beside(section, entry_id) for name, section in sections.items()} == shown
+    # The boundary the qualified readers cross: a relative runtime path names the reader's own drive.
+    _ctx, forked = actors["forked"]
+    assert _opened(forked.execute("read_file", {"root": "runtime_data", "path": "memory/scratchpad_journal.jsonl"}),
+                   entry_id) is None
+
+
+def test_a_qualified_reader_is_an_address_never_a_grant(roots):
+    """Dispatch keeps every follower's own restrictions: read-only children read and never write, a
+    disabled ``read_file`` and a protected journal refuse, and a Presence ceiling stays bound to the
+    physical runtime root it selected."""
+    from tests.frozen_presence_capabilities import PresenceResourceTarget, PresenceToolTarget
+    from tests.test_authored_memory import _run, _speaker
+
+    env, memory, fork = roots
+    originals, fold, _said = _fold_from(_rooted(env, fork)[1], memory, "forked")
+    entry_id = fold["metadata"]["source_ref"]["entry_id"]
+    read = fold["metadata"]["source_ref"]["read"]
+    journal = memory.journal_path()
+    before = journal.read_bytes()
+    target = {key: value for key, value in read["arguments"].items() if key in ("root", "path")}
+
+    for profile in ("local_readonly_subagent", "acting_subagent"):
+        _ctx, child = _rooted(env, fork, profile)
+        assert _opened(_follow(child, read), entry_id) == originals, profile
+        for name, payload in (("write_file", {"content": "changed"}),
+                              ("edit_text", {"old_str": entry_id, "new_str": "changed"})):
+            assert child.execute_result(name, {**target, **payload}).status != "ok", (profile, name)
+    _ctx, disabled = _rooted(env, fork, task_contract={"disabled_tools": ["read_file"]})
+    assert "RESOURCE_CONSTRAINT_BLOCKED" in _follow(disabled, read)
+    _ctx, protected = _rooted(env, fork, task_contract={"resource_policy": {"protected_artifacts": [
+        {"id": "scratchpad-journal", "paths": [str(journal)], "allow": ["execute"]}]}})
+    assert "RESOURCE_POLICY_BLOCKED" in _follow(protected, read)
+
+    call = "read_file(" + ", ".join(f"{key}={value!r}" for key, value in read["arguments"].items()) + ")"
+    assert _run(_speaker(env, "speaker"), call).startswith("⚠️ PRESENCE_CAPABILITY_BLOCKED")
+    for drive, opens in ((env.drive_root, True), (fork, False)):
+        speaker = _speaker(env, "speaker", PresenceToolTarget("builtin", "read_file"),
+                           PresenceResourceTarget("runtime_data", ("read",), "memory"))
+        speaker.drive_root, speaker.budget_drive_root = drive, str(env.drive_root)
+        opened = _run(speaker, call)
+        assert (_opened(opened, entry_id) == originals) is opens, opened
+        assert opens or opened.startswith("⚠️")
+    assert journal.read_bytes() == before
+
+
+def test_a_historical_relative_reference_keeps_its_bytes_and_is_shown_a_qualified_reader(roots):
+    """Old sources are never rewritten: a fold stored before this repair keeps its relative
+    ``source_ref`` (so its sha256) and the journal keeps its rows through later folds, while the
+    context shows a forked focus the reader that opens that fold's canonical originals."""
+    from ouroboros.utils import append_jsonl
+    from tests.test_authored_memory import _run
+
+    env, memory, fork = roots
+    forked_ctx, forked = _rooted(env, fork)
+    source = {"ts": "2026-10-29T10:00:00+00:00", "source": "task", "content": "LEGACY original note"}
+    entry_id = "scratchpad-fold:" + "a" * 64
+    relative = {"read": {"tool": "read_file", "arguments": {
+        "root": "runtime_data", "path": "memory/scratchpad_journal.jsonl", "start_line": 1}}, "entry_id": entry_id}
+    legacy = {"ts": "2026-10-29T10:05:00+00:00", "source": "fold", "content": "LEGACY fold accepted before the repair",
+              "metadata": {"fold": {"replaces": [scratchpad_block_sha256(source)],
+                                    "covers": {"from": source["ts"], "to": source["ts"], "blocks": 1}},
+                           "source_ref": relative}}
+    memory.mutate_scratchpad_blocks(lambda _rows: [legacy])
+    assert append_jsonl(memory.journal_path(), {
+        "ts": legacy["ts"], "type": "fold_sources_preserved", "entry_id": entry_id,
+        "source_blocks": [source], "fold_block": legacy, "source_ref": relative})
+    stored = memory.scratchpad_blocks_path().read_text(encoding="utf-8")
+    journaled = memory.journal_path().read_bytes()
+
+    _fold_from(forked, memory, "forked")
+
+    assert _blocks(memory)[0] == json.loads(stored)[0] == legacy
+    assert memory.journal_path().read_bytes().startswith(journaled)
+    assert _opened(_follow(forked, relative["read"]), entry_id) is None  # the historical address, unchanged
+    section = _context_section(env, forked_ctx)
+    assert _opened(_run(forked_ctx, _reader_beside(section, entry_id)), entry_id) == [source]
 
 
 # --- failure and crash points ------------------------------------------------------------

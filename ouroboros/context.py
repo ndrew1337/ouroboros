@@ -324,6 +324,7 @@ def _task_authority_projection(env: Any, task: Dict[str, Any]) -> Dict[str, Any]
 def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, scheduled_tasks_digest_out: Optional[Dict[str, Any]] = None,
                           captured_at: str = "", supplementary_messages_out: Optional[List[Dict[str, Any]]] = None) -> str:
     declared = task_input_sources(task) == "declared"
+    canonical_root = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
     try:
         git_branch, git_sha = get_git_info(env.repo_dir)
     except Exception:
@@ -392,14 +393,12 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
 
     runtime_data["effort_range"] = {**effort_range(), "binds": effort_range_binds(task.get("metadata"))}
     # What Ouroboros owns on disk and its body's dated facts: facts, no threshold.
-    runtime_data.update(body_facts(pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None)
-                                                or env.drive_root), observed_at=runtime_data["context_captured_at"]))
+    runtime_data.update(body_facts(canonical_root, observed_at=runtime_data["context_captured_at"]))
     runtime_data.update(_task_authority_projection(env, task))
     if supplementary_messages_out is not None:
         from ouroboros.main_context_authority import late_answer_notes_message, predecessor_notes_message
         from ouroboros.review_history_view import capture_review_history_messages
 
-        canonical_root = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
         runtime_data, supplemental = capture_review_history_messages(runtime_data, task_id=str(task.get("id") or ""),
                                                                      drive_root=canonical_root)
         # The predecessor mind's notes are the first row after the assignment, then a late answer's
@@ -604,9 +603,7 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
         from ouroboros.task_tree_ledger import tree_ledger_tail_digest
         _root_id = str(task.get("root_task_id") or task.get("id") or "")
         from ouroboros.tool_access import canonical_data_root
-        _tree_root = (canonical_data_root(ctx) if ctx is not None else pathlib.Path(
-            task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root
-        ).resolve(strict=False))
+        _tree_root = canonical_data_root(ctx) if ctx is not None else canonical_root.resolve(strict=False)
         _tree_digest = tree_ledger_tail_digest(
             _root_id, limit=40, data_root=_tree_root,
         ) if _root_id else ""
@@ -727,20 +724,21 @@ def _warn_if_over_budget(name: str, content: str) -> None:
         log.warning("Context section '%s' exceeds budget: %d chars > %d", name, len(content), budget)
 
 
-def _scratchpad_for_context(memory: "Memory") -> Tuple[str, str]:
+def _scratchpad_for_context(memory: "Memory", ctx: Any = None) -> Tuple[str, str]:
     """``(source, body)``: the whole working memory, rendered from its canonical blocks.
 
     The scratchpad is tier-0 core (``context_layout.TIER0_ALWAYS_FULL``): no build drops a
     block for age or size (#918); a window too small for the core is ``memory_floor``'s
     measured fact. Blocks render through the writer's own ``render_scratchpad_markdown``, so a
     projection a failed regeneration left stale never hides an active block. With no blocks
-    (none yet, or a flat pre-block scratchpad) the file itself is the section.
+    (none yet, or a flat pre-block scratchpad) the file itself is the section. The fold
+    journal's reader is qualified for ``ctx``, the focus reading this section.
     """
     blocks = memory.load_scratchpad_blocks()
     if not blocks:
         return "memory/scratchpad.md", memory.load_scratchpad()
     return "memory/scratchpad_blocks.json", render_scratchpad_markdown(
-        blocks, journal_pointer=memory.journal_path().exists())
+        blocks, journal_pointer=memory.journal_path().exists(), journal_reader=memory.scratchpad_journal_reader(ctx))
 
 
 def build_memory_sections(memory: Memory, partition: str = "all", *, include_scratchpad: bool = True,
@@ -752,7 +750,7 @@ def build_memory_sections(memory: Memory, partition: str = "all", *, include_scr
     include_volatile = partition in {"all", "volatile"}
 
     if include_volatile and include_scratchpad:
-        source, scratchpad_body = _scratchpad_for_context(memory)
+        source, scratchpad_body = _scratchpad_for_context(memory, ctx)
         _warn_if_over_budget("scratchpad", scratchpad_body)  # a log line only: the section is never cut
         sections.append(f"## Scratchpad (from `{source}` — already loaded; do not re-read via "
                         "read_file(root='runtime_data', path='memory/scratchpad.md'))\n\n" + scratchpad_body)
@@ -1115,7 +1113,8 @@ def _capture_context_core(
         )))
     except Exception:
         log.warning("Failed to build the Review records block", exc_info=True)
-    dynamic_parts.extend(build_memory_sections(context_memory, partition="volatile", include_scratchpad=not is_child))
+    dynamic_parts.extend(build_memory_sections(context_memory, partition="volatile", include_scratchpad=not is_child,
+                                               ctx=ctx))
 
     registry_digest = _build_registry_digest(context_env)
     if registry_digest:

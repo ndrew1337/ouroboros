@@ -387,9 +387,8 @@ def _update_scratchpad(ctx: ToolContext, content: str, replaces: list | None = N
         text = (f"OK: scratchpad fold applied: {len(written['sources'])} blocks "
                 f"({sum(len(str(block.get('content', ''))) for block in written['sources'])} chars) replaced by one "
                 f"fold block ({len(content)} chars, sha256 {scratchpad_block_sha256(fold)}); exact originals journaled "
-                f"at entry_id={written['entry_id']} (read_file(root='runtime_data', "
-                f"path='memory/scratchpad_journal.jsonl')). Active now: {written['blocks_after']} blocks, "
-                f"{written['content_len']} chars.")
+                f"at entry_id={written['entry_id']}: {mem.scratchpad_journal_reader(ctx)}. "
+                f"Active now: {written['blocks_after']} blocks, {written['content_len']} chars.")
     else:
         text = (f"OK: scratchpad block appended ({len(content)} chars, ts={written.get('ts', '?')[:16]}, "
                 f"sha256 {scratchpad_block_sha256(written)})")

@@ -51,7 +51,7 @@ def test_eleven_blocks_stay_whole_and_a_fold_names_its_exact_journaled_originals
     memory.fold_scratchpad_blocks("folded scratch-source-0", [scratchpad_block_sha256(first)])
 
     current = memory.load_scratchpad()
-    assert "read_file(root='runtime_data', path='memory/scratchpad_journal.jsonl'" in current
+    assert f"Exact replaced blocks: {memory.scratchpad_journal_reader()};" in current
     journal = _read_source(_tool_ctx(tmp_path), {"read": {"tool": "read_file", "arguments": {
         "root": "runtime_data", "path": "memory/scratchpad_journal.jsonl"}}})
     rows = [json.loads(line) for line in journal.splitlines() if line.startswith("{")]
@@ -77,14 +77,13 @@ def test_scratchpad_fold_journals_exact_replaced_blocks_and_ref(tmp_path):
         "tool": "read_file",
         "arguments": {
             "root": "runtime_data",
-            "path": "memory/scratchpad_journal.jsonl",
+            "path": str(memory.journal_path()),  # absolute: a relative path names a fork's own drive
             "start_line": 1,
         },
     }
     assert source_ref["entry_id"]
 
-    journal = _read_source(_tool_ctx(tmp_path), {"read": {"tool": "read_file", "arguments": {
-        "root": "runtime_data", "path": "memory/scratchpad_journal.jsonl"}}})
+    journal = _read_source(_tool_ctx(tmp_path), source_ref)
     rows = [json.loads(line) for line in journal.splitlines() if line.startswith("{")]
     entry = next(row for row in rows if row.get("entry_id") == source_ref["entry_id"])
     assert entry["type"] == "fold_sources_preserved"

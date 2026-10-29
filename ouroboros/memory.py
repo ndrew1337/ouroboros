@@ -62,7 +62,7 @@ def _fold_span(blocks: List[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 def render_scratchpad_markdown(
-    blocks: List[Dict[str, Any]], *, journal_pointer: bool = False,
+    blocks: List[Dict[str, Any]], *, journal_reader: str, journal_pointer: bool = False,
 ) -> str:
     """Render scratchpad blocks the one way the runtime renders them.
 
@@ -74,18 +74,16 @@ def render_scratchpad_markdown(
     each heading names the block's sha256, the address a fold uses.
 
     ``journal_pointer`` adds the retired/replaced-blocks pointer line; the
-    writer passes ``Memory.journal_path().exists()`` for it.
+    writer passes ``Memory.journal_path().exists()`` for it. ``journal_reader``
+    (``Memory.scratchpad_journal_reader``) is how the reader of this text opens
+    that journal; every fold's line, an older one's included, shows it, not the stored recipe.
     """
     chars = sum(len(str(block.get("content", ""))) for block in blocks)
     parts = [f"## Scratchpad (working memory — {len(blocks)} blocks, {chars:,} characters)\n",
              "Nothing leaves by age or size: a block leaves only through a fold I accept "
              "(`update_scratchpad` with `replaces` = the sha256 after its heading).\n"]
     if journal_pointer:
-        parts.append(
-            "Exact retired/replaced source blocks remain readable with "
-            "`read_file(root='runtime_data', "
-            "path='memory/scratchpad_journal.jsonl', start_line=1)`.\n\n"
-        )
+        parts.append(f"Exact retired/replaced source blocks remain readable with {journal_reader}.\n\n")
     for block in reversed(blocks):
         ts = str(block.get("ts", ""))[:16]
         source = block.get("source", "?")
@@ -103,11 +101,7 @@ def render_scratchpad_markdown(
         source_ref = metadata.get("source_ref") if isinstance(metadata.get("source_ref"), dict) else {}
         entry_id = str(source_ref.get("entry_id") or "")
         if entry_id:
-            parts.append(
-                "Exact replaced blocks: `read_file(root='runtime_data', "
-                "path='memory/scratchpad_journal.jsonl', start_line=1)`; "
-                f"locate `entry_id={entry_id}`.\n\n"
-            )
+            parts.append(f"Exact replaced blocks: {journal_reader}; locate `entry_id={entry_id}`.\n\n")
     return "\n".join(parts)
 
 
@@ -248,21 +242,22 @@ class Memory:
     def logs_path(self, name: str) -> pathlib.Path:  # once per instance: a resolve lstat's every component
         return self._logs.get(name) or self._logs.setdefault(name, (self.drive_root / "logs" / name).resolve())
 
-    @staticmethod
-    def scratchpad_journal_source_ref(entry_id: str = "") -> Dict[str, Any]:
-        ref: Dict[str, Any] = {
-            "read": {
-                "tool": "read_file",
-                "arguments": {
-                    "root": "runtime_data",
-                    "path": "memory/scratchpad_journal.jsonl",
-                    "start_line": 1,
-                },
-            },
-        }
+    def scratchpad_journal_source_ref(self, entry_id: str = "") -> Dict[str, Any]:
+        """The stored recipe for this journal, by its absolute path: a relative ``runtime_data`` path
+        names the follower's own execution drive, so a fold followed from a fork would miss it. An
+        address, not a grant: dispatch applies the follower's own restrictions."""
+        read = {"root": "runtime_data", "path": str(self.journal_path()), "start_line": 1}
+        ref: Dict[str, Any] = {"read": {"tool": "read_file", "arguments": read}}
         if str(entry_id or "").strip():
             ref["entry_id"] = str(entry_id).strip()
         return ref
+
+    def scratchpad_journal_reader(self, ctx: Any = None) -> str:
+        """How ``ctx`` opens this journal (``canonical_runtime_reader``: relative on this drive, absolute
+        from a fork); without a focus (the persisted ``scratchpad.md``) the address, access unknown."""
+        from ouroboros.tool_access_reads import canonical_runtime_reader
+
+        return canonical_runtime_reader(ctx, self.drive_root, "memory/scratchpad_journal.jsonl")
 
     def load_scratchpad(self) -> str:
         path = self.scratchpad_path()
@@ -492,6 +487,7 @@ class Memory:
             self.scratchpad_path(),
             render_scratchpad_markdown(
                 blocks, journal_pointer=self.journal_path().exists(),
+                journal_reader=self.scratchpad_journal_reader(),
             ),
         )
 
