@@ -28,7 +28,7 @@ Iframes inherit no host tokens or choice; `render.appearance` declares their pol
 - `api_client.js` / `api_types.js` / `model_route_types.js` / `decision_types.js` ← browser API calls with typed errors; mirrors of browser-facing contract shapes.
 - `ui_primitives.js` ← shared safe-field renderer/collector, tone/status and attribute escaping; `ui_helpers.js`/`utils.js` re-export it, the author kit serves it directly.
 - `ui_helpers.js` ← row/badge helpers, keyboard menu lock, System/routing action rows (`createSystemMessageActions`).
-- `desktop_shell.js` ← Settings' desktop facts from `shell_info()` (else `/api/health`'s stamped `app_version`): missing persistence or app entry, installed bundle apart from loaded source.
+- `desktop_shell.js` ← window facts from `shell_info()` (legacy `app_version`: health); installed/loaded stay distinct. Failed reads are not unsupported; no update advice.
 - `interface_size.js` ← Interface size's one setter, also `ouroInterfaceSize` for the macOS View menu: the app's `set_interface_size`, a touch screen's viewport (`theme.js` `ouroViewportScale`), else browser zoom.
 - `skill_card_renderer.js`, `skill_presentation.js` ← skill cards and the words every Skills surface shares.
 - `client_surface.js` ← send-time raw observables in each chat frame, no device taxonomy.
