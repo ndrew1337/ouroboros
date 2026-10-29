@@ -913,7 +913,7 @@ def _read_source(root: Path, ref: Any, start: int, limit: int) -> str:
 def _read_rooms(root: Path, store: ChronicleStore, start: int, limit: int) -> str:
     from ouroboros import memory_view as mv
 
-    spec = mv.ViewSpec("integrator", room_id=None)
+    spec = mv.ViewSpec("integrator", room_id=None, live_rooms="directory")
     with capture(root):  # one state of the chronicle for every room's facts
         gaps, quiet = {}, {}
         rows, lineage = memory_inventory.open_rows_by_room(root, gaps=gaps, quiet=quiet), row_lineage(root)
