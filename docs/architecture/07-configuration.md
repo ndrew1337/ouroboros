@@ -4,7 +4,7 @@ Settings have one home and default; the table projects `config.SETTINGS_DEFAULTS
 
 `ouroboros/config.py` re-exports paths, loaders/writers, environment projection, normalization, runtime mode, skills location and PID lock. Vocabularies/defaults belong to its leaves (§10 invariant 3). `settings_scales.IMMEDIATE_SETTINGS` applies live; `RESTART_REQUIRED_SETTINGS` awaits restart; other keys apply from the next task, a route key from the next model call. `update_channels.py` owns update defaults.
 
-Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`); a direct server's implicit `REPO_DIR` is its executing checkout; `resolve_port_file` relocates only the hosting root's port file. Retained exception: a server given only `APP_ROOT` keeps `~/Ouroboros/data` (`server_process.DATA_DIR`), since deriving it would start a fresh brain. The document is `data/settings.json` under the data root. Writes need the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential never reads as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
+Each path constant takes its `OUROBOROS_*` override, else derives from `APP_ROOT` (`~/Ouroboros`) in `launch_roots` before imports; a direct server's implicit `REPO_DIR` is its executing checkout, and given only `APP_ROOT` it refuses while `~/Ouroboros/data` may hold memory; `resolve_port_file` relocates only the hosting root's port file. Unset work roots follow the witness basis: `~/Ouroboros` for older data, else `APP_ROOT`; unknown refuses. The document is `settings.json` under the data root. Writes need the settings file lock. Secret placeholders are repaired only when recognized on disk, before environment precedence resolves, so a real environment credential never reads as a mask (`secret_masking.py`). While `OUROBOROS_SETTINGS_SHA256` is set (`settings_integrity.py`) the seeded snapshot is an owner-authored trust root for an isolated child: every read verifies the whole byte stream without creating a sibling lock file, and every writer refuses.
 
 `openrouter_attribution.py` is the app-identity SSOT of every first-party paid OpenRouter request (canonical URL + `X-OpenRouter-Title`); a fork uses its own URL, never renaming one app record.
 
@@ -102,15 +102,15 @@ One row per key (`settings_defaults.py`). Env-only rows have no settings.json ca
 | OUROBOROS_MAX_SUBAGENT_DEPTH | 3 | Subagent tree depth |
 | OUROBOROS_DISABLE_MANAGED_UPDATES | unset | Env-only: `1` disables managed updates (`git_ops.py`) |
 | OUROBOROS_ALLOW_MUTATIVE_SUBAGENTS | "" | Mutative-subagent Auto override |
-| OUROBOROS_SUBAGENT_WORKTREE_ROOT | "" | Acting-worktree root (empty derives `~/Ouroboros/subagent_worktrees`) |
-| OUROBOROS_SUBAGENT_PROJECTS_ROOT | "" | Projects root (empty derives `~/Ouroboros/projects`) |
+| OUROBOROS_SUBAGENT_WORKTREE_ROOT | "" | Acting-worktree root (empty: basis default) |
+| OUROBOROS_SUBAGENT_PROJECTS_ROOT | "" | Projects root (empty: basis default) |
 | OUROBOROS_SUBAGENTS_MODE | auto | Live room delegation choice: `off`, `auto`, `swarm`; project cognition is independent (§6) |
 | OUROBOROS_SUBAGENTS | "" | Configured-subagent roster (`configured_subagents.py`; §6 Delegated subagents) |
 | OUROBOROS_SUBAGENT_HARNESS | "" | Narrow harness input, read for migration |
 | OUROBOROS_SUBAGENT_PROFILE | "" | Narrow profile input, read for migration |
 | OUROBOROS_DELEGATE_WAIT_SEC | 120 | Default `delegate_wait` window |
 | OUROBOROS_DELEGATE_WAIT_MAX_SEC | 1800 | `delegate_wait` ceiling |
-| OUROBOROS_DELIVERABLES_ROOT | "" | Deliverables root (empty derives `~/Ouroboros/Deliverables`; `tool_access.py`) |
+| OUROBOROS_DELIVERABLES_ROOT | "" | Deliverables root (empty: basis default; `tool_access.py`) |
 | OUROBOROS_GC_RETENTION_DAYS | 7 | Unified GC retention (`retention.py`) |
 | OUROBOROS_RESTART_DRAIN_MAX_SEC | 120 | Restart drain bound |
 | TOTAL_BUDGET | 200.0 | Global USD budget, reached by known spend; non-positive = no finite limit; resolved live at every model call (`resolve_total_budget_usd`) |
