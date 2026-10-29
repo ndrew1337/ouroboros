@@ -189,6 +189,7 @@ class TestAliasProducerFanOutSweep:
         ("ouroboros/live_usage.py", "cost_usd", "settle_live_response"): ("ledger settlement call for a priced live (voice) response", 1),
         ("ouroboros/live_usage.py", "cost_usd", "record_refused_live_response"): ("ledger row for a live response the budget refused after the provider started it", 1),
         ("ouroboros/live_usage.py", "cost_usd", "settle_connection_usage"): ("ledger row for spent live connection time", 1),
+        ("ouroboros/live_usage.py", "cost_usd", "observe_live_usage"): ("private ledger receipt for the call's separately billed input transcription; never a gateway cost projection", 1),
         ("ouroboros/usage_journal.py", "cost_usd", "legacy_candidates"): ("legacy usage telemetry import rows (the store's one-time migration)", 2),
         ("ouroboros/tools/imagegen.py", "cost_usd", "_recover_image"): ("original physical-attempt ledger settlement; public image receipts use actual_cost_usd/estimated_cost_usd", 1),
         ("ouroboros/tools/search.py", "cost_usd", "_web_search_openai"): ("ledger settlement call (web search attempt)", 1),

@@ -609,6 +609,10 @@ def test_the_task_input_pointer_is_a_physical_rescue_and_the_floor_counts_reside
     monkeypatch.undo()
 
     # The fit on a route switch counts the resident list: the same window keeps the bare view and narrows the loaded one.
+    # The huge assignment above can already exhaust every memory rung under Nano's
+    # target. Give this separate route-pressure case memory it can still return.
+    task = {**task, "text": "Continue the work whose exact input reader was checked above."}
+    core = context._capture_context_core(env, memory, task, None, None)
     built = plan(meta, 1.0)
     resident = lambda tools: built.nano_projection.estimated_tokens + context_fit.tool_schema_tokens(tools) + NANO_MIN_HEADROOM_TOKENS  # noqa: E731
     middle = resident(meta) + 15_000
