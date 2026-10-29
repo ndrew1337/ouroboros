@@ -396,15 +396,17 @@ def build_runtime_section(env: Any, task: Dict[str, Any], *, ctx: Any = None, sc
                                                 or env.drive_root), observed_at=runtime_data["context_captured_at"]))
     runtime_data.update(_task_authority_projection(env, task))
     if supplementary_messages_out is not None:
-        from ouroboros.main_context_authority import predecessor_notes_message
+        from ouroboros.main_context_authority import late_answer_notes_message, predecessor_notes_message
         from ouroboros.review_history_view import capture_review_history_messages
 
         canonical_root = pathlib.Path(task.get("budget_drive_root") or getattr(env, "budget_drive_root", None) or env.drive_root)
         runtime_data, supplemental = capture_review_history_messages(runtime_data, task_id=str(task.get("id") or ""),
                                                                      drive_root=canonical_root)
-        # The predecessor mind's notes are the first row after the assignment (never a declared input).
-        notes = None if declared else predecessor_notes_message(task, drive_root=canonical_root)
-        supplementary_messages_out.extend([*([notes] if notes else []), *supplemental])
+        # The predecessor mind's notes are the first row after the assignment, then a late answer's
+        # asker's, as information only (neither is a declared input).
+        notes = [] if declared else [row for row in (predecessor_notes_message(task, drive_root=canonical_root),
+                                                     late_answer_notes_message(task, drive_root=canonical_root)) if row]
+        supplementary_messages_out.extend([*notes, *supplemental])
     if declared:
         runtime_data["task_constraint"] = task.get("task_constraint") or getattr(ctx, "task_constraint", {})
     runtime_data["operational_reality_rule"] = (
