@@ -10,8 +10,12 @@ import io
 import json
 import os
 import pathlib
+import re
 import subprocess
+import sys
+import types
 
+import launcher  # before per-test root rebinding, as tests/test_launcher_background.py does
 from ouroboros import launcher_background as lb
 from ouroboros import platform_layer
 
@@ -92,3 +96,17 @@ def test_a_copy_whose_path_ends_like_this_ones_is_another_copy(tmp_path, monkeyp
     lock, port = _running(tmp_path, monkeypatch, *_handed_off(other))
     assert lb.other_copy_line(lock, port, this) == (
         f"Ouroboros 7.9.0 is already running from {other.parents[1]}. Quit it, then open this copy.")
+
+
+def test_the_notice_wraps_a_long_unbroken_path(monkeypatch):
+    """The 440-wide notice holds a full path, and an AppTranslocation path is one unbroken ~110-character word."""
+    pages = []
+    webview = types.ModuleType("webview")
+    webview.create_window = lambda *args, **kwargs: pages.append(kwargs["html"])
+    webview.start = lambda *args, **kwargs: None
+    monkeypatch.setitem(sys.modules, "webview", webview)
+    monkeypatch.setattr(launcher, "paint_room", lambda window: window)
+    launcher._already_running_window("Ouroboros 7.9.0 is already running from /private/var/folders/x/AppTranslocation/"
+                                     "0123456789ABCDEF/d/Ouroboros.app. Quit it, then open this copy.")
+    rule = re.search(r"\.window p \{([^}]*)\}", pages[0])
+    assert rule and "overflow-wrap: anywhere" in rule.group(1), "a long path ran out of the window"

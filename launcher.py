@@ -203,7 +203,7 @@ body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify
   background: var(--bg-primary, Canvas); color: var(--text-primary, CanvasText); font-family: var(--font-sans, system-ui); }
 .window { box-sizing: border-box; max-width: 460px; padding: 24px; text-align: center; }
 .window h2 { margin: 0 0 12px; font-size: var(--type-page, 24px); font-weight: 600; line-height: var(--line-title); }
-.window p { margin: 0; font-size: var(--type-body); line-height: var(--line-body); }
+.window p { margin: 0; font-size: var(--type-body); line-height: var(--line-body); overflow-wrap: anywhere; }
 .window .muted { margin-top: 10px; font-size: var(--type-meta); line-height: var(--line-meta); }
 .window .btn { margin: 16px auto 0; }
 .window .ui-status { margin-top: 12px; }
