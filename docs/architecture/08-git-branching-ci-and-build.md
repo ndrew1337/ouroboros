@@ -10,7 +10,7 @@ The local `ouroboros-stable` ref is also a recovery fallback maintained by expli
 
 ### CI topology
 
-`ci.yml` runs on dispatch or `v*` tags. After merges to `ouroboros`, secret-free `post-merge.yml` runs affected tests (coalesced, one retry) and ruff F, attributes persistent reds to a PR and opens a `post-merge-red` issue. Its independent eight-minute cost-contract step selects the whole scale module at k=30; k=100 stays opt-in. Neither blocks merging. UI/provider wrappers are manual.
+`ci.yml` runs on dispatch or `v*` tags. After merges to `ouroboros`, secret-free `post-merge.yml` runs affected tests (coalesced, one retry) on Linux (WAL) and Windows (PERSIST); Linux adds ruff F, `size_ratchet` against its base and the 8-minute k=30 cost contract (k=100 opt-in). Reds go to their PR and a per-OS `post-merge-red` issue; no merge waits. UI/provider wrappers are manual.
 
 | Tier | Jobs | Trust boundary |
 |---|---|---|
