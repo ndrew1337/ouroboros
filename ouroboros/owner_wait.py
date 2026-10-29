@@ -1029,7 +1029,8 @@ def wait_after_tools(ctx: Any, messages: list, trace: dict, usage: dict,
         model_sleep.announce_resumed(ctx, outcome)  # the same attempt prepares again, with no new start
 
 
-def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress: Any) -> bool:
+def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress: Any,
+                         origin: str = "prose") -> bool:
     """Plain prose with no completion choice while a commit/change review the author left
     for an addressed message is still its intention: the prose stays in the transcript as
     narration and the same wait resumes on the review park, with no model call until the
@@ -1037,8 +1038,15 @@ def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress
     gets one round, and one that could not be written is said inline; a wait restored from
     another process holds no live custody here, so the author gets one round with that fact
     instead of a park nothing would end. A new commit or review_change act, an explicit
-    completion, a new turn or a read notice ends it."""
+    completion, a new turn or a read notice ends it. Each case that holds the prose records
+    its ``left_review_wait`` hold itself (``origin`` from the caller); a park before it waits."""
     from ouroboros.review_pause import PROCESS_TOKEN
+
+    def held(case: str) -> bool:
+        from ouroboros.loop_delivery import observe_completion_hold
+
+        observe_completion_hold(tools, limit_ctx, origin, "left_review_wait", case)
+        return True
 
     ctx = tools._ctx
     wait = getattr(ctx, "_left_review_wait", None)
@@ -1059,13 +1067,15 @@ def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress
 
         ctx._left_review_wait = None
         limit_ctx.messages.append({"role": "user", "content": left_review_custody_note(wait)})
-        return True
-    if not wait.get("done"):
+        return held("custody_restored")
+    parked = not wait.get("done")
+    if parked:
         from ouroboros.review_waiting import wake_reason
         if reason := wake_reason(ctx, wait):
             append_wake_notice(ctx, {"review_binding": wait.get("binding")},
                                "helper_result" if reason.startswith(("task:", "run:")) else reason, limit_ctx.messages)
-            return True
+            return held("wake_notice")
+        held("parked")  # before the wait: the hold is readable while it lasts and after a wait that ended it
         wait_after_tools(ctx, limit_ctx.messages, limit_ctx.llm_trace, limit_ctx.accumulated_usage,
                          limit_ctx.round_idx, limit_ctx.tool_schemas, limit_ctx.owner_msg_seen,
                          review_binding=str(wait.get("binding") or ""))
@@ -1073,7 +1083,7 @@ def park_for_left_review(tools: Any, limit_ctx: Any, content: Any, emit_progress
         ctx._left_review_wait = None
         if wait.get("notice"):
             limit_ctx.messages.append({"role": "user", "content": str(wait["notice"])})
-    return True
+    return True if parked else held("settled")
 
 
 def restore_continuation_state(tools: Any, state: dict, messages: list, trace: dict,

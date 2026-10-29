@@ -106,7 +106,7 @@ def _handle_text_response(
 def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_tools=False, assistant_message=None,
                              resume_candidate=False):
     """One completion request owner, with ordinary first/direct prose compatibility."""
-    from ouroboros.loop_delivery import consume_completion_request, hold_completion_response
+    from ouroboros.loop_delivery import consume_completion_request, hold_completion_response, observe_completion_hold
     ctx = tools._ctx
     if resume_candidate:
         content = ctx._delivery_candidate.full_text
@@ -115,9 +115,12 @@ def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_
         ctx._delivery_candidate.finalization_control = "owner_revision_required"
         if ctx._delivery_candidate.control_episode_seen:
             _arm_delivery_control(tools, limit_ctx, limit_ctx.llm_trace, control="owner_revision_required")
+        observe_completion_hold(tools, limit_ctx, "resume", "owner_input_changed")
         return None
     selected = bool(getattr(ctx, "_completion_selected", None)) or consume_completion_request(tools, limit_ctx, limit_ctx.llm_trace, content)
-    if not selected and (after_tools or park_for_left_review(tools, limit_ctx, content, emit_progress)):
+    origin = "resume" if resume_candidate else "selection" if selected else "prose"
+    # A park records its own hold; after tools nothing was offered (ordinary work, or a refusal already observed).
+    if not selected and (after_tools or park_for_left_review(tools, limit_ctx, content, emit_progress, origin)):
         return None
     if selected:
         from ouroboros.loop_messages import owner_source_sha256
@@ -126,6 +129,7 @@ def _finalize_loop_candidate(content, limit_ctx, tools, emit_progress, *, after_
             ctx._completion_selected = ctx._presence_completion = None
             ctx._delivery_candidate.control_episode_seen = True
             _arm_delivery_control(tools, limit_ctx, limit_ctx.llm_trace, control="owner_revision_required")
+            observe_completion_hold(tools, limit_ctx, origin, "owner_input_changed")
             return None
         content = ctx._delivery_candidate.full_text
     response_start = len(limit_ctx.messages)
