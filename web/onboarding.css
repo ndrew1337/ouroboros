@@ -1202,7 +1202,7 @@ textarea::placeholder {
   .wizard-step-copy,
   .step-copy,
   .panel-card p,
-  .field-note,
+  .field-note:not(.compatible-load-status),
   .footer-copy {
     display: none;
   }

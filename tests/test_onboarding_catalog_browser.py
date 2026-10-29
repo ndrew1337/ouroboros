@@ -12,6 +12,34 @@ from tests.test_subscription_setup_browser import subscription_ui as subscriptio
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
 
 
+@pytest.mark.parametrize("viewport", [(980, 780), (390, 844), (1360, 900)])
+def test_connection_discovery_feedback_stays_visible_on_compact_screens(subscription_ui, viewport, tmp_path):
+    from playwright.sync_api import expect
+
+    ui, page = subscription_ui, subscription_ui["page"]
+    page.set_viewport_size(dict(zip(("width", "height"), viewport)))
+    ui["bootstrap"]["initialState"].update(compatibleBaseUrl="http://127.0.0.1:1/v1")
+    response = {"status": 400, "body": {
+        "error": "This server's address changed since its key was saved. Enter its key again to list its models.",
+        "code": "masked_key_endpoint_changed"}}
+    page.route("**/api/openai-compatible/models", lambda route: route.fulfill(
+        status=response["status"], json=response["body"]))
+    page.goto(ui["url"] + "/onboarding", wait_until="networkidle")
+    page.click("#next-btn")
+    status = page.locator("#compatible-load-status")
+    evidence = diagnostic_directory(tmp_path / "frames", "discovery-feedback")
+    for name, code, body, text in (
+        ("error", 400, response["body"], "Enter its key again"),
+        ("empty", 200, {"models": []}, "No models listed"),
+        ("success", 200, {"models": ["same-model"]}, "1 model listed"),
+    ):
+        response.update(status=code, body=body)
+        page.click("#load-compatible-models")
+        expect(status).to_contain_text(text)
+        page.screenshot(path=str(evidence / f"{viewport[0]}x{viewport[1]}-{name}.png"), animations="disabled")
+        expect(status).to_be_visible()
+
+
 def test_connection_discovery_survives_general_refresh_without_replacing_other_sources(subscription_ui, tmp_path):
     from playwright.sync_api import expect
 
