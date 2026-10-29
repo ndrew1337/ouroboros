@@ -214,3 +214,12 @@ def test_skill_exec_never_runs_a_package_skill_on_another_python(tmp_path, monke
     blocked = skill_exec_mod._handle_skill_exec(ctx, skill="alpha", script="hello.py")
     assert "SKILL_EXEC_BLOCKED" in blocked and "(absent)" in blocked, "the old code ran PATH python without the packages"
     assert "hello from skill" in skill_exec_mod._handle_skill_exec(ctx, skill="plain", script="hello.py")
+
+    def unreadable(*_args):
+        raise RuntimeError("the environment could not be read")
+
+    import ouroboros.skill_dependencies as skill_dependencies
+    monkeypatch.setattr(skill_dependencies, "unusable_python_env", unreadable)
+    monkeypatch.setattr(skill_exec_mod, "unusable_python_env", unreadable, raising=False)
+    with pytest.raises(RuntimeError):  # a failed check runs nothing; the old one fell through to PATH python
+        skill_exec_mod._handle_skill_exec(ctx, skill="alpha", script="hello.py")
