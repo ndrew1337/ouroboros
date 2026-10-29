@@ -615,6 +615,7 @@ def test_start_agent_windows_assigns_job_before_resume_and_records(monkeypatch, 
     monkeypatch.setattr(launcher, "assign_pid_to_job", lambda job, pid: calls.append(("assign", (job, pid))) or True)
     monkeypatch.setattr(launcher, "resume_process", lambda pid: calls.append(("resume", pid)) or True)
 
+    monkeypatch.delenv("PYTHONPYCACHEPREFIX", raising=False)  # no custom prefix: the data root's own
     proc = launcher.start_agent(port=1)
 
     assert proc.pid == 54321

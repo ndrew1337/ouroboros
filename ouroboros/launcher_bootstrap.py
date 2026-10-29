@@ -298,7 +298,7 @@ def embedded_python_env(data_dir: pathlib.Path, base: dict[str, str] | None = No
         user_base.mkdir(parents=True, exist_ok=True)
     except OSError:
         pass
-    env["PYTHONPYCACHEPREFIX"] = bytecode_prefix(data_dir)
+    env["PYTHONPYCACHEPREFIX"] = bytecode_prefix(data_dir, env.get("PYTHONPYCACHEPREFIX", ""))  # a custom one stays
     env["PYTHONUSERBASE"] = str(user_base)
     env.pop("PYTHONNOUSERSITE", None)
     return env

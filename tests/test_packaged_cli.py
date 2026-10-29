@@ -255,6 +255,7 @@ def test_packaged_cli_inner_env_ignores_inherited_repo_and_data(tmp_path, monkey
     monkeypatch.setenv("OUROBOROS_REPO_DIR", "/bad/repo")
     monkeypatch.setenv("OUROBOROS_DATA_DIR", "/bad/data")
     monkeypatch.setenv("OUROBOROS_URL", "http://127.0.0.1:9000")
+    monkeypatch.delenv("PYTHONPYCACHEPREFIX", raising=False)  # no custom prefix: the data root's own
 
     env = _inner_cli_env(runtime)
 
