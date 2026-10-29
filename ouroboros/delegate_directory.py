@@ -273,6 +273,9 @@ def capture_directory_result(drive, entry, gateway, *, publish=True):
     A finished run whose engine reports no file work product is captured ready, never retried
     on later sweeps: as ``no_changes`` after success, otherwise as an absent work product whose
     changes, if any, were not captured (Apply applies nothing; Reject releases the copy).
+    One capture fetches each content identity (digest and size) once: every file side keeps
+    its own row, and a later side with the same identity names the first verified file.
+    Modes stay in the exact engine manifest; no retained file is chmodded.
     """
     if not entry.settled and entry.terminal_state not in custody.TERMINAL_STATES:
         raise ValueError("the directory run has not completed")
@@ -324,7 +327,7 @@ def capture_directory_result(drive, entry, gateway, *, publish=True):
         raise ValueError("engine directory strategy differs from the recorded request")
     if not direct and original.get("complete") is not True:
         raise ValueError("the selected execution copy was not completely captured")
-    records = [raw]
+    records, retained = [raw], {}  # retained: this capture's verified file per content identity
     for index, row in enumerate(original["entries"]):
         for side in ("before", "after"):
             state = row.get(side)
@@ -334,9 +337,11 @@ def capture_directory_result(drive, entry, gateway, *, publish=True):
                 if direct and side == "before":
                     continue
                 raise ValueError(f"file {side} has no complete reference: {row.get('path')}")
-            record = _download(gateway, entry.run_id, state["artifactPath"],
-                               cap_dir / f"{side}-{index}", state)
-            records.append({**record, "source_path": row["path"], "side": side})
+            identity = (state.get("sha256"), state.get("sizeBytes"))
+            if identity not in retained:
+                retained[identity] = _download(gateway, entry.run_id, state["artifactPath"],
+                                               cap_dir / f"{side}-{index}", state)
+            records.append({**retained[identity], "source_path": row["path"], "side": side})
     manifest = {
         "schema_version": 1, "capture_kind": "engine_directory", "status": "ready",
         "workspace_root": original["executionRoot"], "authority_target_root": entry.target_root,
