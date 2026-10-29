@@ -244,6 +244,22 @@ def test_first_run_named_servers_keep_routes_and_credentials_in_settings(direct_
         secret.fill(mask)
         expect(row_status).to_have_text('Ready')
         assert secret.get_attribute('data-force-clear') is None
+        # Built-in rows survive Reload; their baseline must exclude transient Clear intent.
+        builtin = page.locator('[data-connection-row][data-kind="openai-compatible"][data-builtin="1"]')
+        builtin.locator('.secret-clear').click()
+        assert builtin.locator('[data-connection-field="api_key"]').get_attribute('data-force-clear') == '1'
+        page.click('#btn-reload-settings')
+        page.get_by_role('button', name='Discard and continue', exact=True).click()
+        expect(page.locator('#settings-status')).to_have_text('Settings loaded')
+        builtin_status = builtin.locator('[data-connection-status]')
+        expect(builtin_status).to_have_text('No key')
+        builtin_url = builtin.locator('[data-connection-field="base_url"]')
+        loaded_url = builtin_url.input_value()
+        builtin_url.fill('http://127.0.0.1:1/v1')
+        expect(builtin_status).to_have_text('Not saved')
+        builtin_url.fill(loaded_url)
+        expect(builtin_status).to_have_text('No key')
+        report['builtin_reload_undo'] = {'status': builtin_status.inner_text(), 'base_url': loaded_url}
         # Test the saved destinations from their real rows; alpha sends no auth, beta uses its own saved key.
         for row in (rows.nth(0), rows.nth(1)):
             with page.expect_response('**/api/providers/test') as tested:

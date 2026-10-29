@@ -745,9 +745,9 @@ export function initSettings({ state, setBeforePageLeave, ws } = {}) {
             input.value = s[field.settingKey] ?? field.default ?? '';
         });
         applyMcpSettings(s);
-        // After the flat inputs: the rows read their applied values, and a reload expires every Test verdict.
-        connections.load(s, { modelSlots: setupModelSlots() });
         resetSecretClearFlags(page);
+        // After the flat inputs and transient flags: snapshot only the applied document.
+        connections.load(s, { modelSlots: setupModelSlots() });
         syncEffortSegments(page);
         syncRuntimeModeBridgeState();
         syncPolicyState(page, s?._meta);
