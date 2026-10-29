@@ -207,8 +207,8 @@ def test_review_model_warning_reads_a_named_route_by_its_native_id(monkeypatch):
 def test_wizard_model_discovery_restores_only_the_selected_connection_secret(monkeypatch):
     from types import SimpleNamespace
     from ouroboros.gateway.secret_rows import mask_connections
-    rows = [{"kind": "openai-compatible", "name": name, "api_key": f"fixture-{name}-key"}
-            for name in ("alpha", "beta")]
+    rows = [{"kind": "openai-compatible", "name": name, "base_url": "http://localhost:41001/v1",
+             "api_key": f"fixture-{name}-key"} for name in ("alpha", "beta")]
     monkeypatch.setattr(models_api, "load_settings", lambda: {CONNECTIONS_KEY: rows})
     sent = []
 
@@ -246,11 +246,42 @@ def test_wizard_discovery_resolves_the_builtin_secret_without_changing_settings(
         sent.append((api_key, url))
         return [{"value": "openai-compatible::same-model"}]
 
+    url = saved.get("OPENAI_COMPATIBLE_BASE_URL") or saved["OPENAI_BASE_URL"]
+
     async def body():
-        return {"baseUrl": "https://draft.example/v1", "apiKey": key}
+        return {"baseUrl": url, "apiKey": key}
 
     monkeypatch.setattr(models_api, "_fetch_openai_compatible_model_catalog", discover)
     response = asyncio.run(models_api.api_openai_compatible_models(SimpleNamespace(json=body)))
     assert response.status_code == 200 and json.loads(response.body) == {"models": ["same-model"]}
-    assert sent == [(expected, "https://draft.example/v1")]
+    assert sent == [(expected, url)]
     assert saved == before
+
+
+@pytest.mark.parametrize("body", [
+    {"baseUrl": "https://elsewhere.example/v1", "apiKey": "***set***"},
+    {"baseUrl": "https://elsewhere.example/v1", "apiKey": "***set***", "connection": "beta"},
+    {"baseUrl": "https://elsewhere.example/v1", "apiKey": "saved-be...", "connection": "beta"},
+])
+def test_wizard_discovery_never_sends_a_saved_key_to_another_endpoint(monkeypatch, body):
+    from types import SimpleNamespace
+
+    # Any page can post here on a loopback install without a password: a placeholder must not
+    # carry the saved key to an address it was not saved with. A changed address needs its key again.
+    monkeypatch.setattr(models_api, "load_settings", lambda: {
+        "OPENAI_COMPATIBLE_API_KEY": "saved-builtin-key", "OPENAI_COMPATIBLE_BASE_URL": "https://saved.example/v1",
+        CONNECTIONS_KEY: [{"kind": "openai-compatible", "name": "beta", "base_url": "https://beta.example/v1",
+                           "api_key": "saved-beta-key"}]})
+    sent = []
+
+    async def discover(client, provider, label, api_key, url):
+        sent.append((api_key, url))
+        return []
+
+    async def read():
+        return body
+
+    monkeypatch.setattr(models_api, "_fetch_openai_compatible_model_catalog", discover)
+    response = asyncio.run(models_api.api_openai_compatible_models(SimpleNamespace(json=read)))
+    assert response.status_code == 400 and json.loads(response.body)["code"] == "masked_key_endpoint_changed"
+    assert sent == []

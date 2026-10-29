@@ -598,8 +598,11 @@ async def api_openai_compatible_models(request: Request) -> JSONResponse:
         body = await request.json()
         base_url = str(body.get("baseUrl", "") or "").strip()
         api_key = str(body.get("apiKey", "") or "").strip()
+        if not base_url:
+            return json_error("baseUrl is required", 400)
         # A wizard reopening an install holds a masked key, just as Settings does.
-        # Resolve only the selected identity; an explicit blank still means no auth.
+        # Resolve only the selected identity, for the address it was saved with: any page can post
+        # here, so a placeholder never carries a key elsewhere. An explicit blank still means no auth.
         from ouroboros.secret_masking import looks_masked_settings_secret
         if looks_masked_settings_secret(PROVIDER_KINDS["openai-compatible"].flat_key("api_key"), api_key):
             from ouroboros.gateway.secret_rows import rehydrate_connections
@@ -608,14 +611,17 @@ async def api_openai_compatible_models(request: Request) -> JSONResponse:
             if name:
                 draft = {"kind": "openai-compatible", "name": name, "api_key": api_key}
                 api_key = rehydrate_connections([draft], settings.get(CONNECTIONS_KEY))[0]["api_key"]
+                saved_url = (find_row(connection_rows(settings.get(CONNECTIONS_KEY)), "openai-compatible", name) or {}).get("base_url")
             else:
                 from ouroboros.llm_routing import resolve_target
                 # Explicit discovery also works while the built-in source is off.
                 settings[CONNECTIONS_KEY] = [row for row in connection_rows(settings.get(CONNECTIONS_KEY))
                                              if (row.get("kind"), row.get("name")) != ("openai-compatible", BUILTIN_CONNECTION)]
-                api_key = resolve_target("openai-compatible::catalog", settings)["api_key"]
-        if not base_url:
-            return json_error("baseUrl is required", 400)
+                target = resolve_target("openai-compatible::catalog", settings)
+                api_key, saved_url = target["api_key"], target.get("base_url")
+            if api_key and str(saved_url or "").strip().rstrip("/") != base_url.rstrip("/"):
+                return json_error("This server's address changed since its key was saved. Enter its key again "
+                                  "to list its models.", 400, code="masked_key_endpoint_changed")
         async with httpx.AsyncClient(timeout=10.0, **verify_kwargs()) as client:
             models = await _fetch_openai_compatible_model_catalog(
                 client, "openai-compatible", "OpenAI-compatible", api_key, base_url

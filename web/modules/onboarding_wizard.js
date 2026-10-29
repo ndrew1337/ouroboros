@@ -1154,6 +1154,8 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
                 const stateKey = PROVIDER_FIELDS.find((entry) => entry.settingKey === field.settingKey)?.stateKey;
                 input.dataset.appliedValue = INITIAL_STATE[stateKey] || '';
             }
+            // The card's own fields first, as Settings does: load() binds each row it mounts.
+            bindSecretInputs(panel);
             connectionsEditor.load(draftSettings(), { modelSlots: MODEL_SLOTS });
             // Back remounts the draft, not a saved document. Show and Test must still
             // use edited values locally rather than look up an unsaved row's key.
@@ -1163,7 +1165,6 @@ import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
                     input.dataset.appliedValue = saved?.[input.dataset.connectionField] || '';
                 });
             });
-            bindSecretInputs(panel);
         }
             const localPreset = document.getElementById('local-preset');
             const localSource = document.getElementById('local-source');
