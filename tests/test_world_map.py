@@ -325,14 +325,23 @@ def test_the_measured_block_names_the_app_copy_and_the_body_it_runs(tmp_path, mo
     for name in ("OUROBOROS_BUNDLE_DIR", "APPIMAGE"):
         monkeypatch.delenv(name, raising=False)
     assert f"- **Host**: source runtime (Python {python} at {sys.executable}); {body}" in wprof.measured_block(str(repo), "/d")
-    for app in (tmp_path / "Applications" / "Ouroboros.app", tmp_path / "AppTranslocation" / "X" / "d" / "Ouroboros.app"):
+    import os
+    import types
+
+    real_statvfs = getattr(os, "statvfs", None)
+    for app, read_only, label in ((tmp_path / "Volumes" / "Disk" / "Ouroboros.app", False, ""),  # a writable volume
+                                  (tmp_path / "AppTranslocation" / "X" / "d" / "Ouroboros.app", False, " (translocated)"),
+                                  (tmp_path / "Volumes" / "Ouroboros 1" / "Ouroboros.app", True, " (read-only mount)")):
         bundle = app / "Contents" / "Frameworks"
         bundle.mkdir(parents=True)
         (bundle / "repo_bundle_manifest.json").write_text("{}", encoding="utf-8")
         monkeypatch.setenv("OUROBOROS_BUNDLE_DIR", str(bundle))
         monkeypatch.setenv("OUROBOROS_APP_VERSION", "7.10.0")
-        transient = " (a disk image or translocated read-only copy)" if "AppTranslocation" in str(app) else ""
-        assert f"- **Host**: App 7.10.0 at {app}{transient} (bundled Python {python}); {body}" in wprof.measured_block(
+        flag = getattr(os, "ST_RDONLY", 1) if read_only else 0
+        monkeypatch.setattr(os, "statvfs", (lambda _path, flag=flag: types.SimpleNamespace(f_flag=flag)) if real_statvfs
+                            else (lambda _path: (_ for _ in ()).throw(OSError("unmeasured"))), raising=False)
+        expected = label if real_statvfs or not read_only else ""  # an unmeasured mount gets no label
+        assert f"- **Host**: App 7.10.0 at {app}{expected} (bundled Python {python}); {body}" in wprof.measured_block(
             str(repo), "/d")
 
 def test_startup_verification_refreshes_the_measured_block_in_place(tmp_path, monkeypatch):

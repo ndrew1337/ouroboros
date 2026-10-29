@@ -536,14 +536,22 @@ def test_installer_under_an_appimage_points_at_its_cli_instead_of_linking_into_t
     monkeypatch.delenv("APPIMAGE")
     assert plan_posix_install(root, target_dir=tmp_path / "bin").action == "create"
 
-def test_installer_rejects_macos_dmg_or_translocation_paths():
+def test_installer_rejects_macos_dmg_or_translocation_paths(tmp_path, monkeypatch):
+    """Measured, not guessed from a folder name: a read-only mount or a translocated copy is refused,
+    an ordinary writable disk under /Volumes is accepted (the old rule refused every /Volumes path)."""
+    import types
+
     from ouroboros.packaged_cli import PackagedCLIError
     from ouroboros.packaged_cli_install import reject_unstable_macos_path
 
     with pytest.raises(PackagedCLIError, match="refusing to install CLI from a DMG"):
-        reject_unstable_macos_path(pathlib.Path("/Volumes/Ouroboros/Ouroboros.app/Contents/Resources"))
-    with pytest.raises(PackagedCLIError, match="refusing to install CLI from a DMG"):
         reject_unstable_macos_path(pathlib.Path("/private/var/AppTranslocation/Ouroboros.app/Contents/Resources"))
+    volume = pathlib.Path("/Volumes/Disk/Ouroboros.app/Contents/Resources")
+    monkeypatch.setattr(os, "statvfs", lambda _path: types.SimpleNamespace(f_flag=0), raising=False)
+    reject_unstable_macos_path(volume)
+    monkeypatch.setattr(os, "statvfs", lambda _path: types.SimpleNamespace(f_flag=getattr(os, "ST_RDONLY", 1)), raising=False)
+    with pytest.raises(PackagedCLIError, match="refusing to install CLI from a DMG"):
+        reject_unstable_macos_path(volume)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell wrapper test")
