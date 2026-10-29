@@ -16,7 +16,7 @@ import pytest
 from ouroboros import desktop_autostart as startup
 from ouroboros.launcher_bootstrap import automatic_launch_allowed, parse_launch_options
 
-SHIPPED_UNIT = (Path(__file__).resolve().parents[1] / "packaging/systemd/ouroboros.service").read_text(encoding="utf-8")
+SHIPPED_UNIT = (Path(__file__).resolve().parents[1] / "packaging/systemd/ouroboros.service.in").read_text(encoding="utf-8")
 # The unit exactly as the 7.2.0 through 7.5.1 deb/rpm packages installed it; a managed update never replaces it.
 HISTORICAL_UNIT = """[Unit]
 Description=Ouroboros agent runtime
