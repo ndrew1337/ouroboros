@@ -240,12 +240,13 @@ def test_delayed_real_mcp_runner_cannot_open_transport_after_callers_return(tmp_
     monkeypatch.setattr(asyncio, "run", delayed)
     monkeypatch.setattr(threading.Thread, "join", joined)
     monkeypatch.setattr(mcp_client, "_transport_factory", transport)
-    monkeypatch.setattr(mcp_client, "_run_async", lambda factory, **_kw: actual_wrapper(factory, join_timeout=0))
+    monkeypatch.setattr(mcp_client, "_run_async", lambda factory, **kw: actual_wrapper(factory, **{**kw, "join_timeout": 0}))
     try:
         async def invoke():
             return registry.execute_result("mcp_demo__effect", {})
         result = actual_run(invoke())
-        assert result.status in {"error", "timeout"}
+        assert (result.status, result.code) == ("timeout", "MCP_TIMEOUT")
+        assert result.meta["mcp_call_not_sent"] is False, "unknown when the caller stopped waiting"
         assert len(claims(tmp_path)) == 1  # real runner has not yet unwound
     finally:
         release.set()
@@ -254,9 +255,9 @@ def test_delayed_real_mcp_runner_cannot_open_transport_after_callers_return(tmp_
             assert not thread.is_alive()
         mcp_client.reset_manager_for_tests()
     assert not calls and not transports
-    # Unknown was never rewritten as no-send; only the runner's positive unwind
-    # can later refine this original exact duty (not currently collected here).
-    assert len(claims(tmp_path)) == 1
+    # Only the runner's own positive unwind (preparation refused by closure, nothing
+    # sent) discharges the exact duty and ends the local call it held.
+    assert not claims(tmp_path)
 
 
 @pytest.mark.parametrize("bound", [False, True])
