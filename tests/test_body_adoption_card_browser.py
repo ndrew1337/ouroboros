@@ -27,6 +27,7 @@ import pytest
 from ouroboros import review_ledger as rl
 from tests.test_review_record_card_projection import CRITICAL, _answer
 from tests.ui_chat_viewport_smoke import _CAPTURE_TEST_SOCKET, _emit_ws_frame
+from tests.ui_console_errors import PageErrors
 
 pytest_plugins = ("tests.test_ui_smoke_playwright",)
 pytestmark = [pytest.mark.ui_browser, pytest.mark.serial]
@@ -341,8 +342,8 @@ def test_adoption_lives_in_its_task_card_and_the_review_row_says_the_relation(di
             browser = getattr(pw, engine).launch(headless=True)
             try:
                 page = browser.new_page(viewport={"width": width, "height": height}, color_scheme=theme)
-                errors = []
-                page.on("pageerror", lambda error: errors.append(str(error)))
+                errors = PageErrors(None, engine)
+                errors.watch(page, navigates=False)
                 page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
                 page.goto(url, wait_until="domcontentloaded")
                 page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
@@ -427,14 +428,16 @@ def test_adoption_lives_in_its_task_card_and_the_review_row_says_the_relation(di
                         assert card.locator(".chat-live-line", has_text=f"Adopted candidate commit {shas['cand']}").count() == 1, scene
                         card.locator("[data-live-disclosure]").click()
                     # Cold reload: the same history rebuilds the same card, relation and single row.
+                    errors.watch(page)  # Only this deliberate reload admits the existing WebKit exception.
                     page.reload(wait_until="domcontentloaded")
                     page.evaluate("theme => document.documentElement.dataset.theme = theme", theme)
                     page.locator('.chat-live-card[data-task-id="adopt-rejected"]').wait_for(state="visible", timeout=30000)
                     _open_reviews(page, "rejected", RELATION["rejected"].format(**shas))
                     assert "Body adoption" not in feed.text_content()
-                assert not errors, errors
+                assert not errors.unexpected(), errors.report()
                 results.append({"engine": engine, "theme": theme, "width": width, "height": height, "facts": facts,
-                                "geometry": geometry, "restart_rows": restart_words, "page_errors": errors})
+                                "geometry": geometry, "restart_rows": restart_words, "page_errors": list(errors),
+                                "page_error_classification": errors.report()})
                 page.close()
             finally:
                 browser.close()
@@ -499,8 +502,8 @@ def _incremental(pw, seeded, monkeypatch, url, shas, evidence):
     browser = pw.webkit.launch(headless=True)
     try:
         page = browser.new_page(viewport={"width": 390, "height": 844}, color_scheme="light")
-        errors = []
-        page.on("pageerror", lambda error: errors.append(str(error)))
+        errors = PageErrors(None, "webkit")
+        errors.watch(page, navigates=False)
         page.add_init_script(f"({_CAPTURE_TEST_SOCKET})()")
         page.add_init_script(f"({COUNT_HISTORY_READS})()")
         page.goto(url, wait_until="domcontentloaded")
@@ -525,10 +528,11 @@ def _incremental(pw, seeded, monkeypatch, url, shas, evidence):
         row.wait_for(state="visible", timeout=10000)
         page.evaluate(SETTLE)
         cards["lost"].screenshot(path=str(evidence / "webkit-390-light-lost-after.png"))
-        assert page.evaluate("window.__sameDocument === true") and not errors, errors
+        assert page.evaluate("window.__sameDocument === true") and not errors.unexpected(), errors.report()
         delayed = _late_history(seeded, page, monkeypatch, evidence, committed, adopted)
-        assert page.evaluate("window.__sameDocument === true") and not errors, errors
+        assert page.evaluate("window.__sameDocument === true") and not errors.unexpected(), errors.report()
 
+        errors.watch(page)
         page.reload(wait_until="domcontentloaded")
         page.locator('.chat-live-card[data-task-id="adopt-late"]').wait_for(state="visible", timeout=30000)
         _open_reviews(page, "late", adopted)
@@ -539,9 +543,10 @@ def _incremental(pw, seeded, monkeypatch, url, shas, evidence):
         page.evaluate(SETTLE)
         page.locator('.chat-live-card[data-task-id="adopt-late"]').screenshot(
             path=str(evidence / "webkit-390-light-late-reload.png"))
-        assert not errors, errors
+        assert not errors.unexpected(), errors.report()
         page.locator('.chat-live-card[data-task-id="adopt-delayed"]').screenshot(
             path=str(evidence / "webkit-390-light-delayed-reload.png"))
-        return {"late": adopted, "lost": lost_words, "lost_after_reload": cold, "geometry": geometry, "delayed": delayed}
+        return {"late": adopted, "lost": lost_words, "lost_after_reload": cold, "geometry": geometry, "delayed": delayed,
+                "page_errors": list(errors), "page_error_classification": errors.report()}
     finally:
         browser.close()
