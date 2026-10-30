@@ -1392,8 +1392,12 @@ running, such as the review a Pause lets finish, a run nobody can confirm); a wo
 beside it, and the sidebar's name says both. An outcome stays beside `Finalizing…`; `Paused` stays until Resume, its
 line saying who or what paused it (the owner's press with its time, Ouroboros in its
 own sentence, nobody when a press declared no one);
-`Waiting` says what it waits for and goes on by itself when that happens;
-helpers an earlier attempt left running read as `Working`, with their count; an
+`Waiting` says what it waits for and goes on by itself when that happens,
+unless a helper its sleep chose is paused: the line then says so and who resumes
+that helper (`… until Ouroboros resumes it` only when this episode may ask for it,
+or `until you resume it` after Panic; a Continue's earlier helper is just
+`paused`), with no new control or turn; helpers an earlier attempt left running
+read as `Working`, with their count; an
 access wait is not an answer wait, and unknown stays unknown. Under the state a
 live work shows its own focus line, what Ouroboros says it is doing (stage ·
 done · left, written by it through `update_focus`), quieter and at most two

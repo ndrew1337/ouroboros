@@ -1463,6 +1463,12 @@ def process_tool_results(
         if ctx is not None and published.get("sleep_question_notice") and not (is_error or result_partial):
             from ouroboros.model_sleep import acknowledge_question_delivery
             acknowledge_question_delivery(ctx, truncated_result)  # exposure needs the complete ready view
+        if ctx is not None and published.get("held_dependency_notice") and not (is_error or result_partial):
+            from ouroboros.model_sleep import acknowledge_hold_delivery
+            acknowledge_hold_delivery(ctx, truncated_result)  # likewise for a held dependency
+        elif ctx is not None and not is_error and (published.get("held_dependency_notice") or published.get("read_view")):
+            from ouroboros.model_sleep import credit_hold_source
+            credit_hold_source(ctx, exec_result, view)  # a shortened one: shown once its exact source was, whole
         if ctx is not None and published.get("review_delivery") and not result_partial:
             from ouroboros.review_waiting import acknowledge_delivery
             acknowledge_delivery(ctx, published["review_delivery"])
@@ -1528,6 +1534,8 @@ def process_tool_results(
             if pending.get(key) == value:
                 pending.pop(key)
         ctx._pending_review_context = pending
+        if getattr(ctx, "_held_dependencies_pending", None):
+            ctx._held_dependencies_pending = []  # the batch reached the transcript: undelivered holds re-read
     # Auto-attach AFTER the round's complete tool-message block, never between two
     # tool messages answering the same assistant turn: the user(image) injection
     # then preserves tool-result contiguity BY CONSTRUCTION instead of relying on
