@@ -191,7 +191,7 @@ def test_labels_match_the_full_exact_title_or_description(attribute, label):
     for text, el in ((label, "play"), (label.lower(), "play2")):
         out = act(ax, "press", {"role": "button", "label": text})
         assert out["ok"] is True and out["matched"] == 1
-        assert out["element"]["label"] == text[:200] and ax.performed[-1] == (el, "AXPress")
+        assert out["element"]["label"] == text and out["element_after"]["label"] == text and ax.performed[-1] == (el, "AXPress")
     assert ax.balanced()
 
 
@@ -326,6 +326,58 @@ def test_set_value_is_verified_by_readback_and_a_completed_action_survives_a_fai
 
 def normalizing_gone(ax: FakeAX, el: str, _value: str) -> None:
     del ax.nodes[el]
+
+
+# Past 200 characters, with combining marks and an astral character so that no cut lands on a clean boundary.
+LONG_LABEL = "N" + "e\u0301\u0302\U0001d11e" * 80 + " [label-end]"
+LONG_BEFORE = "\u2192 " + "ab\u0301\U0001d11e" * 70 + " [before-end]"
+LONG_TEXT = "set: " + "x\u0302\U0001d11e" * 100 + " [text-end]"
+NORMALIZED = " [app-normalized-suffix]"
+
+
+def long_field() -> dict:
+    nodes = deck()
+    nodes["field"].update(title=LONG_LABEL, value=LONG_BEFORE)
+    return nodes
+
+
+def test_a_set_value_receipt_keeps_the_complete_label_before_value_and_normalized_readback(monkeypatch, capsys):
+    nodes = long_field()
+    ax = FakeAX(nodes, windows=["win"], focused="win", on_set=lambda el, v: nodes[el].__setitem__("value", v + NORMALIZED))
+    real = native.op_act
+    monkeypatch.setattr(native, "op_act", lambda pid, do, sel, nodes_, ms: real(pid, do, sel, nodes_, ms, ax=ax, front=lambda: None, settle=lambda _s: None))
+    selector = {"role": "TextField", "label": LONG_LABEL, "text": LONG_TEXT}
+    assert native.main(["act", "200", "set_value", json.dumps(selector)]) == 0
+    line = capsys.readouterr().out.strip().splitlines()[-1]
+    assert line.isascii(), "the helper's one line is ASCII; the parent decodes the same strings under any locale"
+    out = json.loads(line)
+    assert len(LONG_LABEL) > 200 and len(LONG_BEFORE) > 200 and len(LONG_TEXT + NORMALIZED) > 200
+    assert out["ok"] is True and marked(out) and out["action_outcome"] == "completed" and ax.sets == [("field", LONG_TEXT)]
+    assert {"label": out["element"]["label"], "label_after": out["element_after"]["label"], "before": out["element"]["value"],
+            "after": out["element_after"]["value"]} == {"label": LONG_LABEL, "label_after": LONG_LABEL, "before": LONG_BEFORE,
+                                                       "after": LONG_TEXT + NORMALIZED}, "whole: the value replaced and the one kept"
+    assert out["verified"] is False and "different one" in out["note"]
+    assert not any("value_len" in out[key] for key in ("element", "element_after")), "no cut, so no length of a cut"
+    assert ax.balanced()
+
+
+def test_refusal_and_candidate_rows_keep_the_complete_label_and_value():
+    nodes = long_field()
+    nodes["play"].update(title=LONG_LABEL, value=LONG_BEFORE)
+    nodes["play2"].update(description=LONG_LABEL, value=LONG_BEFORE)
+    ambiguous = act(FakeAX(nodes, windows=["win"], focused="win"), "press", {"role": "Button", "label": LONG_LABEL})
+    assert ambiguous["reason"] == "element_ambiguous" and len(ambiguous["candidates"]) == 2
+    nodes = long_field()
+    nodes["play2"].update(title=LONG_LABEL, value=LONG_BEFORE, unread=["description"])
+    unreadable = act(FakeAX(nodes, windows=["win"], focused="win"), "press", {"role": "Button", "label": LONG_LABEL})
+    assert unreadable["reason"] == "candidates_unread" and len(unreadable["unreadable_candidates"]) == 1
+    nodes = long_field()
+    nodes["field"]["enabled"] = False
+    disabled = act(FakeAX(nodes, windows=["win"], focused="win"), "set_value", {"role": "TextField", "label": LONG_LABEL, "text": "x"})
+    assert disabled["reason"] == "element_disabled" and disabled["dispatched"] is False
+    rows = [*ambiguous["candidates"], *unreadable["unreadable_candidates"], disabled["element"]]
+    assert [(row["label"], row["value"]) for row in rows] == [(LONG_LABEL, LONG_BEFORE)] * 4
+    assert not any("value_len" in row for row in rows)
 
 
 @pytest.mark.parametrize("value", [None, ("axerror", -25212), ("axerror", -25205)])

@@ -696,8 +696,9 @@ def choose(found: int, nth: int | None, complete: bool) -> str:
 
 
 def read_element(ax: Any, elem: Any) -> dict[str, Any]:
-    """One fresh read of an element: role, subrole, label, value (whole), bounds, enabled, focused, identifier;
-    ``unread`` names what the application failed to answer, and a read that failed whole is only ``unread``."""
+    """One fresh read of an element: role, subrole, label and value (both whole: a receipt is the record of what the
+    action replaced and what the application kept), bounds, enabled, focused, identifier; ``unread`` names what the
+    application failed to answer, and a read that failed whole is only ``unread``."""
     return _read(ax, elem)[0]
 
 
@@ -713,7 +714,7 @@ def _read(ax: Any, elem: Any) -> tuple[dict[str, Any], tuple[Any, Any, Any]]:
         out["subrole"] = subrole
     label = title or desc or ""
     if label:
-        out["label"] = str(label)[:200]
+        out["label"] = str(label)
     if isinstance(value, (str, float, bool)):
         out["value"] = value
     bounds = _bounds(pos, size)
@@ -727,15 +728,6 @@ def _read(ax: Any, elem: Any) -> tuple[dict[str, Any], tuple[Any, Any, Any]]:
     if failed:
         out["unread"] = failed
     return out, (role, title, desc)
-
-
-def _shown(element: dict[str, Any]) -> dict[str, Any]:
-    """An element read as a receipt shows it: a long value is cut to 200 characters and says its length."""
-    out = dict(element)
-    value = out.get("value")
-    if isinstance(value, str) and len(value) > 200:
-        out["value"], out["value_len"] = value[:200], len(value)
-    return out
 
 
 def _identity(sel: dict[str, Any]) -> str:
@@ -906,14 +898,14 @@ def act_in_window(ax: Any, win: Any, sel: dict[str, Any], action: str, *, max_no
                  "truncated_by": walked["truncated_by"], "errors": walked["errors"], "elapsed_ms": walked["elapsed_ms"]}
         identity = _identity(sel)
         if unread:
-            shown = [{"index": i + 1, **_shown(read_element(ax, el))} for i, el in enumerate(unread[:_SHOWN])]
+            shown = [{"index": i + 1, **read_element(ax, el)} for i, el in enumerate(unread[:_SHOWN])]
             return {"ok": False, "reason": "candidates_unread", "dispatched": False, "unreadable_candidates": shown,
                     "error": f"{len(unread)} element(s) did not answer an attribute the selector names ({identity}), so the choice "
                              "cannot be made (one of them may be the target); retry, or name the element by another attribute",
                     "note": "no action was made", **facts}
         which = choose(len(found), sel.get("nth"), complete)
         if which != "one":
-            candidates = [{"index": i + 1, **_shown(read_element(ax, el))} for i, el in enumerate(found[:_SHOWN])]
+            candidates = [{"index": i + 1, **read_element(ax, el)} for i, el in enumerate(found[:_SHOWN])]
             if which == "none":
                 error = (f"only {len(found)} element(s) match {identity}, nth={sel['nth']} was asked" if sel.get("nth")
                          else f"no element of the window matches {identity}")
@@ -931,11 +923,11 @@ def act_in_window(ax: Any, win: Any, sel: dict[str, Any], action: str, *, max_no
         before, raw = _read(ax, el)
         refusal = _precondition(ax, el, before, raw, sel, action)
         if refusal:
-            return {"ok": False, **refusal, "dispatched": False, "element": _shown(before), "note": "no action was made", **facts}
+            return {"ok": False, **refusal, "dispatched": False, "element": before, "note": "no action was made", **facts}
         code = ax.perform(el, "AXPress") if action == "press" else ax.set_string(el, "AXValue", sel["text"])
         outcome = "completed" if code == 0 else ("unknown" if code == -25204 else "failed")
         payload: dict[str, Any] = {"ok": outcome == "completed", "dispatched": True, "action_outcome": outcome,
-                                   "element": _shown(before), **facts}
+                                   "element": before, **facts}
         if code != 0:
             payload["ax_error"] = AX_ERR.get(code, str(code))
             payload["reason"] = "outcome_unknown" if outcome == "unknown" else "action_failed"
@@ -946,7 +938,7 @@ def act_in_window(ax: Any, win: Any, sel: dict[str, Any], action: str, *, max_no
             after = read_element(ax, el)
         except Exception as exc:  # noqa: BLE001 - the action stands; only the look afterwards failed
             after = {"unread": {"element": f"{type(exc).__name__}: {exc}"}}
-        payload["element_after"] = _shown(after)
+        payload["element_after"] = after
         if action == "set_value" and outcome != "failed":
             payload["verified"] = after["value"] == sel["text"] if "value" in after else None
         payload["note"] = _note(action, outcome, after, payload.get("verified"))

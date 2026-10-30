@@ -8,9 +8,14 @@ and two buttons named "Twin", and a front app that receives synthetic keystrokes
 path - built-in install, out-of-process load and dispatch through ``ToolRegistry`` - the skill presses and
 sets a value in the background target while the front app is typed into. Each fixture logs its own
 state, every activation the workspace announces (a focus taken and given back between two samples
-still shows), pointer events and the clipboard's change count (never its contents); the skill's answers
-are checked against those logs, not against themselves. A grant the run lacks becomes the skip reason,
-never a pass. ``test_the_fixture_builds`` alone runs without the opt-in: it compiles and starts nothing.
+still shows), the key events it receives, pointer events and the clipboard's change count (never its
+contents); the skill's answers, kept in ``receipts.jsonl``, are checked against those logs, not against
+themselves. Three cases use foreground input: one hands the front to one fixture and lets the other take
+it (targeted ``key``/``type_text`` with ``raise_policy="never"`` must refuse rather than take it back), one
+sends Command-A spelled ``cmd+a`` and ``cmd+A`` and reads the modifiers the front app received, and one
+clicks Commit at a point read off a downscaled screenshot. The calls run as an owner task's would
+(``work_kind`` owner). A grant the run lacks becomes the skip reason, never a pass.
+``test_the_fixture_builds`` alone runs without the opt-in: it compiles and starts nothing.
 """
 
 from __future__ import annotations
@@ -149,12 +154,22 @@ def host(tmp_path, monkeypatch):
     _dependency_pass(data, [SKILL], log)
     assert load_enabled(data, SKILL) is True
     registry = ToolRegistry(repo_dir=REPO, drive_root=data)
-    registry.set_context(ToolContext(repo_dir=REPO, drive_root=data))
+    # An owner task's context. Work of unknown provenance counts as consciousness work, whose full Safety
+    # Supervisor coverage holds every action while no safety model is reachable, which a hermetic run never has.
+    registry.set_context(ToolContext(repo_dir=REPO, drive_root=data, task_metadata={"work_kind": "owner"}))
+
+    receipts = tmp_path / "receipts.jsonl"  # every answer as received, on the fixtures' clock (system uptime)
 
     def call(name, **args):
-        raw = registry.execute(extension_loader.extension_surface_name(SKILL, name), args)
-        head, sep, _tail = str(raw).partition("\n\n⚠️ ")
-        return json.loads(head if sep else raw)
+        raw = str(registry.execute(extension_loader.extension_surface_name(SKILL, name), args))
+        with receipts.open("a", encoding="utf-8") as out:
+            row = {"t": time.monotonic(), "tool": name, "args": args, "answer": raw}
+            out.write(json.dumps(row, ensure_ascii=False) + "\n")
+        head, sep, _tail = raw.partition("\n\n⚠️ ")
+        try:
+            return json.loads(head if sep else raw)
+        except ValueError:
+            raise AssertionError(f"{name} answered without a receipt: {raw[:1500]}") from None
 
     def schema(name):
         tool = extension_loader.get_tool(extension_loader.extension_surface_name(SKILL, name))
@@ -194,6 +209,33 @@ def _between(rows: list[dict], start: float, end: float, *events: str) -> list[d
     return [row for row in rows if start < row["t"] < end and row["event"] in events]
 
 
+def _input_ready(call, **also: str) -> None:
+    """Foreground input needs the grants to post it and cliclick to send it; without them the case is skipped."""
+    grants = _grants(call)
+    required = {"accessibility": "trusted", "post_events": "granted", **also}
+    lacking = {key: grants.get(key, "absent") for key, value in required.items() if grants.get(key) != value}
+    if lacking:
+        pytest.skip(f"unsupported here, not passed: this process lacks {lacking} (no grant is requested)")
+    if (call("capabilities").get("input") or {}).get("cliclick") is not True:
+        pytest.skip("unsupported here, not passed: cliclick is not installed, so key, type_text and click send nothing")
+
+
+def _hand_front(call, owned: Owned) -> dict:
+    """Puts an owned fixture in front through activate_app, the switch an owner would make, and returns its own
+    snapshot once it is the active application with its key window."""
+    seen = owned.mark("handing")
+    if not (seen["app_active"] and seen["key_window"] and seen["front_pid"] == owned.pid):
+        switched = call("activate_app", app=f"pid:{owned.pid}")
+        assert switched.get("ok") is True and (switched.get("target") or {}).get("verified") is True, switched
+        if not seen["app_active"]:
+            owned.wait_for("app_became_active", after=seen["t"])
+        if not seen["key_window"]:
+            owned.wait_for("window_became_key", after=seen["t"])
+    held = owned.mark("in_front")
+    assert held["app_active"] and held["key_window"] and held["front_pid"] == owned.pid, held
+    return held
+
+
 @desktop_only
 def test_without_accessibility_element_act_refuses_and_the_target_is_untouched(host, launch):
     call, schema = host
@@ -231,7 +273,7 @@ def test_quiet_press_and_set_value_while_the_front_app_is_typed_into(host, launc
         front.wait_for("app_became_active", timeout=5)
     except AssertionError:  # an app started outside LaunchServices may be kept back: hand the front over
         handoff = call("activate_app", app=f"pid:{front.pid}")
-        assert handoff.get("verified") is True, handoff
+        assert handoff.get("ok") is True and (handoff.get("target") or {}).get("verified") is True, handoff
         front.wait_for("app_became_active")
 
     # Every step runs even after a failure, and each failure keeps both answers, so one desktop
@@ -279,7 +321,7 @@ def test_quiet_press_and_set_value_while_the_front_app_is_typed_into(host, launc
     commits = [(r["instance"], r["field"], r["count"]) for r in _between(trows, start, end, "commit")]
     check("target commits", commits == [(1, "1500", 1), (2, "1500", 2)], commits)
     check("twin", [r["identifier"] for r in _between(trows, start, end, "twin")] == ["qa.twinB"], trows)
-    check("no keystroke reached the target", not _between(trows, start, end, "field_typed"), trows)
+    check("no keystroke reached the target", not _between(trows, start, end, "key_down"), trows)
     check("target never active or key", not _between(trows, start, end, "app_became_active", "window_became_key"), trows)
     check("front kept active and key", not _between(frows, start, end, "app_resigned_active", "window_resigned_key"), frows)
     check("no application activated", not _between(frows, start, end, "workspace_activated"), frows)
@@ -291,3 +333,118 @@ def test_quiet_press_and_set_value_while_the_front_app_is_typed_into(host, launc
     check("target state", (t_after["field"], t_after["count"], t_after["status"], t_after["app_active"])
           == ("1500", 2, "committed:1500", False), t_after)
     assert not problems, "\n".join(problems)
+
+
+@desktop_only
+def test_never_policy_leaves_the_front_with_the_app_that_took_it(host, launch):
+    """SKILL.md's handoff: after a one-shot activate_app, targeted input with raise_policy="never" refuses once
+    another application holds the front instead of taking it back. A is handed the front, B takes it, then key and
+    type_text aimed at A must send nothing and switch nothing; the same key aimed at B, which is in front, must land
+    in B, so the logs that show no keystroke are logs that would have shown one."""
+    call, _schema = host
+    _input_ready(call)
+    handed, taker = launch("target"), launch("front")
+    _hand_front(call, handed)
+    _hand_front(call, taker)  # stands in for the owner switching to another application
+
+    problems: list[str] = []
+
+    def check(label, condition, payload):
+        if not condition:
+            problems.append(f"{label}: {json.dumps(payload, ensure_ascii=False)[:1500]}")
+
+    a_before, b_before = handed.mark("before"), taker.mark("before")
+    aimed = f"pid:{handed.pid}"
+    refusals = {"key": call("key", keys="x", app=aimed, raise_policy="never"),
+                "type_text": call("type_text", text="x", app=aimed, raise_policy="never")}
+    time.sleep(1.0)  # a late switch or keystroke would land in the logs before the marks below
+    a_after, b_after = handed.mark("after"), taker.mark("after")
+    for name, refused in refusals.items():
+        check(f"{name} refused", refused.get("ok") is False and refused.get("reason") == "target_lost"
+              and refused.get("dispatched") is not True and not refused.get("observed_effect")
+              and (refused.get("target") or {}).get("activated") is False
+              and (refused.get("front") or {}).get("pid") == taker.pid, refused)
+    arows, brows = handed.rows(), taker.rows()
+    start, end = min(a_before["t"], b_before["t"]), max(a_after["t"], b_after["t"])
+    check("A never active, key or typed into",
+          not _between(arows, start, end, "app_became_active", "window_became_key", "key_down", "field_typed"), arows)
+    check("B kept active and key", not _between(brows, start, end, "app_resigned_active", "window_resigned_key"), brows)
+    check("no application activated", not _between(brows, start, end, "workspace_activated"), brows)
+    check("no keystroke reached B", not _between(brows, start, end, "key_down", "front_text")
+          and b_after["text"] == b_before["text"], [b_before, b_after])
+    check("B still in front", b_after["app_active"] and b_after["front_pid"] == taker.pid
+          and (call("capabilities").get("frontmost") or {}).get("pid") == taker.pid, b_after)
+
+    # The control: the same key aimed at B, which is in front, is sent and lands there.
+    sent = call("key", keys="k", app=f"pid:{taker.pid}", raise_policy="never")
+    check("control sent", sent.get("ok") is True and sent.get("dispatched") is True
+          and (sent.get("delivered_to") or {}).get("pid") == taker.pid
+          and (sent.get("target") or {}).get("activated") is False, sent)
+    try:
+        landed = taker.wait_for("front_text", after=b_after["t"])
+        check("control landed in B", landed["text"] == b_before["text"] + "k", landed)
+    except AssertionError as exc:
+        check("control landed in B", False, str(exc))
+    assert not problems, "\n".join(problems)
+
+
+@desktop_only
+def test_command_a_arrives_as_command_a_however_its_letter_is_cased(host, launch):
+    """key("cmd+a") and key("cmd+A") both name Command-A: a letter's case in a combination is not a Shift. The front
+    fixture logs every key event it receives with its modifiers. Command-A is harmless there (the fixture has no
+    menu that acts on it); no quit or logout key is ever sent."""
+    call, _schema = host
+    _input_ready(call)
+    front = launch("front")
+    _hand_front(call, front)
+    problems: list[str] = []
+    for keys in ("cmd+a", "cmd+A"):
+        mark = front.mark(keys)
+        sent = call("key", keys=keys, app=f"pid:{front.pid}", raise_policy="never")
+        if not (sent.get("ok") is True and sent.get("dispatched") is True
+                and (sent.get("delivered_to") or {}).get("pid") == front.pid):
+            problems.append(f"{keys} not sent to the front fixture: {json.dumps(sent)[:1500]}")
+            continue
+        try:
+            row = front.wait_for("key_down", after=mark["t"], timeout=5)
+        except AssertionError as exc:
+            problems.append(f"{keys} never arrived: {exc}")
+            continue
+        if (row["chars_ignoring"], row["modifiers"]) != ("a", ["cmd"]):
+            problems.append(f"{keys} arrived as {row['modifiers']} + {row['chars_ignoring']!r}, not Command-A: "
+                            f"{json.dumps(row)} (sent {json.dumps(sent.get('cmd'))})")
+    after = front.mark("after")
+    assert not problems and after["text"] == "", "\n".join(problems) or after
+
+
+@desktop_only
+def test_a_point_read_off_a_screenshot_clicks_the_button_drawn_there(host, launch):
+    """Observation-bound input: the centre of the fixture's own Commit button, converted into the pixels of a
+    screenshot taken 512 px wide (so image->input is not the identity on any display), clicked with that
+    screenshot's observation_id, presses Commit once. Where Commit is comes from the fixture's own geometry."""
+    call, _schema = host
+    _input_ready(call, screen_recording="granted")
+    target = launch("target")
+    placed = _hand_front(call, target)
+    shot = call("screenshot", max_width=512, max_height=384)
+    transform = shot.get("coord_transform") or {}
+    assert shot.get("ok") is True and shot.get("observation_id") and transform.get("sx", 1) > 1, shot
+    x, y, w, h = placed["commit_frame"]
+    point = [round((x + w / 2 - transform["ox"]) / transform["sx"]),
+             round((y + h / 2 - transform["oy"]) / transform["sy"])]
+    before = target.mark("before")
+    clicked = call("click", x=point[0], y=point[1], observation_id=shot["observation_id"],
+                   app=f"pid:{target.pid}", raise_policy="never")
+    try:
+        pressed = target.wait_for("commit", after=before["t"], timeout=5)
+    except AssertionError as exc:
+        pressed = {"missing": str(exc)}
+    time.sleep(0.5)  # a second press or a stray twin would show before the mark below
+    after = target.mark("after")
+    rows = _between(target.rows(), before["t"], after["t"], "commit", "twin")
+    assert (clicked.get("ok") is True and clicked.get("dispatched") is True
+            and clicked.get("observation_id") == shot["observation_id"] and clicked.get("mapped_from") == point
+            and (clicked.get("delivered_to") or {}).get("pid") == target.pid), clicked
+    assert [(r["event"], r.get("instance")) for r in rows] == [("commit", 1)] and after["count"] == 1, \
+        {"point": point, "commit_frame": placed["commit_frame"], "transform": transform, "pressed": pressed,
+         "rows": rows}

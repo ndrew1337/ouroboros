@@ -9,8 +9,10 @@
 //
 // Every observation is one JSON line in the log, stamped with ProcessInfo.systemUptime (one clock for both
 // processes). Both roles log their own activation, key-window changes and every application activation the
-// workspace announces, so a focus taken and given back between two samples still shows. The front role also
-// logs mouse events (none of the keyboard of other apps) and the clipboard's change count, never its contents.
+// workspace announces, so a focus taken and given back between two samples still shows, and every key event
+// it receives itself with its modifiers (none of the keyboard of other apps). The front role also logs mouse
+// events and the clipboard's change count, never its contents. The target's snapshots carry Commit's frame in
+// global top-left points, the space clicks are sent in.
 
 import AppKit
 
@@ -98,6 +100,9 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
             }
             log("pointer_monitor", ["installed": monitors.count == 2])
         }
+        if let keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown, handler: { self.key($0); return $0 }) {
+            monitors.append(keys)
+        }
         let center = NotificationCenter.default
         for (name, event) in [(NSApplication.didBecomeActiveNotification, "app_became_active"),
                               (NSApplication.didResignActiveNotification, "app_resigned_active"),
@@ -137,6 +142,11 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
             out["count"] = count
             out["status"] = status.stringValue
             out["commit_instance"] = commit?.tag ?? 0
+            if let commit = commit, let primary = NSScreen.screens.first {
+                let frame = window.convertToScreen(commit.convert(commit.bounds, to: nil))
+                out["commit_frame"] = [frame.minX, primary.frame.maxY - frame.maxY, frame.width, frame.height]
+                    .map { $0.rounded() }
+            }
         } else {
             out["text"] = typed.string
             out["pasteboard_change_count"] = NSPasteboard.general.changeCount  // a counter, not the contents
@@ -157,6 +167,14 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
         log("pointer_event", ["type": Int(event.type.rawValue), "scope": scope, "mouse": [at.x.rounded(), at.y.rounded()]])
     }
 
+    func key(_ event: NSEvent) {
+        let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        let held = [(NSEvent.ModifierFlags.command, "cmd"), (.control, "ctrl"), (.option, "alt"), (.shift, "shift")]
+            .filter { flags.contains($0.0) }.map { $0.1 }
+        log("key_down", ["chars_ignoring": event.charactersIgnoringModifiers ?? "", "key_code": Int(event.keyCode),
+                         "modifiers": held])
+    }
+
     @objc func commitPressed(_ sender: NSButton) {
         count += 1
         status.stringValue = "committed:" + field.stringValue
@@ -170,8 +188,8 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSTex
     }
 
     func controlTextDidChange(_ note: Notification) {
-        // Only an edit through the field editor (keystrokes) lands here; a value set through
-        // Accessibility shows in the snapshots and in the commit row instead.
+        // Every edit through the field editor lands here: keystrokes, and also a value set through Accessibility
+        // while the field holds the field editor (seen natively); key_down rows tell keystrokes apart.
         log("field_typed", ["field": field.stringValue])
     }
 
