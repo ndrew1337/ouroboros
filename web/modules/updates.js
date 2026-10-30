@@ -5,6 +5,7 @@ import { apiClient, apiFetch } from './api_client.js';
 import { UPDATE_STAGE_LABELS, afterUpdateRows, attemptTime, bindPreflightDescription, preflightDescription, preflightEvidenceRows, updateAttemptView, verifiedUpdatePlan } from './update_status.js';
 import { destroyChatMarkdown, enhanceChatMarkdown, mountChatMarkdown } from './chat_markdown.js';
 import { updateEffectsText } from './update_effects.js';
+import { openTaskReference, taskReferenceHtml } from './task_reference.js';
 
 // Known non-state warnings are folded into their verdict states; everything
 // else is surfaced verbatim so a backend warning class can never vanish.
@@ -342,7 +343,8 @@ function requestView(letter) {
     if (!request?.task_id) return null;
     const status = String(request.status || 'unknown');
     return { taskId: String(request.current_task_id || request.task_id), mode: String(request.mode || ''), key: request.key || {},
-        status, saved: request.saved === true, live: LIVE_REQUEST_STATUSES.has(status) };
+        requestedAt: String(request.requested_at || ''), status, saved: request.saved === true,
+        live: LIVE_REQUEST_STATUSES.has(status) };
 }
 
 // What a finished request that saved nothing leaves to say; a saved one says nothing.
@@ -406,10 +408,12 @@ export function updateLetterView(data = {}, phase = '') {
     } : null;
     let note = '';
     if (request?.live) {
-        // Once its own save landed, the shown text is no longer the one waiting to be replaced.
+        // Once its own save landed, the shown text is no longer the one waiting to be replaced. The time
+        // is the owner's press, a fixed fact: the task's own card (the note's door) shows what it does.
+        const asked = attemptTime(request.requestedAt);
         note = request.saved ? `Ouroboros saved the description; its task (${request.taskId}) is still running.`
-            : `Ouroboros is writing the description (task ${request.taskId}).${markdown
-                ? ' The current text stays until the new one is saved.' : ''}`;
+            : `Ouroboros is writing the description${asked ? ` you asked for on ${asked}` : ''} (task ${request.taskId}).${
+                markdown ? ' The current text stays until the new one is saved.' : ''}`;
     } else if (failure) {
         const when = attemptTime(failure.failedAt);
         note = `Refresh failed${when ? ` on ${when}` : ''}. ${markdown
@@ -577,7 +581,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
                                 aria-describedby="updates-letter-resources" hidden></button>
                         </div>
                     </div>
-                    <div class="updates-letter-note" id="updates-letter-note" role="status" aria-live="polite" hidden></div>
+                    <div class="updates-letter-note" id="updates-letter-note-line" hidden><span id="updates-letter-note" role="status" aria-live="polite"></span> <span id="updates-letter-task"></span></div>
                     <div class="updates-letter-body ui-rich-content" id="updates-letter-body"></div>
                     <details class="updates-letter-details" id="updates-letter-details">
                         <summary>Details</summary>
@@ -632,6 +636,8 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     const letterCovers = page.querySelector('#updates-letter-covers');
     const letterWrite = page.querySelector('#updates-letter-write');
     const letterNote = page.querySelector('#updates-letter-note');
+    const letterNoteLine = page.querySelector('#updates-letter-note-line');
+    const letterTask = page.querySelector('#updates-letter-task');
     const letterBody = page.querySelector('#updates-letter-body');
     const letterRefresh = page.querySelector('#updates-letter-refresh');
     const letterRefreshLabel = page.querySelector('#updates-letter-refresh-label');
@@ -643,6 +649,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     let letterRequestError = null;
     let letterDisposer = null;
     let letterKey = null;
+    let letterDoor = '';
     let latestStatus = null;
     let phase = 'loading';
     let restartReconcileInFlight = false;
@@ -733,7 +740,14 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
             : letterRequestError ? `Could not request a description: ${letterRequestError.text}`
                 : letterRefreshError ? 'Could not check for updates. The description is unchanged.' : view.note;
         letterNote.textContent = note;
-        letterNote.hidden = !note;
+        letterNoteLine.hidden = !note;
+        // A running request's own note opens its task's card in Main; rewritten only when the task changes,
+        // so a passive refresh keeps focus on it.
+        const door = note === view.note && view.request?.live ? taskReferenceHtml(view.request.taskId) : '';
+        if (door !== letterDoor) {
+            letterTask.innerHTML = door;
+            letterDoor = door;
+        }
         const letter = latestStatus?.letter || {};
         const author = letter.author?.task_id ? ` in task ${letter.author.task_id}${letter.author.model
             ? ` (${letter.author.model})` : ''}${letter.author.requested ? ', at your request' : ''}` : '';
@@ -773,6 +787,8 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
         });
         stripLetterControls();
     }
+
+    letterTask.addEventListener('click', openTaskReference);
 
     // Check is the ordinary fetching check: it records range facts and never
     // writes prose, so an unchanged description stays exactly as it was.
