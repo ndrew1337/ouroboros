@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from ouroboros import context, context_fit as fit, memory_floor, memory_view, section_floor
+from ouroboros.context_budget import start_room_levels
 from ouroboros.context_sections import runtime_host_section
 from ouroboros.section_floor import HostSection, capture_sections
 from tests import _memory_view_synthetic as syn
@@ -219,7 +220,8 @@ def test_tool_schema_cost_and_route_density_both_count_toward_physical_pressure(
     tokens = _plan(core, 0).max_projection.estimated_tokens
     schemas = [{"type": "function", "function": {"name": "read_file", "description": "schema detail " * 3_000,
                                                 "parameters": {"type": "object", "properties": {}}}}]
-    window = (tokens + RESERVE) * 8 // 7 + 10  # every start leaves one eighth for work
+    levels = start_room_levels("integrator")  # this root's start leaves its role's eighths for work
+    window = (tokens + RESERVE) * 8 // (8 - levels) + 10
     assert not _host_facts(_plan(core, window))
     with_tools = fit.build_context_fit_plan(SimpleNamespace(drive_root=tmp_path), core, {"id": "task-1"},
         preferred_mode="max", tool_schemas=schemas,
