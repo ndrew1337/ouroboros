@@ -48,17 +48,24 @@ def test_another_threads_build_does_not_see_this_ones_spans():
     assert seen["spans"] == {}
 
 
-def test_the_agent_measures_its_context_build(tmp_path, monkeypatch):
+@pytest.mark.parametrize("realtime", [False, True])
+def test_the_agent_measures_its_context_build(tmp_path, monkeypatch, realtime):
     """The agent opens the measured scope around its context build, so the receipt can carry the spans."""
     import pathlib
     import queue
+    from types import SimpleNamespace
 
     from ouroboros import agent as agent_module, context_timing, provider_models
     from ouroboros.agent import Env, OuroborosAgent
 
     seen = []
+    route_resolver = object()
 
     def build(**_kwargs):
+        if realtime:
+            assert _kwargs["route_resolver"] is route_resolver
+        else:
+            assert "route_resolver" not in _kwargs
         seen.append(context_timing._SPANS.get() is not None)
         raise RuntimeError("stop after the context build")
 
@@ -67,6 +74,8 @@ def test_the_agent_measures_its_context_build(tmp_path, monkeypatch):
     monkeypatch.setattr(OuroborosAgent, "_log_worker_boot_once", lambda self: None)
     agent = OuroborosAgent(Env(repo_dir=pathlib.Path(__file__).resolve().parents[1], drive_root=tmp_path),
                            event_queue=queue.Queue())
+    if realtime:
+        agent._realtime_turn = SimpleNamespace(resolve_route=route_resolver)
     monkeypatch.setattr(agent.llm, "chat", lambda **_kw: pytest.fail("no model call"))
     with pytest.raises(RuntimeError, match="stop after the context build"):
         agent._prepare_task_context({"id": "timed", "type": "task", "chat_id": 1, "text": "hi"})
