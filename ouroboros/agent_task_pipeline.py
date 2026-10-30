@@ -1373,6 +1373,7 @@ def _store_task_result(env: Any, task: Dict[str, Any], text: str,
 def build_review_context(env: Any) -> str:
     """Build a compact review continuity section for the main reasoning context."""
     try:
+        from ouroboros.context_sections import continuity_status_lines
         from ouroboros.review_state import (
             _LEGACY_CURRENT_REPO_KEY,
             format_status_section,
@@ -1447,6 +1448,7 @@ def build_review_context(env: Any) -> str:
         else:
             lines.append("- open_obligations=0")
 
+        continuation_start = len(lines)
         if retired:
             lines.append(f"- {len(retired)} settled continuation(s) archived out of context "
                          "(durable under state/review_continuations/archived/): "
@@ -1523,12 +1525,16 @@ def build_review_context(env: Any) -> str:
                     f"additional corrupt entry/entries omitted."
                 )
 
+        from ouroboros.section_floor import HostSection
+
+        operative = '\n'.join(continuity_status_lines(state, repo_dir, (marker_current, look_unreadable)) + lines[continuation_start:]
+                              + ['Historical review ledger: review_status().'])
         history = format_status_section(state, repo_dir=repo_dir)
         if history:
             history = history.replace("## Advisory Pre-Review Status", "### Historical review ledger")
             lines.append("\n" + history)
 
-        return "\n".join(lines)
+        return HostSection('review_continuity', "\n".join(lines), operative)
     except Exception:
         log.debug("Failed to build review continuity context", exc_info=True)
         return ""

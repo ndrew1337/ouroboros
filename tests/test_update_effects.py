@@ -155,4 +155,3 @@ def test_preflight_carries_its_exact_range_description_and_survives_its_failure(
     body = json.loads(response.body)
     assert response.status_code == 200 and body["merge_plan"] == plan
     assert body["letter"] is None and body["qualification"] is None, "unknown, never a refusal or a stale range"
-
