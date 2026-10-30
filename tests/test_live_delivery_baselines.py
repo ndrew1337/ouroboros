@@ -194,16 +194,16 @@ def test_live_pixels_since_receipt_are_pending_even_when_next_fit_collapses_them
     asyncio.run(host.session(consume, LiveOptions()))
 
 
-@pytest.mark.parametrize('successor', [False, True])
-def test_small_result_waits_for_an_already_requested_successor(host_world, monkeypatch, successor):
+@pytest.mark.parametrize('successor', ['none', 'native', 'fresh'])
+def test_small_result_waits_only_for_a_requested_fresh_successor(host_world, monkeypatch, successor):
     from skills.live_conversation.driver import _Call
     from ouroboros.tools.tool_result import ToolResult
     host = host_world.host
     monkeypatch.setattr(host.tools, 'execute_result', lambda *a: ToolResult(status='ok', code='OK', text='Small result.'))
     async def consume(session):
         call = _Call(host); call.session = session; call.connected.set()
-        if successor:
-            call.request_renewal(resuming=True)  # a native successor request does not set the host refit flag
+        if successor != 'none':
+            call.request_renewal(resuming=successor == 'native')
         sent = []
         async def send(command): sent.append(command)
         session.send = send
@@ -211,9 +211,9 @@ def test_small_result_waits_for_an_already_requested_successor(host_world, monke
         worker = asyncio.create_task(call.tools())
         try:
             await asyncio.wait_for(call.tool_queue.join(), 30)
-            assert bool(call.deferred_tool_outputs) is successor
-            assert call.resume is successor, "a small result preserves an already requested native handle"
-            assert bool([c for c in sent if isinstance(c, ToolOutputs)]) is not successor
+            assert bool(call.deferred_tool_outputs) is (successor == 'fresh')
+            assert call.resume is (successor == 'native')
+            assert bool([c for c in sent if isinstance(c, ToolOutputs)]) is (successor != 'fresh')
         finally:
             worker.cancel(); await asyncio.gather(worker, return_exceptions=True)
             await call.close_preparation()

@@ -292,17 +292,17 @@ def fit_memory_view(snapshot: mv.MemoryViewSnapshot, allowances: Mapping[str, Op
         current -= delta
     current = measure(level(taken))
     # A coarse final cut can leave space for an earlier element; give it back without unfolding kept choices.
-    story_blocked = False  # F5 keeps the oldest prefix addressed; never restore an older page over a newer retelling.
+    story_blocked = set()  # Each story rung keeps its oldest addressed prefix.
     for step, ident, delta in reversed(added):
-        if step == "F5" and story_blocked:
+        if step in story_blocked:
             continue
         if target is not None and current + delta <= target:
             trial = taken - {(step, ident)}
             actual = measure(level(trial))
             if actual <= target:
                 taken, current = trial, actual
-        if step == "F5" and (step, ident) in taken:
-            story_blocked = True
+        if step in {"F5l", "F5"} and (step, ident) in taken:
+            story_blocked.add(step)
     # People's words last: uncovered owner rows become addresses, oldest first, only while the view does not fit.
     physical = allowances.get("physical")
     for step, ident, whole, short in uncovered:

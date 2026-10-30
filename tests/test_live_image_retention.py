@@ -140,7 +140,7 @@ def test_image_reader_follows_each_fitted_catalog_after_canonical_floor(host_wor
         assert 'frame-0.jpg' in text
         assert ('re-view: view_image' in text) is loaded
         assert '_evicted_image' not in text and '_source_path' not in text
-    assert 're-view: view_image' not in json.dumps(host.messages)
+    assert 're-view: view_image' in json.dumps(host.messages)  # call end restores the text reader
 
 
 @pytest.mark.parametrize('count', [2, 6])

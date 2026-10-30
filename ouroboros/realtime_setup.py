@@ -27,11 +27,9 @@ def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False, owner_mode='
     if fresh:
         from ouroboros.context_images import fresh_call_images
         rows = fresh_call_images(rows, owner_mode=owner_mode)
-    from ouroboros.context_images import image_placeholder
+    from ouroboros.context_images import render_image_placeholders
     reader = any(schema.get('function', {}).get('name') == 'view_image' for schema in schemas)
-    rows = [{**row, 'content': [image_placeholder(block, reader_available=reader)
-             if isinstance(block, dict) and block.get('_evicted_image') else block for block in row['content']]}
-            if isinstance(row.get('content'), list) else row for row in rows]
+    rows = render_image_placeholders(rows, reader_available=reader)
     if vision:
         return project_wire_messages(rows, delivery_marks=True)
     out = []
@@ -199,13 +197,15 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
         from ouroboros.context_source_view import fresh_room_rows
         messages, source = fresh_room_rows(messages, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
         from ouroboros.context_measurement import room_fact
+        from ouroboros.context_view_facts import memory_facts
         from ouroboros.loop_messages import _context_components
         from types import SimpleNamespace
         _, _, measured, _ = measure_session_wire(host, plan, messages, schemas, factory, options, _room_fact=False)
         parts = _context_components(SimpleNamespace(messages=messages, tool_schemas=schemas,
             accumulated_usage={'_context_measurement_density': measured['fit']['measurement']['measurement_density']},
             context_fit_plan=plan), measured=True)
-        rows = [*messages, room_fact(measured['fit']['measurement'], parts, source=source)]
+        rows = [*messages, room_fact(measured['fit']['measurement'], parts, source=source,
+            memory=memory_facts(plan, plan.initial_mode, messages))]
         session, request, evidence, window = measure_session_wire(host, plan, rows, schemas, factory, options, _room_fact=False)
         if canonical_rows is not None:
             canonical_rows[:] = rows
@@ -265,8 +265,6 @@ def _publish_room_reader(host, plan, prior, rows, factory, options, evidence):
     evict_stale_image_blocks(current, owner_mode=plan.preferred_mode, readable_only=True, reader_available=False)
     _, placeholder = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
     _, reader = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
-    if not reader:
-        return None
     rows[-1] = bound_host_row('ouroboros_context_facts', rows[-1]['content'].replace(placeholder, reader))
     session, request, sealed, window = measure_session_wire(host, plan, rows, host.schemas, factory, options, _room_fact=False)
     sealed.update({key: evidence[key] for key in ('work_room', 'recovery')})
@@ -381,9 +379,6 @@ def session_candidate(host, factory, options, *, observation_fp=None):
         if refusal is None:
             if room_facts:
                 published = _publish_room_reader(host, plan, current, sent_rows, factory, options, evidence)
-                if published is None:
-                    room_facts = False
-                    continue
                 session, request, evidence, physical_window = published
             _accept_session_candidate(host, plan, sent_rows, options, physical_window, evidence['fit']['measurement']['raw_input_tokens'])
             return session, request, evidence

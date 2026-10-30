@@ -116,6 +116,9 @@ def serving_delivery_room(host, rows, schemas):
             current.append(row)
     if host._session_instructions:
         current.append({'role': 'system', 'content': host._session_instructions})
+    from ouroboros.realtime_setup import rows_for_engine
+    current = rows_for_engine(current, vision=host.model.vision, schemas=schemas)
+    rows = rows_for_engine(rows, vision=host.model.vision, schemas=schemas)
     # Fresh-fit growth floors/collapses images; live deliveries do neither.
     baseline = getattr(host, '_serving_history_at_receipt', None)
     if baseline is None:

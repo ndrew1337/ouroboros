@@ -460,7 +460,12 @@ def estimate_context_prompt_tokens(
     # Do not strip same-named keys inside native payloads or user/tool arguments.
     hidden = {HOST_CONTEXT_KIND_KEY, HOST_TEXT_SHA_KEY, REVIEW_HISTORY_MESSAGE_KEY, REVIEW_CONTEXT_INDEX_KEY,
               TOOL_RESULT_RECORD_KEY}
+    from ouroboros.llm_messages import HOST_ONLY_MESSAGE_KEYS
     messages = [{key: value for key, value in message.items() if key not in hidden} for message in messages]
+    messages = [{**message, "content": [
+        {key: value for key, value in block.items() if key not in HOST_ONLY_MESSAGE_KEYS}
+        if isinstance(block, dict) else block for block in message["content"]]}
+        if isinstance(message.get("content"), list) else message for message in messages]
     projections = direct_openai_context_projections(
         messages, tools, provider=provider, reasoning_effort=reasoning_effort,
     )

@@ -72,7 +72,7 @@ def test_cut_protects_chosen_tool_pairs_notes_reviews_and_consecutive_owner_tail
     assert not any(row in kept for row in ordinary)
 
 
-def test_room_fact_pricing_never_writes_and_store_failure_appends_no_fact(host_world, monkeypatch):
+def test_room_fact_pricing_never_writes_and_store_failure_omits_only_reader(host_world, monkeypatch):
     from ouroboros.realtime_setup import measure_session_wire, session_candidate
     from ouroboros.context_source_view import fresh_room_rows
     from ouroboros.contracts.live_conversation import LiveOptions
@@ -88,7 +88,9 @@ def test_room_fact_pricing_never_writes_and_store_failure_appends_no_fact(host_w
     rows, reader = fresh_room_rows(original, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
     assert rows == original and not reader
     session_candidate(host, host_world.provider['session'], LiveOptions())
-    assert not any('Fresh view before this facts row:' in str(row.get('content')) for row in host.messages)
+    facts = [row['content'] for row in host.messages if 'Fresh view before this facts row:' in str(row.get('content'))]
+    assert len(facts) == 1 and 'memory:' in facts[0]
+    assert 'Exact view before this refresh:' not in facts[0]
     def bug(*a, **kw): raise ValueError('bad reference')
     monkeypatch.setattr('ouroboros.artifacts.store_actor_source_bytes', bug)
     with pytest.raises(ValueError):

@@ -13,6 +13,13 @@ def image_placeholder(block, *, reader_available=True):
                if source else '') + ']')}
 
 
+def render_image_placeholders(rows, *, reader_available=True):
+    """Rebind only marked placeholders to the delivering catalog, on a send copy."""
+    return [{**row, 'content': [image_placeholder(block, reader_available=reader_available)
+             if isinstance(block, dict) and block.get('_evicted_image') else block for block in row['content']]}
+            if isinstance(row.get('content'), list) else row for row in rows]
+
+
 def image_positions(messages):
     return [(mi, bi) for mi, row in enumerate(messages) if isinstance(row.get('content'), list)
             for bi, block in enumerate(row['content'])

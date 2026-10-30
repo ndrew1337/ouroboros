@@ -699,7 +699,8 @@ class ConversationHost:
     def _serving_history_estimate(self):
         from ouroboros.context_fit import estimate_context_prompt_tokens
         extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
-        return estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+        rows = rows_for_engine(self.messages, vision=self.model.vision, schemas=self.schemas)
+        return estimate_context_prompt_tokens([*rows, *extra], self.schemas)
 
     def _history_estimate(self):
         from ouroboros.context_fit import estimate_context_prompt_tokens
@@ -707,7 +708,6 @@ class ConversationHost:
         version = owner._history_version if self.messages is owner.messages else self._history_version
         if self._history_cached_version != version:
             extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
-            from ouroboros.realtime_setup import rows_for_engine
             projected = rows_for_engine(self.messages, vision=self.model.vision, fresh=True, owner_mode=self.plan.preferred_mode, schemas=self.schemas)
             self._history_tokens = estimate_context_prompt_tokens([*projected, *extra], self.schemas)
             self._history_cached_version = version
@@ -964,8 +964,11 @@ class ConversationHost:
         if pending_connections:
             await joined(asyncio.gather(*pending_connections, return_exceptions=True))
         await drain_exposure(self)
-        from ouroboros.context_images import evict_stale_image_blocks
-        if evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode, readable_only=True, reader_available=False):
+        from ouroboros.context_images import evict_stale_image_blocks, render_image_placeholders
+        changed = evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode, readable_only=True)
+        rendered = render_image_placeholders(self.messages)  # text has the core image reader
+        if changed or rendered != self.messages:
+            self.messages[:] = rendered
             self._context_changed()
             await joined(asyncio.to_thread(self.checkpoint, "ready"))
         with _active_hosts_lock:

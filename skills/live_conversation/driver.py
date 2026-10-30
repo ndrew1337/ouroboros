@@ -355,7 +355,8 @@ class _Call:
                 if self.hub.ended_by_ouroboros:
                     await peers  # a queued end_call still owns goodbye playback
                     self.renewing = False
-                elif not self.resume:
+                elif not self.resume or not self.host.state.get("resume_handle"):
+                    self.resume = False
                     self.request_renewal()  # a capacity/catalog obligation needs a fresh fit
             replacing = self.renewing
             resumed = replacing and self.resume
@@ -668,7 +669,7 @@ class _Call:
                 offline_tools = getattr(self.session, "tools_need_renewal", None)
                 needs_fit = (self.host.state.get("refit") or self.host.renewal_due()
                              or (offline_tools is not None and offline_tools(tuple(self.host.schemas))))
-                if self.renewing or self.tool_refit.is_set() or needs_fit:
+                if (self.renewing and not self.resume) or self.tool_refit.is_set() or needs_fit:
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.

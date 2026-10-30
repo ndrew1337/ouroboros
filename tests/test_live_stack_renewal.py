@@ -170,6 +170,8 @@ def test_full_stack_loss_during_a_tool_result_respects_the_native_handle(host_wo
             monkeypatch.setattr(native, 'receive', delayed_close)
             live.wire.tool('inflight-result', 'attend', {'see': None, 'look': None, 'revisit_after_s': None})
             await live.wait(lambda: len(live.provider.connections) == 2 and live.host.connection_number == 2)
+            if resumable:
+                await live.wait(lambda: 'inflight-result' in live.wire.outputs)
             await live.quiet()
             assert 'inflight-result' in live.host.executed, 'the completed effect is already durable'
             if resumable:
@@ -274,9 +276,11 @@ def test_transport_replacement_open_refusal_ends_with_its_typed_reason(host_worl
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize('renew', [False, True])
-def test_finished_small_tool_waits_for_requested_native_resume_without_losing_handle(host_world, monkeypatch, renew):
+@pytest.mark.parametrize('during_call', ['none', 'cleared', 'predates'])
+def test_r28_goaway_while_tool_pending(host_world, monkeypatch, during_call):
+    """The fitting result reaches the issuing socket; only its answer enables a new handle."""
     import threading
+    from tests._live_stack_wire import NativeWire
     from ouroboros.tools.tool_result import ToolResult
     entered, release = threading.Event(), threading.Event()
     effects = []
@@ -286,27 +290,37 @@ def test_finished_small_tool_waits_for_requested_native_resume_without_losing_ha
             def blocked(name, args):
                 if name != 'list_available_tools': return execute(name, args)
                 effects.append(name); entered.set()
-                assert release.wait(30), 'test must release the completed effect'
+                assert release.wait(30)
                 return ToolResult(status='ok', code='OK', text='Completed exactly once.')
             monkeypatch.setattr(live.host.tools, 'execute_result', blocked)
+            send = NativeWire.send
+            async def answer_then_handle(wire, raw):
+                await send(wire, raw)
+                if 'toolResponse' in json.loads(raw):
+                    wire.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'after-answer'}})
+            monkeypatch.setattr(NativeWire, 'send', answer_then_handle)
             old = live.wire
+            old.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'before-call'}})
+            await live.wait(lambda: live.host.state.get('resume_handle') == 'before-call')
             old.tool('pending-native', 'list_available_tools', {})
             try:
                 await live.wait(entered.is_set)
-                if renew:
-                    old.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'pending-tool-handle'}})
-                    await live.wait(lambda: live.host.state.get('resume_handle') == 'pending-tool-handle')
+                if during_call == 'cleared':
+                    old.put({'sessionResumptionUpdate': {'resumable': False}})
+                    await live.wait(lambda: live.host.state.get('resume_handle') == '')
+                if during_call != 'none':
                     old.put({'goAway': {'timeLeft': '30s'}})
                     await live.wait(lambda: live.call.renewing and live.call.resume)
                 release.set()
-                if renew:
-                    await live.wait(lambda: len(live.provider.connections) == 2 and live.host.connection_number == 2)
-                    assert live.wire.sent[0]['setup']['sessionResumption'] == {'handle': 'pending-tool-handle'}
-                    assert 'pending-native' not in old.outputs
-                await live.wait(lambda: 'pending-native' in live.wire.outputs)
+                await live.wait(lambda: 'pending-native' in old.outputs or len(live.provider.connections) > 1)
+                assert 'pending-native' in old.outputs, 'a fitting result must reach the issuing socket'
                 await live.quiet()
                 assert effects == ['list_available_tools']
-                assert len(live.provider.connections) == (2 if renew else 1)
+                assert not live.call.deferred_tool_outputs and not live.call.pending_offers
+                assert len(live.provider.connections) == (1 if during_call == 'none' else 2)
+                if during_call != 'none':
+                    assert live.wire.sent[0]['setup']['sessionResumption'] == {'handle': 'after-answer'}
+                    assert 'pending-native' not in live.wire.outputs
             finally:
                 release.set()
         assert live.result[1]['execution_status'] == 'ok', live.result
