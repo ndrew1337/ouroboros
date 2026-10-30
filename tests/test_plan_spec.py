@@ -379,26 +379,30 @@ def test_live_settings_are_never_attachable_as_evidence(tmp_path):
     assert "sk-live-secret" not in json.dumps(manifest)
 
 
-def test_evidence_content_reaches_reviewers_as_the_source_wrote_it(tmp_path):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_evidence_content_reaches_reviewers_as_the_source_wrote_it(tmp_path, newline):
     """Admission is decided by path, root and deny rules; content is never rewritten by pattern
-    (owner 2026-10-29: the legacy secret-shaped masking broke variable-bearing code)."""
+    (owner 2026-10-29: the legacy secret-shaped masking broke variable-bearing code), and the
+    file's own line endings survive on every OS."""
     notes = tmp_path / "notes.md"
     probe = tmp_path / "probe.ts"
-    notes.write_text(
-        "benchmark notes\nOPENROUTER_API_KEY=sk-or-FAKEFIXTURE-not-a-real-key-ABCDEFGHIJKLMNOP\n", encoding="utf-8")
-    probe.write_text(
-        'const API_KEY = process.env.API_KEY ?? "";\nexport const config = { token: "abcd1234", password: pw };\n',
-        encoding="utf-8")
+    # Bytes, not text mode: text mode would translate newlines on Windows; the fixture fixes them.
+    notes.write_bytes(
+        f"benchmark notes{newline}OPENROUTER_API_KEY=sk-or-FAKEFIXTURE-not-a-real-key-ABCDEFGHIJKLMNOP{newline}"
+        .encode("utf-8"))
+    probe.write_bytes(
+        (f'const API_KEY = process.env.API_KEY ?? "";{newline}'
+         f'export const config = {{ token: "abcd1234", password: pw }};{newline}').encode("utf-8"))
     manifest = plan_evidence.resolve_evidence(
         ["notes.md", "probe.ts", "probe.ts::lines=1-1"], active_root=tmp_path, allowed_roots=[tmp_path])
     import hashlib
     rows = {row["locator"]: row for row in manifest["attached"]}
     for name, path in (("notes.md", notes), ("probe.ts", probe)):
-        assert rows[name]["text"] == path.read_text(encoding="utf-8")
+        assert rows[name]["text"] == path.read_bytes().decode("utf-8")
         assert rows[name]["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
         assert hashlib.sha256(rows[name]["text"].encode()).hexdigest() == rows[name]["sha256"]
         assert "secrets_redacted" not in rows[name]
-    assert rows["probe.ts::lines=1-1"]["text"] == 'const API_KEY = process.env.API_KEY ?? "";\n'
+    assert rows["probe.ts::lines=1-1"]["text"] == f'const API_KEY = process.env.API_KEY ?? "";{newline}'
     assert "REDACTED" not in json.dumps(manifest)
 
 
