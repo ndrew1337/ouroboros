@@ -560,6 +560,11 @@ def _waited(ctx, rows, select=None):
     return text, messages, trace["tool_calls"][0]
 
 
+def _key(ref):
+    """A pending hold source is the file its shortened view named: its retained path and its exact bytes."""
+    return f"{ref['path']}|{ref['sha256']}"
+
+
 def _read(ctx, args, *, messages=None, fit=None, error=False):
     """One ``read_file`` call delivered as the loop delivers it; returns the transcript and the call's trace row."""
     from ouroboros.tools.core import _read_file
@@ -614,7 +619,7 @@ def test_only_what_was_delivered_of_that_exact_source_shows_a_shortened_hold(tmp
     ctx, rows = _held_children(tmp_path, monkeypatch, 160)
     full, messages, shown = _waited(ctx, rows)
     ref, omitted = _source_ref(messages[0]["content"]), shown["result_source_view"]["read_omitted"]
-    assert shown.get("result_partial") and list(ctx._held_dependency_sources) == [ref["sha256"]]
+    assert shown.get("result_partial") and list(ctx._held_dependency_sources) == [_key(ref)]
     first, last = omitted["start_char"], omitted["start_char"] + omitted["max_chars"]
     store = task_artifact_dir_path(tmp_path, "root-1")
     (store / "copy.txt").write_bytes((store / ref["path"]).read_bytes())  # the same bytes under another name
@@ -656,7 +661,8 @@ def test_a_saved_continuation_keeps_a_shortened_hold_views_source_and_a_new_proc
     full, messages, _shown = _waited(ctx, rows)
     ref = _source_ref(messages[0]["content"])
     state = owner_wait.continuation_state(ctx, messages, {}, {}, 1, [], set())
-    assert state["held_dependency_sources"] == {ref["sha256"]: ref} and state["held_dependencies_seen"] == {}
+    kept = {_key(ref): {**ref, "order": 1}}  # with the place its shortened view arrived at
+    assert state["held_dependency_sources"] == kept and state["held_dependencies_seen"] == {}
 
     def restored(saved):
         fresh = ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id="root-1")
@@ -668,7 +674,7 @@ def test_a_saved_continuation_keeps_a_shortened_hold_views_source_and_a_new_proc
     legacy = restored({key: value for key, value in state.items() if key != "held_dependency_sources"})
     assert legacy._held_dependency_sources == {}
     fresh = restored(json.loads(json.dumps(state)))
-    assert fresh._held_dependency_sources == {ref["sha256"]: ref}
+    assert fresh._held_dependency_sources == kept
     monkeypatch.setattr(delegate_output, "_READ_COVERAGE", {})  # a new worker: nothing was delivered to it yet
     view = _view_json(messages[0]["content"])
     first, last = view["omitted_ranges"][0]
@@ -701,5 +707,271 @@ def test_an_older_shortened_hold_view_stays_completable_however_many_follow_it(t
         tid: rows[tid]["current_stop"]["identity"] for tid in sets[0]}, "the oldest source, read whole, shows its holds"
     assert "early_return" not in json.loads(readers._wait_for_tasks(ctx, sets[0], timeout_sec=0)), \
         "its same wait now waits"
-    assert sorted(ctx._held_dependency_sources) == sorted(ref["sha256"] for ref in refs[1:]), \
+    assert sorted(ctx._held_dependency_sources) == sorted(_key(ref) for ref in refs[1:]), \
         "each later source is still there to be read"
+
+
+def _restop(rows, task_id, **fields):
+    """That child's stop as it reads now: a newer one, or its recovery (a ``None`` field is gone)."""
+    stop = {**rows[task_id]["current_stop"], **fields}
+    rows[task_id]["current_stop"] = {key: value for key, value in stop.items() if value is not None}
+
+
+def _rearm(ctx, task_ids):
+    """The same wait, deliberately armed again as a warm sleep (``request_sleep``, the store's rows stubbed)."""
+    from ouroboros import model_sleep
+
+    chosen = {"senders": [], "tasks": list(task_ids), "runs": [], "wake_at": "", "any_mail": False}
+    return model_sleep.request_sleep(ctx, chosen, "warm")["reason"]
+
+
+def _older_then_newer(tmp_path, monkeypatch):
+    """Astra's R3 premise at the readers: an older wait over 160 held children arrives shortened, its exact source
+    kept; then one child is paused anew and another's root resume basis becomes unreadable, a newer wait over those
+    two reaches the transcript whole, and that same wait is deliberately armed as a sleep."""
+    from tests.test_tool_result_delivery import _source_ref
+
+    ctx, rows = _held_children(tmp_path, monkeypatch, 160)
+    old, (paused, unknown) = _identities(rows), list(rows)[:2]
+    full, messages, shown = _waited(ctx, rows)
+    assert shown.get("result_partial"), "the older view arrived shortened"
+    _restop(rows, paused, cause="pause", scope="tree", identity="newer-pause")
+    _restop(rows, unknown, resume_basis="unreadable", identity="basis-unreadable")
+    assert not _waited(ctx, rows, [paused, unknown])[2].get("result_partial"), "the newer view arrived whole"
+    assert ctx._held_dependencies_seen == {paused: "newer-pause", unknown: "basis-unreadable"}
+    assert _rearm(ctx, [paused, unknown]) == "sleep_armed", "shown once: the same wait arms"
+    return ctx, rows, old, full, _source_ref(messages[0]["content"])
+
+
+def _read_whole(ctx, ref, full):
+    """A later tool of the batch that armed the sleep reads the older source whole, page by page."""
+    for start in range(0, len(full), 20_000):
+        assert not _read(ctx, _page(ref, start, min(start + 20_000, len(full))))[1].get("result_partial")
+
+
+def _park_refresh(ctx):
+    """The park's one addressed refresh (``withdraw_for_new_holds``): the holds its notice shows, or ``None`` when
+    the sleep parks."""
+    from ouroboros import model_sleep
+
+    notices = []
+    if not model_sleep.withdraw_for_new_holds(ctx, notices):
+        assert notices == [] and ctx._model_sleep
+        return None
+    [notice] = [row["content"] for row in notices]
+    return [(row["task_id"], row["identity"]) for row in json.loads(
+        notice.split("[HELD_DEPENDENCY]\n", 1)[1].split("\n[/HELD_DEPENDENCY]", 1)[0])]
+
+
+def test_an_older_shortened_hold_view_read_whole_later_keeps_the_newer_stops_so_the_rearmed_sleep_parks(
+        tmp_path, monkeypatch):
+    """Astra's R3 finding: the older view counts at the place it arrived. Its other holds count and its source is
+    done, while the newer stops stay what was shown, so the deliberately re-armed sleep parks; a Pause newer than
+    every view is still shown before the park, and the same request then parks."""
+    from ouroboros.tools import control_task_results as readers
+
+    ctx, rows, old, full, ref = _older_then_newer(tmp_path, monkeypatch)
+    paused, unknown = list(rows)[:2]
+    _read_whole(ctx, ref, full)
+    assert ctx._held_dependency_sources == {}, "the older source still completes"
+    assert _park_refresh(ctx) is None, "nothing the re-armed sleep waits for changed: it parks"
+    assert ctx._held_dependencies_seen == {**old, paused: "newer-pause", unknown: "basis-unreadable"}, \
+        "the older view's other holds count; what the newer view showed stays"
+    assert "early_return" not in json.loads(readers._wait_for_tasks(ctx, list(rows), timeout_sec=0)), \
+        "the older wait itself now waits"
+    _restop(rows, paused, identity="newest-pause")
+    assert _park_refresh(ctx) == [(paused, "newest-pause")], "a stop newer than every view is shown before the park"
+    assert _rearm(ctx, [paused, unknown]) == "sleep_armed" and _park_refresh(ctx) is None, \
+        "the same request then parks"
+
+
+def test_a_recovery_to_the_stop_an_older_view_showed_is_shown_after_that_view_is_read_whole(tmp_path, monkeypatch):
+    """The unreadable basis reads again, back at the very identity the older view showed: after the newer view
+    that is new information, and reading the older source whole later does not make it seen."""
+    ctx, rows, old, full, ref = _older_then_newer(tmp_path, monkeypatch)
+    unknown = list(rows)[1]
+    _read_whole(ctx, ref, full)
+    _restop(rows, unknown, resume_basis=None, identity=old[unknown])
+    assert _park_refresh(ctx) == [(unknown, old[unknown])], "the recovered basis is shown once before the park"
+    assert _rearm(ctx, list(rows)[:2]) == "sleep_armed" and _park_refresh(ctx) is None
+
+
+def test_a_restored_actor_keeps_each_hold_record_at_its_place_so_an_older_source_read_there_keeps_the_newer_stop(
+        tmp_path, monkeypatch):
+    """The places ride the continuation beside what was shown and what waits to be read: a new process that reads
+    the older source whole keeps what the newer view showed, and the same wait arms and parks."""
+    from ouroboros import delegate_output, owner_wait
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.tools.tool_result import _TOOL_RESULT_ATTR
+
+    ctx, rows, old, full, ref = _older_then_newer(tmp_path, monkeypatch)
+    paused, unknown = list(rows)[:2]
+    state = json.loads(json.dumps(owner_wait.continuation_state(ctx, [], {}, {}, 1, [], set())))
+    fresh = ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id="root-1")
+    fresh.task_attempt, fresh.root_task_id, fresh.budget_drive_root, fresh.task_metadata = 1, "root-1", tmp_path, {}
+    setattr(fresh, _TOOL_RESULT_ATTR, None)
+    owner_wait.restore_continuation_state(SimpleNamespace(_ctx=fresh), state, [], {}, {}, set())
+    monkeypatch.setattr(delegate_output, "_READ_COVERAGE", {})  # a new worker: nothing was delivered to it yet
+    _read_whole(fresh, ref, full)
+    assert fresh._held_dependency_sources == {}
+    assert fresh._held_dependencies_seen == {**old, paused: "newer-pause", unknown: "basis-unreadable"}
+    assert _rearm(fresh, [paused, unknown]) == "sleep_armed" and _park_refresh(fresh) is None
+
+
+def test_a_shortened_hold_view_newer_than_a_tasks_record_replaces_it_once_read_whole(tmp_path, monkeypatch):
+    """The same order the other way: a child shown whole, then paused anew and shown again by a newer wait that
+    arrives shortened. Read whole, the newer view's stop is what was shown: its same wait waits, the sleep parks."""
+    from ouroboros.tools import control_task_results as readers
+    from tests.test_tool_result_delivery import _source_ref
+
+    ctx, rows = _held_children(tmp_path, monkeypatch, 160)
+    task_id = list(rows)[0]
+    assert not _waited(ctx, rows, [task_id])[2].get("result_partial")
+    assert ctx._held_dependencies_seen == {task_id: rows[task_id]["current_stop"]["identity"]}
+    _restop(rows, task_id, cause="pause", scope="tree", identity="newer-pause")
+    full, messages, shown = _waited(ctx, rows)
+    assert shown.get("result_partial"), "the newer view arrived shortened"
+    _read_whole(ctx, _source_ref(messages[0]["content"]), full)
+    assert ctx._held_dependencies_seen == _identities(rows), "the newer view replaced the older record"
+    assert "early_return" not in json.loads(readers._wait_for_tasks(ctx, list(rows), timeout_sec=0))
+    assert _rearm(ctx, [task_id]) == "sleep_armed" and _park_refresh(ctx) is None
+
+
+_SLEEP_FRAME = {"window": 8_000, "reserve": 2_000}  # Astra's R4 probe: a sleep selects at most 32 tasks
+
+
+def _sleepable_children(tmp_path, monkeypatch, count):
+    """``_held_children`` whose root may request its sleep (``await_messages``), as in Astra's R4 probe: an owner
+    to sleep under, and each child a task this installation knows. Its holds return the same bytes in every test,
+    so each starts from a fresh reading ledger, as a new worker does."""
+    from ouroboros import delegate_output
+
+    ctx, rows = _held_children(tmp_path, monkeypatch, count)
+    monkeypatch.setattr(delegate_output, "_READ_COVERAGE", {})
+    ctx.owner_wait_callback = lambda *_args: "owner_text"
+    monkeypatch.setattr("ouroboros.task_results.load_task_result",
+                        lambda _root, task_id, **_kwargs: rows.get(task_id, {}))
+    return ctx, rows
+
+
+def _awaited(ctx, rows, call_id):
+    """The same wait as a warm sleep request over every child, delivered at the frame as call ``call_id``. A hold it
+    returns names no elapsed time, so the same holds return the same text byte for byte: its text, the transcript
+    and the source its shortened view advertised."""
+    from ouroboros.tools import control_task_results as readers
+    from ouroboros.tools.tool_result import _TOOL_RESULT_ATTR
+    from tests._tool_result_delivery_shared import measured_fit
+    from tests.test_tool_result_delivery import _deliver, _row, _source_ref
+
+    text = readers._await_messages(ctx, mode="warm", tasks=list(rows))
+    assert json.loads(text)["reason"] == "dependency_held"
+    messages, trace = _deliver(ctx, [_row(call_id, "await_messages", text, args={"mode": "warm", "tasks": list(rows)},
+                                          meta={"tool_result_meta": dict(getattr(ctx, _TOOL_RESULT_ATTR).meta)})],
+                               measured_fit(**_SLEEP_FRAME))
+    assert trace["tool_calls"][0].get("result_partial"), "it arrived shortened"
+    return text, messages, _source_ref(messages[0]["content"])
+
+
+def _same_text_twice(ctx, rows):
+    """Astra's R4 premise: two calls return byte-identical holds, each shortened and kept under its own call's
+    retained path. That text, each call's transcript and each source."""
+    (text, first, ref), (again, second, ref_again) = (_awaited(ctx, rows, call_id) for call_id in ("first", "second"))
+    assert again == text and ref["sha256"] == ref_again["sha256"] and ref["path"] != ref_again["path"]
+    return text, (first, second), (ref, ref_again)
+
+
+def _read_span(ctx, ref, start, end):
+    """``read_file`` pages of ``[start, end)`` of that source, each delivered whole."""
+    for at in range(start, end, 20_000):
+        assert not _read(ctx, _page(ref, at, min(at + 20_000, end)))[1].get("result_partial")
+
+
+def _pending(ctx):
+    """Each advertised file still waiting to be read whole, at the place its view arrived."""
+    return {ref["path"]: ref["order"] for ref in (getattr(ctx, "_held_dependency_sources", None) or {}).values()}
+
+
+def test_two_identical_shortened_hold_views_keep_two_sources_each_completed_by_what_was_delivered_of_it(
+        tmp_path, monkeypatch):
+    """Astra's R4 finding: the later of two identical views no longer replaces the earlier one's source. The earlier,
+    its omitted middle read, shows its holds and the same request arms, while the later still waits at its own place:
+    what was delivered of one file never covers the other, and the later, its own middle read, records there."""
+    from ouroboros.tools import control_task_results as readers
+    from tests.test_tool_result_delivery import _view_json
+
+    ctx, rows = _sleepable_children(tmp_path, monkeypatch, 32)
+    _text, transcripts, (first, second) = _same_text_twice(ctx, rows)
+    omitted = [_view_json(messages[0]["content"])["omitted_ranges"] for messages in transcripts]
+    for start, end in omitted[0]:
+        _read_span(ctx, first, start, end)
+    assert getattr(ctx, "_held_dependencies_seen", None) == _identities(rows), \
+        "the earlier file, its head and tail shown and its middle read, shows its holds"
+    assert set(ctx._held_dependencies_order.values()) == {1}, "at the place its view arrived"
+    assert _pending(ctx) == {second["path"]: 2}, "the later file still waits to be read"
+    assert json.loads(readers._await_messages(ctx, mode="warm", tasks=list(rows)))["reason"] == "sleep_armed", \
+        "the same request arms"
+    start, end = omitted[1][0]
+    assert end - start > 1_000
+    _read_span(ctx, second, start, start + 1_000)
+    assert _pending(ctx) == {second["path"]: 2}, "one page of the later file does not complete it"
+    for start, end in omitted[1]:
+        _read_span(ctx, second, start, end)
+    assert _pending(ctx) == {} and set(ctx._held_dependencies_order.values()) == {2}, \
+        "read whole by what was delivered of it, the later file records at its own place"
+
+
+def test_a_restored_actor_completes_each_of_two_identical_hold_sources_at_its_own_place_in_either_order(
+        tmp_path, monkeypatch):
+    """Both files and their places ride the continuation. A new process reads the later one whole first: it records
+    at its own place while the earlier still waits; the earlier, read whole after it, completes and never replaces
+    that newer record."""
+    from ouroboros import delegate_output, owner_wait
+    from ouroboros.tools.registry import ToolContext
+    from ouroboros.tools.tool_result import _TOOL_RESULT_ATTR
+
+    ctx, rows = _sleepable_children(tmp_path, monkeypatch, 32)
+    text, _transcripts, (first, second) = _same_text_twice(ctx, rows)
+    assert _pending(ctx) == {first["path"]: 1, second["path"]: 2}, "two files, each at the place its view arrived"
+    state = json.loads(json.dumps(owner_wait.continuation_state(ctx, [], {}, {}, 1, [], set())))
+    assert state["held_dependency_sources"] == {_key(first): {**first, "order": 1},
+                                                _key(second): {**second, "order": 2}}
+    fresh = ToolContext(repo_dir=tmp_path, drive_root=tmp_path, task_id="root-1")
+    fresh.task_attempt, fresh.root_task_id, fresh.budget_drive_root, fresh.task_metadata = 1, "root-1", tmp_path, {}
+    setattr(fresh, _TOOL_RESULT_ATTR, None)
+    owner_wait.restore_continuation_state(SimpleNamespace(_ctx=fresh), state, [], {}, {}, set())
+    monkeypatch.setattr(delegate_output, "_READ_COVERAGE", {})  # a new worker: nothing was delivered to it yet
+    _read_whole(fresh, second, text)
+    assert fresh._held_dependencies_seen == _identities(rows) and set(fresh._held_dependencies_order.values()) == {2}
+    assert _pending(fresh) == {first["path"]: 1}, "the earlier file still waits to be read"
+    _read_whole(fresh, first, text)
+    assert _pending(fresh) == {} and set(fresh._held_dependencies_order.values()) == {2}, \
+        "the earlier completes and never replaces the later one's record"
+    assert _rearm(fresh, list(rows)) == "sleep_armed" and _park_refresh(fresh) is None
+
+
+def test_the_older_of_two_identical_hold_sources_read_whole_keeps_the_newer_stops_until_the_later_one_is_read(
+        tmp_path, monkeypatch):
+    """R4 beside R3's order. After a newer view, both children return to the very stops the older view showed, and a
+    later request returns the older view's text byte for byte under its own call's path. The older file, read whole,
+    counts at the place it arrived: the newer stops stay what was shown, so the same request shows the returned
+    stops before it arms. The later file, read whole, records them at its own place; the same request then parks."""
+    ctx, rows = _sleepable_children(tmp_path, monkeypatch, 32)
+    old, (paused, unknown) = _identities(rows), list(rows)[:2]
+    full, _messages, older = _awaited(ctx, rows, "older")
+    _restop(rows, paused, cause="pause", scope="tree", identity="newer-pause")
+    _restop(rows, unknown, resume_basis="unreadable", identity="basis-unreadable")
+    assert not _waited(ctx, rows, [paused, unknown])[2].get("result_partial"), "the newer view arrived whole"
+    _restop(rows, paused, cause="awaiting_selection", scope="member", identity=old[paused])
+    _restop(rows, unknown, resume_basis=None, identity=old[unknown])
+    again, _messages, later = _awaited(ctx, rows, "later")
+    assert again == full and later["sha256"] == older["sha256"] and later["path"] != older["path"], \
+        "the older view's very text, under the later call's own path"
+    _read_whole(ctx, older, full)
+    assert ctx._held_dependencies_seen == {**old, paused: "newer-pause", unknown: "basis-unreadable"}, \
+        "the older file counts where it arrived: its other holds count, the newer stops stay what was shown"
+    assert _pending(ctx) == {later["path"]: 3}, "the later file still waits to be read"
+    assert _rearm(ctx, [paused, unknown]) == "dependency_held", "so the stops they returned to are shown first"
+    _read_whole(ctx, later, again)
+    assert _pending(ctx) == {} and ctx._held_dependencies_seen == old
+    assert _rearm(ctx, [paused, unknown]) == "sleep_armed" and _park_refresh(ctx) is None, \
+        "the same request then arms and parks"

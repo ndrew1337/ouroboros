@@ -262,7 +262,7 @@ def _readers(store, nested):
     return ([store.get(record_id) for record_id in ids], store.records(), store.records("r"),
             store.records(kinds=("page", "part")), store.records("r", kinds=("note", "mark"), after_seq=3),
             store.room_records("r"), store.room_records("r", after_seq=8), store.room_records("s"),
-            store.pages_of_room("r"), store.pending_candidates(), store.pending_candidates("r"), store.accounts(),
+            store.pages_of_room("r"), store.interpreted(kinds=("page",), author_kind="helper"), store.interpreted("r", kinds=("page",), author_kind="helper"), store.accounts(),
             store.folded_members(nested), store.sealed_row_refs("r"), store.sealed_row_refs("x"),
             store.legacy_pointer_rows(), store.active_marks(None), store.active_marks("r"),
             store.active_marks("r", include_global=False), store.active_marks("x"), store.scan_state(),

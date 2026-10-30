@@ -484,8 +484,7 @@ _ASSIGNED = (("s1", "change"), ("s1", "coupling"), ("s2", "change"), ("s3", "cha
 
 
 def _keys(frozen, **over):
-    args = {"rules_sha": "rules", "layer": frozen.spec.layer, "assigned": _ASSIGNED,
-            "enforcement": "blocking", "contract_fp": "cf"}
+    args = {"layer": frozen.spec.layer, "assigned": _ASSIGNED, "enforcement": "blocking", "contract_fp": "cf"}
     args.update(over)
     return review_reuse_key(frozen, **args)
 
@@ -508,11 +507,12 @@ def test_reuse_key_returns_the_settled_record_without_a_wave(tmp_path):
     assert reused is not None and reused["reused"] is True and reused["usd"] == 0.0
     assert reused["record_id"] == record.record_id and reused["record"]["verdict"]["aggregate"] == "PASS"
     # Another surface, another composition, another layer, another enforcement or
-    # another rules source is another key — a new wave, not a reuse.
+    # another contract is another key — a new wave, not a reuse. The rules source is
+    # the record's provenance, never identity.
     other = freeze_subject(ctx, _index_spec(repo, surface="change"))
     for variant in (
         _keys(other), _keys(frozen, assigned=assigned_seats(["s1", "s2"], ["scope"])), _keys(frozen, layer="core"),
-        _keys(frozen, enforcement="advisory"), _keys(frozen, rules_sha="other-rules"), _keys(frozen, contract_fp="cf2"),
+        _keys(frozen, enforcement="advisory"), _keys(frozen, contract_fp="cf2"),
     ):
         assert variant != key and reuse_or_none(drive, variant) is None
     # The composition hashes as rows, however it is spelled.

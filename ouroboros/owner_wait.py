@@ -205,6 +205,7 @@ def continuation_state(ctx: Any, messages: list, trace: dict, usage: dict,
         "seen": sorted(seen), "owner_directives": getattr(ctx, "_owner_directives", []),
         "sleep_interaction_seen": dict(getattr(ctx, "_sleep_interaction_seen", None) or {}),
         "held_dependencies_seen": dict(getattr(ctx, "_held_dependencies_seen", None) or {}),
+        "held_dependencies_order": dict(getattr(ctx, "_held_dependencies_order", None) or {}),
         "held_dependency_sources": dict(getattr(ctx, "_held_dependency_sources", None) or {}),
         "held_owner_messages": dict(getattr(ctx, "_held_owner_messages", None) or {}),
         "open_relays": dict(getattr(ctx, "_open_relays", None) or {}),
@@ -1127,6 +1128,8 @@ def restore_continuation_state(tools: Any, state: dict, messages: list, trace: d
     ctx._sleep_interaction_seen = dict(state.get("sleep_interaction_seen") or {})
     # A legacy state without this map shows each current hold once more before its wait arms.
     ctx._held_dependencies_seen = dict(state.get("held_dependencies_seen") or {})
+    # Each record's place: an older source read whole later never replaces a newer one (``model_sleep._record_holds``).
+    ctx._held_dependencies_order = dict(state.get("held_dependencies_order") or {})
     # A shortened hold view's exact source stays readable to completion (``model_sleep.credit_hold_source``).
     ctx._held_dependency_sources = dict(state.get("held_dependency_sources") or {})
     ctx._owner_directives = state["owner_directives"]

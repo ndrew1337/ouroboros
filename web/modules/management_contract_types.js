@@ -546,6 +546,7 @@
 
 /**
  * @typedef {Object} OpenAICompatibleModelsRequest
+ * @property {string=} connection Named compatible row; omitted uses the built-in pair.
  * @property {string} baseUrl
  * @property {string=} apiKey
  */

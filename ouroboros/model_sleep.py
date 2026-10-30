@@ -301,19 +301,38 @@ def hold_notice(ctx: Any, holds: list) -> tuple:
     return {HOLD_NOTICE: True}, SLEEP_WITHDRAWN if armed and _withdraw_sleep(ctx) else ""
 
 
-def _record_holds(ctx: Any, rows: Any) -> None:
+def _place(value: Any) -> int:
+    return value if type(value) is int else 0  # absent (a state saved before places) or malformed: the oldest
+
+
+def _next_order(ctx: Any) -> int:
+    """The place of a hold view arriving now in this actor's own order of arrivals: after every place its records
+    and pending sources keep. A count of this actor's deliveries, never a time or a hash of what they showed."""
+    sources = (getattr(ctx, "_held_dependency_sources", None) or {}).values()
+    return 1 + max([0, *map(_place, (getattr(ctx, "_held_dependencies_order", None) or {}).values()),
+                    *(_place(ref.get("order")) for ref in sources if isinstance(ref, dict))])
+
+
+def _record_holds(ctx: Any, rows: Any, order: int | None = None) -> None:
+    """Record what a delivered view showed of each task at that view's place (``order``; arriving now: the newest).
+    A task keeps what the newest view showing it showed: a source read whole keeps the place its shortened view
+    arrived at, so it never replaces a later view's or park notice's record, and its other tasks still count."""
+    order = _next_order(ctx) if order is None else order
     seen = dict(getattr(ctx, "_held_dependencies_seen", None) or {})
-    seen.update({str(row["task_id"]): str(row["identity"]) for row in rows or ()
-                 if isinstance(row, dict) and row.get("task_id") and row.get("identity")})
-    ctx._held_dependencies_seen = seen
+    places = dict(getattr(ctx, "_held_dependencies_order", None) or {})
+    for row in rows or ():
+        if (isinstance(row, dict) and row.get("task_id") and row.get("identity")
+                and _place(places.get(str(row["task_id"]))) <= order):
+            seen[str(row["task_id"])], places[str(row["task_id"])] = str(row["identity"]), order
+    ctx._held_dependencies_seen, ctx._held_dependencies_order = seen, places
 
 
-def acknowledge_hold_delivery(ctx: Any, text: str) -> None:
+def acknowledge_hold_delivery(ctx: Any, text: str, order: int | None = None) -> None:
     """A complete view of a result that showed holds reached the transcript: the same wait may now arm on them.
 
     Their identities are read from that view, as ``acknowledge_question_delivery`` reads questions, so the
     bounded meta stays one flag at any supported wait-set size: ``wait_task``'s ``[HELD_DEPENDENCY]`` block,
-    else the ``held`` rows of a JSON result or of its ``early_return``."""
+    else the ``held`` rows of a JSON result or of its ``early_return``. ``order`` is a retained source's place."""
     import json
 
     text, decoder, block = str(text or ""), json.JSONDecoder(), "[HELD_DEPENDENCY]\n"
@@ -325,7 +344,7 @@ def acknowledge_hold_delivery(ctx: Any, text: str) -> None:
     if isinstance(shown, dict):
         early = shown.get("early_return") if isinstance(shown.get("early_return"), dict) else {}
         shown = shown.get("held", early.get("held"))
-    _record_holds(ctx, shown if isinstance(shown, list) else ())
+    _record_holds(ctx, shown if isinstance(shown, list) else (), order)
 
 
 def credit_hold_source(ctx: Any, row: Dict[str, Any], view: Dict[str, Any]) -> None:
@@ -335,20 +354,25 @@ def credit_hold_source(ctx: Any, row: Dict[str, Any], view: Dict[str, Any]) -> N
     very file at its exact bytes (``read_view`` target and ``source_revision``), merged by the reading ledger
     staged delegated outputs use (``delegate_output``). A cut window or a skipped middle credits only what was
     shown; another file credits nothing, whatever its text claims. The holds are then read from the retained
-    source itself.
+    source itself and recorded at the place its shortened view arrived (``order``, ``_record_holds``): a task a
+    later view or park notice showed keeps that newer record.
 
     ``row`` is the executed call and ``view`` its delivered view. A pending source leaves only once read whole:
     a later wait may select other tasks, so no later view stands in for it, and its few hundred bytes sit beside
-    the shortened view the transcript already keeps. Pending sources ride the continuation; the ledger is this
-    process's, so a restarted worker proves its coverage again by reading."""
+    the shortened view the transcript already keeps. Each is the file its view named, by path and bytes: two calls
+    that returned the same text keep two files, each completed only by what was delivered of it, at its own place.
+    Pending sources and the records' places ride the continuation; the ledger is this process's, so a restarted
+    worker proves its coverage again by reading."""
     published = (row.get("result_meta") or {}).get("tool_result_meta") or {}
     sources, read_view = dict(getattr(ctx, "_held_dependency_sources", None) or {}), published.get("read_view")
     if published.get(HOLD_NOTICE):
         ref, read_view = view.get("result_source_ref"), None
         if not isinstance(ref, dict) or not ref.get("sha256"):
             return  # no exact source was kept: nothing can complete this view, so the next wait shows it again
-        ctx._held_dependency_sources = {**sources, str(ref["sha256"]): dict(ref)}
-    elif not isinstance(read_view, dict) or (ref := sources.get(str(read_view.get("source_revision") or ""))) is None:
+        key, ref = f"{ref.get('path')}|{ref['sha256']}", {**ref, "order": _next_order(ctx)}
+        ctx._held_dependency_sources = {**sources, key: ref}
+    elif not isinstance(read_view, dict) or not (named := [(key, ref) for key, ref in sources.items() if (
+            isinstance(ref, dict) and ref.get("sha256") and ref["sha256"] == read_view.get("source_revision"))]):
         return
     import hashlib
 
@@ -358,10 +382,13 @@ def credit_hold_source(ctx: Any, row: Dict[str, Any], view: Dict[str, Any]) -> N
 
     drive, owner, complete = pathlib.Path(ctx.drive_root), task_id_for_artifacts(ctx), False
     try:
-        if read_view is not None and pathlib.Path(str(read_view.get("target") or "")).resolve(strict=False) != (
-                task_artifact_dir_path(drive, owner).joinpath(*pathlib.PurePosixPath(str(ref.get("path"))).parts)
-                .resolve(strict=False)):
-            return  # the same bytes under another name are not this source
+        if read_view is not None:
+            store = task_artifact_dir_path(drive, owner)
+            target = pathlib.Path(str(read_view.get("target") or "")).resolve(strict=False)
+            key, ref = next(((key, ref) for key, ref in named if store.joinpath(
+                *pathlib.PurePosixPath(str(ref.get("path"))).parts).resolve(strict=False) == target), (None, None))
+            if ref is None:
+                return  # the same bytes under another name are not this source
         content = reader_text(read_actor_source_bytes(drive, owner, ref).decode("utf-8"))
         if read_view is not None:
             ranges = _delivered_source_ranges(read_view, str(row.get("result") or ""), view, content)
@@ -375,14 +402,14 @@ def credit_hold_source(ctx: Any, row: Dict[str, Any], view: Dict[str, Any]) -> N
                     and 0 <= span[0] <= span[1] <= len(content) for span in ranges):
                 return
         for start, end in ranges or ():
-            complete = _covered_whole(f"held:{ctx.task_id}|{ref['sha256']}", start, end, len(content))
+            complete = _covered_whole(f"held:{ctx.task_id}|{key}", start, end, len(content))
     except Exception:  # crediting never breaks delivery: unread or unmatched, its holds stay unshown
         log.warning("Held-dependency source of %s not credited; its holds stay unshown", ctx.task_id, exc_info=True)
         return
     if complete:
-        acknowledge_hold_delivery(ctx, content)
-        ctx._held_dependency_sources = {key: value for key, value in (
-            getattr(ctx, "_held_dependency_sources", None) or {}).items() if key != ref["sha256"]}
+        acknowledge_hold_delivery(ctx, content, _place(ref.get("order")))
+        ctx._held_dependency_sources = {other: value for other, value in (
+            getattr(ctx, "_held_dependency_sources", None) or {}).items() if other != key}
 
 
 def withdraw_for_new_holds(ctx: Any, messages: list) -> bool:

@@ -3,6 +3,10 @@ from __future__ import annotations
 
 from ouroboros import memory_floor as floor, memory_view as mv
 from ouroboros.chronicle_store import DELEGATED_FOCUS_ROLES
+from ouroboros.context_budget import HOST_CONTEXT_KIND_KEY
+from ouroboros.memory_waiting import text as waiting_text
+
+CONTEXT_FACTS_NAME = "ouroboros_context_facts"
 
 
 def memory_snapshot(plan):
@@ -23,28 +27,47 @@ def block_label(message, index, block, plan):
     return "core and books" if index == 0 else "runtime facts"
 
 
-def memory_facts(plan, mode):
-    """One round line of an integrating focus (every view role but a delegated child or nanny): the host's
-    measure of the start's Max room, the pages no part or account holds yet and the drafts awaiting a decision.
-    Measured parts and a possibility, never an instruction; without a Max room fact (the owner's Low or Nano,
-    an unknown window) the line names the memory alone."""
+def memory_facts(plan, mode, messages=()):
+    """Start facts of an integrating focus, only while this exact memory part is absent from visible facts rows:
+    on the owner's Max with a known window, the host's measure of the start's Max room part by part (books, core,
+    knowledge and runtime facts, assignment, reply reserve, work room, tool schemas) and how the start settled;
+    my memory: the story with its pages no part or account holds yet (how many, their tokens, the rooms holding
+    most of them) and the rooms' lines; what this view shows only by address; marks and waiting classes
+    with their count, oldest date, list reader and closure act.
+    Counted from the captured snapshot and its receipt; measures only, no advice and no
+    threshold. Without a Max room fact (the owner's Low or Nano, an unknown window) it names the memory alone."""
     snapshot = memory_snapshot(plan)
     if snapshot is None or snapshot.spec.role in DELEGATED_FOCUS_ROLES:
         return ""
     receipt = plan.projection(mode).memory_facts or {}
-    room, blocks = receipt.get("max_room"), receipt.get("blocks") or {}
+    room, blocks, pages = receipt.get("max_room"), receipt.get("blocks") or {}, floor.unfolded_pages(snapshot)
     if not room:
-        line = f"memory: story {blocks.get('story_tokens', 0):,} + rooms {blocks.get('room_tokens', 0):,}"
+        line = (f"memory: story {blocks.get('story_tokens', 0):,} ({floor.pages_text(pages)}) + rooms "
+                f"{blocks.get('room_tokens', 0):,}")
     else:
-        line = "Max room: " + floor.measure_text(room) + {
+        line = "Max room at the start: " + floor.measure_text(room, parts=True, pages=pages) + {
             "held": "; Max held" + (f" by cuts {', '.join(room['cuts'])}" if room["cuts"] else ""),
-            "crowded": "; Low. " + floor.CROWDED_POSSIBILITY.rstrip("."),
+            "crowded": "; Low",
             "route": "; Low, a disclosed fact of this route: folding memory or dropping tool schemas cannot make room here",
         }[room["cause"]]
-    pages = sum(1 for entry in snapshot.story if entry.get("kind") == "page" and not entry.get("told_by"))
-    drafts = len(snapshot.candidates)
-    return f"{line}; pages not yet in a part or account {pages}" + (
-        f"; drafts awaiting a decision {drafts}" if drafts or snapshot.spec.role == "consciousness" else "")
+    shown = floor.addressed_text((receipt.get("floor") or {}).get("steps") or {})
+    line += (f"; shown only by address: {shown}" if shown else "") + f"; marks in view {len(snapshot.marks)}" + waiting_text(snapshot.waiting)
+    return "" if any(message.get(HOST_CONTEXT_KIND_KEY) == CONTEXT_FACTS_NAME
+                     and f" | {line} | " in f" | {message.get('content') or ''} | " for message in messages) else line
+
+
+def low_start_line(plan, mode, task_id):
+    """The owner's Main line for one fresh start of an integrating focus that memory lowered to Low (owner decision
+    1B, 29.10): its Max room (which exists only on the owner's Max with a known window) is ``crowded`` while the
+    books, core, assignment, tool schemas, reply reserve and work room alone fit (``memory_floor.crowded_by_memory``).
+    The host's measure, no advice. "" for every other start: a route (the task's own facts disclose it), tool
+    schemas that tip it alone, a held start, a delegated child or nanny, the owner's Low or Nano, an unknown window."""
+    receipt = (plan.projection(mode).memory_facts or {}) if plan is not None else {}
+    room = receipt.get("max_room")
+    if receipt.get("role") in DELEGATED_FOCUS_ROLES or not floor.crowded_by_memory(room):
+        return ""
+    return (f"Task {task_id} started in Low with chapter maps: its memory ({room['story'] + room['room']:,} tokens) "
+            f"did not fit the {room['allowance']:,} tokens left beside the full books.")
 
 
 def window_projection(record):

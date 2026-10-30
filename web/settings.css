@@ -288,7 +288,8 @@
     line-height: var(--line-body);
 }
 
-.settings-shell .form-row {
+.settings-shell .form-row,
+.connection-fields .form-row {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
     gap: 14px;

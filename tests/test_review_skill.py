@@ -857,7 +857,7 @@ def test_every_seat_reads_the_declared_tool_effect_rule_in_the_stable_half():
 
     assert "Place connectors must declare every tool" in subject._TOOL_EFFECT_RULE
     source = pathlib.Path(subject.__file__).read_text(encoding="utf-8")
-    assert '"## Checklist (source of truth — follow it literally)", rubric, _TOOL_EFFECT_RULE,' in source
+    assert "_PREAMBLE, _CHECKLIST_HEADING, rubric, _TOOL_EFFECT_RULE," in source
 
 
 def test_the_change_section_names_what_it_cut_and_where_the_whole_is():

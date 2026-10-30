@@ -327,3 +327,11 @@ def owner_words_text(ctx: Any, *, audience: str = "reviewer") -> str:
     root = str(_ctx_metadata(ctx).get("root_task_id") or getattr(ctx, "task_id", "") or "")
     return render_owner_words(words.get(FIELD) or [], str(words.get(ABSENT_FIELD) or ""),
                               audience=audience, root_task_id=root)
+
+
+def reviewer_words_material() -> list:
+    """Review-contract material (``commit_gate.commit_review_contract_fingerprint``): a reviewer's frame of the
+    owner's words over a placeholder row, and the absence marker. The words and stamps are data."""
+    row = {"text": "⟨words⟩", "source": "⟨source⟩", "task_id": "⟨task⟩", "ts": "⟨ts⟩", "ref": "⟨ref⟩"}
+    return [render_owner_words([row], audience="reviewer", root_task_id="⟨root⟩"),
+            *(render_owner_words([], marker, audience="reviewer") for marker in (NOT_RECORDED, "⟨marker⟩"))]

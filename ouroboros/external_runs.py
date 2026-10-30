@@ -365,8 +365,9 @@ def _participant_line(root: Any, task_id: str, row: Dict[str, Any], runs: Dict[s
         facts.append(f"output retained ({'complete' if run.output_complete else 'partial'}, "
                      f"{'read' if run.output_consumed else 'not read yet'})" if run.output_artifact
                      else "no retained output recorded")
-        if run.patch_captured:
-            facts.append("patch captured, " + (str(run.patch_disposed) or "awaiting apply or reject"))
+        if run.patch_captured or run.patch_disposed in ("applied", "rejected"):  # a lost result was never captured
+            facts.append(("patch captured, " if run.patch_captured else "no patch captured, ")
+                         + (str(run.patch_disposed) or "awaiting apply or reject") + _decided_by(run, task_id))
         if run.superseded_by:
             facts.append(f"already continued by run {run.superseded_by}")
         elif run.patch_apply_pending:
@@ -377,6 +378,16 @@ def _participant_line(root: Any, task_id: str, row: Dict[str, Any], runs: Dict[s
     if not review:
         facts.append(f'inspect: delegate_wait(run_id="{run.run_id}")')
     return "; ".join(facts)
+
+
+def _decided_by(run: Any, task_id: str) -> str:
+    """Who recorded an apply or reject (#1651), from current custody; a row reduced before the
+    disposer was projected says so instead of naming anyone."""
+    if run.patch_disposed not in ("applied", "rejected"):
+        return ""
+    by = run.patch_disposed_by
+    return ((" as lost (its private copy was gone with no usable capture)" if run.patch_result_lost else "")
+            + (" by this task" if by and by == task_id else f" by task {by}" if by else " (disposer not recorded)"))
 
 
 def _retained_terminal(root: Any, task_id: str, run: Any) -> List[str]:

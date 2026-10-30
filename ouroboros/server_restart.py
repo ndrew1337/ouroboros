@@ -612,14 +612,18 @@ def _noticed_bootstrap(safe_restart_fn):
     """Bootstrap's ``safe_restart``: a failure after it RAN (a refused checkout step, dependency
     sync, the import test) is also told in the owner's chat as the message's headline line; the
     whole message, Git's output included, stays in the returned value, the log and supervisor.jsonl.
-    A reset blocked to protect local changes is told as kept files, not as a failure.
+    A reset blocked to protect local changes is told as kept files, not as a failure; a start that
+    fell back to the recovery point is told too (the working branch keeps the code that failed).
     ``_safe_restart_serialized``'s deliberate deferrals never call it and stay silent."""
     def run(**kwargs):
         ok, msg = safe_restart_fn(**kwargs)
-        if not ok:
+        fell_back = ok and str(msg).startswith("OK: fell back to")
+        if not ok or fell_back:
             headline = (str(msg).splitlines() or ["no detail"])[0]
             kept = headline.partition(": ")[2]  # after "Failed checkout <branch>"
-            text = (f"Startup kept the current files: {kept}" if kept.startswith("Reset blocked (")
+            text = (f"Startup fell back to the recovery point ({headline.rpartition(' ')[2]}): the working branch "
+                    "did not pass its import test and keeps that code for repair" if fell_back
+                    else f"Startup kept the current files: {kept}" if kept.startswith("Reset blocked (")
                     else f"Startup bootstrap failed: {headline}")
             try:
                 from supervisor.message_bus import notification_chat_route, send_with_budget
