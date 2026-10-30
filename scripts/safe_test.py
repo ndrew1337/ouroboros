@@ -123,8 +123,8 @@ def main() -> int:
             "PLAYWRIGHT_BROWSERS_PATH", "OUROBOROS_E2E_DEEP",
             # The run's shard weights (ci.yml `shard-plan`): tests/default_lane.py, tests/browser_lane.py.
             "OUROBOROS_CI_DURATIONS",
-            # Opt-in native Windows desktop qualification (tests/test_windows_computer_use_native.py).
-            "OUROBOROS_WINDOWS_DESKTOP_QA",
+            # Opt-in native desktop qualification; ordinary runs remain skipped.
+            "OUROBOROS_WINDOWS_DESKTOP_QA", "OUROBOROS_MACOS_DESKTOP_QA",
             "OUROBOROS_TEST_EVIDENCE_ROOT", *environment["DIAGNOSTIC_OUTPUT_KEYS"],
         ))
         # Each pytest controller claims its own fresh basetemp beneath this owned
