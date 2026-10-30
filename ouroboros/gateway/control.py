@@ -493,12 +493,17 @@ async def api_update_description(request: Request) -> JSONResponse:
 def _admit_description_task(task_id: str, text: str, metadata: Dict[str, Any]) -> str:
     """Admit the owner's description request as an ordinary root task in the owner chat;
     returns ``""`` or the refusal reason. Nothing else is started or stopped. Typed as a root
-    like every host-started one, so a host retry stays this request's own attempt."""
+    like every host-started one, so a host retry stays this request's own attempt. The press
+    is the web panel's: while the binding is known empty (no owner message yet) the task is
+    Main's, where the panel's door opens it; a bound or unreadable binding is used as read."""
+    from ouroboros.contracts.chat_id_policy import WEB_UI_CHAT_ID
     from supervisor.queue import enqueue_with_admission_receipt, persist_queue_snapshot
-    from supervisor.state import load_state
+    from supervisor.state import control_value, load_state
 
+    st = load_state()
+    unbound = control_value(st, "owner_chat_id") == (True, None)
     admitted = enqueue_with_admission_receipt({
-        "id": task_id, "type": "task", "chat_id": int(load_state().get("owner_chat_id") or 0),
+        "id": task_id, "type": "task", "chat_id": WEB_UI_CHAT_ID if unbound else int(st.get("owner_chat_id") or 0),
         "root_task_id": task_id, "delegation_role": "root",
         "text": text, "metadata": metadata, "_require_worker_pool": True, "_require_unique_task_id": True,
     })
