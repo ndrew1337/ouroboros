@@ -984,7 +984,7 @@ The host builds what each of you receives: this section; the task objective with
 the owner's words as the host recorded them, with the own-room conversation inline as numbered lines
 (both speakers, options, quiz cards with the chosen answer, attachment names, addressed mailbox
 provenance; progress rows and host notices stay
-in the exact redacted snapshot those numbers address; a route that cannot hold the whole
+in the exact snapshot those numbers address; a route that cannot hold the whole
 conversation keeps the newest rows and names the cut as an exact line range; related rooms are
 pointers); the plan when one exists, always whole, with the change since the revision you last
 answered about when you answered before; everything said in the council since your last answer,

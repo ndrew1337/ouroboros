@@ -3,8 +3,9 @@
 Owner Batch4 (1A/4A/8A): Continue is a NEW root in the same room and folder
 that reads the interrupted work; it is never a resurrection of the old task,
 never offered after the owner's own Stop, a Panic or a finished answer, and it
-adopts no old children: it may only accept or reject a direct child's finished
-native result through ``integrate_subagent_patch`` under the recorded relation.
+adopts no old children: it may only decide a direct child's finished native
+result (apply or verify it, accept a shared one as it stands, or reject it)
+through ``integrate_subagent_patch`` under the recorded relation.
 The successor model decides whether and how to go on
 (LLM-first) and asks in the existing conversation when unsure — the host
 carries facts, not a policy. This module is the protocol's data half; the
@@ -630,8 +631,10 @@ def work_order_text(predecessor_task_id: str, cause: str, sources: Dict[str, Any
     lines = [
         f"[CONTINUE] Continue was requested for task {predecessor_task_id}, which was interrupted "
         f"(recorded cause: {cause or 'technical interruption'}). This is a NEW task in the same "
-        "conversation and folder; the old task is not resumed and its helpers are not yours to steer; a "
-        "helper's FINISHED native result can be accepted or rejected with integrate_subagent_patch(task_id=...), "
+        "conversation and folder; the old task is not resumed and its helpers are not yours to steer; with "
+        "integrate_subagent_patch(task_id=...) a helper's FINISHED native result can be applied or verified (the "
+        "default), accepted as it stands when it is a shared result (decision='accept' with your reason, never a "
+        "verification) or rejected, "
         "and the old task's stopped delegated runs are yours to continue with delegate_start(subagent_id=..., "
         "continue_from=<run_id>, prompt=...) instead of redoing them.",
         result_line,
