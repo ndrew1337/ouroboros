@@ -999,6 +999,9 @@ this Project" came to be drawn six ways. The rule is therefore about intents.
   place that is not such a reference (`Load older messages`, `Open widgets`).
   Tabs, toggles, menus and the navigation list keep their own roles; a status
   chip states a fact and is not a destination.
+- A **Main task** is opened by its door, `Open in Main ↗`: words inside the sentence that names the
+  task (`.consciousness-inline-link`). `task_reference.js` builds it and alone raises `ouro:open-task`;
+  its landing is §5 "Dashboard › Consciousness".
 - An intent that will be drawn in a second place gets its door first (siblings:
   `docs/inventories/UI_CONTROL_TEXT_INVENTORY.md`).
 
@@ -1392,8 +1395,12 @@ running, such as the review a Pause lets finish, a run nobody can confirm); a wo
 beside it, and the sidebar's name says both. An outcome stays beside `Finalizing…`; `Paused` stays until Resume, its
 line saying who or what paused it (the owner's press with its time, Ouroboros in its
 own sentence, nobody when a press declared no one);
-`Waiting` says what it waits for and goes on by itself when that happens;
-helpers an earlier attempt left running read as `Working`, with their count; an
+`Waiting` says what it waits for and goes on by itself when that happens,
+unless a helper its sleep chose is paused: the line then says so and who resumes
+that helper (`… until Ouroboros resumes it` only when this episode may ask for it,
+or `until you resume it` after Panic; a Continue's earlier helper is just
+`paused`), with no new control or turn; helpers an earlier attempt left running
+read as `Working`, with their count; an
 access wait is not an answer wait, and unknown stays unknown. Under the state a
 live work shows its own focus line, what Ouroboros says it is doing (stage ·
 done · left, written by it through `update_focus`), quieter and at most two
@@ -1942,7 +1949,7 @@ Open accounting keeps “so far”; it is no final total.
 The allowance's “Some calls have no price” and “next check at” promise no admission.
 Visible and accessible words agree.
 
-“Open in Main ↗” locates the card by task/chat through around-history; a focus door
+“Open in Main ↗” lands on the card Main draws, else finds it through around-history; a focus door
 opens its captured conversation in the sheet, Back returns. An unowned room disables
 the door with a reason. Refresh keeps open nodes, disclosure, focus, selection and
 position until closure. Host words use `tr`/`fmt`; summaries, notes and names use
