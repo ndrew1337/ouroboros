@@ -1,0 +1,38 @@
+[
+  {
+    "item": "intent_alignment",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "See Part 1 code_quality and forgotten_touchpoints; picker, persistence, Continue and fallback checks passed, including nine browser tests with the documented temporary-path workaround."
+  },
+  {
+    "item": "forgotten_touchpoints",
+    "verdict": "FAIL",
+    "severity": "critical",
+    "reason": "ouroboros/gateway/tasks.py:720-721 admits new owner work without capture_room_route. After saving a custom model for Project alpha, POST /api/tasks with project_id=alpha still binds global Main; reproduced in .review-evidence/test_api_room_route.py. This omits an existing admission path from the room-choice behavior promised by docs/CLIENT_CONTRACT.md:532-534. Capture the choice through the shared helper before fresh owner task admission, using the canonical drive root and preserving explicit routes and historical continuation snapshots."
+  },
+  {
+    "item": "cross_surface_consistency",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "Checked contracts.py, api_types.js, endpoint registration and persistence documentation; 12 contract/preferences checks passed; routing exceptions are reported above."
+  },
+  {
+    "item": "regression_surface",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "See Part 1 code_quality for Presence; checked explicit voice admission, delegated routing, Panic handling and automatic fallback, including the passing browser wire test."
+  },
+  {
+    "item": "architecture_fit",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "composer_cognition owns persisted choices, route_choice owns admission/runtime interpretation, and existing guarded writers and UI preferences own their respective writes."
+  },
+  {
+    "item": "implicit_contracts",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "Checked room isolation, default Main behavior, snapshot preservation through Continue/promotion, account/context options and picker disposal; the two admission defects are reported above."
+  }
+]
