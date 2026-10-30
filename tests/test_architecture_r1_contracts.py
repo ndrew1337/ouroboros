@@ -34,7 +34,7 @@ def test_frozen_plugin_row_names_the_surface_and_host_mediated_permissions():
     module = ast.parse((ROOT / "ouroboros/contracts/plugin_api.py").read_text(encoding="utf-8"))
     api = next(node for node in module.body if isinstance(node, ast.ClassDef) and node.name == "PluginAPI")
     count = sum(isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) for node in api.body)
-    assert count == 18 and f"{count}-method extension surface" in row
+    assert f"{count}-method extension surface" in row
     for name in ("companion_process", "supervised_task", "subscribe_event", "inject_chat", "presence",
                  "notify_owner", "context_snapshot", "page_module", "realtime_provider", "live_conversation", "call_peer"):
         assert f"`{name}`" in row

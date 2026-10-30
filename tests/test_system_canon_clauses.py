@@ -11,7 +11,7 @@ def _contains(text, clause):
 
 
 def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
-    clause = "when `owner_client` is absent I ask or hedge rather than assume a browser"
+    clause = "`owner_client` identifies the sending surface. I advise for that surface, asking or hedging if absent"
     section = SYSTEM.read_text(encoding="utf-8").split("## Environment and My Human", 1)[1].split("## Drift Detector", 1)[0]
     _contains(section, clause)
     with pytest.raises(AssertionError):
@@ -20,7 +20,7 @@ def test_absent_owner_client_rule_is_available_without_a_runtime_client_note():
 
 @pytest.mark.parametrize("clause", [
     "its route plus the facets it really runs with, defaults omitted",
-    "(the restart path checks it out when my working branch fails to import)",
+    "restart uses it if the working branch cannot import",
     "Their exact composition and room detail remain readable",
     "not by merely reselecting the old one",
     "MCP tools are named `mcp_<server>__<tool>`",
