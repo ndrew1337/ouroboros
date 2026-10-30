@@ -311,6 +311,10 @@ def test_published_candidate_room_reader_always_resolves(host_world, refused):
         elif isinstance(value, list):
             for item in value: yield from strings(item)
     paths = [path for value in strings(wire) for path in re.findall(r"path=(\"[^\"]*room-[^\"]+\")", value)]
+    if refused:
+        from ouroboros.artifacts import task_artifact_dir_path
+        assert not paths and not list(task_artifact_dir_path(host.ctx.drive_root, host.ctx.task_id).rglob('room-*.json'))
+        return
     assert paths, text[:100]
     for path in paths:
         assert json.loads(handle_bytes(host.ctx.drive_root, host.ctx.task_id, json.loads(path)))

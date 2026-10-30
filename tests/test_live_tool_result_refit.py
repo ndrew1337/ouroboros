@@ -79,6 +79,7 @@ def test_call_result_refits_whole_then_falls_back_without_repeating_effect(
                 else:
                     assert 'no reader is loaded' in text
                 assert not call.deferred_tool_outputs
+                assert 'one' in host._tool_delivery_fallbacks  # a range still owes the whole delivery
                 assert body in canonical['content']
                 monkeypatch.setattr(host, 'prepare_session', prepare)
             # Adopt successive real fitted prefixes, including recovery after a
@@ -91,6 +92,7 @@ def test_call_result_refits_whole_then_falls_back_without_repeating_effect(
                     assert result['content'] == canonical['content']
                     assert body in result['content'] and 'RESULT_VIEW_JSON=' not in result['content']
                     assert next(row for row in host.messages if row.get('tool_call_id') == 'one') == canonical
+                    assert not host._tool_delivery_fallbacks
                 try:
                     await lease.run(adopted)
                 finally: await lease.close()
@@ -99,3 +101,33 @@ def test_call_result_refits_whole_then_falls_back_without_repeating_effect(
             worker.cancel(); await asyncio.gather(worker,return_exceptions=True)
             await call.close_preparation()
     asyncio.run(host.session(consume,LiveOptions()))
+
+
+@pytest.mark.parametrize('whole', [False, True])
+@pytest.mark.parametrize('queued', [False, True])
+def test_successful_send_retires_only_the_whole_result_fallback(host_world, whole, queued):
+    import copy
+    from skills.live_conversation.driver import _Call
+    from ouroboros.live_context_view import _call_tool_row, record_live_exposure, drain_exposure
+    from types import SimpleNamespace
+    host = host_world.host
+    result = {'tool_call_id': 'done', 'fn_name': 'list_available_tools', 'result': 'Exact completed body.'}
+    host._tool_delivery_fallbacks = {'done': (result, {'result': 'partial'})}
+    row = _call_tool_row(result, result if whole else {'result': 'partial'})
+    async def run():
+        call = _Call(host); call.connected.set()
+        session = SimpleNamespace(held_context_rows=[], response_context_rows={})
+        async def send(command):
+            if not queued: session.held_context_rows.extend(command.messages)
+        session.send = send; call.session = session
+        await call.send(ToolOutputs((row,), ()))
+        assert ('done' in host._tool_delivery_fallbacks) is (queued or not whole)
+        if queued:
+            # Native adapters snapshot actual delivered rows before exposing a response.
+            session.response_context_rows['answer'] = [row]
+            view = copy.copy(host); view._connection_owner = host; view._context_session = session
+            host._connection_view = view
+            record_live_exposure(view, 'answer')
+            await drain_exposure(host)
+        assert ('done' in host._tool_delivery_fallbacks) is not whole
+    asyncio.run(run())

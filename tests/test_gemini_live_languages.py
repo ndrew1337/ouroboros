@@ -61,7 +61,8 @@ def test_language_batch_reaches_gemini_before_fresh_refit(host_world, gemini, tm
             "name": e.data["name"], "arguments": e.data["arguments"]}} for e in events if e.kind == "tool_call"]
         changes = await host.tool_batch(calls)
         assert changes.silent == ()  # recording languages leaves the turn open for the next words
-        assert host.state["refit"] and host.state["languages"] == ("ru-RU", "en-US")
+        assert host.state.get("refit_after_answer") and host.state["languages"] == ("ru-RU", "en-US")
+        assert not host.state.get("refit")  # The confirmation still belongs to the serving connection.
         await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent=changes.silent))
         responses = [event["toolResponse"]["functionResponses"] for event in wire.sent if "toolResponse" in event]
         assert len(responses) == 1
@@ -88,13 +89,13 @@ def test_language_batch_reaches_gemini_before_fresh_refit(host_world, gemini, tm
         changes = await host.tool_batch([{"id": call["call_id"], "type": "function", "function": {
             "name": call["name"], "arguments": call["arguments"]}}])
         await session.send(ToolOutputs(tuple(changes), tuple(host.schemas), silent=changes.silent))
-        assert not host.state.get("refit")  # Recording the same languages needs no new connection.
+        assert not host.state.get("refit") and not host.state.get("refit_after_answer")
         assert not session.pending
 
     async def run():
         await host.session(consume, session_options(host))
         assert recorded_call_languages(tmp_path / "call-state") == ("ru-RU", "en-US")
-        host.state.pop("refit")
+        host.state.pop("refit_after_answer")  # The driver clears this at the fresh connection boundary.
         await host.session(refitted, session_options(host))
     asyncio.run(run())
 

@@ -272,3 +272,42 @@ def test_transport_replacement_open_refusal_ends_with_its_typed_reason(host_worl
         assert len(run.provider.connections) == 2
         assert all(w.closed for w in run.provider.connections)
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize('renew', [False, True])
+def test_finished_small_tool_waits_for_requested_native_resume_without_losing_handle(host_world, monkeypatch, renew):
+    import threading
+    from ouroboros.tools.tool_result import ToolResult
+    entered, release = threading.Event(), threading.Event()
+    effects = []
+    async def scenario():
+        async with stack(host_world, monkeypatch, 'gemini') as live:
+            execute = live.host.tools.execute_result
+            def blocked(name, args):
+                if name != 'list_available_tools': return execute(name, args)
+                effects.append(name); entered.set()
+                assert release.wait(30), 'test must release the completed effect'
+                return ToolResult(status='ok', code='OK', text='Completed exactly once.')
+            monkeypatch.setattr(live.host.tools, 'execute_result', blocked)
+            old = live.wire
+            old.tool('pending-native', 'list_available_tools', {})
+            try:
+                await live.wait(entered.is_set)
+                if renew:
+                    old.put({'sessionResumptionUpdate': {'resumable': True, 'newHandle': 'pending-tool-handle'}})
+                    await live.wait(lambda: live.host.state.get('resume_handle') == 'pending-tool-handle')
+                    old.put({'goAway': {'timeLeft': '30s'}})
+                    await live.wait(lambda: live.call.renewing and live.call.resume)
+                release.set()
+                if renew:
+                    await live.wait(lambda: len(live.provider.connections) == 2 and live.host.connection_number == 2)
+                    assert live.wire.sent[0]['setup']['sessionResumption'] == {'handle': 'pending-tool-handle'}
+                    assert 'pending-native' not in old.outputs
+                await live.wait(lambda: 'pending-native' in live.wire.outputs)
+                await live.quiet()
+                assert effects == ['list_available_tools']
+                assert len(live.provider.connections) == (2 if renew else 1)
+            finally:
+                release.set()
+        assert live.result[1]['execution_status'] == 'ok', live.result
+    asyncio.run(scenario())

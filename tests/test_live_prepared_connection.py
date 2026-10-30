@@ -13,6 +13,7 @@ from tests.test_live_host_settlement import tariff
 
 def test_old_host_port_default_keeps_sequential_sessions():
     assert asyncio.run(LiveHost.prepare_session(object(), LiveOptions())) is None
+    assert LiveHost.tool_results_delivered(object(), ()) is None
 
 
 @pytest.mark.parametrize('close_error', [False, True])

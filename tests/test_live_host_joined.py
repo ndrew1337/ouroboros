@@ -57,7 +57,7 @@ def mailbox_host(monkeypatch, tmp_path):
     monkeypatch.setattr(loop_round_limits, '_drain_incoming_messages', drain)
     host = SimpleNamespace(incoming=object(), _tools_lock=asyncio.Lock(),
         ctx=SimpleNamespace(drive_root=tmp_path, task_id='mailbox-cancellation'),
-        event_queue=None, owner_seen=set(), messages=[], _context_changed=lambda: None,
+        event_queue=None, owner_seen=set(), messages=[], schemas=[], _context_changed=lambda: None,
         checkpoint=checkpoints.append, model=SimpleNamespace(vision=True))
     host.mailbox = lambda: ConversationHost.mailbox(host)
     return host, entered, release, checkpoints, row

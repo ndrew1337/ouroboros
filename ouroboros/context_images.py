@@ -4,11 +4,13 @@ from __future__ import annotations
 import copy
 
 
-def image_placeholder(block):
+def image_placeholder(block, *, reader_available=True):
     caption = str(block.get('_caption') or '').strip()
     source = str(block.get('_source_path') or '').strip()
-    return {'type': 'text', 'text': ('[image evicted' + (f': {caption}' if caption else '')
-            + (f'; re-view: view_image path={source}' if source else '') + ']')}
+    return {'type': 'text', '_evicted_image': True, '_caption': caption, '_source_path': source,
+            'text': ('[image evicted' + (f': {caption}' if caption else '')
+            + ((f'; re-view: view_image path={source}' if reader_available else f'; path={source}')
+               if source else '') + ']')}
 
 
 def image_positions(messages):
@@ -17,7 +19,7 @@ def image_positions(messages):
             if isinstance(block, dict) and block.get('type') in {'image_url', 'image'}]
 
 
-def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max', readable_only=False):
+def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max', readable_only=False, reader_available=True):
     """Nano chosen by the owner batches >4 to 2; Max/Low keep their >10 to 5 floor."""
     from ouroboros.context_budget import (MAX_LIVE_IMAGE_BLOCKS, LIVE_IMAGE_BLOCKS_HIGH_WATER,
                                           NANO_LIVE_IMAGE_BLOCKS, NANO_LIVE_IMAGE_BLOCKS_HIGH_WATER)
@@ -30,7 +32,7 @@ def evict_stale_image_blocks(messages, *, incoming=0, owner_mode='max', readable
     for mi, bi in positions[:total - keep]:
         if readable_only and not messages[mi]['content'][bi].get('_source_path'):
             continue
-        messages[mi]['content'][bi] = image_placeholder(messages[mi]['content'][bi])
+        messages[mi]['content'][bi] = image_placeholder(messages[mi]['content'][bi], reader_available=reader_available)
         changed = True
     return changed
 

@@ -45,6 +45,7 @@ def record_live_exposure(view, response_id):
     held = getattr(session, 'response_context_rows', {}).pop(response_id, None)
     if held is None:
         return  # older plugins supply no delivery evidence; unknown stays unknown
+    delivered_call_tool_results(owner, held)
     # Snapshot on the boundary; hashing belongs to a worker, never the media loop.
     import asyncio
     previous = copy.deepcopy(getattr(owner.ctx, '_last_context_observation', {}) or {})
@@ -115,7 +116,11 @@ def serving_delivery_room(host, rows, schemas):
             current.append(row)
     if host._session_instructions:
         current.append({'role': 'system', 'content': host._session_instructions})
-    pending = math.ceil(max(0, estimate_context_prompt_tokens(current, schemas) - host._history_at_receipt) * density)
+    # Fresh-fit growth floors/collapses images; live deliveries do neither.
+    baseline = getattr(host, '_serving_history_at_receipt', None)
+    if baseline is None:
+        baseline = host._history_at_receipt
+    pending = math.ceil(max(0, estimate_context_prompt_tokens(current, schemas) - baseline) * density)
     # A canonical fold cannot free the serving socket: price the delivery itself too.
     pending = max(pending, math.ceil(estimate_context_prompt_tokens(rows) * density))
     return window - held - pending - host._growth - reserve
@@ -189,6 +194,7 @@ def record_response_context(host, key, usage, raw_usage, status):
             host._growth = max(host._growth, measured - host._held_input)
         host._held_input = measured
         host._history_at_receipt = host._history_estimate()
+        host._serving_history_at_receipt = host._serving_history_estimate()
 
 
 def _call_tool_row(result, view, *, reader_available=True):
@@ -227,6 +233,17 @@ def project_call_tool_results(host, ctx, results, messages, schemas, fit_candida
             saved[result['tool_call_id']] = result, view
     host.state['refit'] = True
     return results  # receipts and the next fitted rows carry the complete effect, never a second execution
+
+
+def delivered_call_tool_results(host, rows):
+    """A whole delivery retires its send-only fallback, never its canonical result."""
+    saved = getattr(host, '_tool_delivery_fallbacks', {})
+    if not saved:
+        return
+    for row in rows:
+        key = row.get('tool_call_id')
+        if key in saved and row.get('content') == _call_tool_row(saved[key][0], saved[key][0])['content']:
+            del saved[key]
 
 
 def fallback_call_tool_results(host, rows, schemas):

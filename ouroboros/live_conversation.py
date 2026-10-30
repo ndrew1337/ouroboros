@@ -409,6 +409,7 @@ class ConversationHost:
         self._renewal_window = self._renewal_facts = None
         self._held_input = self._growth = 0
         self._history_at_receipt = 0
+        self._serving_history_at_receipt = None
         self._history_version, self._history_cached_version, self._history_tokens = 0, -1, 0
         self._selected_text_estimate = self._selected_raw_estimate = 0
         self._session_instructions = ""
@@ -480,7 +481,7 @@ class ConversationHost:
                 raise RealtimeSetupError("owner_stop", "ordinary owner control ended the call")
             # A live delta reaches the engine as it can take it: an image attached in the room is a caption for a
             # blind engine (R15-1); the canonical rows above keep the image.
-            return rows_for_engine(rows, vision=self.model.vision)
+            return rows_for_engine(rows, vision=self.model.vision, schemas=self.schemas)
 
     def take_mail_answer(self):
         pending = getattr(self, '_pending_mail_answer', False)
@@ -559,7 +560,6 @@ class ConversationHost:
             except BudgetExceeded as exc:
                 raise RealtimeSetupError("budget_exhausted", "The shared spending limit has been reached.") from exc
 
-
     async def watch_controls(self):
         while True:
             await self.check()
@@ -578,6 +578,10 @@ class ConversationHost:
         snapshot = copy.copy(self)
         snapshot.messages = copy.deepcopy(self.messages)
         return await asyncio.to_thread(serving_delivery_fits, snapshot, rows, schemas)
+
+    def tool_results_delivered(self, rows):
+        from ouroboros.live_context_view import delivered_call_tool_results
+        delivered_call_tool_results(self, rows)
 
     async def tool_result_fallback(self, rows, schemas):
         from ouroboros.live_context_view import fallback_call_tool_results
@@ -692,6 +696,11 @@ class ConversationHost:
     def _context_changed(self):
         self._history_version += 1
 
+    def _serving_history_estimate(self):
+        from ouroboros.context_fit import estimate_context_prompt_tokens
+        extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
+        return estimate_context_prompt_tokens([*self.messages, *extra], self.schemas)
+
     def _history_estimate(self):
         from ouroboros.context_fit import estimate_context_prompt_tokens
         owner = getattr(self, "_connection_owner", self)
@@ -699,7 +708,7 @@ class ConversationHost:
         if self._history_cached_version != version:
             extra = [{"role": "system", "content": self._session_instructions}] if self._session_instructions else []
             from ouroboros.realtime_setup import rows_for_engine
-            projected = rows_for_engine(self.messages, vision=self.model.vision, fresh=True, owner_mode=self.plan.preferred_mode)
+            projected = rows_for_engine(self.messages, vision=self.model.vision, fresh=True, owner_mode=self.plan.preferred_mode, schemas=self.schemas)
             self._history_tokens = estimate_context_prompt_tokens([*projected, *extra], self.schemas)
             self._history_cached_version = version
         return self._history_tokens
@@ -778,7 +787,7 @@ class ConversationHost:
             silent = [call["id"] for call in calls if (self.call_tools.get(call["function"]["name"]) is not None
                        and self.call_tools[call["function"]["name"]].silent)]
             if not fresh:
-                return ToolBatch(rows_for_engine(cached, vision=self.model.vision), silent=silent)
+                return ToolBatch(rows_for_engine(cached, vision=self.model.vision, schemas=self.schemas), silent=silent)
             await self.check()
 
             async def run():
@@ -826,7 +835,7 @@ class ConversationHost:
                     self.executed[call["id"]] = (canonical_json(call), [
                         row for row in changes if row.get("tool_call_id") == call["id"]])
                 await joined(asyncio.to_thread(self.checkpoint, "post_batch"))
-                return ToolBatch(rows_for_engine(cached + changes, vision=self.model.vision), silent=silent)
+                return ToolBatch(rows_for_engine(cached + changes, vision=self.model.vision, schemas=self.schemas), silent=silent)
 
             job = asyncio.create_task(run())
             self.tool_jobs.add(job)
@@ -956,7 +965,7 @@ class ConversationHost:
             await joined(asyncio.gather(*pending_connections, return_exceptions=True))
         await drain_exposure(self)
         from ouroboros.context_images import evict_stale_image_blocks
-        if evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode, readable_only=True):
+        if evict_stale_image_blocks(self.messages, owner_mode=self.plan.preferred_mode, readable_only=True, reader_available=False):
             self._context_changed()
             await joined(asyncio.to_thread(self.checkpoint, "ready"))
         with _active_hosts_lock:

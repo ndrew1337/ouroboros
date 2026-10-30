@@ -140,7 +140,7 @@ def call_tools(state_dir):
             raise ValueError("set_call_languages takes a languages list")
         languages = record_call_languages(state_dir, arguments["languages"], binding_id=host.hub.spec.presence_binding_id)
         if languages != host.state.get("languages", ()):
-            host.state.update(languages=languages, refit=True)
+            host.state.update(languages=languages, refit_after_answer=True)
         if not languages:
             return "Recorded: no languages. Speech recognition guesses each utterance again from the next pause."
         return (f"Recorded: speech recognition expects {', '.join(languages)} from the next pause, "
@@ -248,7 +248,7 @@ class _Call:
             if self.hub.closed or self.hub.ended_by_owner or self.hub.ended_by_ouroboros:
                 return
             if self.tool_refit.is_set():
-                handle = ""
+                if not self.resume: handle = ""
                 self.tool_refit.clear()
                 # The retired native tool obligation cannot hold this new
                 # interaction open. Unreceipted reservations remain host-owned.
@@ -257,6 +257,7 @@ class _Call:
                 self.response_open = self.input_open = False
             if not handle:
                 self.host.state.pop("refit", None)
+                self.host.state.pop("refit_after_answer", None)
                 self.host.state.pop("resume_handle", None)
             if handle:
                 await self.close_preparation()  # native resumption stays sequential
@@ -354,8 +355,8 @@ class _Call:
                 if self.hub.ended_by_ouroboros:
                     await peers  # a queued end_call still owns goodbye playback
                     self.renewing = False
-                else:
-                    self.request_renewal()  # always a fresh fit, never a resume
+                elif not self.resume:
+                    self.request_renewal()  # a capacity/catalog obligation needs a fresh fit
             replacing = self.renewing
             resumed = replacing and self.resume
             return (self.host.state.get("resume_handle", "") if resumed else "") if self.renewing else None
@@ -392,6 +393,9 @@ class _Call:
                 result = await session.send(command)
                 if isinstance(command, ToolOutputs):
                     self.delivered_catalog = command.tools
+                    delivered = getattr(self.host, 'tool_results_delivered', None)
+                    if delivered is not None:
+                        delivered(getattr(session, "held_context_rows", ()))
                 return result
             except ConnectionClosed:
                 # The writer saw the closed socket before the native reader, which
@@ -662,8 +666,9 @@ class _Call:
                 # 28.10: Gemini cannot change a live session's declarations; a call that enabled desktop
                 # tools kept asking for tools it never received. Such an engine renews at this boundary.
                 offline_tools = getattr(self.session, "tools_need_renewal", None)
-                if (self.tool_refit.is_set() or self.host.renewal_due()
-                        or (offline_tools is not None and offline_tools(tuple(self.host.schemas)))):
+                needs_fit = (self.host.state.get("refit") or self.host.renewal_due()
+                             or (offline_tools is not None and offline_tools(tuple(self.host.schemas))))
+                if self.renewing or self.tool_refit.is_set() or needs_fit:
                     if not self.hub.ended_by_ouroboros:
                         # Results and execution receipts are already canonical.
                         # Waiting for quiet would deadlock on the withheld result.
@@ -673,7 +678,8 @@ class _Call:
                                 "[Host fact; not owner words] The requested tool batch returned; its results are in the fitted history. "
                                 "You may continue from them, act or stay silent; completed effects stay done."}]
                             self.pending_offers.extend(offers)
-                        self.request_renewal()
+                        if needs_fit or not self.renewing:
+                            self.request_renewal()
                         self.tool_refit.set()
                         self.deferred_tool_outputs.append((ToolOutputs(tuple(changes) + tuple(images),
                             tuple(self.host.schemas), silent=silent), offers))
@@ -855,7 +861,8 @@ class _Call:
                     await self.rows.join()
                     if self.quiet() and await self.host.apply_context_view():
                         self.request_renewal()
-                if self.host.renewal_due() or self.host.state.get("refit"):
+                if (self.host.renewal_due() or self.host.state.get("refit")
+                        or self.host.state.get("refit_after_answer") and self.quiet()):
                     self.request_renewal()
                 if self.renewing:
                     if self.quiet() and (self.resume or self.preparation_ready()):
@@ -956,7 +963,7 @@ class _Call:
     async def offer_pending(self):
         if not self.pending_offers or not self.connected.is_set() or not self.quiet():
             return
-        if self.host.renewal_due() or self.host.state.get("refit"):
+        if self.host.renewal_due() or self.host.state.get("refit") or self.host.state.get("refit_after_answer"):
             if self.request_renewal() is not False:
                 return
             await self.guard_serving(self.pending_offers)

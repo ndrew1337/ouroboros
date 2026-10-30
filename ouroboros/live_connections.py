@@ -22,7 +22,7 @@ from ouroboros.realtime_session import joined
 
 CURRENT = ContextVar('live_connection', default=None)
 FIELDS = ('plan', '_physical_context', '_renewal_window', '_renewal_facts', '_held_input', '_growth',
-          '_history_at_receipt', '_selected_text_estimate', '_selected_raw_estimate', '_session_instructions',
+          '_history_at_receipt', '_serving_history_at_receipt', '_selected_text_estimate', '_selected_raw_estimate', '_session_instructions',
           '_density_input', '_connection_quote', '_connection_accounting', '_meter_watermark', 'connection_number',
           '_view_session_factory', '_view_session_options', '_prepared_view', '_schemas_mode',
           '_history_tokens', '_history_cached_version', '_fitted_frame_rows')
@@ -153,6 +153,7 @@ class PreparedConnection:
         view._physical_context = self.request.physical_context
         view._held_input = view._growth = 0
         view._history_at_receipt = view._history_estimate()
+        view._serving_history_at_receipt = view._serving_history_estimate()
         view._meter_watermark = 0.0
         receipt = await joined(asyncio.to_thread(persist_physical_candidate, view.ctx.drive_root,
             task_id=view.ctx.task_id, attempt_id=f'call-{view.turn.spec.call_id}-{view.connection_number}' + ('-rebound' if rebound else ''),
@@ -180,7 +181,7 @@ class PreparedConnection:
             if tail:
                 _, request, evidence, _ = await joined(asyncio.to_thread(measure_session_wire,
                     view, view.plan, [*rows_for_engine(view.messages, vision=host.model.vision,
-                        fresh=not self.options.resume_handle, owner_mode=view.plan.preferred_mode), *tail], view.schemas, self.provider['session'], self.options,
+                        fresh=not self.options.resume_handle, owner_mode=view.plan.preferred_mode, schemas=view.schemas), *tail], view.schemas, self.provider['session'], self.options,
                     _room_fact=False, fresh=False))
                 if main_context_fit_refusal(request) is not None:
                     raise RealtimeSetupError('prepared_stale', 'new canonical rows need the ordinary ladder again')
@@ -200,7 +201,7 @@ class PreparedConnection:
             host.messages[:] = [*view.messages, *tail]
             if not self.options.resume_handle:
                 from ouroboros.context_images import evict_stale_image_blocks
-                evict_stale_image_blocks(host.messages, owner_mode=view.plan.preferred_mode, readable_only=True)
+                evict_stale_image_blocks(host.messages, owner_mode=view.plan.preferred_mode, readable_only=True, reader_available=False)
             host.schemas[:] = view.schemas
             from ouroboros.tools.tool_discovery import bind_resident_schemas
             enabled = set(host.ctx._actor_loaded_tool_names) | set(view.ctx._actor_loaded_tool_names)
@@ -209,6 +210,7 @@ class PreparedConnection:
             host._context_changed()
             view.messages, view.schemas = host.messages, host.schemas
             view._history_at_receipt = view._history_estimate()
+            view._serving_history_at_receipt = view._serving_history_estimate()
             host._connection_view = view
             if host._prepared_successor is self:
                 host._prepared_successor = None
@@ -217,9 +219,11 @@ class PreparedConnection:
             self.host.timing_event('switched')
             self.connection['switched_at'] = time.time()
             if tail:
-                await self.session.send(ContextUpdate(tuple(rows_for_engine(tail, vision=host.model.vision)), respond=False))
+                await self.session.send(ContextUpdate(tuple(rows_for_engine(tail, vision=host.model.vision, schemas=view.schemas)), respond=False))
                 view._fitted_frame_rows.extend(tail)  # these pixels reached the new connection before consume
                 self.caught_up = True
+            if not self.options.resume_handle:
+                host.tool_results_delivered(host.messages)
 
     async def _lifetime(self):
         with ExitStack() as scope:

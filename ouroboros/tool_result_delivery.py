@@ -207,7 +207,8 @@ def render_result_view(
         lines.append(FULL_SOURCE_MARKER + json.dumps(ref, ensure_ascii=False, sort_keys=True, separators=(",", ":")))
         lines.append((RECOVER_PAGEABLE if tool_name in PAGEABLE_TOOL_RESULTS else RECOVER_OTHER)
                      if reader_available else "The exact source is retained, but no reader is loaded in this connection. "
-                     "Do not rerun this tool to recover omitted output.")
+                     + ("Another range is available using this tool's declared parameters."
+                        if tool_name in PAGEABLE_TOOL_RESULTS else "Do not rerun this tool to recover omitted output."))
     else:
         lines.extend([FULL_SOURCE_UNAVAILABLE, SOURCE_UNAVAILABLE_NOTE])
     delivered = text[:head] + marker + text[total - tail:] + "\n" + "\n".join(lines)

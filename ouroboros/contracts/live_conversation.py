@@ -310,6 +310,9 @@ class LiveHost(Protocol):
         """Whether held input plus pending delivery fits this connection; unknown declines fallback."""
         return False
 
+    def tool_results_delivered(self, rows) -> None:
+        """Optional whole-delivery receipt; older hosts retain their existing bookkeeping."""
+
     async def tool_result_fallback(self, rows, schemas) -> list[dict] | None:
         """Optional fitting range of a retained complete result after a failed fresh fit."""
         return None

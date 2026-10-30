@@ -60,6 +60,14 @@ def test_fresh_adoptions_bound_pixels_checkpoints_and_room_readers(host_world, r
                     measurements.append(dict(looks=(interval+1)*5,canonical_bytes=size,
                         largest_reader=max(p.stat().st_size for p in readers),checkpoint_seconds=round(elapsed,4)))
                     assert size < 500000 and measurements[-1]['largest_reader'] < 500000
+                    import re
+                    from ouroboros.evidence_packs import handle_bytes
+                    wire_rows = json.loads(session.selected.messages_json)
+                    paths = [path for row in wire_rows if isinstance(row.get('content'), str)
+                             for path in re.findall(r'path=("[^"\n]*room-[^"\n]+")', row['content'])]
+                    assert paths
+                    for path in paths:
+                        assert json.loads(handle_bytes(host.ctx.drive_root, host.ctx.task_id, json.loads(path)))
                 await lease.run(consume)
             finally: await lease.close()
         await host.finish()
@@ -113,3 +121,36 @@ def test_adoption_floors_catchup_only_after_snapshot_is_replaced(host_world, arr
             await lease.run(consume)
         finally: await lease.close()
     asyncio.run(run())
+
+
+@pytest.mark.parametrize('reader_loaded', [False, True])
+def test_image_reader_follows_each_fitted_catalog_after_canonical_floor(host_world, reader_loaded):
+    from ouroboros.realtime_setup import rows_for_engine
+    host = host_world.host
+    host.plan = replace(host.plan, preferred_mode='nano')
+    schema = {'type': 'function', 'function': {'name': 'view_image'}}
+    async def run():
+        for i in range(6): await host.observe_context(look(host, i))
+        await host.finish()
+    asyncio.run(run())
+    assert len(image_positions(host.messages)) == 2
+    for loaded in (reader_loaded,):
+        rendered = rows_for_engine(host.messages, vision=True, fresh=True, owner_mode='nano', schemas=[schema] if loaded else [])
+        text = json.dumps(rendered)
+        assert 'frame-0.jpg' in text
+        assert ('re-view: view_image' in text) is loaded
+        assert '_evicted_image' not in text and '_source_path' not in text
+    assert 're-view: view_image' not in json.dumps(host.messages)
+
+
+@pytest.mark.parametrize('count', [2, 6])
+def test_pricing_copy_keeps_canonical_pixels_until_adoption(host_world, count):
+    from ouroboros.realtime_setup import measure_session_wire
+    host = host_world.host
+    host.plan = replace(host.plan, preferred_mode='nano')
+    rows = [*host.messages, *(look(host, i) for i in range(count))]
+    canonical = []
+    session, _, _, _ = measure_session_wire(host, host.plan, rows, host.schemas,
+        host_world.provider['session'], LiveOptions(), canonical_rows=canonical)
+    assert len(image_positions(canonical)) == count
+    assert len(image_positions(json.loads(session.selected.messages_json))) == 1  # same-source projection

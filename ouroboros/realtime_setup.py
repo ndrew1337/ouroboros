@@ -15,7 +15,7 @@ from ouroboros.extension_registry_state import (
 )
 
 
-def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False, owner_mode='max') -> list[dict]:
+def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False, owner_mode='max', schemas=()) -> list[dict]:
     """What the speech engine receives from the ordinary history.
 
     An engine whose catalog says it does not see images gets each image part as
@@ -27,6 +27,11 @@ def rows_for_engine(rows: list[dict], *, vision: bool, fresh=False, owner_mode='
     if fresh:
         from ouroboros.context_images import fresh_call_images
         rows = fresh_call_images(rows, owner_mode=owner_mode)
+    from ouroboros.context_images import image_placeholder
+    reader = any(schema.get('function', {}).get('name') == 'view_image' for schema in schemas)
+    rows = [{**row, 'content': [image_placeholder(block, reader_available=reader)
+             if isinstance(block, dict) and block.get('_evicted_image') else block for block in row['content']]}
+            if isinstance(row.get('content'), list) else row for row in rows]
     if vision:
         return project_wire_messages(rows, delivery_marks=True)
     out = []
@@ -185,10 +190,8 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
         fresh = not options.resume_handle
     if fresh:
         import copy
-        from ouroboros.context_images import evict_stale_image_blocks
         from ouroboros.tools.tool_discovery import update_resident_notice
         messages = copy.deepcopy(messages)
-        evict_stale_image_blocks(messages, owner_mode=plan.preferred_mode, readable_only=True)
         update_resident_notice(host.tools, schemas, messages)
         if canonical_rows is not None:
             canonical_rows[:] = messages
@@ -211,7 +214,7 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
     facts = host.model.facts
     # Every candidate an engine receives passes here (setup, renewal, an authored view's measurement): a blind
     # engine gets image parts as captions, the canonical history keeps the images (R15-1).
-    messages = rows_for_engine(messages, vision=host.model.vision, fresh=fresh, owner_mode=plan.preferred_mode)
+    messages = rows_for_engine(messages, vision=host.model.vision, fresh=fresh, owner_mode=plan.preferred_mode, schemas=schemas)
     rows = [*messages, *([{"role": "system", "content": options.instructions}] if options.instructions else [])]
     fit = measure_main_fit(plan, rows, schemas, profile=_main_context_profile(plan, plan.initial_mode),
         rendered_mode=plan.initial_mode, round_id=host.ctx.task_id + ":call", reasoning_effort=host.effort)
@@ -253,13 +256,13 @@ def measure_session_wire(host, plan, messages, schemas, factory, options, *, _ro
 
 
 def _publish_room_reader(host, plan, prior, rows, factory, options, evidence):
-    """Publish the exact reader only for the selected send or refusal evidence."""
+    """Publish the exact reader only for the selected send."""
     from ouroboros.context_source_view import fresh_room_rows
     from ouroboros.context_budget import bound_host_row
     import copy
     from ouroboros.context_images import evict_stale_image_blocks
     current = copy.deepcopy(prior)
-    evict_stale_image_blocks(current, owner_mode=plan.preferred_mode, readable_only=True)
+    evict_stale_image_blocks(current, owner_mode=plan.preferred_mode, readable_only=True, reader_available=False)
     _, placeholder = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id)
     _, reader = fresh_room_rows(current, drive_root=host.ctx.drive_root, task_id=host.ctx.task_id, persist=True)
     if not reader:
@@ -436,11 +439,8 @@ def session_candidate(host, factory, options, *, observation_fp=None):
                 receipts.append({'rung': rung, 'before_tokens': measured, 'after_tokens': after})
             continue
         if room_facts:
-            published = _publish_room_reader(host, plan, current, sent_rows, factory, options, evidence)
-            if published is None:
-                room_facts = False
-                continue
-            session, request, evidence, physical_window = published
+            room_facts = False  # refusal evidence names no unpublished prior-view reader
+            continue
         from ouroboros.observability import persist_physical_candidate
         evidence.update(reason="context_capacity", refusal=refusal,
                         deficit_tokens=max(1, -refusal["free_tokens"] + 1))
