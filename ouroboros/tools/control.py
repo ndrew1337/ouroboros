@@ -151,6 +151,36 @@ _SCHEDULE_SUBAGENT_DESCRIPTION = (
 )
 
 
+def _project_tool_entries() -> List[ToolEntry]:
+    """Reversible project decisions and their paginated reader, beside work placement."""
+    return [
+        ToolEntry("close_project", {
+            "name": "close_project",
+            "description": "Close a finished project with a note, or reopen it. Its room and history stay; a new owner message or task reopens it.",
+            "parameters": {"type": "object", "properties": {
+                "project_id": {"type": "string"},
+                "note": {"type": "string", "description": "Why I close or reopen this project."},
+                "reopen": {"type": "boolean", "default": False},
+            }, "required": ["project_id", "note"], "additionalProperties": False},
+        }, _close_project, safety_policy="skip"),
+        ToolEntry("list_projects", {
+            "name": "list_projects",
+            "description": (
+                "List projects with id, name, last_active_at, closed record and activity — read-only. "
+                "Follow the next-page call to enumerate every match. "
+                "Use it in a main-chat turn to decide whether a message belongs to an existing "
+                "project, then place this work there with move_to_project."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
+                "start": {"type": "integer", "minimum": 0, "default": 0, "description": "Offset in the filtered, sorted list; use the returned next-page call."},
+                "closed": {"type": "boolean", "description": "False: open projects; true: closed projects; omit for both."},
+                "oldest_first": {"type": "boolean", "default": False, "description": "List by last_active_at from oldest to newest."},
+            }},
+        }, _list_projects),
+    ]
+
+
 def get_tools() -> List[ToolEntry]:
     from ouroboros.subagent_inspection import inspect_subagent_tool
     from ouroboros.tools.control_maintenance import maintenance_tool_entries
@@ -246,17 +276,7 @@ def get_tools() -> List[ToolEntry]:
                 "required": [],
             },
         }, _move_to_project),
-        ToolEntry("list_projects", {
-            "name": "list_projects",
-            "description": (
-                "List the owner's projects (id, name, recency, running flag) — read-only. "
-                "Use it in a main-chat turn to decide whether a message belongs to an existing "
-                "project, then place this work there with move_to_project."
-            ),
-            "parameters": {"type": "object", "properties": {
-                "limit": {"type": "integer", "default": 50, "description": "Max projects to list."},
-            }},
-        }, _list_projects),
+        *_project_tool_entries(),
         ToolEntry("tell_task", {
             "name": "tell_task",
             "description": "Send a note to another work, with optional exact owner quotes selected from "
@@ -426,7 +446,7 @@ def get_tools() -> List[ToolEntry]:
         get_task_result_entry(),
         ToolEntry("wait_task", {
             "name": "wait_task",
-            "description": "Wait for ONE subtask to reach a terminal status and return its effective result: the full single-child handoff once it settled (or when your known_result_sha256 no longer matches); a return BEFORE it settled carries the compact wait_tasks projection plus delegated_runs (its open delegated runs with dated observation facts, no liveness verdict). May return EARLY (before terminal) if the child raises a tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon — the result then carries a [CHILD_BEACONS] block so you can steer, review, or override it. An unread message in your own mailbox also returns early so the ordinary loop can deliver and acknowledge it; the child keeps running. With SEVERAL children in flight, prefer wait_tasks(any_terminal) to absorb whichever finishes first rather than blocking serially on one id at a time.",
+            "description": "Wait for ONE subtask to reach a terminal status and return its effective result: the full single-child handoff once it settled (or when your known_result_sha256 no longer matches); a return BEFORE it settled carries the compact wait_tasks projection plus delegated_runs (its open delegated runs with dated observation facts, no liveness verdict). May return EARLY (before terminal) if the child raises a tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon — the result then carries a [CHILD_BEACONS] block so you can steer, review, or override it. An unread message in your own mailbox also returns early so the ordinary loop can deliver and acknowledge it; the child keeps running. A child held by a current stop you have not yet been shown returns once with [HELD_DEPENDENCY] (its current_stop: cause, who releases it, the request door if yours); waiting again keeps waiting. With SEVERAL children in flight, prefer wait_tasks(any_terminal) to absorb whichever finishes first rather than blocking serially on one id at a time.",
             "parameters": {"type": "object", "required": ["task_id"], "properties": {
                 "task_id": {"type": "string", "description": "Task ID to check"},
                 "view": {"type": "string", "enum": ["answer", "summary", "evidence", "full"], "description": "Settled result view; omitted/full preserves the existing handoff. Early returns remain compact wait observations, not a result or full read."},
@@ -438,7 +458,7 @@ def get_tools() -> List[ToolEntry]:
         }, _wait_for_task, timeout_sec=7200),
         ToolEntry("wait_tasks", {
             "name": "wait_tasks",
-            "description": "Wait for MULTIPLE subtasks at once: the right tool to ABSORB a batch of independent children you scheduled in one burst. With mode=any_terminal it returns as soon as the FIRST child finishes (handle it, then call again for the rest) instead of blocking serially. Each child gets a compact structural projection, its cost as accounted_upper_bound_usd with cost_final; the full per-child envelope stays in the task store (child_result_sha256 pins the exact result you saw; get_task_result returns the full result text plus trace/outcome summaries). The wait may early_return (before all terminal) on a child tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon so you can steer, review, or override mid-flight, or on an unread message in your own mailbox (reason=owner_mailbox_pending); the ordinary loop then handles delivery and acknowledgement. An id no surface of this tree ever minted (no task result, queue row or tree-ledger row) is flagged unknown_task_id ('not yet registered or never scheduled'), with unknown_task_ids and a compact children_roster of your ACTUAL direct children so you can repair the wait set instead of re-polling phantoms.",
+            "description": "Wait for MULTIPLE subtasks at once: the right tool to ABSORB a batch of independent children you scheduled in one burst. With mode=any_terminal it returns as soon as the FIRST child finishes (handle it, then call again for the rest) instead of blocking serially. Each child gets a compact structural projection, its cost as accounted_upper_bound_usd with cost_final; the full per-child envelope stays in the task store (child_result_sha256 pins the exact result you saw; get_task_result returns the full result text plus trace/outcome summaries). The wait may early_return (before all terminal) on a child tree_note blocker/question/interface_contract/review_requested/delegation_constraint beacon so you can steer, review, or override mid-flight, or on an unread message in your own mailbox (reason=owner_mailbox_pending); the ordinary loop then handles delivery and acknowledgement. A child held by a current stop you have not yet been shown returns once (reason=dependency_held); waiting again keeps waiting. An id no surface of this tree ever minted (no task result, queue row or tree-ledger row) is flagged unknown_task_id ('not yet registered or never scheduled'), with unknown_task_ids and a compact children_roster of your ACTUAL direct children so you can repair the wait set instead of re-polling phantoms.",
             "parameters": {"type": "object", "required": ["task_ids"], "properties": {
                 "task_ids": {"type": "array", "items": {"type": "string"}, "description": "Task IDs returned by schedule_subagent."},
                 "known_result_sha256_by_task": {"type": "object", "additionalProperties": {"type": "string"}, "description": "Optional task_id to previously obtained child_result_sha256 map. Matching children omit only result/trace and return result_unchanged plus a full-read reference. Missing or different hashes return the usual complete body/trace. Current status/cost/outcome/capability facts remain; wait timing is unchanged."},
@@ -470,6 +490,7 @@ from ouroboros.tools.control_routing import (  # noqa: E402, F401 -- intentional
     _attach_client_surface,
     _attach_origin_from_metadata,
     _finish_swarm_handoff,
+    _close_project,
     _list_projects,
     _start_task,
 )

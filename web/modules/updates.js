@@ -1,4 +1,4 @@
-import { escapeHtmlAttr as escapeHtml } from './utils.js';
+import { escapeHtmlAttr as escapeHtml, lastAppVersion, watchAppVersion } from './utils.js';
 import { openConfirmDialog } from './confirm_dialog.js';
 import { showToast } from './toast.js';
 import { apiClient, apiFetch } from './api_client.js';
@@ -111,10 +111,11 @@ export function applyFailureText(err) {
 // humanizeCheckedAt reads Date.now for the "checked N ago" age). The button is always a real next action; facts
 // travel as status line, hint, and chips (ARCHITECTURE §3: unavailable,
 // divergent, dirty, unsafe, failed-check, rollback, and restart-required
-// states stay visible — they are just not buttons).
-export function updateVerdict(data = {}, phase = '') {
+// states stay visible — they are just not buttons). `appVersion` is the app (host) version About shows: the
+// headline names the code an update changes, the App chip the app that a new download changes.
+export function updateVerdict(data = {}, phase = '', appVersion = '') {
     const checkedAgo = humanizeCheckedAt(data.checked_at);
-    const chips = [];
+    const chips = appVersion ? [{ label: 'App', value: appVersion }] : [];
     if (data.official_repo_url) chips.push({ label: 'Official repo', value: repoSlug(data.official_repo_url) });
     if (data.target_ref) chips.push({ label: 'Target', value: data.target_ref });
     if (data.update_channel) chips.push({ label: 'Channel', value: data.update_channel, link: 'settings-advanced' });
@@ -530,6 +531,12 @@ export function bindUpdateRefreshEvents({ ws, getPhase, reconcileRestart, loadSt
     };
 }
 
+// The App chip follows the health read About uses: one that lands after a status rendered re-renders the panel;
+// a panel still loading keeps its loading line until its own status render. Returns the disposer.
+export function bindAppVersionRender({ getStatus, render }) {
+    return watchAppVersion(() => { if (getStatus()) render(); });
+}
+
 export function initUpdates({ mount, state, ws, openSettingsTab }) {
     const page = document.createElement('div');
     page.id = 'page-updates';
@@ -871,7 +878,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     }
 
     function render() {
-        const verdict = updateVerdict(latestStatus || {}, phase);
+        const verdict = updateVerdict(latestStatus || {}, phase, lastAppVersion());
         dot.dataset.tone = verdict.tone;
         summary.textContent = verdict.headline;
         const hintText = [verdict.hint, ...(verdict.warnings || []).map((w) => `Warning: ${w}`)]
@@ -1243,7 +1250,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
     page.querySelector('#updates-promote').addEventListener('click', async () => {
         const confirmedPromote = await openConfirmDialog({
             title: 'Save recovery point',
-            body: 'Move this installation\'s local recovery branch (ouroboros-stable) to the current checkout?\n\nThis is the fallback the runtime boots when the working branch breaks. It does not publish anything and does not change the official QA feed of any install.',
+            body: 'Move this installation\'s local recovery branch (ouroboros-stable) to the current checkout now?\n\nThis is the fallback the runtime boots when the working branch breaks. Each successful start of a clean, launcher-managed working branch moves it, so a point saved here lasts until then (earlier versions stay under Restore). It does not publish anything and does not change the official QA feed of any install.',
             confirmLabel: 'Save recovery point',
         });
         if (!confirmedPromote) return;
@@ -1269,6 +1276,7 @@ export function initUpdates({ mount, state, ws, openSettingsTab }) {
         loadStatus,
         getRequestTaskId: () => requestView(latestStatus?.letter)?.taskId || '',
     });
+    bindAppVersionRender({ getStatus: () => latestStatus, render });  // same lifetime as the panel
     window.addEventListener('ouro:dashboard-subtab-shown', (event) => {
         if (event.detail?.tab !== 'updates' || state.activePage !== 'dashboard') return;
         loadStatus({ fetchRemote: false });

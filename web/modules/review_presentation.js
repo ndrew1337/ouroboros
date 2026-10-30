@@ -891,7 +891,22 @@ export function reviewRecordGroupFromTaskDetail(detail, ownerTaskId = '') {
         warning: '', authorDecisionText: '', activeCount: 0, attemptCount: attempts.length,
         // Older records stay in the ledger: the count is exact only when the projection says none exist.
         countIsAuthoritative: projection.review_records_omitted === 0, attempts,
+        // The task's own settled adoptions, joined with each record's landed commit; a source without the
+        // field leaves what an earlier read said (absent is unknown, never "none adopted").
+        ...(Array.isArray(detail?.body_adoptions) ? { adoptions: detail.body_adoptions } : {}),
     };
+}
+
+// One row per adoption at its highest revision across two reads: a history row read before a later outcome settled
+// cannot take that adoption back, nor drop one the other read named.
+function mergeAdoptions(prior, incoming) {
+    const revision = (row) => (Number.isSafeInteger(row?.revision) ? row.revision : 0);
+    const rows = new Map();
+    for (const row of [...prior, ...incoming]) {
+        const id = text(row?.adoption_id) || JSON.stringify(row);
+        if (!(revision(rows.get(id)) > revision(row))) rows.set(id, row);
+    }
+    return [...rows.values()];
 }
 
 export function reviewGroupsFromTaskDetail(detail, ownerTaskId = '') {
@@ -1015,6 +1030,7 @@ export function mergeReviewGroup(store, incoming) {
         attempts: order.map((id) => mergedById.get(id)).filter(Boolean),
         attemptCount: Math.max(prior.attemptCount || 0, incoming.attemptCount || 0, mergedById.size),
     };
+    if (Array.isArray(prior.adoptions) && Array.isArray(incoming.adoptions)) merged.adoptions = mergeAdoptions(prior.adoptions, incoming.adoptions);
     if (staleActiveRegression) {
         merged.state = prior.state;
         merged.verdict = prior.verdict;

@@ -136,6 +136,7 @@ class SetupInitialState(TypedDict):
     ``contract.providerFields[].stateKey`` (a configured secret reads as ``secretPlaceholder``,
     never the secret), per ``contract.budgetFields[].stateKey`` and per ``contract.modelSlots[].stateKey``."""
 
+    connections: List[Dict[str, Any]]  # masked OUROBOROS_CONNECTIONS rows, keyed by kind/name
     safetyModel: str
     providerProfile: str
     reviewEnforcement: str
@@ -510,7 +511,7 @@ class ChatUploadDeleteResponse(TypedDict):
 class ProjectListResponse(TypedDict):
     """``GET /api/projects``: active and deleting projects, at most 200, most recently active first.
     Rows are the compact projection ``GET /api/state`` also carries: id, name, pinned, chat_id, working_dir,
-    provenance, last_active_at, lifecycle, routing_generation, visible_revision, delete_error and
+    provenance, last_active_at, lifecycle, optional closed, routing_generation, visible_revision, delete_error and
     has_thread_activity."""
 
     projects: List[ProjectEntry]
@@ -528,10 +529,11 @@ class ProjectCreateResponse(TypedDict):
 
 
 class ProjectUpdateRequest(TypedDict, total=False):
-    """``POST /api/projects/{project_id}/update``: name and/or pin; at least one."""
+    """``POST /api/projects/{project_id}/update``: name, pin or closure; at least one."""
 
     name: str  # 1 to 80 characters
     pinned: bool
+    closed: bool  # true closes as owner; false removes the closure record
 
 
 class ProjectUpdateResponse(TypedDict):

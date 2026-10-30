@@ -9,8 +9,8 @@ import { apiClient } from './api_client.js';
 import { adoptConnectionLabels } from './connection_labels.js';
 import { API_PROVIDER_ORDER, apiConnections, apiProviderLabel, parseModelSource } from './route_editor_primitives.js';
 import { setButtonBusy } from './settings_controls.js';
-import { resetSecretReveals } from './settings_secrets.js';
-import { PROVIDER_CARDS, bindSecretInputs, connectionRowHtml } from './settings_ui.js';
+import { bindSecretInputs, resetSecretReveals } from './settings_secrets.js';
+import { PROVIDER_CARDS, connectionRowHtml } from './settings_provider_cards.js';
 import { revealNewRow, setInlineStatus } from './ui_helpers.js';
 
 export const CONNECTIONS_KEY = 'OUROBOROS_CONNECTIONS';
@@ -131,8 +131,10 @@ export function providerTestStatusText(result = {}) {
     return reason ? `Not ready — ${reason}` : 'Not ready';
 }
 
-export function providerTestNetworkErrorStatus() {
-    return 'Not ready';
+/** A failed request reads "Not ready"; only the server's typed refusal adds its own controlled reason. */
+export function providerTestNetworkErrorStatus(error) {
+    const body = error?.status === 400 && error?.body;
+    return body?.code === 'masked_key_endpoint_changed' ? providerTestStatusText(body) : 'Not ready';
 }
 
 export function providerTestResultIsCurrent({
@@ -143,7 +145,8 @@ export function providerTestResultIsCurrent({
 
 /** The Accounts API-key rows of one Settings page: load, draft edits, collect, validate, Test. */
 export function createConnectionsEditor({ root, onChange = () => {}, test = (body) => apiClient.providerTest(body) } = {}) {
-    const cards = new Map(PROVIDER_CARDS.map((card) => [card.kind, card]));
+    const cards = new Map(PROVIDER_CARDS.filter((card) => root.querySelector(`[data-connection-rows="${card.kind}"]`))
+        .map((card) => [card.kind, card]));
     const kinds = API_PROVIDER_ORDER.filter((kind) => cards.has(kind));
     const advanced = PROVIDER_CARDS.filter((card) => card.advanced).map((card) => card.kind);
     const panel = root.querySelector('[data-settings-panel="providers"]');
@@ -158,6 +161,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
     const touched = new Set();  // cards the owner opened or closed: a reload never overrides that
     const generations = new Map();
     const inFlight = new Set();
+    let rowBaselines = new WeakMap();
 
     const cardNode = (kind) => root.querySelector(`[data-provider-card="${cards.get(kind)?.id}"]`);
     const rowsHost = (kind) => root.querySelector(`[data-connection-rows="${kind}"]`);
@@ -218,7 +222,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         const id = builtin ? kind : `${kind}@${row.dataset.name}`;
         const entry = draft ? null : entries.find((item) => item.id === id);
         const enabled = builtin ? !builtinOff.has(kind) : row.dataset.enabled !== '0';
-        const facts = connectionRowFacts({ draft, enabled, configured: Boolean(entry?.configured),
+        const facts = connectionRowFacts({ draft: draft || rowFingerprint(row) !== rowBaselines.get(row), enabled, configured: Boolean(entry?.configured),
             source: entry?.source, usedBy: usage.get(id) || [] });
         const status = row.querySelector('[data-connection-status]');
         Object.assign(status, { textContent: facts.label, hidden: false });
@@ -243,6 +247,16 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
 
     function paintAll() {
         root.querySelectorAll('[data-connection-row]').forEach(paintRow);
+    }
+
+    // Field edits withdraw saved readiness without duplicating provider credential rules.
+    // Toggle status remains independent, and restoring the loaded fields restores their facts.
+    function rowFingerprint(row) {
+        return JSON.stringify([row.querySelector('[data-connection-label]')?.value.trim() || '',
+            ...cards.get(row.dataset.kind).fields.map((field) => {
+                const input = fieldInput(row, field);
+                return [field.secret ? input?.value || '' : (input?.value || '').trim(), input?.dataset.forceClear || ''];
+            })]);
     }
 
     function expire(row) {
@@ -277,6 +291,7 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
             if (added.length && !touched.has(card.kind)) setCardOpen(card.kind, true);
         }
         root.querySelectorAll('[data-connection-row]').forEach(expire);
+        rowBaselines = new WeakMap([...root.querySelectorAll('[data-connection-row]')].map((row) => [row, rowFingerprint(row)]));
         paintAll();
         const fold = root.querySelector('#settings-more-providers');
         if (fold && moreProvidersOpen(entries, advanced)) fold.open = true;
@@ -359,8 +374,8 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         try {
             const data = await test(sent);
             if (current()) setInlineStatus(status, providerTestStatusText(data), data?.ok ? 'ok' : 'danger');
-        } catch {
-            if (current()) setInlineStatus(status, providerTestNetworkErrorStatus(), 'danger');
+        } catch (error) {
+            if (current()) setInlineStatus(status, providerTestNetworkErrorStatus(error), 'danger');
         } finally {
             inFlight.delete(key);
             setButtonBusy(button, false);
@@ -390,7 +405,8 @@ export function createConnectionsEditor({ root, onChange = () => {}, test = (bod
         const row = event.target instanceof Element ? event.target.closest('[data-connection-row]') : null;
         if (!row) return;
         expire(row);
-        if (event.target.matches('[data-connection-label]')) paintRow(row);
+        paintRow(row);
+        onChange();
     }
 
     panel?.addEventListener('click', onClick);

@@ -18,4 +18,4 @@ Wake facts (context only):
 - allowance known spend (last 24 h): {spent_usd} / {daily_usd} USD; by cause: {spend_by_cause}; own tasks: {running}/{max_tasks}; next interval: {interval} s
 - counted roots: {counted_roots}
 - places: {places}
-- memory: Main is my ordinary room; Live rooms is a directory; round facts measure my Max room, unfolded pages and pending drafts.
+- memory: Main is my room; round facts measure my window, unfolded pages and what awaits my decision; other open rooms keep a reader.

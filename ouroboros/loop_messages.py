@@ -6,6 +6,7 @@ Extracted from loop.py (v7 L-B split); loop.py re-exports every name."""
 from __future__ import annotations
 
 from ouroboros.context_budget import HOST_CONTEXT_KIND_KEY, bound_host_row
+from ouroboros.context_view_facts import CONTEXT_FACTS_NAME
 from ouroboros.config import runtime_setting
 
 import hashlib
@@ -650,7 +651,6 @@ def _emit_round_progress(content: Any, msg: Dict[str, Any], emit_progress, llm_t
 
 
 CONTEXT_FACTS_HEADER = "[CONTEXT_FACTS]"
-CONTEXT_FACTS_NAME = "ouroboros_context_facts"
 
 
 def subagents_fact_line() -> str:
@@ -702,7 +702,7 @@ def context_facts_line(ctx: Any, *, money: Optional[Dict[str, Any]] = None,
     from ouroboros.context_view_facts import memory_facts, window_fact
     source = window_fact(getattr(ctx, "context_fit_plan", None), usage.get("_context_response_reserve_tokens")) if measured else ""
     parts.append((source or ("window unknown" if capacity is None else f"window {int(capacity):,}")) + largest)
-    parts.extend(filter(None, [memory_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode)]))
+    parts.extend(filter(None, [memory_facts(getattr(ctx, "context_fit_plan", None), ctx.active_context_mode, ctx.messages)]))
     if target is not None:
         parts.append(f"target {int(target):,}")
     if estimate is None:

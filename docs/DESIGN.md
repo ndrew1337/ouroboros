@@ -1395,8 +1395,12 @@ running, such as the review a Pause lets finish, a run nobody can confirm); a wo
 beside it, and the sidebar's name says both. An outcome stays beside `Finalizing…`; `Paused` stays until Resume, its
 line saying who or what paused it (the owner's press with its time, Ouroboros in its
 own sentence, nobody when a press declared no one);
-`Waiting` says what it waits for and goes on by itself when that happens;
-helpers an earlier attempt left running read as `Working`, with their count; an
+`Waiting` says what it waits for and goes on by itself when that happens,
+unless a helper its sleep chose is paused: the line then says so and who resumes
+that helper (`… until Ouroboros resumes it` only when this episode may ask for it,
+or `until you resume it` after Panic; a Continue's earlier helper is just
+`paused`), with no new control or turn; helpers an earlier attempt left running
+read as `Working`, with their count; an
 access wait is not an answer wait, and unknown stays unknown. Under the state a
 live work shows its own focus line, what Ouroboros says it is doing (stage ·
 done · left, written by it through `update_focus`), quieter and at most two
@@ -1473,6 +1477,20 @@ reviews create child tasks or prove execution.
   status sentence in its tone; live work is the moving status mark. Owed seats
   use the host's wait facts and `since` (local 24-hour clock, a date when
   earlier; never inferred), not a second definition.
+- A record a commit landed under opens its row with one sentence on that commit
+  (owner 29.10, A): which commit (the one the task's recorded adoption took, alone
+  or within a later adopted commit, else the newest), whether its tree is the one
+  this review read, and what this record's verdict says of it. The author's
+  decision is named, its reason quiet below, only for the commit it governed.
+  Other code than the reviewed tree means the review covers earlier code, never
+  "unreviewed", and the head adds `· earlier version`. The sentence wraps whole at
+  any width; the reason may stop at two lines, Record facts keeping each landing
+  with its decision and whole reason, and where landings past the panel's bound
+  are kept. The closed row, verdict and tone stay the record's; no landing (an
+  older record, a failed commit) says nothing. Limits are stated as such: an
+  unrecorded tree or a cut adopted range reads as not recorded, and a commit the
+  task's record does not name reads only as committed, which denies no adoption
+  (one the task failed to record stays unnamed here).
 - Read opens the selected saved answer in the document reader (Markdown, Source
   exact; a failure note as plain text) and never regenerates a review or
   switches sources after an update; limits, Download, timeout and focus follow
@@ -2453,7 +2471,7 @@ desktop window size merely because a step has several fields.
 
 ### Advanced settings
 
-The panels a new owner opens first (Models, Providers, Agents, Behavior) show only what an owner touches in the first week. Anything a typical owner never needs, or would have to look up before using it safely, lives under Advanced: deployment plumbing (bind hosts, process pools, runtime limits), transport and trust knobs such as the extra CA bundle, MCP servers, and the rarely used provider cards, which stay on the Providers page but fold under "More providers". A control that needs a paragraph of explanation before it can be used safely is an Advanced control by definition. The engineering seam is the `advanced` settings panel and the `advanced: true` card flag in `web/modules/settings_ui.js` (DEVELOPMENT "Onboarding and Settings surfaces").
+The panels a new owner opens first (Models, Providers, Agents, Behavior) show only what an owner touches in the first week. Anything a typical owner never needs, or would have to look up before using it safely, lives under Advanced: deployment plumbing (bind hosts, process pools, runtime limits), transport and trust knobs such as the extra CA bundle, MCP servers, and the rarely used provider cards, which stay on the Providers page but fold under "More providers". A control that needs a paragraph of explanation before it can be used safely is an Advanced control by definition. The seams are the `advanced` settings panel and the `advanced: true` flag in `web/modules/settings_provider_cards.js` (DEVELOPMENT "Onboarding and Settings surfaces").
 
 ## 8. Migration state
 

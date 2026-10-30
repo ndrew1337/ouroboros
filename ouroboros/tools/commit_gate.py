@@ -202,99 +202,98 @@ def resolve_root_task_id(ctx: ToolContext) -> str:
     )
 
 
-def commit_review_contract_fingerprint() -> str:
-    """Identity of the commit gate's live review contract (Q22): the one wave's
-    seat roster + routes, the ``parts`` each seat is asked (one brief, two parts),
-    enforcement, and the shipped prompt-contract text — contract A, contract B
-    and the required-source policy version. A changed fingerprint lapses
+def commit_review_contract_fingerprint(own: Sequence[str] = (), *, packet: Optional[Sequence[str]] = None,
+                                       retrieving: Sequence[str] = (), layer: str = "body",
+                                       surface: str = "multi_model_review", shape: str = "two_part") -> str:
+    """Identity of the commit gate's live review contract (Q22): the digest of
+    ``commit_review_contract_material``. A changed fingerprint lapses
     free-refusal/replay authority (a new paid review is allowed and refusals
     never quote across the change). Fail-open "" — an unknown contract never
-    matches, so nothing is refused on it. The per-row efforts below are the
-    RESOLVED efforts (``row_effort`` uses a compound route's encoded effort before
-    the configured surface default). Changing a global effort therefore lapses
-    only rows that actually inherit it (synthesis F4 — pinned by test)."""
+    matches, so nothing is refused on it."""
     try:
-        from ouroboros.config import get_review_enforcement
-        from ouroboros.reviewer_slot_config import commit_triad_delivery
-        from ouroboros.tools.review_admission import seat_vectors
-        from ouroboros.tools.review_helpers import CRITICAL_FINDING_CALIBRATION, REVIEW_PREAMBLE
-        from ouroboros.tools.scope_required_sources import SCOPE_REQUIRED_SOURCES_POLICY
-        from ouroboros.triad_review import REVIEW_JSON_ARRAY_CONTRACT, REVIEW_TWO_PART_OBJECT_CONTRACT
-
-        row_plan = seat_vectors(commit_triad_delivery())
-        rows = [
-            [
-                str(model),
-                str(getattr(route, "value", route) or ""),
-                str(effort or ""),
-                str(target or ""),
-                str(profile or ""),
-                str(slot_id or ""),
-            ]
-            for model, route, effort, target, profile, slot_id in zip(
-                row_plan["models"], row_plan["routes"], row_plan["efforts"],
-                row_plan["session_targets"], row_plan["session_profiles"],
-                row_plan["slot_ids"],
-            )
-        ]
-        # Actor binding is contract identity: a configured-subagent reference
-        # changes the row's DELIVERY (native retrieval vs packet), so replay/
-        # refusal authority must lapse when it changes. The column is added
-        # only when some row carries one, so untouched legacy configs keep
-        # their exact historical bytes (conservative in the paid direction
-        # only where the contract actually changed).
-        actor_ids = [str(a or "") for a in (row_plan.get("subagent_ids") or [])]
-        if any(actor_ids):
-            for row, actor in zip(rows, actor_ids):
-                row.append(actor)
-        # A direct api row saved as native delivery (#1334) is the same kind of
-        # contract change with no actor id to carry it; the column appears only
-        # when such a row exists, so every other panel keeps its exact bytes.
-        native_direct = [bool(flag) and not actor and str(getattr(route, "value", route) or "") == "api_chat"
-                         for flag, actor, route in zip(row_plan.get("retrieves") or [], actor_ids
-                                                       or [""] * len(rows), row_plan["routes"])]
-        if any(native_direct):
-            for row, native in zip(rows, native_direct):
-                row.append("native_retrieval" if native else "")
-        # A session seat's writable technical access (#1609) changes what it can
-        # check, as in the skill/plan fingerprints and the attempt key. The column
-        # appears only when some row is writable, so read-only and legacy panels
-        # keep their exact bytes.
-        writable = ["" if str(access or "readonly") == "readonly" else str(access)
-                    for access in (row_plan.get("session_accesses") or [])]
-        if any(writable):
-            for row, access in zip(rows, writable):
-                row.append(access)
-        if any(row_plan.get("additional") or []):
-            for row, extra in zip(rows, row_plan["additional"]):
-                row.append({"additional": bool(extra)})
-        # What each seat is ASKED is contract identity: a seat that gains or
-        # loses the coupling question is a different review.
-        parts = {str(slot_id or ""): list(seat_parts) for slot_id, seat_parts in zip(row_plan["slot_ids"], row_plan["parts"])}
-        # Both answer contracts and the required-source policy are part of what a
-        # reviewer is asked and owed, so a change to any of them lapses recorded
-        # free-replay authority instead of surviving it. Governance-document
-        # CONTENTS stay out (docs/development 05).
-        prompt_contract = hashlib.sha256(
-            "\n".join([
-                REVIEW_PREAMBLE, CRITICAL_FINDING_CALIBRATION, REVIEW_JSON_ARRAY_CONTRACT,
-                REVIEW_TWO_PART_OBJECT_CONTRACT, SCOPE_REQUIRED_SOURCES_POLICY,
-            ]).encode("utf-8")
-        ).hexdigest()
-        payload = json.dumps(
-            {
-                "rows": rows,
-                "parts": parts,
-                "enforcement": str(get_review_enforcement() or ""),
-                "prompt_contract": prompt_contract,
-            },
-            sort_keys=True,
-            ensure_ascii=False,
-        )
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+        material = commit_review_contract_material(own, packet=packet, retrieving=retrieving, layer=layer,
+                                                   surface=surface, shape=shape)
+        return hashlib.sha256(json.dumps(material, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     except Exception:
         log.debug("commit review contract fingerprint unavailable (fail-open)", exc_info=True)
         return ""
+
+
+def commit_review_contract_material(own: Sequence[str] = (), *, packet: Optional[Sequence[str]] = None,
+                                    retrieving: Sequence[str] = (), layer: str = "body",
+                                    surface: str = "multi_model_review", shape: str = "two_part") -> dict:
+    """What the review contract is: the one wave's seat roster + routes, the
+    ``parts`` each seat is asked (one brief, two parts), enforcement, the shipped
+    prompt contract (contract A, contract B, the required-source policy version)
+    and the text every seat's request carries of Ouroboros's own
+    (``review_admission.seat_brief_material``: the surface's words, the layer's
+    navigation, the seated deliveries' wrappers), never a guide's body or the
+    request's data (docs/development 05). The per-row efforts below are the
+    RESOLVED efforts (``row_effort`` uses a compound route's encoded effort before
+    the configured surface default). Changing a global effort therefore lapses
+    only rows that actually inherit it (synthesis F4 — pinned by test)."""
+    from ouroboros.config import get_review_enforcement
+    from ouroboros.reviewer_slot_config import commit_triad_delivery
+    from ouroboros.tools.review_admission import seat_brief_material, seat_vectors
+    from ouroboros.tools.review_helpers import CRITICAL_FINDING_CALIBRATION, REVIEW_PREAMBLE
+    from ouroboros.tools.scope_required_sources import SCOPE_REQUIRED_SOURCES_POLICY
+    from ouroboros.triad_review import REVIEW_JSON_ARRAY_CONTRACT, REVIEW_TWO_PART_OBJECT_CONTRACT
+
+    row_plan = seat_vectors(commit_triad_delivery())
+    rows = [
+        [
+            str(model),
+            str(getattr(route, "value", route) or ""),
+            str(effort or ""),
+            str(target or ""),
+            str(profile or ""),
+            str(slot_id or ""),
+        ]
+        for model, route, effort, target, profile, slot_id in zip(
+            row_plan["models"], row_plan["routes"], row_plan["efforts"],
+            row_plan["session_targets"], row_plan["session_profiles"],
+            row_plan["slot_ids"],
+        )
+    ]
+    # Actor binding is contract identity: a configured-subagent reference
+    # changes the row's DELIVERY (native retrieval vs packet), so replay/
+    # refusal authority must lapse when it changes. The column is added
+    # only when some row carries one, so untouched legacy configs keep
+    # their exact historical bytes (conservative in the paid direction
+    # only where the contract actually changed).
+    actor_ids = [str(a or "") for a in (row_plan.get("subagent_ids") or [])]
+    if any(actor_ids):
+        for row, actor in zip(rows, actor_ids):
+            row.append(actor)
+    # A direct api row saved as native delivery (#1334) is the same kind of
+    # contract change with no actor id to carry it; the column appears only
+    # when such a row exists, so every other panel keeps its exact bytes.
+    native_direct = [bool(flag) and not actor and str(getattr(route, "value", route) or "") == "api_chat"
+                     for flag, actor, route in zip(row_plan.get("retrieves") or [], actor_ids
+                                                   or [""] * len(rows), row_plan["routes"])]
+    if any(native_direct):
+        for row, native in zip(rows, native_direct):
+            row.append("native_retrieval" if native else "")
+    # A session seat's writable technical access (#1609) changes what it can
+    # check, as in the skill/plan fingerprints and the attempt key. The column
+    # appears only when some row is writable, so read-only and legacy panels
+    # keep their exact bytes.
+    writable = ["" if str(access or "readonly") == "readonly" else str(access)
+                for access in (row_plan.get("session_accesses") or [])]
+    if any(writable):
+        for row, access in zip(rows, writable):
+            row.append(access)
+    if any(row_plan.get("additional") or []):
+        for row, extra in zip(rows, row_plan["additional"]):
+            row.append({"additional": bool(extra)})
+    # What each seat is ASKED is contract identity: a seat that gains or
+    # loses the coupling question is a different review.
+    parts = {str(slot_id or ""): list(seat_parts) for slot_id, seat_parts in zip(row_plan["slot_ids"], row_plan["parts"])}
+    return {"rows": rows, "parts": parts, "enforcement": str(get_review_enforcement() or ""),
+            "prompt_contract": [REVIEW_PREAMBLE, CRITICAL_FINDING_CALIBRATION, REVIEW_JSON_ARRAY_CONTRACT,
+                                REVIEW_TWO_PART_OBJECT_CONTRACT, SCOPE_REQUIRED_SOURCES_POLICY],
+            "brief": seat_brief_material(row_plan, layer=layer, surface=surface, shape=shape, own=own, packet=packet,
+                                         retrieving=retrieving)}
 
 
 def _quote_verdict_attempt(item: Any) -> str:
@@ -1289,11 +1288,13 @@ def bind_author_commit_candidate(ctx: ToolContext, commit_message: str, pre_fing
                             neutral_allowed=_neutral_commit_allowed(ctx))
 
 
-def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_at: float, before: dict, after: dict) -> None:
+def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_at: float, before: dict, after: dict,
+                                commit_sha: str = "") -> None:
     """Persist the already-verified Git effect with its actual review/author facts.
 
     Landing is written here, after Git succeeded, and nowhere earlier. A failed
-    Git command never reaches this function, so it is not a commit.
+    Git command never reaches this function, so it is not a commit. The created
+    ``commit_sha`` lands on this call's record with its own tree, read from Git.
     """
     import time
     from ouroboros.review_doctrine import attach_landing
@@ -1319,10 +1320,18 @@ def record_bound_commit_success(ctx: ToolContext, commit_message: str, started_a
     subject = str(author.get("subject_hash") or "") if isinstance(author, dict) else ""
     landing = author.get("landing") if isinstance(author, dict) else None
     record_id = str(getattr(ctx, "_current_review_record_id", "") or "")
-    if isinstance(landing, dict) and record_id and post_fp == pre_fp == subject:
+    authored = isinstance(landing, dict) and post_fp == pre_fp == subject
+    if record_id and (authored or commit_sha):
         from ouroboros import review_ledger as ledger
 
-        ledger.note_commit_landing(ledger.ledger_root(ctx), record_id, landing)
+        try:  # the commit object's own tree, then its parents; unreadable leaves the relation unknown
+            tree, *parents = git_mod.run_cmd(["git", "rev-parse", f"{commit_sha}^{{tree}}", f"{commit_sha}^@"],
+                                             cwd=ctx.repo_dir).split() if commit_sha else [""]
+        except Exception:
+            tree, parents = "", []
+        ledger.note_commit_landing(ledger.ledger_root(ctx), record_id, landing if authored else None, {
+            "commit_sha": commit_sha, "tree_sha": tree, "parent_sha": (parents or [""])[0],
+            "author_subject": subject if authored else ""} if commit_sha else None)
 
 
 def prepare_author_commit_request(ctx: ToolContext, review_reference: Any, author_disposition: Any, review_rebuttal: str) -> Optional[str]:

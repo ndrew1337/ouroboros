@@ -23,6 +23,10 @@ from ouroboros.observability import without_finalization_timing
 from ouroboros.store import bounded_wait
 from ouroboros.utils import update_json_locked, utc_now_iso
 from ouroboros.task_store import patch_document
+from ouroboros.terminal_outbox import (  # noqa: F401 — shared storage owner; historical patch surface
+    _REGISTRY_CAP, _SCHEMA_VERSION, _registry_path, _mapping_rows, _registry_document, _read_registry,
+    _delivered_rows, _dispatch_attempts, _exhausted_row,
+)
 from ouroboros.task_finalization import (
     HOST_AUTHORED_TERMINAL_ORIGINS, TERMINAL_ORIGIN_HOST_NOTICE, TERMINAL_ORIGIN_HOST_SALVAGE,
     TERMINAL_ORIGIN_MODEL_FINAL, artifact_store_roots, rescued_files_fact, rescued_files_sentence,
@@ -30,9 +34,6 @@ from ouroboros.task_finalization import (
 
 log = logging.getLogger(__name__)
 
-# v3 ``exhausted`` (the host gave up), v4 ``superseded`` (a delivered Stop receipt replaced it): payloads kept.
-_SCHEMA_VERSION = 4
-_REGISTRY_CAP = 512
 # Bounded chat preview of the salvaged answer; the full copy is referenced by a
 # durable receipt, and the omitted tail is DISCLOSED (BIBLE P1), never silent.
 SALVAGE_PREVIEW_CHARS = 3500
@@ -71,12 +72,6 @@ def cleanup_settled_owner_mailbox(
         cleanup_task_mailbox(_task_drive_for_task(task or durable, str(task_id)), str(task_id), canonical_root=drive_root, carry_inputs=carry_inputs, stop=stop)
 
 
-def _registry_path(drive_root: Any) -> pathlib.Path:
-    root = pathlib.Path(drive_root) / "state"
-    root.mkdir(parents=True, exist_ok=True)
-    return root / "terminal_deliveries.json"
-
-
 # A terminal ANSWER's identity; custody-notice and other suffixed rows are not answers.
 # Exact answer-byte evidence (receipt capture, acceptance) stays this narrow.
 _TERMINAL_ANSWER_ID = re.compile(r"final:(?P<task>[^:]+):[0-9a-f]{16}")
@@ -86,28 +81,6 @@ _TERMINAL_ANSWER_ID = re.compile(r"final:(?P<task>[^:]+):[0-9a-f]{16}")
 # ``:terminal_incident`` suffix, the Main mirror (``project-completion:``) and every
 # other row are never the answer. The Done gate reads debt through THIS family set.
 TERMINAL_MESSAGE_ID = re.compile(r"(?:final|cancel|cascade):(?P<task>[^:]+):(?P<episode>[^:]+)")
-
-
-def _mapping_rows(current: Dict[str, Any], key: str, *, strict: bool = False) -> Dict[str, Any]:
-    """Missing/None mappings mean empty; strict mutations preserve malformed forensic bytes."""
-    value = current.get(key)
-    if isinstance(value, dict):
-        return dict(value)
-    if strict and value is not None:
-        raise ValueError(f"terminal-delivery registry '{key}' is malformed (not an object)")
-    return {}
-
-
-def _registry_document(current: Dict[str, Any], rows: List[str], pending: Dict[str, Any],
-                       **maps: Dict[str, Any]) -> Dict[str, Any]:
-    """Keep the receipts, exhausted (replay/capacity limit) and superseded payloads not passed in ``maps``
-    untouched. Their Done-card disposition retires only on a real receipt of that id."""
-    document = {"schema_version": _SCHEMA_VERSION, "delivered": rows[-_REGISTRY_CAP:], "pending": pending}
-    for key in ("receipts", "exhausted", "superseded"):
-        value = maps[key] if key in maps else _mapping_rows(current, key, strict=True)
-        if value:
-            document[key] = dict(list(value.items())[-_REGISTRY_CAP:])
-    return document
 
 
 def _capture_emitted_answer(drive_root: Any, delivery_id: str, emitted: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -136,15 +109,6 @@ def _capture_emitted_answer(drive_root: Any, delivery_id: str, emitted: Dict[str
     return {"task_id": task_id, "chat_id": record["chat_id"], "sent_at": record["sent_at"],
             "text_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(), "text_chars": len(text),
             "basis": record["basis"], "source_ref": ref}
-
-
-def _read_registry(drive_root: Any) -> Dict[str, Any]:
-    from ouroboros.utils import read_json_dict
-    path = pathlib.Path(drive_root) / "state" / "terminal_deliveries.json"
-    data = read_json_dict(path) if path.is_file() else {}
-    if data is None:
-        raise ValueError("registry file is malformed or is not an object")
-    return data
 
 
 def terminal_answer_receipts(drive_root: Any, task_id: str) -> Dict[str, Any]:
@@ -220,21 +184,6 @@ def already_delivered(drive_root: Any, delivery_id: str, *, task_id: str = "", p
         # only owner-visible answer ("never lost" outranks "never doubled").
         log.debug("terminal-delivery registry read failed for %s", did, exc_info=True)
         return False
-
-
-def _delivered_rows(current: Dict[str, Any], *, strict: bool = False) -> List[str]:
-    """Read delivered ids; strict reads reject malformed containers or entries.
-
-    Mutators refuse corruption without overwriting the file. Fail-soft readers
-    keep only a valid list; corruption disclosure belongs to their caller."""
-    delivered = current.get("delivered")
-    if isinstance(delivered, list):
-        if strict and any(not isinstance(item, str) for item in delivered):
-            raise ValueError("terminal-delivery registry 'delivered' holds non-string entries")
-        return [str(item) for item in delivered]
-    if strict and delivered is not None:
-        raise ValueError("terminal-delivery registry 'delivered' is malformed (not a list)")
-    return []
 
 
 def register_delivery(drive_root: Any, delivery_id: str, *, emitted: Optional[Dict[str, Any]] = None,
@@ -518,13 +467,6 @@ def _kept_send_facts(drive_root: Any) -> List[Dict[str, Any]]:
         return []
 
 
-def _exhausted_row(row: Dict[str, Any], *, reason: str) -> Dict[str, Any]:
-    """The registry's exhausted disposition of one owed row: its payload plus how it ended."""
-    return {**row, "exhausted_at": utc_now_iso(), "reason": reason,
-            "attempts": _dispatch_attempts(row) if "dispatch_attempts" in row else None,
-            "attempts_basis": "recorded_replay_dispatch_entries", "preserved_path": ""}
-
-
 def _stamp_replay_queued(drive_root: Any, ids: List[str]) -> None:
     """Space admitted queue copies without charging a transport attempt."""
     def _mutate(current: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -620,12 +562,6 @@ def _stamp_exhausted_copy(drive_root: Any, delivery_id: str, preserved: str) -> 
         update_json_locked(_registry_path(drive_root), _mutate, strict_existing_dict=True)
     except Exception:
         log.debug("exhausted-delivery copy path could not be recorded for %s", delivery_id, exc_info=True)
-
-
-def _dispatch_attempts(row: Dict[str, Any]) -> Optional[int]:
-    """Prospective budget only: absence records no new entries; invalid is unknown."""
-    value = row.get("dispatch_attempts", 0)
-    return value if type(value) is int and value >= 0 else None
 
 
 def _disclose_exhausted_delivery(

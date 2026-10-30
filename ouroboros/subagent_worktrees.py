@@ -175,17 +175,18 @@ def _read_record(file: Path, *, op: str = "", data_dir: Optional[Any] = None) ->
 
 
 def _records(data_dir: Optional[Any] = None, *, op: str = "", strict: bool = False) -> List[Dict[str, Any]]:
-    """Every readable copy record. An unreadable record is reported and skipped (``strict``:
-    raised), never rewritten or removed: the copy it names stays where it is."""
+    """Every readable copy record, never rewritten or removed: the copy it names stays. An unreadable record is reported
+    and skipped; ``strict`` raises instead, listing with ``os.listdir`` (``Path.glob`` reads an unlistable directory as empty)."""
     _import_legacy_registry(data_dir)
     rows: List[Dict[str, Any]] = []
+    directory = _records_dir(data_dir)
     try:
-        files = sorted(f for f in _records_dir(data_dir).glob("*.json") if not f.name.startswith("."))
-    except OSError:
-        if strict:
+        names = os.listdir(directory) if strict else [f.name for f in directory.glob("*.json")]
+    except OSError as exc:
+        if strict and not isinstance(exc, FileNotFoundError):  # a missing directory holds no record
             raise
         return rows
-    for file in files:
+    for file in sorted(directory / name for name in names if name.endswith(".json") and not name.startswith(".")):
         with contextlib.suppress(*(() if strict else (SubagentWorktreeRegistryCorrupt,))):
             row = _read_record(file, op=op, data_dir=data_dir)
             if row is not None:

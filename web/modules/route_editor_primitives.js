@@ -159,9 +159,20 @@ export function apiConnections(settings = {}, providerProfiles = {}) {
         });
     }
     const present = (key) => String(settings?.[key] ?? '').trim() !== '';
-    return API_PROVIDER_ORDER.map((id) => ({ id, kind: id, name: '', builtin: true, enabled: true,
+    let rows = settings.OUROBOROS_CONNECTIONS || [];
+    if (typeof rows === 'string') {
+        try { rows = JSON.parse(rows); } catch { rows = []; }
+    }
+    rows = Array.isArray(rows) ? rows : [];
+    return API_PROVIDER_ORDER.flatMap((id) => [{ id, kind: id, name: '', builtin: true,
+        enabled: !rows.some((row) => row?.kind === id && row.name === 'default' && row.enabled === false),
         configured: API_PROVIDER_CREDENTIALS[id].some((group) => group.every(present)), source: '',
-        label: apiProviderLabel(id, providerProfiles) }));
+        label: apiProviderLabel(id, providerProfiles) }, ...rows.filter((row) => row?.kind === id && row.name && row.name !== 'default')
+        .map((row) => ({ id: `${id}@${row.name}`, kind: id, name: row.name, builtin: false,
+            enabled: row.enabled !== false, configured: id === 'openai-compatible' ? Boolean(row.base_url?.trim())
+                : id === 'gigachat' ? Boolean(row.credentials?.trim() || (row.user?.trim() && row.password?.trim()))
+                    : Boolean(row.api_key?.trim()), source: '',
+            label: `${apiProviderLabel(id, providerProfiles)} · ${row.label || row.name}` }))]);
 }
 
 /** The sources the owner can send to: one per enabled connection that holds its credential. */

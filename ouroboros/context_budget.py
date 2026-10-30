@@ -89,13 +89,14 @@ RECLAIM_LOW_WATER_DIVISOR = 8
 #: An unknown reclaim target: the step takes everything its category can give (the refusal passes).
 WHOLE_CATEGORY = 2**31 - 1
 
-def start_room_levels(role: str, *, focus_wake: bool = False, direct_chat: bool = False) -> int:
-    """Roots and wakes leave two eighths; direct chat turns, other Presence turns and helpers leave one.
+def start_room_levels(role: str, *, direct_chat: bool = False) -> int:
+    """Roots (an integrating task that is not a direct chat turn) leave two eighths for their work; a wake
+    (consciousness or a Presence focus), a direct chat turn, another Presence turn and a helper leave one.
 
-    Decided from task facts, never the task type (``memory_view.start_room`` reads them).
+    A wake is one turn of the mind beside its whole memory, as a direct chat turn is; work it starts runs as
+    its own root (owner decision 2026-10-29, question 3 = A). Decided from task facts, never the task type
+    (``memory_view.start_room`` reads them).
     """
-    if role == "consciousness" or (role == "presence" and focus_wake):
-        return 2
     return 2 if role == "integrator" and not direct_chat else 1
 
 
