@@ -85,6 +85,7 @@ class Desktop:
         monkeypatch.setattr(self.module, "_platform", lambda: platform)
         monkeypatch.setattr(self.module, "_session_type", lambda: session)
         monkeypatch.setattr(self.module, "_which", lambda name: f"/usr/bin/{name}" if name in tools else "")
+        monkeypatch.setattr(self.module._ComputerUse, "_x11_keysym", staticmethod(lambda _name: None))
         api = API(tmp_path / f"skill-state-{label}")
         self.module.register(api)
         self.handlers = api.tools

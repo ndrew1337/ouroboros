@@ -178,7 +178,8 @@ class PlaceMixin:
                 if isinstance(parsed, dict):
                     return parsed
                 break
-        return {"ok": False, "error": f"native helper gave no answer ({(err or out).strip()[:200] or f'exit {rc}'})", "op": op}
+        return {"ok": False, "error": f"native helper gave no answer ({(err or out).strip()[:200] or f'exit {rc}'})", "op": op,
+                "no_answer": True}
 
     def _front_local(self, rows: list[dict[str, Any]] | None = None) -> dict[str, Any] | None:
         """Who is in front NOW, read fresh each call: macOS via ``lsappinfo``, X11 via ``xdotool getactivewindow``
@@ -314,29 +315,57 @@ class PlaceMixin:
         ctx["delivered_to"] = res.get("front")
         return None, ctx
 
-    def _begin(self, app: str, wait_ms: int = 2000) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    def _begin(self, app: str, wait_ms: int = 2000, *, raise_policy: str = "allow",
+               connection: tuple[str, dict[str, Any]] | None = None) -> tuple[dict[str, Any] | None, dict[str, Any]]:
         """Before an input: resolve and bring ``app`` forward (launch-free) and verify it is in front.
 
         Returns ``(refusal, context)``: a refusal sends nothing. With no ``app`` the context only records who
         is in front now (local backends), which is who will receive the input; remote backends read it in the
         same call as the input."""
         app = str(app or "").strip()
-        if self._is_remote():
-            name, conn = self._active_connection()
-            if conn.get("disabled"):
-                return json.loads(self._disabled_connection_error(name, conn)), {}
+        if raise_policy not in ("allow", "never"):
+            return {"ok": False, "reason": "invalid_raise_policy", "error": "raise_policy must be 'allow' or 'never'", "dispatched": False}, {}
+        if raise_policy == "never" and not app:
+            return {"ok": False, "reason": "app_required", "error": "raise_policy='never' requires app", "dispatched": False}, {}
+        name, conn = self._connection_snapshot(connection)
+        if conn.get("disabled"):
+            return json.loads(self._disabled_connection_error(name, conn)), {}
+        if name != "local":
             if not app:
                 return None, {}
-            return self._ctx_from_activation(app, self._remote_activate_dict(conn, app, int(wait_ms)))
+            return self._ctx_from_activation(app, self._remote_activate_dict(conn, app, int(wait_ms), raise_policy=raise_policy))
         ctx: dict[str, Any] = {}
         if not app:
             ctx["front_before"] = ctx["delivered_to"] = self._front_local()
             return None, ctx
         plat = self._plat()
         if plat == "macos":
-            res = self._native("activate", app, int(wait_ms), timeout=max(12, 3 * int(wait_ms) // 1000 + 10))
+            if raise_policy == "never":
+                resolved = self._native("resolve", app, timeout=15)
+                if not resolved.get("ok"):
+                    res = resolved
+                else:
+                    target = (resolved.get("candidates") or [{}])[0]
+                    front = self._front_local()
+                    same = bool(front and front.get("pid") == target.get("pid"))
+                    res = {"ok": same, "target": target, "front_before": front, "front": front,
+                           "activated": False, "already_front": same, "verified": same,
+                           "reason": "target_lost" if front else "front_unread", "resolved": target}
+            else:
+                res = self._native("activate", app, int(wait_ms), timeout=max(12, 3 * int(wait_ms) // 1000 + 10))
         elif plat == "linux" and self._session() != "wayland":
-            res = self._x11_activate(app, int(wait_ms))
+            if raise_policy == "never":
+                rows, err = self._x11_windows()
+                res = {"ok": False, "reason": "unsupported", "error": err} if err else x11_resolve(app, rows)
+                if res.get("ok"):
+                    target = res["target"]
+                    front = self._front_local(rows)
+                    same = x11_same(front, target)
+                    res = {"ok": same, "target": target, "front_before": front, "front": front,
+                           "activated": False, "already_front": same, "verified": same,
+                           "reason": "target_lost" if front else "front_unread", "resolved": target}
+            else:
+                res = self._x11_activate(app, int(wait_ms))
         else:
             res = {"ok": False, "reason": "unsupported", "error": f"no application targeting on {plat}/{self._session()}"}
         return self._ctx_from_activation(app, res)
@@ -581,3 +610,56 @@ class PlaceMixin:
                           "error": "no element reader on Linux in this skill (use the app's own commands or screenshot)",
                           "windows": rows, **({"windows_error": err} if err else {})})
         return self._backend_unavailable("accessibility tree")
+
+    def element_act(self, *, app: str, do: str, select: dict[str, Any] | None = None, text: str | None = None,
+                    window: Any = "", max_nodes: int = 600, timeout_ms: int = 3000, include_web: bool = False) -> str:
+        """Act on ONE element of ``app`` through the element's own Accessibility action (macOS): ``press`` or
+        ``set_value``. The element is named by identity (the window as ``window_list`` prints it, role, exact label,
+        AXIdentifier, nth), never by a mark or node id of an earlier read; it is found and acted on inside one
+        short-lived helper call (``macos_native.py act``), with no pointer and no switch: who is in front is
+        reported, not changed. The helper composes the receipt; this method only resolves the application and
+        says when the helper gave no answer (an unknown outcome, never "not sent")."""
+        plat = self._plat()
+        app = str(app or "").strip()
+        do = str(do or "").strip().lower()
+        asked: dict[str, Any] = {"app": app, "do": do, "select": select if isinstance(select, dict) else {}}
+        if not app:
+            return self._json_text({"ok": False, "reason": "app_required", "dispatched": False, **asked,
+                                    "error": "app is required (a running application's name, bundle id or pid:<n>): "
+                                             "an element action is never aimed at whatever is in front"})
+        if do not in ("press", "set_value"):
+            return self._json_text({"ok": False, "reason": "unknown_action", "dispatched": False, **asked,
+                                    "error": f"do must be press or set_value, not {do!r}"})
+        if self._is_remote():
+            name, conn = self._active_connection()
+            if conn.get("disabled"):
+                return self._disabled_connection_error(name, conn)
+            return self._json_text({"ok": False, "backend": str(conn.get("backend") or ""), "reason": "unsupported", "dispatched": False, **asked,
+                                    "error": "no element actions on a remote (an OSWorld guest is Linux, an SSH Mac has no element reader "
+                                             "here); use the input tools with app= or the app's own commands through remote_exec"})
+        if plat != "macos":
+            return self._json_text({"ok": False, "platform": plat, "reason": "unsupported", "dispatched": False, **asked,
+                                    "error": "no element actions on Linux in this skill (use the app's own commands or the input tools)"})
+        res = self._native("resolve", app, timeout=15)
+        if not res.get("ok"):
+            return self._json_text({"ok": False, "platform": plat, "reason": res.get("reason") or "unresolved", "dispatched": False, **asked,
+                                    "error": self._target_error(app, res), "candidates": res.get("candidates") or []})
+        target = res["candidates"][0]
+        selector: dict[str, Any] = {**asked["select"], "include_web": bool(include_web)}
+        if window is not None and window != "":
+            selector["window"] = window
+        if text is not None:
+            selector["text"] = text
+        max_nodes = max(1, min(2000, int(max_nodes or 600)))
+        timeout_ms = max(100, min(15_000, int(timeout_ms or 3000)))
+        res = self._native("act", target["pid"], do, json.dumps(selector, ensure_ascii=False), max_nodes, timeout_ms,
+                           timeout=timeout_ms // 1000 + 10)
+        out: dict[str, Any] = {"platform": plat, "app": target, "do": do, **res}
+        if "dispatched" not in res:
+            # Every answer of ``act`` says whether the action call was made; one without that fact is a helper that
+            # gave no answer or stopped mid-way: whether it found the element and acted is unknown, never "not sent".
+            out.update({"ok": False, "reason": "helper_no_answer" if res.get("no_answer") else "helper_failed", "dispatched": None,
+                        "action_outcome": "unknown", "select": asked["select"],
+                        "note": "the helper that carried the action did not answer, so whether it found the element and acted "
+                                "is unknown (do not assume it did not): read the window with ax_tree before acting again"})
+        return self._json_text(out)

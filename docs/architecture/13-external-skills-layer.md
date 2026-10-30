@@ -1,12 +1,12 @@
 # 13. External Skills Layer
 
-Built-in and installed payloads, dependencies, staging and Telegram. Discovery, review, grants, dependency readiness and enablement stay separate facts because collapsing any two turns a UI toggle into execution authority. Granted context snapshots reuse §6; protocol: `CREATING_SKILLS.md`.
+Built-in and installed payloads, dependencies, staging and transports. Discovery, review, grants, dependencies and enablement stay separate: a toggle proves no execution. Context snapshots: §6; protocol: `CREATING_SKILLS.md`.
 
 ### Skill gates
 
-Discovery is not trust; review/ON prove no readiness. Payload/state paths: §1. Install → preflight → digest-bound review or acceptance → grants → dependencies → enablement → execution; extensions need registration (§10 invariant 8). One queue (`skill_lifecycle_queue.py`) owns mutations. `answer_or_job` awaits completion unless the client requests early job replies; older UI and dictation stay terminal. Enable survives a grant in the same job; grant and setup results stay separate (CLIENT_CONTRACT §11). Panels lend the lane and persist only for installed bytes. Full reviews stay private; UI labels dead-process/stale-heartbeat jobs interrupted without writes. List reads heal nothing. Ordinals (allocated under the lifecycle lock after job start) are display facts, never review authority.
+Payload/state paths: §1. Install → preflight → digest-bound review/acceptance → grants → dependencies → enablement → execution; extensions need registration (§10.8). `skill_lifecycle_queue.py` owns mutations. `answer_or_job` awaits completion unless early replies are requested; older UI/dictation stay terminal. Enable survives same-job grants; grant/setup results stay separate (CLIENT_CONTRACT §11). Panels lend the lane and persist only for installed bytes. Full reviews stay private; UI marks dead-process/stale-heartbeat jobs interrupted without writes. Lists heal nothing. Ordinals allocated under the lifecycle lock after job start are display facts, not review authority.
 
-A state read shares one location inventory between canonical identity and fresh peers (`skill_peer_inventory.py`), hashing only the selected payload. Liveness reads enablement first, parsing only new ON manifest text: only an ON, unique, well-formed peer conflicts, symmetrically (`skill_conflicts.py`); unreadable payloads keep valid conflicts. Tool enumeration shares each skill's verdict under the registry lock, never across requests. Disable, revoke and restored-mtime edits apply at the next lifecycle or dispatch check. Both readers use `skill_loader._native_platform_visible`: foreign built-ins stay hidden except retained Windows Unix-remote copies (§2); OFF preserves provenance, not execution authority.
+State reads share one location inventory for canonical identity and fresh peers (`skill_peer_inventory.py`), hashing only the selected payload. Liveness parses only new ON manifest text: only ON, unique, well-formed peers conflict symmetrically (`skill_conflicts.py`); unreadable payloads keep valid conflicts. Enumeration shares verdicts under the registry lock per request. Disable, revoke and restored-mtime edits apply at the next lifecycle/dispatch check. Both use `skill_loader._native_platform_visible`: foreign built-ins stay hidden except retained Windows Unix-remote copies (§2); OFF keeps provenance, not execution authority.
 
 ### Skill review authority
 
@@ -32,9 +32,11 @@ Updates compare candidate and optional local digests. Replace keeps `.previous`;
 
 ClawHub lands atomically with file hashes; direct review attempts precede `skill_dependencies.ensure_skill_dependencies`, callers own deferred review/acceptance. It uses current hash-bound admission despite review errors. Accepted specs allow literal build/check argv (`marketplace/install_specs.py`); manual steps are guidance. Caches: `state/skills/<name>/dependency_cache`; results: `deps.json`; absent checks stay unknown; drift, or a venv on another host Python, voids readiness. `removal_action` names removal; `provenance.py` clears only the local receipt. Runtimes: `tools/skill_exec.py`.
 
-### Tool result views
+### Desktop actions and result views
 
-Result composition and the `PRODUCER_RESULT_SOURCE_JSON` / `FULL_RESULT_SOURCE_JSON` distinction: `tools/tool_result.py` and `loop_tool_execution.py`.
+`skills/unix_computer_use/` owns macOS semantic actions separately from foreground input, never-raise targeting, screenshot-bound coordinates and remote completion evidence. Its `SKILL.md` owns receipts and platform limits; native checks use owned fixtures, not the owner's documents.
+
+Result composition and producer/full-source references: `tools/tool_result.py`, `loop_tool_execution.py`.
 
 ### Extension import and isolation
 
