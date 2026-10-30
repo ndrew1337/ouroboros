@@ -17,6 +17,7 @@ import pytest
 import ouroboros.gateway.models as provider_api
 from ouroboros.llm import LLMClient
 from ouroboros.provider_models import CONNECTIONS_KEY
+from tests._socket_seal import block_network_except_socketpair
 
 SAVED = "synthetic-saved-key-0001"
 TYPED = "synthetic-typed-key-0002"
@@ -314,7 +315,8 @@ def wire(monkeypatch):
     def refuse(*_args, **_kwargs):
         raise AssertionError("a provider test request tried to reach the network")
 
-    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket, "socketpair", getattr(socket, "_fallback_socketpair", socket.socketpair))  # Windows loop path, on every OS
+    block_network_except_socketpair(monkeypatch, refuse)  # Windows builds asyncio's self-pipe through connect
     monkeypatch.setattr(socket, "create_connection", refuse)
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", lambda _transport, request: reply(request))
     monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", reply_async)
