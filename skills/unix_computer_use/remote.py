@@ -679,6 +679,7 @@ class RemoteBackends:
         input_y: int = 0,
         extra: dict[str, Any] | None = None,
         approx: bool = False,
+        mapping_available: bool = True,
         connection_identity: str = "",
         resolved_target: str = "",
     ) -> str:
@@ -692,7 +693,7 @@ class RemoteBackends:
             except OSError:
                 pass
             return self._json_text({"ok": False, "backend": backend, "error": "remote screenshot is not a fully decodable PNG"})
-        if input_w <= 0 or input_h <= 0:
+        if mapping_available and (input_w <= 0 or input_h <= 0):
             input_w, input_h = px_w, px_h
         max_w = max(320, min(int(max_width or self._MAX_IMAGE_W), 4096))
         max_h = max(240, min(int(max_height or self._MAX_IMAGE_H), 4096))
@@ -708,8 +709,8 @@ class RemoteBackends:
             "image_height": img_h,
             "capture_width_px": px_w,
             "capture_height_px": px_h,
-            "input_width": input_w,
-            "input_height": input_h,
+            "input_width": input_w if mapping_available else None,
+            "input_height": input_h if mapping_available else None,
             "downscaled": img_path != raw_path,
             "view_image_ready": True,
             # Typed opt-in for the host's same-round image attachment (v6.81.1).
@@ -722,7 +723,10 @@ class RemoteBackends:
             result["full_resolution_path"] = str(raw_path)
         if extra:
             result.update(extra)
-        if img_w > 0 and img_h > 0 and input_w > 0 and input_h > 0:
+        if not mapping_available:
+            result["mapped_input_available"] = False
+            result["coordinate_note"] = "Capture only: exact primary display geometry is unavailable; use raw=true for native coordinates."
+        if mapping_available and img_w > 0 and img_h > 0 and input_w > 0 and input_h > 0:
             sx = round(input_w / img_w, 6)
             sy = round(input_h / img_h, 6)
             transform = {
@@ -743,8 +747,7 @@ class RemoteBackends:
                 result["coordinate_note"] = (
                     "Pass this observation_id with coordinates read off THIS image to click/move/drag — "
                     "they are remapped through coord_transform (image -> remote input space)."
-                    + (" The remote Mac's logical size came from the Finder desktop (the union of its displays) or from the capture's"
-                       " pixels: the scale is approximate." if approx else "")
+                    + (" The input scale is approximate." if approx else "")
                 )
         return self._json_text(result)
 
@@ -857,7 +860,7 @@ class RemoteBackends:
         out_dir = pathlib.Path(self.api.skill_job_dir("ssh_macos")) / "output"
         out_dir.mkdir(parents=True, exist_ok=True)
         remote_path = f"/tmp/ouroboros-shot-{int(time.time())}-{uuid.uuid4().hex[:6]}.png"
-        rc, stdout, stderr = self._ssh_run(conn, f"screencapture -x {remote_path!r}", timeout=20)
+        rc, stdout, stderr = self._ssh_run(conn, f"screencapture -x -m {remote_path!r}", timeout=20)
         if rc != 0:
             return self._json_text({"ok": False, "backend": "ssh_macos", "error": stderr.strip() or stdout.strip() or f"exit {rc}"})
         dest = out_dir / pathlib.Path(remote_path).name
@@ -868,7 +871,7 @@ class RemoteBackends:
             return self._json_text({"ok": False, "backend": "ssh_macos", "error": f"scp failed: {type(exc).__name__}: {exc}"})
         if proc.returncode != 0 or not dest.exists():
             return self._json_text({"ok": False, "backend": "ssh_macos", "error": proc.stderr.strip() or proc.stdout.strip() or f"scp exit {proc.returncode}"})
-        # Capture and live validation use the same signed Finder bounds, including the origin.
+        # Capture and live validation use the same exact primary-display geometry reader.
         geometry = self._display_geometry({}, connection=(connection_name, conn)) or {}
         return self._remote_screenshot_result(
             backend="ssh_macos",
@@ -880,7 +883,7 @@ class RemoteBackends:
             input_x=geometry.get("x", 0),
             input_y=geometry.get("y", 0),
             extra={"host": str(conn.get("ssh_alias") or conn.get("host") or "")},
-            approx=True,  # Finder's desktop bounds span every display; a one-display capture cannot be told apart
+            mapping_available=bool(geometry),
             connection_identity=identity,
         )
 

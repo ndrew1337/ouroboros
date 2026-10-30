@@ -121,7 +121,7 @@ def test_capture_attests_starting_connection(desktop, monkeypatch, backend):
     def ssh(conn, cmd, **kw):
         destinations.append(conn["host"])
         switch()
-        return 0, "0, 0, 100, 80", ""
+        return 0, '{"x":0,"y":0,"w":100,"h":80}', ""
 
     impl._ssh_run = ssh
     def scp(cmd, **kw):
@@ -146,19 +146,19 @@ def test_capture_attests_starting_connection(desktop, monkeypatch, backend):
 
 
 @pytest.mark.parametrize("origin", [(-100, -80), (0, 0)])
-def test_ssh_capture_preserves_finder_origin_through_mapping_and_live_validation(desktop, monkeypatch, origin):
+def test_ssh_capture_maps_exact_primary_and_validates_same_geometry(desktop, monkeypatch, origin):
     from PIL import Image
     select(desktop, "ssh_macos")
     x, y = origin
-    bounds = f"{x}, {y}, {x + 100}, {y + 80}"
+    bounds = json.dumps({"x": x, "y": y, "w": 100, "h": 80})
     sent, geometry_reads = [], []
 
     def ssh(conn, command, **_kw):
         assert conn["host"] == "a.invalid"
-        if "bounds of window of desktop" in command:
+        if "CGDisplayBounds($.CGMainDisplayID())" in command:
             geometry_reads.append(bounds)
             return 0, bounds, ""
-        if not command.startswith("screencapture -x "):
+        if not command.startswith("screencapture -x -m "):
             assert "cliclick" in command
             sent.append(command)
         return 0, "", ""
@@ -175,7 +175,7 @@ def test_ssh_capture_preserves_finder_origin_through_mapping_and_live_validation
     transform = shot["coord_transform"]
     assert (transform["ox"], transform["oy"]) == origin
     assert transform["display_geometry"] == {"x": x, "y": y, "w": 100, "h": 80}
-    assert transform["approx"] is True
+    assert transform["approx"] is False
     assert desktop._load_transform()["transforms"][0]["display_geometry"] == transform["display_geometry"]
     clicked = json.loads(desktop.click(x=20, y=40, observation_id=shot["observation_id"]))
     assert clicked["ok"] is True and clicked["geometry_verification"] == "live"
@@ -183,10 +183,36 @@ def test_ssh_capture_preserves_finder_origin_through_mapping_and_live_validation
     assert len(sent) == 1 and f"cliclick c:{point}" in sent[0]
     assert len(geometry_reads) == 2
     # A moved origin with unchanged dimensions invalidates this observation.
-    bounds = f"{x + 1}, {y}, {x + 101}, {y + 80}"
+    bounds = json.dumps({"x": x + 1, "y": y, "w": 100, "h": 80})
     refused = json.loads(desktop.click(x=20, y=40, observation_id=shot["observation_id"]))
     assert refused["ok"] is False and refused["dispatched"] is False
     assert "display geometry changed" in refused["error"] and len(sent) == 1
+
+
+@pytest.mark.parametrize("geometry_reply", [(1, "", "unavailable"), (0, '{"x":-1920,"y":0,"w":1920,"h":0}', "")])
+def test_ssh_capture_without_exact_primary_geometry_is_capture_only(desktop, monkeypatch, geometry_reply):
+    from PIL import Image
+    select(desktop, "ssh_macos")
+    calls = []
+
+    def ssh(_conn, command, **_kw):
+        calls.append(command)
+        if "CGDisplayBounds($.CGMainDisplayID())" in command:
+            return geometry_reply
+        assert command.startswith("screencapture -x -m ")
+        return 0, "", ""
+
+    def scp(command, **_kw):
+        Image.new("RGB", (200, 160)).save(command[-1])
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    desktop._ssh_run = ssh
+    monkeypatch.setattr(plugin.subprocess, "run", scp)
+    shot = json.loads(desktop.screenshot())
+    assert shot["ok"] is True and shot["mapped_input_available"] is False
+    assert "observation_id" not in shot and "coord_transform" not in shot
+    assert shot["input_width"] is None and shot["input_height"] is None
+    assert len(calls) == 2 and not any("Finder" in call for call in calls)
 
 
 @pytest.mark.parametrize("method,kwargs", [

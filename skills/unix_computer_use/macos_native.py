@@ -770,8 +770,14 @@ def pick_window(ax: Any, app: Any, want: dict[str, Any] | None) -> tuple[Any, di
     if not want:
         for name in ("AXFocusedWindow", "AXMainWindow"):
             val, err = ax.attr(app, name)
-            if err == 0 and val and isinstance(val, tuple):
-                return val[1], _window_facts(ax, val[1], name), None
+            if err in _ABSENT:
+                continue
+            if err != 0:
+                return None, {}, {"reason": "windows_unread",
+                                  "error": f"{name} could not be read ({AX_ERR.get(err, str(err))})"}
+            if not (isinstance(val, tuple) and len(val) == 2 and val[0] == "ref" and val[1]):
+                return None, {}, {"reason": "windows_unread", "error": f"{name} returned a malformed window reference"}
+            return val[1], _window_facts(ax, val[1], name), None
     refs, err = ax.window_refs(app)
     if err != 0:
         return None, {}, {"reason": "windows_unread",

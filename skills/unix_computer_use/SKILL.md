@@ -49,8 +49,12 @@ Tools:
   and `use_local` manage the local/remote connection registry in skill state.
 - `screenshot` captures the main display (or, on macOS with `app=`, the display
   holding that application's front window), downscales the image to fit WXGA
-  (1280x800, configurable) and persists the exact image-to-input coordinate
-  transform, including the display's origin. `display.selected_by` says how the
+  (1280x800, configurable). When geometry and persistence succeed, it returns
+  `mapped_input_available: true` with a saved image-to-input transform and observation ID.
+  Otherwise the image remains usable for viewing, but `mapped_input_available: false`
+  means no `coord_transform` or `observation_id` is supplied. SSH macOS uses the
+  primary display capture and its matching CoreGraphics bounds; it does not map a
+  single-screen image against the Finder desktop union. `display.selected_by` says how the
   display was chosen: `default`, `app`, or `fallback` when the named window
   could not be located (`app_window_unread` says why) and the main display was
   captured instead; the result then carries no `app`. Linux and the remotes
@@ -193,10 +197,10 @@ Coordinate contract:
   an X11/Wayland desktop and an OSWorld guest, which have no screen space left
   of or above their origin, refuse them before any call, also when a stored
   transform maps a point there: a screenshot of another display or backend,
-  so take a screenshot of this desktop first). Without those bounds the Finder
-  desktop size is used (the union of all displays) and the transform is always
-  flagged `approx`; an SSH Mac's transform is always `approx` for the same
-  reason.
+  so take a screenshot of this desktop first). Missing exact display bounds
+  yield a capture-only result, not a guessed Finder-union mapping. SSH Mac
+  capture and mapping use the same primary display; unavailable geometry also
+  means capture-only. Raw coordinates require independently verified native points.
 
 Input receipts (the same contract on every backend):
 
@@ -323,7 +327,9 @@ Backend matrix (honest limitations):
   also when the paste chord after it failed); use it for
   long or non-ASCII text, which `cliclick t:` types slowly. `via` accepts
   `type` or `paste`; anything else is refused.
-- Linux X11: `xdotool` (input and the active window), `gnome-screenshot`/`scrot`
+- Linux X11: key/hold validation also requires loadable `libX11` (discovered by
+  `ctypes.util.find_library`); missing validation refuses without sending a prefix.
+  `xdotool` (input and the active window), `gnome-screenshot`/`scrot`
   (capture), `wmctrl` (window rows and `app=` activation through
   `wmctrl -i -a`, verified with `xdotool getactivewindow` matched to the rows,
   so no `getwindowclassname` is needed), ImageMagick (downscaling). Targeting

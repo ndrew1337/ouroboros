@@ -456,6 +456,44 @@ def test_focused_window_retains_title_read_errors_without_preventing_identity_se
     assert "title" not in out["window"] and ax.performed == [("play", "AXPress")] and ax.balanced()
 
 
+@pytest.mark.parametrize("focused_reply", [(None, TIMEOUT), (None, -25200), (None, 0), (("wrong", "win"), 0)])
+def test_default_window_refuses_failed_or_malformed_focused_read_without_fallback(focused_reply):
+    ax = FakeAX(deck(), windows=["win"], focused=None)
+    original_attr = ax.attr
+    reads = []
+
+    def attr(el, name):
+        if el == "app":
+            reads.append(name)
+            assert name == "AXFocusedWindow", "a failed default-window read must not try main or AXWindows"
+            return focused_reply
+        return original_attr(el, name)
+
+    ax.attr = attr
+    ax.window_refs = lambda _app: pytest.fail("AXWindows fallback after a failed focused-window read")
+    out = act(ax, "press", {"identifier": "toolbar.play"})
+    assert out["ok"] is False and out["reason"] == "windows_unread" and out["dispatched"] is False
+    assert ax.performed == [] and reads == ["AXFocusedWindow"] and ax.balanced()
+
+
+def test_default_window_refuses_busy_main_read_after_ordinary_focused_absence():
+    ax = FakeAX(deck(), windows=["win"], focused=None)
+    ax.attr = lambda _el, name: (None, -25212) if name == "AXFocusedWindow" else (None, TIMEOUT)
+    ax.window_refs = lambda _app: pytest.fail("AXWindows fallback after busy main-window read")
+    out = act(ax, "press", {"identifier": "toolbar.play"})
+    assert out["ok"] is False and out["reason"] == "windows_unread" and out["dispatched"] is False
+    assert "AXMainWindow" in out["error"] and ax.performed == [] and ax.balanced()
+
+
+def test_default_window_uses_windows_after_unsupported_focused_and_main_attributes():
+    ax = FakeAX(deck(), windows=["win"], focused=None)
+    original_attr = ax.attr
+    ax.attr = lambda el, name: (None, -25205) if el == "app" else original_attr(el, name)
+    out = act(ax, "press", {"identifier": "toolbar.play"})
+    assert out["ok"] is True and out["window"]["from"] == "AXWindows"
+    assert ax.performed == [("play", "AXPress")] and ax.balanced()
+
+
 def test_the_selector_admits_identity_only_and_the_untrusted_process_refuses_first():
     parse = native.parse_selector
     assert parse('{"role": "AXButton", "label": "OK", "nth": 2, "window": "39"}')[0] == {"role": "AXButton", "label": "OK", "nth": 2, "window": {"window_id": 39}, "include_web": False}

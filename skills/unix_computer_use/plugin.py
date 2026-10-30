@@ -622,10 +622,15 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             return None
         if backend == "ssh_macos":
             try:
-                rc, out, _ = self._ssh_run(conn, "osascript -e 'tell application \"Finder\" to get bounds of window of desktop'", timeout=10)
-                values = [int(v) for v in re.findall(r"-?\d+", out)] if rc == 0 else []
-                if len(values) == 4:
-                    return {"x": values[0], "y": values[1], "w": values[2]-values[0], "h": values[3]-values[1]}
+                rc, out, _ = self._ssh_run(conn,
+                    'osascript -l JavaScript -e \'ObjC.import("CoreGraphics"); '
+                    'var b = $.CGDisplayBounds($.CGMainDisplayID()); '
+                    'JSON.stringify({x:b.origin.x,y:b.origin.y,w:b.size.width,h:b.size.height});\'', timeout=10)
+                bounds = json.loads(out) if rc == 0 else None
+                if (isinstance(bounds, dict) and set(bounds) == {"x", "y", "w", "h"}
+                        and all(type(v) in (int, float) and math.isfinite(v) and int(v) == v for v in bounds.values())
+                        and bounds["w"] > 0 and bounds["h"] > 0):
+                    return {key: int(value) for key, value in bounds.items()}
             except Exception:
                 pass
             return None
@@ -1555,7 +1560,7 @@ def register(api: Any) -> None:
     api.register_tool("activate_connection", impl.activate_connection, description="Select a configured connection as the active target for screenshot/input tools.", schema={"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}, timeout_sec=5)
     api.register_tool("use_local", lambda: impl.use_local(), description="Return computer-use tools to the local desktop backend.", schema={"type": "object", "properties": {}}, timeout_sec=5)
     api.register_tool("capabilities", lambda: impl.capabilities(), description="Who is in front, which OS grants this process holds (prompt-free preflights on macOS), whether app= targeting works here, and the installed backends.", schema={"type": "object", "properties": {}}, timeout_sec=45)
-    api.register_tool("screenshot", impl.screenshot, description="Capture the main display (or, with app=, the display holding that app's window on macOS; display.selected_by says which was captured), downscale to <=WXGA and persist the image->input transform. The image is attached automatically; an engine without vision gets its path.", schema={"type": "object", "properties": {"job_id": {"type": "string", "default": "manual"}, "max_width": {"type": "integer", "default": _MAX_IMAGE_W}, "max_height": {"type": "integer", "default": _MAX_IMAGE_H}, **_app}}, timeout_sec=90)
+    api.register_tool("screenshot", impl.screenshot, description="Capture the main display (or, with app=, the display holding that app's window on macOS; display.selected_by says which was captured), downscale to <=WXGA. mapped_input_available=true supplies an observation_id for coordinate input; otherwise capture-only, without a mapping. The image is attached automatically; an engine without vision gets its path.", schema={"type": "object", "properties": {"job_id": {"type": "string", "default": "manual"}, "max_width": {"type": "integer", "default": _MAX_IMAGE_W}, "max_height": {"type": "integer", "default": _MAX_IMAGE_H}, **_app}}, timeout_sec=90)
     # y is deliberately NOT in `required` for click/move: models recurringly emit the
     # whole point inside x ("663, 500") with y omitted, and a required-field rejection
     # then fires BEFORE the handler's _coerce_point can recover the pair.
