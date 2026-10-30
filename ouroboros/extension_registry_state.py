@@ -301,6 +301,19 @@ def live_widget_files(skill: str, tab_id: str, generation: str) -> Optional[Dict
         return {path: bundle.widget_sources[path] for path in paths}
 
 
+def live_widget_route_generation(skill: str, tab_id: str) -> Optional[str]:
+    """Live publication of a classic module or route-iframe tab, whose mount may GET its own skill's routes."""
+    with _lock:
+        bundle = _extensions.get(skill)
+        tab = _ui_tabs.get(f"{skill}:{tab_id}")
+        if bundle is None or skill in _unloading or tab is None:
+            return None
+        render = tab["render"]
+        if render.get("kind") != "iframe" and (render.get("kind") != "module" or render.get("entry_type") == "module"):
+            return None
+        return str(bundle.generation_digest or "") or None
+
+
 def live_contribution_projection() -> List[Dict[str, Any]]:
     """Entries and revisions from the same publication, detached under one lock."""
     with _lock:
