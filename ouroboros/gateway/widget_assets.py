@@ -377,7 +377,7 @@ async def widget_resource_response(scope, receive, send, leases: WidgetAssetLeas
 
     spec = list_routes().get(route_path)
     try:
-        with extension_work_scope(spec, stream) if spec else contextlib.nullcontext():
+        with extension_work_scope(spec, stream, call_work=False) if spec else contextlib.nullcontext():
             await app(child, guarded_receive, guarded_send)
     except ExtensionRegistrationError:
         if not sent["start"]:

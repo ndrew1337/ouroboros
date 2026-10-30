@@ -7,6 +7,8 @@ observed ending a response that would otherwise never finish.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -17,11 +19,14 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from ouroboros import extension_loader as loader
+from ouroboros import extension_registry_state as registry
 from ouroboros import server_auth
 from ouroboros.gateway.extensions import api_extension_dispatch
 from ouroboros.gateway.widget_assets import RESOURCE_PREFIX, api_widget_asset_lease, api_widget_bridge_script
 from ouroboros.gateway.widgets import api_widgets
-from ouroboros.skill_loader import SkillReviewState, compute_content_hash, find_skill, save_review_state
+from ouroboros.live_conversation import feature_configuration
+from ouroboros.skill_loader import (SkillReviewState, compute_content_hash, find_skill, requested_skill_permissions,
+                                    save_review_state, save_skill_grants)
 from tests._shared import clean_extension_runtime_state
 
 NAME = "route_media"
@@ -335,6 +340,114 @@ def _capture(errors, fn):
         fn()
     except BaseException as exc:  # noqa: BLE001 - surfaced by the assertion
         errors.append(exc)
+
+
+# --- a skill that also offers a call ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def call_capable(monkeypatch):
+    """The same skill also registers a conversation feature, through the real PluginAPI and grants."""
+    module = sys.modules[__name__]
+    original_install = module._install
+    monkeypatch.setattr(module, "PLUGIN", PLUGIN.replace("def register(api):", """async def never_called(host):
+    raise AssertionError("no call starts here")
+
+def register(api):
+    from ouroboros.contracts.live_conversation import LiveConfig
+    api.register_live_conversation("call", never_called, configure=LiveConfig)"""))
+
+    def install(root):
+        skill = original_install(root)
+        manifest = skill / "SKILL.md"
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+            "permissions: [widget, route]", 'plugin_api: "2.3"\npermissions: [widget, route, live_conversation]'),
+            encoding="utf-8", newline="\n")
+        _approve_call_capable(root, skill)
+        return skill
+
+    monkeypatch.setattr(module, "_install", install)
+
+
+def _approve_call_capable(root, skill):
+    digest = compute_content_hash(skill, manifest_entry="plugin.py")
+    save_review_state(root, NAME, SkillReviewState(status="pass", content_hash=digest))
+    permissions = requested_skill_permissions(["widget", "route", "live_conversation"])
+    save_skill_grants(root, NAME, [], content_hash=digest, requested_keys=[],
+                      requested_permissions=permissions, granted_permissions=permissions)
+
+
+@contextlib.contextmanager
+def _open_media(env):
+    """An endless leased response; only the publication's own cancellation can end it here (no disconnect)."""
+    lease = _lease(env.owner, "classic")
+    messages, run = _asgi_get(env.gate, lease["base_url"] + "live")
+    errors: list[BaseException] = []
+    runner = threading.Thread(target=lambda: _capture(errors, lambda: asyncio.run(run())), daemon=True)
+    runner.start()
+    assert _wait_for(lambda: sum(m["type"] == "http.response.body" for m in messages) >= 3), messages[:2]
+    assert _state(env)["live_open"] == 1
+    try:
+        yield SimpleNamespace(runner=runner, messages=messages, bundle=registry._extensions[NAME])
+    finally:
+        loader.unload_extension(NAME)
+        runner.join(timeout=8)
+        assert not runner.is_alive() and not errors
+
+
+def _new_payload(env):
+    """A reviewed edit: the next reconcile owes an automatic replacement of the live publication."""
+    skill = find_skill(env.root, NAME).skill_dir
+    plugin = skill / "plugin.py"
+    plugin.write_text(plugin.read_text(encoding="utf-8") + "\n# edited\n", encoding="utf-8", newline="\n")
+    _approve_call_capable(env.root, skill)
+
+
+def _reconcile(env):
+    return loader.reconcile_extension(NAME, env.root, lambda: {}, repo_path="")
+
+
+def test_leased_media_is_cancelled_by_replacement_it_cannot_hold(call_capable, env):
+    assert registry._extensions[NAME].conversation_features == [f"{NAME}:call"]
+    with _open_media(env) as media:
+        assert media.bundle.active_call_work == 0 and media.bundle.supervised_futures
+        assert registry.realtime_load_refusal(NAME) == ""
+        _new_payload(env)
+        assert _reconcile(env)["action"] == "extension_loaded"
+        media.runner.join(timeout=8)
+        assert not media.runner.is_alive(), "replacing the publication must end its open media"
+        replacement = registry._extensions[NAME]
+        assert replacement is not media.bundle and replacement.generation_digest != media.bundle.generation_digest
+        assert media.bundle.supervised_futures == [] and replacement.supervised_futures == []
+        assert _state(env)["live_open"] == 0
+
+
+def test_a_real_call_admission_still_refuses_replacement_beside_media(call_capable, env):
+    with _open_media(env) as media:
+        with feature_configuration(f"{NAME}:call"):
+            assert media.bundle.active_call_work == 1
+            assert registry.realtime_load_refusal(NAME) == "live_call_active"
+            _new_payload(env)
+            refused = _reconcile(env)
+            assert (refused["reason"], refused["action"]) == ("live_call_active", "extension_reload_pending")
+            assert registry._extensions[NAME] is media.bundle
+            chunks = len(media.messages)
+            assert _wait_for(lambda: len(media.messages) > chunks), "the refused reload must leave media running"
+        assert media.bundle.active_call_work == 0 and registry.realtime_load_refusal(NAME) == ""
+        assert media.runner.is_alive()
+        assert _reconcile(env)["action"] == "extension_loaded"
+        media.runner.join(timeout=8)
+        assert not media.runner.is_alive() and registry._extensions[NAME] is not media.bundle
+
+
+def test_unload_cleans_up_media_and_call_work_together(call_capable, env):
+    with _open_media(env) as media:
+        with feature_configuration(f"{NAME}:call"):
+            loader.unload_extension(NAME)
+            media.runner.join(timeout=8)
+            assert not media.runner.is_alive() and NAME not in registry._extensions
+        assert media.bundle.active_call_work == 0 and media.bundle.supervised_futures == []
+    assert registry.realtime_load_refusal(NAME) == ""
 
 
 def test_an_isolated_dependency_route_streams_through_the_lease_and_ends_with_it(tmp_path, monkeypatch):

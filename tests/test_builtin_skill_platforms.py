@@ -38,7 +38,8 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 SEEDS = REPO / "skills"
 UNIX = "unix_computer_use"
 WINDOWS = "windows_computer_use"
-EVERYWHERE = ["ui_design", "templates", "device_voice"]  # on by default on every host
+EVERYWHERE = ["ui_design", "templates", "device_voice",  # on by default on every host
+              "live_conversation", "gemini_live", "grok_realtime", "openai_realtime"]  # inert until Calls (beta)
 UNIX_043 = "1e237c1bc89f0600a7362f69eddafdff4ddd1f2d"  # official history: os any, permissions with net
 log = logging.getLogger(__name__)
 
@@ -829,7 +830,7 @@ def test_an_existing_unix_copy_is_turned_on_once_unless_the_owner_chose(data, mo
 
     _boot(data, monkeypatch)
 
-    assert skill_builtin._version(native / UNIX) == "0.5.3"
+    assert skill_builtin._version(native / UNIX) == skill_builtin._version(SEEDS / UNIX)
     assert load_enabled(data, UNIX) is (choice is None)
     assert (state / "connections.json").read_bytes() == connections
     if choice is None:

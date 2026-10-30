@@ -16,6 +16,8 @@ from __future__ import annotations
 from typing import NamedTuple
 
 HTTP_ENDPOINTS: tuple[str, ...] = (
+    "POST /api/call/open",
+    "WS /ws/call/{call_id}",
     "GET /api/health",
     "GET /api/contract",
     "GET /api/state",
@@ -231,6 +233,7 @@ _INSTALL_REFUSAL = "404,409,429,502:SkillCatalogInstallResponse"
 _ENGINE = "relays the bundled Claudexor engine"
 
 HTTP_SHAPES: dict[str, Shape] = {
+    "POST /api/call/open": Shape("200:CallOpenResponse 409:CallRefusal", "CallOpenRequest"),
     "GET /api/health": Shape("200:HealthResponse"),
     "GET /api/contract": Shape("200:GatewayContractResponse"),
     "GET /api/state": Shape("200:StateResponse 500:ErrorResponse", query="bindings_since"),
@@ -577,6 +580,7 @@ INTERFACE_PATHS: tuple[str, ...] = ("/", "/static")
 WS_SHAPES: dict[str, tuple[str, str]] = {
     "chat": ("ChatInbound", "ChatOutbound"),
     "command": ("CommandInbound", ""),
+    "conversation_finished": ("", "ConversationFinishedOutbound"),
     "panic_accepted": ("", "PanicAcceptedOutbound"),
     "photo": ("", "PhotoOutbound"),
     "video": ("", "VideoOutbound"),
