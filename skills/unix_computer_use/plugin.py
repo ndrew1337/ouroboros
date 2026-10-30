@@ -1231,6 +1231,8 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
         for combo in steps:
             mods, base = self._parse_combo(combo)
             low = base.lower()
+            # A capital under a held modifier would add an unnamed Shift (cmd+S = cmd+s); OSWorld keeps its pyautogui letter.
+            base = low if mods and len(low) == 1 and backend != "osworld_http" else base
             if backend in ("macos", "ssh_macos"):
                 if backend == "ssh_macos" and hold_ms is not None:
                     raise ValueError("hold_key unsupported on ssh_macos")
@@ -1461,7 +1463,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
                 return refusal
         step = ctx
         if recheck or (raise_policy == "never" and ctx.get("target")):
-            refusal, step = self._recheck(ctx)
+            refusal, step = self._recheck(ctx, later=recheck)
             if refusal:
                 return refusal
         activated = bool((ctx.get("target") or {}).get("activated"))
@@ -1510,7 +1512,7 @@ class _ComputerUse(PlaceMixin, RemoteBackends):
             return _json(refusal)
         for done, cmd in enumerate(steps):
             if raise_policy == "never" and ctx.get("target"):
-                refused, _step = self._recheck(ctx)
+                refused, _step = self._recheck(ctx, later=done > 0)
                 if refused:
                     return _json({**refused, "steps_done": done, "steps_total": len(steps), "dispatched": False})
             rc, stdout, stderr = self._try(cmd)

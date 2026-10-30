@@ -46,6 +46,7 @@ def observation(impl, **overrides):
     return tf
 
 
+FIRST_REFUSAL = "no switch was attempted and nothing was sent"
 POINTERS = [("click", {"x": 5, "y": 6}), ("move", {"x": 5, "y": 6}),
             ("left_click_drag", {"start_x": 5, "start_y": 6, "end_x": 9, "end_y": 10}),
             ("mouse_down", {"x": 5, "y": 6}), ("mouse_up", {"x": 5, "y": 6})]
@@ -312,8 +313,9 @@ def test_local_key_commands_are_prepared_once_before_activation(desktop, monkeyp
         return {"ok": True, "target": {"pid": 7}, "front": {"pid": 7}, "verified": True}
     desktop._native = native
     desktop._try = lambda cmd, **kw: sent.append(cmd) or (0, "", "")
-    out = json.loads(desktop.key(keys="down A", app="Editor"))
-    assert out["ok"] is True and sent == [["cliclick", "kp:arrow-down"], ["cliclick", "t:A"]]
+    out = json.loads(desktop.key(keys="down A cmd+A", app="Editor"))
+    assert out["ok"] is True and sent == [["cliclick", "kp:arrow-down"], ["cliclick", "t:A"],
+                                          ["cliclick", "kd:cmd", "t:a", "ku:cmd"]]
     assert not hasattr(desktop, "_last_base_raw")
 
 
@@ -338,6 +340,11 @@ def test_x11_uses_authoritative_name_lookup_without_opening_display(desktop, mon
     assert out["ok"] is False and out["dispatched"] is False and sent == []
     assert lookup_names[-2:] == [b"Down", b"invalid-name"]
     assert lookup.argtypes == [ctypes.c_char_p] and lookup.restype is ctypes.c_ulong
+    sent.clear()
+    lookup_names.clear()
+    out = json.loads(desktop.key(keys="ctrl+C ctrl+KP_Enter ctrl+XF86AudioPlay"))
+    assert out["ok"] is True and [cmd[-1] for cmd in sent] == ["ctrl+c", "ctrl+KP_Enter", "ctrl+XF86AudioPlay"]
+    assert b"c" in lookup_names and b"C" not in lookup_names
 
 
 @pytest.mark.parametrize("error", [None, OSError("library unavailable")])
@@ -353,12 +360,76 @@ def test_unavailable_x11_validation_is_not_success(desktop, monkeypatch, error):
 
 
 def test_mac_local_and_ssh_share_real_cliclick_key_commands():
-    assert cliclick_keys(["cmd"], "A") == ["kd:cmd", "t:A", "ku:cmd"]
+    assert cliclick_keys(["cmd"], "a") == ["kd:cmd", "t:a", "ku:cmd"]
+    assert cliclick_keys([], "A") == ["t:A"]
     for key in ["num-enter", "play-pause", "keys-light-up", "f16"]:
         assert cliclick_keys([], key) == ["kp:" + key]
     for key in ["invalid-name", "f35", "XF86AudioPlay"]:
         with pytest.raises(ValueError):
             cliclick_keys([], key)
+
+
+@pytest.mark.parametrize("keys,mac,x11", [
+    ("cmd+S", ["kd:cmd", "t:s", "ku:cmd"], "super+s"),
+    ("ctrl+C", ["kd:ctrl", "t:c", "ku:ctrl"], "ctrl+c"),
+    ("Control+S", ["kd:ctrl", "t:s", "ku:ctrl"], "ctrl+s"),
+    ("ctrl+shift+T", ["kd:ctrl,shift", "t:t", "ku:ctrl,shift"], "ctrl+shift+t"),
+    ("shift+A", ["kd:shift", "t:a", "ku:shift"], "shift+a"),
+    ("cmd+s", ["kd:cmd", "t:s", "ku:cmd"], "super+s"),
+    ("cmd+1", ["kd:cmd", "t:1", "ku:cmd"], "super+1"),
+    ("ctrl+F5", ["kd:ctrl", "kp:f5", "ku:ctrl"], "ctrl+F5"),
+    ("ctrl+Tab", ["kd:ctrl", "kp:tab", "ku:ctrl"], "ctrl+Tab"),
+    ("A", ["t:A"], "A"),
+    ("a", ["t:a"], "a"),
+])
+def test_a_letter_under_a_modifier_adds_no_shift_and_a_bare_letter_stays_as_written(desktop, monkeypatch, keys, mac, x11):
+    """A kept capital presses Shift on the way out: cmd+S would become cmd+shift+s. Shift is only what the combo names."""
+    sent, commands = [], []
+    desktop._try = lambda cmd, **kw: sent.append(cmd) or (0, "", "")
+    assert json.loads(desktop.key(keys=keys))["ok"] is True
+    assert sent == [["cliclick", *mac]]
+    select(desktop, "ssh_macos")
+    desktop._ssh_run = lambda conn, command, **kw: commands.append(command) or (0, "", "")
+    assert json.loads(desktop.key(keys=keys))["ok"] is True
+    assert " ".join(["cliclick", *mac]) + ";" in commands[0]
+    desktop.use_local()
+    monkeypatch.setattr(plugin, "_platform", lambda: "linux")
+    monkeypatch.setattr(plugin, "_session_type", lambda: "x11")
+    monkeypatch.setattr(plugin._ComputerUse, "_x11_keysym", staticmethod(lambda _name: None))
+    sent.clear()
+    assert json.loads(desktop.key(keys=keys))["ok"] is True
+    assert sent == [["xdotool", "key", x11]]
+
+
+def test_x11_hold_presses_and_releases_the_same_keys(desktop, monkeypatch):
+    monkeypatch.setattr(plugin, "_platform", lambda: "linux")
+    monkeypatch.setattr(plugin, "_session_type", lambda: "x11")
+    monkeypatch.setattr(plugin._ComputerUse, "_x11_keysym", staticmethod(lambda _name: None))
+    sent = []
+    desktop._try = lambda cmd, **kw: sent.append(cmd) or (0, "", "")
+    assert json.loads(desktop.hold_key(keys="ctrl+C", duration_ms=50))["ok"] is True
+    assert sent == [["xdotool", "keydown", "ctrl+c"], ["xdotool", "keyup", "ctrl+c"]]
+    sent.clear()
+    assert json.loads(desktop.hold_key(keys="A", duration_ms=50))["ok"] is True
+    assert sent == [["xdotool", "keydown", "A"], ["xdotool", "keyup", "A"]]
+
+
+def test_osworld_hands_pyautogui_the_letter_as_written(desktop):
+    """Unchanged since before typed key validation: the guest's pyautogui owns what a capital means there."""
+    select(desktop, "osworld_http")
+    sent = []
+    def execute(conn, cmd, **kw):
+        validation = guest_key_validation(cmd[-1])
+        if validation:
+            return validation
+        sent.append(cmd[-1])
+        return {"status": 200, "result": {"status": "success", "returncode": 0, "output": ""}}
+    desktop._osworld_execute = execute
+    assert json.loads(desktop.key(keys="ctrl+C A"))["ok"] is True
+    assert "pyautogui.hotkey('ctrl', 'C')" in sent[0] and "pyautogui.press('A')" in sent[1]
+    sent.clear()
+    assert json.loads(desktop.hold_key(keys="ctrl+C", duration_ms=50))["ok"] is True
+    assert "pyautogui.keyDown('ctrl'); pyautogui.keyDown('C')" in sent[0]
 
 
 @pytest.mark.parametrize("raw", [False, True])
@@ -414,8 +485,106 @@ def test_never_policy_requires_front_without_any_activation(tmp_path, monkeypatc
                    for cmd in calls)
     if not front:
         assert out["reason"] == "target_lost" and not out.get("observed_effect")
+        assert "is not in front" in out["error"] and FIRST_REFUSAL in out["error"], out["error"]
+        assert "no longer" not in out["error"] and "nothing more" not in out["error"], out["error"]
         assert not any(cmd[0] in ("cliclick", "pbcopy") or cmd[:2] in (["xdotool", "key"], ["xdotool", "type"])
                        or (cmd[0] == "ssh" and "cliclick" in cmd[-1]) for cmd in calls)
+
+
+@pytest.mark.parametrize("host", ["macos", "x11", "ssh", "osworld"])
+def test_never_policy_with_an_unread_front_claims_no_switch(tmp_path, monkeypatch, host):
+    from tests.test_unix_computer_use_targeting import mac, x11
+    from tests.test_unix_computer_use_remote_targeting import ssh, osworld, listing, LISTING
+    if host == "macos":
+        _, api, state = mac(tmp_path, monkeypatch, lsappinfo=False)
+        calls = state["calls"]
+    elif host == "x11":
+        _, api, state = x11(tmp_path, monkeypatch, active="")
+        calls = state["calls"]
+    elif host == "ssh":
+        _, api, calls = ssh(tmp_path, monkeypatch, lambda command: (0, LISTING + "__FRONT__\n"))
+    else:
+        _, api, guest = osworld(tmp_path, monkeypatch, lambda code, index: (0, listing("")))
+        calls = guest.commands
+    out = json.loads(api.tools["key"](keys="down", app="Keynote", raise_policy="never"))
+    assert out["ok"] is False and out["reason"] == "front_unread" and out["target"]["activated"] is False, out
+    assert "could not be read" in out["error"] and FIRST_REFUSAL in out["error"], out["error"]
+    assert "switch was requested" not in out["error"] and "None" not in out["error"], out["error"]
+    assert not any("activate" in cmd or "System Events" in " ".join(cmd) or cmd[:3] == ["wmctrl", "-i", "-a"]
+                   or cmd[0] == "cliclick" or cmd[:2] == ["xdotool", "key"] or (cmd[0] == "ssh" and "cliclick" in cmd[-1])
+                   for cmd in calls)
+
+
+@pytest.mark.parametrize("front,reason", [({"pid": 8, "app": "Other"}, "target_lost"), (None, "front_unread")])
+@pytest.mark.parametrize("method,kwargs", [("key", {"keys": "a"}), ("click", {"x": 1, "y": 1, "raw": True}), ("type_text", {"text": "text"})])
+def test_never_policy_last_look_before_the_first_step_says_nothing_was_sent(desktop, method, kwargs, front, reason):
+    desktop._native = lambda op, *a, **kw: {"ok": True, "candidates": [{"pid": 7, "app": "Editor"}]}
+    sent = []
+    desktop._try = lambda cmd, **kw: sent.append(cmd) or (0, "", "")
+    reads = iter([{"pid": 7, "app": "Editor"}, front])
+    desktop._front_local = lambda *a: next(reads)
+    out = json.loads(getattr(desktop, method)(**kwargs, app="Editor", raise_policy="never"))
+    assert out["ok"] is False and out["reason"] == reason, out
+    assert FIRST_REFUSAL in out["error"], out["error"]
+    assert not any(word in out["error"] for word in ("nothing more", "next step", "no longer", "switch was requested")), out["error"]
+    assert sent == []
+
+
+def test_never_policy_x11_hold_refused_before_the_press_is_not_dispatched(tmp_path, monkeypatch):
+    from tests.test_unix_computer_use_targeting import x11
+    module, api, state = x11(tmp_path, monkeypatch, active="2")
+    real, reads = module._ComputerUse._front_local, []
+    def front(self, rows=None):
+        reads.append(rows)
+        if len(reads) > 1:
+            state["active"] = "1"  # the last look before the press finds another window
+        return real(self, rows)
+    monkeypatch.setattr(module._ComputerUse, "_front_local", front)
+    out = json.loads(api.tools["hold_key"](keys="ctrl", app="Keynote", raise_policy="never"))
+    assert out["ok"] is False and out["reason"] == "target_lost" and out["dispatched"] is False, out
+    assert FIRST_REFUSAL in out["error"] and "no longer" not in out["error"], out["error"]
+    assert not any(cmd[:2] == ["xdotool", "keydown"] for cmd in state["calls"])
+
+
+def test_never_policy_keeps_the_later_step_words(tmp_path, monkeypatch):
+    from tests.test_unix_computer_use_targeting import mac, inputs, KEYNOTE, SAFARI
+    def switch(argv, state):
+        if "kp:tab" in argv:
+            state["front"] = SAFARI
+    _, api, state = mac(tmp_path, monkeypatch, front=KEYNOTE, on_input=switch)
+    out = json.loads(api.tools["key"](keys="cmd+tab right", app="Keynote", raise_policy="never"))
+    assert out["ok"] is False and out["reason"] == "target_lost" and out["steps_done"] == 1 and out["dispatched"] is False, out
+    assert "no longer in front" in out["error"] and "nothing more was sent" in out["error"], out["error"]
+    assert FIRST_REFUSAL not in out["error"] and len(inputs(state)) == 1
+
+
+@pytest.mark.parametrize("reason,marker", [("target_lost", "__TARGET_LOST__"), ("front_unread", "__FRONT_UNREAD__")])
+@pytest.mark.parametrize("host", ["ssh", "osworld"])
+def test_remote_precheck_after_no_switch_claims_none(tmp_path, monkeypatch, host, reason, marker):
+    from tests.test_unix_computer_use_targeting import KEYNOTE
+    from tests.test_unix_computer_use_remote_targeting import ssh, osworld, listing, info_line, LISTING, KEYNOTE_FRONT
+    other = "1|4242|Browser" if reason == "target_lost" else ""
+    if host == "ssh":
+        _, api, _calls = ssh(tmp_path, monkeypatch, lambda command: (
+            (0, LISTING + "__FRONT__" + info_line(KEYNOTE)) if "lsappinfo list" in command else (3, f"\n__FRONT_BEFORE__\n{marker}\n")))
+    else:
+        _, api, _guest = osworld(tmp_path, monkeypatch, lambda code, index: (
+            (0, listing(KEYNOTE_FRONT)) if "wmctrl -lpxG" in code else (3, f"__FRONT_BEFORE__{other}\n{marker}\n")))
+    out = json.loads(api.tools["key"](keys="right", app="Keynote", raise_policy="never"))
+    assert out["ok"] is False and out["reason"] == reason and not out.get("observed_effect"), out
+    assert FIRST_REFUSAL in out["error"], out["error"]
+    assert "switch was requested" not in out["error"] and "nothing more" not in out["error"], out["error"]
+
+
+def test_a_requested_switch_that_could_not_be_verified_still_says_so(tmp_path, monkeypatch):
+    from tests.test_unix_computer_use_targeting import mac, inputs
+    _, api, state = mac(tmp_path, monkeypatch, helper=lambda args, state: {
+        "ok": False, "reason": "front_unread", "activated": None, "verified": False, "method": "ax_frontmost",
+        "target": {"app": "Keynote", "pid": 200}, "error": "lsappinfo named no frontmost application after the switch"})
+    out = json.loads(api.tools["key"](keys="down", app="Keynote"))
+    assert out["ok"] is False and out["reason"] == "front_unread" and out["target"]["activated"] is None, out
+    assert "the switch was requested" in out["error"] and "after the switch" in out["error"] and "nothing was sent" in out["error"], out["error"]
+    assert FIRST_REFUSAL not in out["error"] and inputs(state) == []
 
 
 def test_ssh_super_modifier_preserves_existing_mapping(desktop):

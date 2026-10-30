@@ -134,7 +134,8 @@ Acting in a named application (`app=`):
   process for `pid:`; "in front" means the active window is one of them. The
   tool resolves the name against the running list without launching anything,
   with `raise_policy="allow"` brings it forward if needed, then verifies the
-  front before input. `never` refuses instead of activating. Two matches are
+  front before input. `never` refuses instead of activating and attempts no
+  switch (`target_lost`, or `front_unread` when the front is unread). Two matches are
   a refusal that lists the candidates; an application that is not running is
   a refusal that lists the running applications; one that did not come to the
   front (macOS 14+ may refuse activation from a background process) is a
@@ -321,7 +322,9 @@ Backend matrix (honest limitations):
   (`cmd`, `cmd+shift`, ...): cliclick `kd:`/`ku:` accept only modifiers and
   `kp:` cannot hold — non-modifier holds report an honest error. In `key`
   combos the base key is tapped while modifiers are held (`cmd+s` = hold cmd,
-  tap s). `type_text` with `via=paste` writes the clipboard (`pbcopy`) and
+  tap s). On a local or SSH Mac and on X11 a letter's case under a modifier adds
+  no Shift (`cmd+S` = `cmd+s`; Shift is named: `cmd+shift+s`), and a bare `A` is a
+  capital. `type_text` with `via=paste` writes the clipboard (`pbcopy`) and
   pastes with `cmd+v`, after the target was verified in front (a refusal leaves
   the clipboard alone; the receipt says whether the clipboard was replaced,
   also when the paste chord after it failed); use it for
@@ -389,7 +392,8 @@ Backend matrix (honest limitations):
   the in-VM clipboard (`pyperclip` + `ctrl+v`, ASCII `typewrite` fallback) so
   Unicode is not silently dropped; every action's `ok` reflects the guest
   process `returncode`/`status` (HTTP 200 alone is not success); `key`
-  `backspace` presses BackSpace and `fwd-delete` presses forward Delete;
+  `backspace` presses BackSpace and `fwd-delete` presses forward Delete, and a
+  letter reaches pyautogui as written (`ctrl+C` = `hotkey('ctrl', 'C')`);
   screenshots are capped at 20 MB and PNG-validated before use.
 - Remote SSH macOS: `screenshot` uses remote `screencapture` + `scp`; input uses
   `cliclick` on the Mac, wrapped so the same ssh call reads the frontmost

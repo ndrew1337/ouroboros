@@ -262,6 +262,8 @@ class PlaceMixin:
         reason = str(res.get("reason") or "")
         front = res.get("front") or {}
         where = f" ({front.get('app') or front.get('title')} is in front)" if isinstance(front, dict) and (front.get("app") or front.get("title")) else ""
+        # No earlier step ran and no switch was asked for: raise_policy='never', or a target that was already in front.
+        first = res.get("activated") is False and not res.get("before_step")
         if reason == "not_running":
             text = f"{app!r} is not a running application; nothing was sent (running: {', '.join(res.get('running') or [])[:300]})"
             if res.get("candidates"):
@@ -277,14 +279,17 @@ class PlaceMixin:
         if reason == "front_unread":
             if res.get("before_step"):
                 return f"{app!r}: who is in front could not be read before the next step ({res.get('error')}); nothing more was sent"
+            if first:
+                return f"{app!r}: who is in front could not be read; no switch was attempted and nothing was sent"
             return f"{app!r}: the switch was requested but who is in front could not be read ({res.get('error')}); nothing was sent"
         if reason == "target_lost":
             resolved = res.get("resolved") or {}
+            state, sent = ("not", "no switch was attempted and nothing was sent") if first else ("no longer", "nothing more was sent")
             if resolved.get("window_ids") and front.get("app") and front.get("app") == resolved.get("app"):
                 # The same class is in front through a window that is not the target's (a sibling, or a dialog a step opened).
-                return (f"{app!r} is no longer in front: another window of its class, {front.get('title')!r} ({front.get('window_id')}), "
-                        f"is in front and is not one of the target's windows ({', '.join(resolved.get('window_ids') or [])}); nothing more was sent")
-            return f"{app!r} is no longer in front{where}; nothing more was sent"
+                return (f"{app!r} is {state} in front: another window of its class, {front.get('title')!r} ({front.get('window_id')}), "
+                        f"is in front and is not one of the target's windows ({', '.join(resolved.get('window_ids') or [])}); {sent}")
+            return f"{app!r} is {state} in front{where}; {sent}"
         if reason == "unsupported":
             return f"application targeting is unavailable here: {res.get('error') or 'no window manager access'}; nothing was sent"
         if reason == "apps_unread":
@@ -370,9 +375,10 @@ class PlaceMixin:
             res = {"ok": False, "reason": "unsupported", "error": f"no application targeting on {plat}/{self._session()}"}
         return self._ctx_from_activation(app, res)
 
-    def _recheck(self, ctx: dict[str, Any]) -> tuple[dict[str, Any] | None, dict[str, Any]]:
-        """Before a later step of one call (a key sequence): read the front again; a targeted call stops with
-        nothing more sent when its application is no longer in front. Returns (refusal, the step's context)."""
+    def _recheck(self, ctx: dict[str, Any], *, later: bool = False) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+        """Before a later step of one call (a key sequence, ``later``) or a never-policy input's first step: read the
+        front again; a targeted call stops, sending nothing more, when its application is not in front. Returns
+        (refusal, the step's context)."""
         front = self._front_local()
         step = dict(ctx)
         step["delivered_to"] = front
@@ -380,13 +386,14 @@ class PlaceMixin:
         if target:
             app = ctx["target"]["requested"]
             ctx["front_last"] = front  # the newest read, for the aggregate even when the step is refused
+            facts = {"before_step": later, "activated": ctx["target"].get("activated")}
             if front is None:
-                res = {"reason": "front_unread", "error": "no front reader answered before the next step", "before_step": True}
+                res = {"reason": "front_unread", "error": "no front reader answered before the next step", **facts}
                 return {"ok": False, "reason": "front_unread", "error": self._target_error(app, res), "target": ctx["target"]}, step
             # An X11/OSWorld target is its matched windows; a macOS/SSH application is its pid.
             still = x11_same(front, target) if target.get("window_ids") else front.get("pid") == target.get("pid")
             if not still:
-                res = {"reason": "target_lost", "front": front, "resolved": target}
+                res = {"reason": "target_lost", "front": front, "resolved": target, **facts}
                 return {"ok": False, "reason": "target_lost", "error": self._target_error(app, res), "target": ctx["target"], "front": front}, step
         return None, step
 

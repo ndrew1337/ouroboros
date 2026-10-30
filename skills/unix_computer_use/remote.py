@@ -464,7 +464,8 @@ class RemoteBackends:
         """The remote pre-check withheld the input (another window in front, or the front unread): nothing was sent;
         a switch observed earlier in the same call keeps its own mark. ``later``: a later step of one call."""
         target = ctx.get("target") or {}
-        res = {"reason": reason, "front": front, "error": "the remote front reader printed nothing", "before_step": later}
+        res = {"reason": reason, "front": front, "error": "the remote front reader printed nothing", "before_step": later,
+               "activated": target.get("activated")}
         out: dict[str, Any] = {"ok": False, "backend": backend, "reason": reason, "target": target,
                                "error": self._target_error(str(target.get("requested") or ""), res)}
         if front:
