@@ -17,6 +17,7 @@ import sys
 import uuid
 
 from ouroboros import maintenance_jobs, store
+from ouroboros.record_compression import WIRE_JOURNAL
 from ouroboros.retention import get_gc_retention_days, time
 from ouroboros.unindexed import BYTECODE, LEGACY_BYTECODE
 
@@ -64,7 +65,8 @@ def task_written(txn, task_id, columns):
     if txn.root is None or columns.get("status") not in SETTLED_STATUSES:
         return
     names = (f"task_trees/{task_id}", f"services/{task_id}",
-             f"state/delegate_recovery/{task_id}.json", f"state/delegate_supervision/{task_id}.json")
+             f"state/delegate_recovery/{task_id}.json", f"state/delegate_supervision/{task_id}.json",
+             f"task_results/artifacts/{task_id}/{WIRE_JOURNAL}")
     deadlines = []
     for name in names:
         try:
@@ -98,7 +100,7 @@ def run(root, should_stop):
     steps = [("delegate_state", sweep_settled_delegate_state),
              ("skill_state", sweep_uninstalled_skill_state), ("code_intel", prune_stale_code_intel_roots),
              ("failed_reconcile", prune_failed_reconcile_markers), ("agent_media", prune_agent_media_uploads),
-             ("bytecode", prune_stale_bytecode)]
+             ("call_wire", prune_call_wire_journals), ("bytecode", prune_stale_bytecode)]
     # Read the durable gate again immediately before source retirement. A fresh child
     # must never substitute its empty memory for the server's recovery result.
     with store.open_store(root, write=False) as txn:
@@ -186,6 +188,61 @@ def prune_agent_media_uploads(
                 report["removed"] += 1
             except OSError:
                 report["errors"] += 1
+    return report
+
+
+def prune_call_wire_journals(root, retention_days=None, *, now=None) -> dict:
+    """Keep a call's whole wire until shared GC age AND proof that its task has no live owner.
+
+    Terminal writes schedule the journal's mtime deadline; startup/repair discover older files.
+    Compression preserves that mtime. An aged terminal task with uncertain ownership stays owed;
+    running/unrecorded tasks await their terminal write. No other task artifact is removed here.
+    """
+    from ouroboros.retention import age_cutoff, keep_until
+    from ouroboros.subagent_worktrees import _task_proven_over
+    from ouroboros.task_status import SETTLED_STATUSES, task_has_live_queue_ownership
+
+    root = pathlib.Path(root)
+    days = get_gc_retention_days() if retention_days is None else retention_days
+    cutoff = age_cutoff(days, now)
+    report = {"removed": 0, "kept": 0, "skipped": 0, "errors": 0}
+    base = root / "task_results" / "artifacts"
+    try:
+        if any(not stat.S_ISDIR(path.lstat().st_mode) for path in (base.parent, base)):
+            return report  # never follow a linked artifact family
+        with os.scandir(base) as listing:
+            folders = sorted((entry for entry in listing if _plain_directory(entry)), key=lambda entry: entry.name)
+    except FileNotFoundError:
+        return report
+    except OSError:
+        report["errors"] += 1
+        return report
+    for folder in folders:
+        path = pathlib.Path(folder.path) / WIRE_JOURNAL
+        try:
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                report["skipped"] += 1
+                continue
+            with store.open_store(root, write=False) as txn:
+                settled = txn.row(folder.name, "status") in SETTLED_STATUSES
+            if not settled or info.st_mtime >= cutoff or not _task_proven_over(
+                    folder.name, root, lambda task: task_has_live_queue_ownership(root, task)):
+                report["kept"] += 1
+                if settled:
+                    keep_until(report, info.st_mtime, days)
+                continue
+            # A write/replacement while ownership was read invalidates this candidate.
+            if path.lstat() != info:
+                report["kept"] += 1
+                keep_until(report, path.lstat().st_mtime, days)
+                continue
+            path.unlink()
+            report["removed"] += 1
+        except FileNotFoundError:
+            continue
+        except OSError:
+            report["errors"] += 1
     return report
 
 
