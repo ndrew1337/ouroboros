@@ -1,0 +1,38 @@
+[
+  {
+    "item": "intent_alignment",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "Owner asks traced to code: remote engines through core/Claudexor (remote_engines.py, execution_domain.py, remote_workspace.py, remote_stops.py); a computer-icon capsule that opens Accounts and keys > Remote engines when none is saved and otherwise toggles (remote_switch.js remoteView press setup/on/off); On moves Main-following work and new helpers (remote_placement.effective_main, place_delegated). UI wording beyond plain On/Off is reported under further findings."
+  },
+  {
+    "item": "forgotten_touchpoints",
+    "verdict": "FAIL",
+    "severity": "advisory",
+    "reason": "web/modules/composer_model.js:437 passes previous = describe(state.main), and state.main is the placed main_route. confirmMainChange (composer_model.js:141-146) then treats a Remote-On Main as lane 'remote' and warns that Main's pinned account becomes Auto when the owner picks a model of the same source on this computer's engine. ouroboros/gateway/owner_effort.py _write_main_route compares the saved routes and keeps that pin (tests/test_remote_switch.py test_a_main_saved_while_on... shows the effective-versus-saved split). Compare against remote_execution.main instead."
+  },
+  {
+    "item": "cross_surface_consistency",
+    "verdict": "FAIL",
+    "severity": "advisory",
+    "reason": "What travels to the host is described too narrowly. ouroboros/remote_workspace.py:33 says the data root never travels, and ENGINE_DETAILS (settings_engine_connections.js) and the switch's menu say nothing on this. Yet subagent_work_order.session_host_sources (:653) stages the whole folder of every enabled instruction skill with a current executable review (skill_catalogue.session_skill_reference_dirs, discovered under the canonical data root) on each remote delegated session start whose task input sources are not 'declared'. BIBLE.md and docs/DESIGN.md travel only for own-body work. The run's private copy also sends its untracked, non-ignored files (tests assert a .env travels). This is disclosure wording; no behaviour is wrong.\n\ndocs/development/06-rules-by-change-class.md:142 (Live subagents: 'dispatch uses its scheduling snapshot; no second selector, host ranking or substitution') and ARCHITECTURE 6 Registry ('exact selection starts or refuses, without substitution') do not mention that the owner's Remote switch re-places a selected row's engine before the snapshot freezes (remote_placement.place_delegated:256, recorded as snapshot.placement). The ARCHITECTURE 6 Remote engines paragraph documents it; DEVELOPMENT does not."
+  },
+  {
+    "item": "regression_surface",
+    "verdict": "FAIL",
+    "severity": "advisory",
+    "reason": "Rollback edge. ouroboros/configured_subagents.py:232-241 parses OUROBOROS_SUBAGENTS with reject_unknown=True, and the base parse_route_spec accepts only {kind, target_id, pin} (shown in the route_spec.py hunk). parse_configured_subagents raises for the whole setting, so once one row saves route.engine/route.workspace, a pre-change body's catalog and review pool fall back to an empty roster with config_error. ENGINE_DETAILS (settings_engine_connections.js:141) says only 'an older version refuses a remote choice'. Source reasoning only: the base was not executed."
+  },
+  {
+    "item": "architecture_fit",
+    "verdict": "FAIL",
+    "severity": "advisory",
+    "reason": "Placement is applied in route_choice.following_route (:250), not where model_slots answers Main/Light. With Remote On and an empty Light slot, following_route('light'), the agent-visible route text in tools/control_models.py:84-85 and empty-slot consciousness wakes (consciousness.py:106) move to the remote engine. Light calls through get_light_model/_main_model stay on this computer's engine: consolidator._consolidation_route via subagents._lane_model, review_synthesis.py:204, semantic_dedup.py:107, ui_translation.py:181, project_naming.py:99, presence_runner.py:993. So do Presence places set to 'main' (presence_context.py:875, place_projection.py:110). remote_placement's docstring promises 'a role whose own slot is empty' moves. Advisory because ARCHITECTURE 07 scopes the switch to following_route-based readers; a maintainer could rate it as two answers to one fact."
+  },
+  {
+    "item": "implicit_contracts",
+    "verdict": "PASS",
+    "severity": "advisory",
+    "reason": "Checked: engine_ref is bound before the POST and reopened only via bound_gateway (same connection, address, home and store) across custody, documents, model operations and review seats; _request strips _host_engine from a scrub_native_custody deep copy, so transcripts and checkpoints keep it; every recover_model_attempt caller fits the new factory arity (imagegen passes none and refuses remote routes); parse_model_route's ROUTE_KINDS only adds the claudexor@ head and connection_references skips claudexor routes. Pin readers that pass no route model (safety.py:1013, consolidator.py:55, reviewer_slot_config.py:257, onboarding and install presets, the owner_effort writer) read unplaced configured routes, so pin and engine agree."
+  }
+]

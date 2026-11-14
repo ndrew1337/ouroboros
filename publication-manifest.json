@@ -1,0 +1,855 @@
+{
+  "base": "33eb58b4fbca849328426cfcd7a64e054f923741",
+  "head": "f835352c5582c5029e6b7648e80a88ac4fb7375c",
+  "tree": "6fb02174eea6ca6476122073af80e088ecec4dbf",
+  "diff_sha256": "b8ace93647a6bb96ab95f1089cc22d4161d474b4c7c80a6b6e6ef2c0206a37d0",
+  "diff_bytes": 1027212,
+  "files": [
+    {
+      "path": "docs/CLIENT_CONTRACT.md",
+      "size": 192210,
+      "sha256": "0ad7dd4119003a53ba7479aa65895f3450606354352e7ed5be6667da13370eae",
+      "git_blob": "ecbfc02f5b6c6e3f3253331dab0f515cd66c4d57"
+    },
+    {
+      "path": "docs/DEPLOYMENT.md",
+      "size": 43314,
+      "sha256": "be99770c89996782d3e1fa2b13d9d1c08319f9f155bda56564422bd5ab1201ae",
+      "git_blob": "8b4e4df4bb4ea8934afb829269f4b1391115f34e"
+    },
+    {
+      "path": "docs/DESIGN.md",
+      "size": 267485,
+      "sha256": "274c758b210f39e415d26af38e12b9be14b2fc9955f3aa4a34b6c8d6c0625f47",
+      "git_blob": "6003173c7830dfd3c8c68cb45efcad0242ec3819"
+    },
+    {
+      "path": "docs/DOMAIN_MAP.md",
+      "size": 44710,
+      "sha256": "112494970a08ac22c89a0dbe1407c0e56fef950fea86bc0a37e6c15b6596e52e",
+      "git_blob": "d9738ece41cc03ce70acde45dd4d2fe56cf2f6e2"
+    },
+    {
+      "path": "docs/PERSISTENCE.md",
+      "size": 286132,
+      "sha256": "4ed2067f52d5c8ec8d6685429cba82c55920de33e73c7d071d91a9479e34b625",
+      "git_blob": "b799ab32661f6beee9e51d31c0eb9942aa492b0c"
+    },
+    {
+      "path": "docs/architecture/01-high-level-architecture.md",
+      "size": 116949,
+      "sha256": "610d0fb323bbd2d1f7a3a14a6d0de950508128753e3d652f5175ce766766fe98",
+      "git_blob": "b5f3c7649bd9c3813c1cd45c42cabfd7b74dfa56"
+    },
+    {
+      "path": "docs/architecture/03-web-ui-pages-and-buttons.md",
+      "size": 61998,
+      "sha256": "e6275e38fa201d4f6b31c28e1ae6f526040c62c918979e4d295af6c211c8d84a",
+      "git_blob": "b06016b3711693e946e40836274a03b6bb3f00fd"
+    },
+    {
+      "path": "docs/architecture/04-server-api-endpoints.md",
+      "size": 23915,
+      "sha256": "c72cd37f636914c160b2d885a33f3f520529a84b6426dfda2029ad730a5c4540",
+      "git_blob": "ed081e2e3fd35fae556f740ade36346668140592"
+    },
+    {
+      "path": "docs/architecture/06-agent-core.md",
+      "size": 206177,
+      "sha256": "c82799c92d9636968bbec5b9d38d0b72a088e23ddefd3a2ccaabfbbff1405ab3",
+      "git_blob": "b9ee2a710f609c2520d953a987b97c27106f175f"
+    },
+    {
+      "path": "docs/architecture/07-configuration.md",
+      "size": 33211,
+      "sha256": "f7ba22dbe68641163659627bc74cb8c85e18cf532e89bf2f9591a111a5fc40a6",
+      "git_blob": "c85b11137b2f7fc62c7056b1b3432e599d1d3c44"
+    },
+    {
+      "path": "docs/architecture/09-shutdown-and-process-cleanup.md",
+      "size": 14186,
+      "sha256": "fc636fa079498b9ca59082e2f3c6d12d400be0bbe8a8948fc49302c872e5a3e4",
+      "git_blob": "f1ba63e6f9b38177482b0e483120c33361ed2ebf"
+    },
+    {
+      "path": "docs/inventories/DATA_LAYOUT_INVENTORY.md",
+      "size": 6522,
+      "sha256": "4213dd8d95df3a9d71530bf9c71c789b4351a8689716856aba1ea56a76d5bc07",
+      "git_blob": "bed62b9297a1aad3b0d86056923089b8795a2156"
+    },
+    {
+      "path": "docs/inventories/UI_CONTROL_TEXT_INVENTORY.md",
+      "size": 23985,
+      "sha256": "154f5744ed94ce44362adfc6308fcf344485c4cd5b6c21831893991598b029ce",
+      "git_blob": "2dcd259ba64aaf53443d3493cd34c9d24eb12d16"
+    },
+    {
+      "path": "ouroboros/capability_evidence.py",
+      "size": 69816,
+      "sha256": "60e2aedd4a91f92e940956b5dcafa42d4eac79c1adb206ead71e9029e7a88c0c",
+      "git_blob": "4c1e294744eacb5b37e56f09e016119f9af0bcd2"
+    },
+    {
+      "path": "ouroboros/claudexor_observations.py",
+      "size": 15436,
+      "sha256": "ab87c5a1a669c38b8507a5056257fbcb9a2c1d50f0dc5b9227cf0c378d6b116e",
+      "git_blob": "56e9f810221a5ad0d345911f96077076ff875791"
+    },
+    {
+      "path": "ouroboros/configured_subagents.py",
+      "size": 38176,
+      "sha256": "ebc4ff3a1c35236f0299c9eb8dd22c6b2e8d53f2e72261b4bd52c020ffb24ed4",
+      "git_blob": "18fd9396244106d96cf85f4362bc47a00b3d8b74"
+    },
+    {
+      "path": "ouroboros/context_fit.py",
+      "size": 74169,
+      "sha256": "1bfd2669651354b8281ea15b0a637ac21e6711790df174099a4eee765a0504bd",
+      "git_blob": "ed139dd3fac7e2fffd29b738c0d9ff48b7bf88f6"
+    },
+    {
+      "path": "ouroboros/deep_self_review.py",
+      "size": 51814,
+      "sha256": "690d2c49c1a33ca07276a3067bbbce9f95136d863ccce9e3b7af122fcf07721a",
+      "git_blob": "e1e65fda604e1af7e73817559c4982b0709e1272"
+    },
+    {
+      "path": "ouroboros/delegate_accepted.py",
+      "size": 16802,
+      "sha256": "c34ed964050be5d1b33af5ff8b8f705bd0af37482097bbafe34fd8f6082c8418",
+      "git_blob": "32a3d15de1eed9fbdb01d350131b5032c7d8757c"
+    },
+    {
+      "path": "ouroboros/delegate_capture_attempt.py",
+      "size": 5284,
+      "sha256": "3a0b463de8bc643f3553ee7886db040e4732d539de7bfcc5891b31bccc9866d8",
+      "git_blob": "ce588dd65b5bf5ebbe5f68be3cc6c68dbd7318a0"
+    },
+    {
+      "path": "ouroboros/delegate_continuation.py",
+      "size": 46983,
+      "sha256": "92031429c37f1ed77e531bd29aeedcdb44c6e7109b2acd5e49b1f3877eb27e32",
+      "git_blob": "bf34bac82ac87e94fe2638638b1d19dd3b001c13"
+    },
+    {
+      "path": "ouroboros/delegate_custody.py",
+      "size": 84809,
+      "sha256": "3665e71844bec5664aadf5c44f663d20e8be420bc00ae8110baecf817dca014f",
+      "git_blob": "be09b8aade5bc2ebcb44e6f3a4b95fda52503b92"
+    },
+    {
+      "path": "ouroboros/delegate_custody_current.py",
+      "size": 47324,
+      "sha256": "5706d5d45b33d165836121b801187000fcf6cbc448fd1f1ea7bfde93f9dd46f4",
+      "git_blob": "2b367d4d80d6636ff7dc5647bab701f6c04da94a"
+    },
+    {
+      "path": "ouroboros/delegate_custody_reconcile.py",
+      "size": 51220,
+      "sha256": "fd9de5e7eaed10fbb44da45d1e26aa9bbd2e6037da6c4e2cbd0cdb9e589a8af8",
+      "git_blob": "ccac9d36f8ee9a02bc5b52cedf13434c4dbf1153"
+    },
+    {
+      "path": "ouroboros/delegate_documents.py",
+      "size": 56149,
+      "sha256": "401060825dc7076f1327edaec3e5f1d61d867e69317c5fde2ab1da83243adf04",
+      "git_blob": "fd714205e301b29035c922ec16267ba90df50dfd"
+    },
+    {
+      "path": "ouroboros/delegate_pending.py",
+      "size": 13979,
+      "sha256": "6452b2f3019a7819bc36b87365135725d27bd6278698df766b000678a3440d43",
+      "git_blob": "359f69c04324fa0d19ef25d4526582b05187b7f4"
+    },
+    {
+      "path": "ouroboros/delegate_readonly_inputs.py",
+      "size": 31882,
+      "sha256": "78d6607f15c2bd85ce0698249c397186aca9786d329cc03b0166d71a9f1dd08b",
+      "git_blob": "1a205801404e349958a3e6898dd605b950fb2053"
+    },
+    {
+      "path": "ouroboros/delegate_recovery.py",
+      "size": 68364,
+      "sha256": "d9addb7d11c250581d6f139b0e6cc4d2fc1ebc0036208639348634ebc38f71e4",
+      "git_blob": "3654ed3df907bb2814ebab5489fb6429aa89ca56"
+    },
+    {
+      "path": "ouroboros/delegate_registration_policy.py",
+      "size": 17135,
+      "sha256": "b5243a60c461e213c00547c91b428a1ee8f19234aabdb835590c57da01363d24",
+      "git_blob": "944b7b53b05a5defdc3460ef173edcb002824b06"
+    },
+    {
+      "path": "ouroboros/deployment_policy.py",
+      "size": 47456,
+      "sha256": "da70410724eae7bb81a3e7c8c755c442a8cef9ba0150f91eac972ca1d5ae7d46",
+      "git_blob": "c6e0600fe48d153d55a04559754ba53e537b2b6e"
+    },
+    {
+      "path": "ouroboros/domains.toml",
+      "size": 61041,
+      "sha256": "b8033bd915883daf18618e74573560e521e131a696ea5e7a377af3cafad5a320",
+      "git_blob": "8af71904006d255f9635c6509f4e9d9e8e27639a"
+    },
+    {
+      "path": "ouroboros/execution_domain.py",
+      "size": 46387,
+      "sha256": "54cadc895baa2c7f5162d3a8405d81df2da2b9fbfcdd09e1ec15abbd58122765",
+      "git_blob": "b0c7d4bf37d267c0562fcfd649038423ba9d3d5d"
+    },
+    {
+      "path": "ouroboros/gateway/contracts.py",
+      "size": 68204,
+      "sha256": "2dda8bb10b90cb6fbfccceb5f4c87fbd201c640f31187671b21626fef0afc6d8",
+      "git_blob": "460d6e986419bd131064dec0c9a3c1ea33b2f2c2"
+    },
+    {
+      "path": "ouroboros/gateway/endpoint_index.py",
+      "size": 49836,
+      "sha256": "d2f76bcb98e56a7a8c00fabadee567233358525fb3d9bb0755c6813857c774ab",
+      "git_blob": "33d6fff00b19d3eb98632845b364b5842a7d48bd"
+    },
+    {
+      "path": "ouroboros/gateway/engine_connections.py",
+      "size": 6571,
+      "sha256": "e44c7c9b82243ba3f9c5c5481a5b2061f46321d6205cd19489813d6289f9d8db",
+      "git_blob": "d92ec2ac1c72e3d6c1505a3af6886770daa5e600"
+    },
+    {
+      "path": "ouroboros/gateway/management_contracts.py",
+      "size": 55655,
+      "sha256": "083dd3d67da7de64c7b874450b7cae485c2113e41d8ed1ad6ae34fee5ee90023",
+      "git_blob": "23254d21405ba369449f1df0b2827b054c4cc11b"
+    },
+    {
+      "path": "ouroboros/gateway/owner_effort.py",
+      "size": 11228,
+      "sha256": "1e4cf66e88f9f99d3fc81a7fe39fd469bfee49d3d7d92a403632b2e943a1da26",
+      "git_blob": "46de8f8240805161dee865daa3b052535228ddb9"
+    },
+    {
+      "path": "ouroboros/gateway/owner_settings.py",
+      "size": 42007,
+      "sha256": "eb74b01a55bf3c068bb19513a5f6a2bfe77c66a3132bebc6ec15da17f56c5ede",
+      "git_blob": "8f7b5231123459a09d02e46878a570b92f41440b"
+    },
+    {
+      "path": "ouroboros/gateway/router.py",
+      "size": 19939,
+      "sha256": "721e3ad8c3813abb7bc0358856a16f85d0f41fe8e2e2f0dee6d1c463c486d9bd",
+      "git_blob": "26ff0f75b0da55f6de9d477791722c07ebc09071"
+    },
+    {
+      "path": "ouroboros/gateway/settings.py",
+      "size": 77540,
+      "sha256": "22a865be4a04c61ecf9f9447f0a52c8f3f2dc3cad21a81304fab476211bfd4a9",
+      "git_blob": "3b18bfb950695cafdf11954b53953b2386c6558b"
+    },
+    {
+      "path": "ouroboros/gateway/state.py",
+      "size": 66892,
+      "sha256": "3b254db6e62253b551a12929e213e1cb7eddc0a6c11da5a16b4d86ff7a8110df",
+      "git_blob": "9ebb2bd8962433909e601fb3567f04bd1c9079d5"
+    },
+    {
+      "path": "ouroboros/gateway/state_publication.py",
+      "size": 25988,
+      "sha256": "62f689594a46563e2077408546a4700ad00a5017b9ae45b5b4bec218ed4337c4",
+      "git_blob": "6fc029d7d2c8d4a6fa431545c35bd6a2fbefcf26"
+    },
+    {
+      "path": "ouroboros/gateway/work_contracts.py",
+      "size": 7688,
+      "sha256": "6230eb26c421d836a05f14dbb9797a1ebb4c704a30c3e5dba34473b315d5d3b9",
+      "git_blob": "07f4213d1658f4f9f77587777f11edfd3c8c68b1"
+    },
+    {
+      "path": "ouroboros/llm_capability_policy.py",
+      "size": 16540,
+      "sha256": "be3ef09a34c98567d8f86ece9a809bd9b7180553abf778e22bf5443a89fd20a4",
+      "git_blob": "468e3b34627f98037ca051e9f3106f5bff50a399"
+    },
+    {
+      "path": "ouroboros/llm_claudexor.py",
+      "size": 75158,
+      "sha256": "0e7962fc345fa71be64af18a4e1398c05b2bfcf9f5d51f5fd39009919c1f3771",
+      "git_blob": "50b7e574ba879e9cbadc8cadc2824305b596eebe"
+    },
+    {
+      "path": "ouroboros/llm_probe.py",
+      "size": 16427,
+      "sha256": "12fe77fe0b7c9afb16cfc787d71a8972094c575d503ef88566323fabbd893d85",
+      "git_blob": "de5c2016b460ae6a503fb7da8c9726f522d9cc60"
+    },
+    {
+      "path": "ouroboros/llm_routing.py",
+      "size": 28307,
+      "sha256": "118c79fc8a7891fba81fe1846fef975fba43689074071df9463c28b82f23b0d2",
+      "git_blob": "b2811bda7b4638b1306cd0a99b478f9a0be2de9c"
+    },
+    {
+      "path": "ouroboros/llm_substitution.py",
+      "size": 30839,
+      "sha256": "752571c093643b67614f8b83a6563d6d8b1d830890dc514c0251ffcd33c42418",
+      "git_blob": "d86b1b7e9046e6405e216f5f4c809cf5dacace64"
+    },
+    {
+      "path": "ouroboros/loop_model_call.py",
+      "size": 98099,
+      "sha256": "af4e0dc0775cfe0bc1cd163ed9e81cc45f958ec16a6032ec11e738562b808f5f",
+      "git_blob": "1e5cab57b91130343e11a2f56f9c71095b90ae18"
+    },
+    {
+      "path": "ouroboros/loop_round_limits.py",
+      "size": 80572,
+      "sha256": "10c209f07d8f4d3e01fa4d319a36bf09926d2dee3e29b63485b0a510df2b896d",
+      "git_blob": "49aa0e2096275ebcd5b915eccaea49e980ede110"
+    },
+    {
+      "path": "ouroboros/model_slots.py",
+      "size": 26007,
+      "sha256": "3e3030611b05c3c7cf378369f6fc42607c9f726f0bacb886cc15860e15950ab3",
+      "git_blob": "affac601c5f57b3de5f293be139ad196f0d1e0fa"
+    },
+    {
+      "path": "ouroboros/model_wait.py",
+      "size": 75489,
+      "sha256": "638d6cd311e66a397a9eda1fd767aa507266683f4e1d6aa0106c502aed5abb33",
+      "git_blob": "821878dc82f81f9c67435134ad027122cecc8dd9"
+    },
+    {
+      "path": "ouroboros/owner_model.py",
+      "size": 15492,
+      "sha256": "2b83c9005a35d15780551ad95d0e3c8f25019c1084dac7e9aaaff51300124d18",
+      "git_blob": "27c7d3b7b0e4c9a0c6e3faf4a8d42690199e7938"
+    },
+    {
+      "path": "ouroboros/primary_route_observation.py",
+      "size": 36807,
+      "sha256": "274762d7b6ba9819709872cf3e67572b126c55710e3f5befc50beb19ba718764",
+      "git_blob": "bdee13b94f52bf254f3a13ada249484ccedc930b"
+    },
+    {
+      "path": "ouroboros/provider_models.py",
+      "size": 47402,
+      "sha256": "054580721dfb11644ee1ad5bdbb817ee09fcdfdcfa33b8dc9473b01f3d3d4279",
+      "git_blob": "11473d2111745ab544f229bfa5f8e96ee9ae4ef6"
+    },
+    {
+      "path": "ouroboros/remote_engines.py",
+      "size": 60838,
+      "sha256": "fa969099f8373358712a4f76ce472e03a5078e0ac32e397f21e0527c181f181c",
+      "git_blob": "028db67224cdd6fdb11d0742a8c95915d36c579a"
+    },
+    {
+      "path": "ouroboros/remote_placement.py",
+      "size": 17892,
+      "sha256": "3de31f7e9bd2a2644e68a055c83b6621145bcecfed09903a76586d58aad53438",
+      "git_blob": "6caf67b132d32b9fc39a4477b32ca31c40f967c3"
+    },
+    {
+      "path": "ouroboros/remote_stops.py",
+      "size": 30355,
+      "sha256": "a435444de697273ba5407b2ee432cfa5878d94fcec53f81fd0aaf5e3ec2ecc0c",
+      "git_blob": "3706512042e9b3a0fc0c222160ca9cfc9fb6c96f"
+    },
+    {
+      "path": "ouroboros/remote_workspace.py",
+      "size": 66801,
+      "sha256": "832abfb47aaecbb231104ad1f2dfa29aedd00b6c59ffbe82fa51faf3de804b4d",
+      "git_blob": "5e801d714035ccf9e43c6fe8f0e020808d461421"
+    },
+    {
+      "path": "ouroboros/response_limits.py",
+      "size": 19279,
+      "sha256": "d4873dc225c7ad1a731081ba9f13bbf833a2427884c6648eca8aaca6efd8880c",
+      "git_blob": "921a6364569dbadcb4add4ae6ab9f2ac33e898cd"
+    },
+    {
+      "path": "ouroboros/review_checking.py",
+      "size": 59563,
+      "sha256": "fd3fb7027ce1a29febec98f225eecc20168b727f85c759793459dd3aa031104a",
+      "git_blob": "fc4dbb2bda8d16979b1c88a0c57d298af34fb5dc"
+    },
+    {
+      "path": "ouroboros/review_checking_prune.py",
+      "size": 38931,
+      "sha256": "4b802c87e01c07235ca8fe02dd6b3f3e54b025c96d9c0e997545f1c1cd07c4ae",
+      "git_blob": "be40c3fda0f5f5d57884fa4c567aa58c76f626ba"
+    },
+    {
+      "path": "ouroboros/review_custody.py",
+      "size": 79300,
+      "sha256": "609d004f62c4bed3654c650a7e0aa11bc131c0f6cb7b6620267a0b45b21595b3",
+      "git_blob": "419512650047781cb5a6a37ee5d7fb068ad3b9a6"
+    },
+    {
+      "path": "ouroboros/review_dispatch.py",
+      "size": 11890,
+      "sha256": "b62e7d726bdf101a44ae85cb49de70c6b294e365851ff35d2b4ca94c33058b68",
+      "git_blob": "92e9882650d4cc22cc80bf562ee1e78815fcd59a"
+    },
+    {
+      "path": "ouroboros/review_execution.py",
+      "size": 92193,
+      "sha256": "544e74d2d33db2372742265fdf972b484c46f4e1950fac7e70ecf1138d7d9834",
+      "git_blob": "ab4bc6b4f8ee02359aa46541bd70b2ff2520248d"
+    },
+    {
+      "path": "ouroboros/review_records.py",
+      "size": 25690,
+      "sha256": "3940b2cecb9cadb818bff3214df589b95e90df597325e94236220507c008f1bf",
+      "git_blob": "e5d61225c1444fc71cdb956450718a202e452eb8"
+    },
+    {
+      "path": "ouroboros/review_session_custody.py",
+      "size": 26297,
+      "sha256": "e46015eaf6a551726473fc37393b17c544c7bdab1dbb2940150f73916b3f5361",
+      "git_blob": "6c22f1cb13dfbcbd65b2ad83ccada5b964b5d799"
+    },
+    {
+      "path": "ouroboros/reviewer_slot_config.py",
+      "size": 48810,
+      "sha256": "ff2f1ced8f94795ffb3340ba3de494605cf57acf9fbdf1d5dc3eff11df499585",
+      "git_blob": "b77e45424cbcfd4d34540dcf805bb0f824adef64"
+    },
+    {
+      "path": "ouroboros/reviewer_window.py",
+      "size": 17673,
+      "sha256": "b415bfc7aee2c27da1b9d5f1f4f1a197930ff23145d4c9ff896614d561cde72b",
+      "git_blob": "fe052069413d2f550e99fbda21a96319e7a491c4"
+    },
+    {
+      "path": "ouroboros/route_choice.py",
+      "size": 28731,
+      "sha256": "ecb12c42a4c73d4c8084cb59ddbf3964f84f47da3326559c8d89cc5c1c1321e8",
+      "git_blob": "21698b5a9a9932b39131422941c8e8843149f856"
+    },
+    {
+      "path": "ouroboros/route_spec.py",
+      "size": 9616,
+      "sha256": "b28cd11cc3a0976718b3fda365bf88eca2075a8026b6fb202303265885b871e5",
+      "git_blob": "9599b6d13f9cde3c49d27375efad315c4c3bff68"
+    },
+    {
+      "path": "ouroboros/runtime_limits.py",
+      "size": 24868,
+      "sha256": "547b95afc64c1a7319193597cbcafb47af48a144b3b98498cb050b72b022bd37",
+      "git_blob": "501fe96fc2167da54c2869f8997f9fe3858c6f59"
+    },
+    {
+      "path": "ouroboros/server_control.py",
+      "size": 28465,
+      "sha256": "6355ac53815408f164bb7086e0bfc640435b97e8ad9fef49635d5adcdea43600",
+      "git_blob": "2725ab2bb98ab71c0507c8d5115af8eed7ef4167"
+    },
+    {
+      "path": "ouroboros/server_maintenance.py",
+      "size": 83867,
+      "sha256": "67ba2c9eefb65d6cb691f8b63137f91c552eda706f329850ca57d4fe400bc285",
+      "git_blob": "508a185c45404f8d6461ea97f5cf911c3533cdae"
+    },
+    {
+      "path": "ouroboros/settings_defaults.py",
+      "size": 37292,
+      "sha256": "c7c1604be42623ba29804f2f988e8cdea9e7c32e6fd6bdbfccf1996695a2fba1",
+      "git_blob": "a660e29632467ebee9a90d24682d2b7177a6ecbe"
+    },
+    {
+      "path": "ouroboros/size_ratchet_manifest.py",
+      "size": 47634,
+      "sha256": "73070d1f7d2321cbd354d13721c3e2a1c2b28c8a45db0575f6a92f96b267d024",
+      "git_blob": "cfe4dfc0154fee0a7d29da51abb8c924ddb349e2"
+    },
+    {
+      "path": "ouroboros/skill_catalogue.py",
+      "size": 17976,
+      "sha256": "e36463a5b3a98b0ac28236f5f352ea05898dc5eeadb53be61bd3b09b3d696e49",
+      "git_blob": "7ae1373a14e9b209da3e4bbb143f010e13f789e4"
+    },
+    {
+      "path": "ouroboros/subagent_history.py",
+      "size": 22717,
+      "sha256": "69c55fe9cf466dfb71001cf162236f9f033e563a8c71f57ffb16d92dedfa3f11",
+      "git_blob": "eb37f07454c604e246e8a1f5b96f7a9576c7c53f"
+    },
+    {
+      "path": "ouroboros/subagent_runtime.py",
+      "size": 77804,
+      "sha256": "4f43de4493e2d46b9ec57c3966cb3baffa7ebe748874b3cb16abd0cff63e9531",
+      "git_blob": "5aa384732936ddde4bbf15948a3d971d25d49cd3"
+    },
+    {
+      "path": "ouroboros/subagent_work_order.py",
+      "size": 40276,
+      "sha256": "3aaf43c847fb7bd6b6edb3db18bb81882f28754626848d15f516561268264bd7",
+      "git_blob": "40834054e73d0ff610e42981aac8043847adf9b6"
+    },
+    {
+      "path": "ouroboros/subagents.py",
+      "size": 58816,
+      "sha256": "82f70a1ca315f09b1982c08847eb816d76eb369d4d8a7af7aeff022de72356fa",
+      "git_blob": "4cc6845bf68d502a63fcace3117738a8478f9e63"
+    },
+    {
+      "path": "ouroboros/supervisor_route.py",
+      "size": 11094,
+      "sha256": "ec54c248bc148380a7243a1e3da4d698fadcc077c895fbfff128ecc21aeb8f14",
+      "git_blob": "6e7335a780abff1fb452cc1c4a82203c1b68de50"
+    },
+    {
+      "path": "ouroboros/terminal_cost_reconciliation.py",
+      "size": 28599,
+      "sha256": "dbce89f6d2e1a557b6821d0cd539b3e71f094bbfae17e500d11d8d7fe808e21d",
+      "git_blob": "e767351cb6e4ad3cfd2a4d0067255e4b93b6e940"
+    },
+    {
+      "path": "ouroboros/tools/control_scheduling.py",
+      "size": 63909,
+      "sha256": "5a84f9cbd8378be8f84976b5245c3386f9ba4571be4b58a2a577cc556d8d97e6",
+      "git_blob": "a4161814ab8293a665b24a9bf24e5aa7c7e3eb2e"
+    },
+    {
+      "path": "ouroboros/tools/delegate.py",
+      "size": 99146,
+      "sha256": "b8f90462da1ddf1226e8efbd90925a85d028251e6492f4fb4c71e0c95745f7f0",
+      "git_blob": "6e79719e62fe75322731ca0cf08227d06b9620cb"
+    },
+    {
+      "path": "ouroboros/tools/delegate_integration.py",
+      "size": 87684,
+      "sha256": "5dcefbf517a2c3d48bf230ef457dcb2aa70aa0918d3a5cc7d896d88d9dbdc691",
+      "git_blob": "da691753c41738188a5da3d81d1bd39f7c4c62fc"
+    },
+    {
+      "path": "ouroboros/tools/imagegen.py",
+      "size": 48761,
+      "sha256": "781bb39d4aebbed579dd6c7f8fb4d3479ecc58b980dc7b72525e2ddf8b1de7d6",
+      "git_blob": "cf985c2c6e8ca0ab629ddc76f2cff60c5888e419"
+    },
+    {
+      "path": "ouroboros/tools/review_admission.py",
+      "size": 59691,
+      "sha256": "f99e1bc12c17bf574f57d8d4c5e867d47ab817d5fa1250b0fe46f3925e2c4ee1",
+      "git_blob": "58056bdad98c08c233cc5cd88706178476ff2e12"
+    },
+    {
+      "path": "ouroboros/tools/review_multi_model.py",
+      "size": 24721,
+      "sha256": "b8224cad2c423995b2cdcbe7f332953922fc5fc2f019ee6bc118d4f898218a00",
+      "git_blob": "a99b33ac9ae4734c1b72379e8a8ea18168d9f3d8"
+    },
+    {
+      "path": "supervisor/queue_snapshot.py",
+      "size": 73098,
+      "sha256": "3cf3554ada89416475efc97a509e75bd101850da367d5e6207bca19733a2c51c",
+      "git_blob": "c2d522f3cf6335062a739115ab39421ee7344277"
+    },
+    {
+      "path": "supervisor/worker_chat_lane.py",
+      "size": 63443,
+      "sha256": "512d98f84f39f7645a51f96009c3cffe930a3a64563ae790daae4240056e851a",
+      "git_blob": "9749af7f5511492f2a2008bb7c5fb717d43a643f"
+    },
+    {
+      "path": "tests/_remote_engine_stand.py",
+      "size": 17103,
+      "sha256": "5b2d7a8dd75586b1de60dfe1402a64888168e5e5b0d5934b8b7c902dace95570",
+      "git_blob": "13dca6bceaa9cd5a1644a3cffdffe4a731cff0ed"
+    },
+    {
+      "path": "tests/test_benchmark_provenance_v6810.py",
+      "size": 35981,
+      "sha256": "1eb8e53d64b1bab23c0cadaffe1b7b7ed3c68c93d4dd6a457bed87875c0106ec",
+      "git_blob": "711461171c6700093b4e619700d75d8a50023e84"
+    },
+    {
+      "path": "tests/test_chat_model_choice.py",
+      "size": 33249,
+      "sha256": "9b943cbc021665b3932de18a423b1a3b668dac3f5996221bb1373016ffd2fb30",
+      "git_blob": "550e126c1302344a62155b854deb433775a02f2d"
+    },
+    {
+      "path": "tests/test_claudexor_admission_wait.py",
+      "size": 22929,
+      "sha256": "1fda150b26c0a38d89ae249ada4206282d43ef1528dceeb94dca740ff3ab5a69",
+      "git_blob": "fead0ce378613dafcad3597c69afbf9e7154cf18"
+    },
+    {
+      "path": "tests/test_client_contract_bindings.py",
+      "size": 41194,
+      "sha256": "1f6c02591f385ae0121d401524cfc62d349260903c972c3aec4a198a53accf27",
+      "git_blob": "7a658b2931e2a7b56dfad1cab63852aebb36ccea"
+    },
+    {
+      "path": "tests/test_config_extraction.py",
+      "size": 20905,
+      "sha256": "c3e98aeb8f0015ab787178f46b6689326d760b63eb9aa8737c66fb71ef16d39e",
+      "git_blob": "f75d24182e5f6972d81dbdb85a3e961360ad046a"
+    },
+    {
+      "path": "tests/test_delegate_sweep_refresh.py",
+      "size": 34580,
+      "sha256": "4a94d649b335f6ce2696ffd3b10d1df1c1ceec3d09bdef6ed6206023c24588e8",
+      "git_blob": "8f41e6d5c8724cca3e1097d523dd13bc77623b53"
+    },
+    {
+      "path": "tests/test_delegated_in_place.py",
+      "size": 24816,
+      "sha256": "c425225e60a84867e5ea48a4d6f35ed33633c96d75e6b492903dfd4a9e1c2362",
+      "git_blob": "5c2ee444b817ef97ac1d585748990c9fed9d2bc2"
+    },
+    {
+      "path": "tests/test_delegated_reconciliation.py",
+      "size": 47297,
+      "sha256": "37d7fe88f281f365b2e48795d6f7ed15e17e0838ffe5869510967530c49c8e96",
+      "git_blob": "3dafd81420a7a0571f69a08c0a61587e3094bdee"
+    },
+    {
+      "path": "tests/test_module_handle_extraction.py",
+      "size": 36395,
+      "sha256": "ea4681f1724daddd9ce8fbbb71b496945e0136db86ea7cb1c98c790fde722f76",
+      "git_blob": "8960bf14309967fc0147d0a84c8ae2acbe61252a"
+    },
+    {
+      "path": "tests/test_persistence_inventory.py",
+      "size": 87838,
+      "sha256": "f3ac4d3dba4cc24a82abeb3b0f3e21baccca4e5cb6f9368f7786662da3ba89b1",
+      "git_blob": "0daa1a1c39ed88226b64c95ea8d56a0404ab00bf"
+    },
+    {
+      "path": "tests/test_process_custody.py",
+      "size": 47257,
+      "sha256": "d7650488b255d5e99c1733c8fb9552c1505eb64ebc0cdc89b6812933a1a043cf",
+      "git_blob": "953561405a84884d46cfd41cb12c6c62e6532f07"
+    },
+    {
+      "path": "tests/test_provider_connections.py",
+      "size": 17884,
+      "sha256": "a2bedb8cde7fe557f9c698d9a79e53fb7b33dbc5dadde4462517f3d2ed9bedd9",
+      "git_blob": "601f7a44170a9a576c82cf61cba26ad3d2fd379d"
+    },
+    {
+      "path": "tests/test_remote_engines.py",
+      "size": 152940,
+      "sha256": "298b4c57cb776d8acee4875507a9c87270401bb02172ef652c2dacb358f9cefd",
+      "git_blob": "6c70ebf0a1c68b2be6b1784c03a008fb304cc946"
+    },
+    {
+      "path": "tests/test_remote_engines_browser.py",
+      "size": 20913,
+      "sha256": "826639330a9a38859e73d4de0d2025859b8f439eaca2a642aa8aa207a2dcbae3",
+      "git_blob": "77a8d4ee7b913583782aa6306ba754b481b4c97d"
+    },
+    {
+      "path": "tests/test_remote_panic_gate.py",
+      "size": 8511,
+      "sha256": "1bd70fd2298895147c7a5633675194df399d0f752800bdc85aa27a87ae411a6e",
+      "git_blob": "d2f1fd6a9bdf929a32afce32afc4621005bd6072"
+    },
+    {
+      "path": "tests/test_remote_review_seats.py",
+      "size": 24405,
+      "sha256": "c9ad4e7eca459f86edda1d8cdc69acb131a70128e6fb014d56b7d89aeb9fd909",
+      "git_blob": "738c55872117c97d489713563266005efcc95951"
+    },
+    {
+      "path": "tests/test_remote_switch.py",
+      "size": 34207,
+      "sha256": "06959846437a4df4a8e4e94e7ea8c8def9659ad78747ed722ea22a33e96149be",
+      "git_blob": "2f6e84a34a04cb814ac4de5eebd843024113159a"
+    },
+    {
+      "path": "tests/test_remote_switch_browser.py",
+      "size": 24136,
+      "sha256": "aecaf2ba8b17b00f5f5196004cf4846b3c1dcb53a0153972fff114f59a8537d0",
+      "git_blob": "3a502640a77527471f784e90f8e0dd3d3f9236ca"
+    },
+    {
+      "path": "tests/test_server_control_panic_daemon.py",
+      "size": 13579,
+      "sha256": "b5648613947bd2df9d4e4d9f0f671e599d0454d14fd5550ea939357af32b9537",
+      "git_blob": "ab207fb1d2ec3ec02133239105e7285a53e6110a"
+    },
+    {
+      "path": "tests/test_state_publication.py",
+      "size": 23136,
+      "sha256": "625f11133c39cf0eac2db700536a690f880d4f2de672450b9df8e5c4bda669ba",
+      "git_blob": "28cd202fa3e0ec7786cb28760a5279d341586924"
+    },
+    {
+      "path": "web/app.js",
+      "size": 89040,
+      "sha256": "a4fa0a1095d73bcb529426a85b13094fbea75954005685fd1c14d935e5549738",
+      "git_blob": "c68c39db5598a2148aa4f3a6fa09e3c814c5229c"
+    },
+    {
+      "path": "web/modules/api_client.js",
+      "size": 45594,
+      "sha256": "a5ccf315e8b8f3eb8620d75fb943a507e4f0daeabf9a5c92a11deaf0db39ecb6",
+      "git_blob": "282123ab3c9927ae0013b512f6680b02e397999b"
+    },
+    {
+      "path": "web/modules/api_types.js",
+      "size": 87894,
+      "sha256": "ac2c9177a5d3886760537d50f184e1f79e50054464ca1a3bb54795c2b4ae799d",
+      "git_blob": "6dad2f8d1d144917af78fdea19a8ab4e729c039f"
+    },
+    {
+      "path": "web/modules/chat.js",
+      "size": 196555,
+      "sha256": "0af2521234f42fd93d4e59250b0d9af3f7f3e2be0072a6ee46460ae17fe292ee",
+      "git_blob": "d61917fddbe4f2df1872b7b34c034b505e4673ca"
+    },
+    {
+      "path": "web/modules/chat_header.js",
+      "size": 5222,
+      "sha256": "01b56f726d2224e9e68243b6d8c71c88b0c1b1ea366f5b5df5b0c46aa6810bbb",
+      "git_blob": "e5b0b12899531dfe8bde76e09b7829f556301fad"
+    },
+    {
+      "path": "web/modules/chat_model_routes.js",
+      "size": 16448,
+      "sha256": "68a937268c4f07d90bea8e86b21ec60fe11d89c5cc358f590cc304f9f3cb62fa",
+      "git_blob": "ab05f2f12664f0217a15e609d119fffc85f6bfb5"
+    },
+    {
+      "path": "web/modules/composer_model.js",
+      "size": 34649,
+      "sha256": "a83b785e4ed7b81647eaa88b2d34985d0bed7d1910dbcf77cd5f86228ca67c5b",
+      "git_blob": "9007ba27e7945e4066f4f906c93515da355ae453"
+    },
+    {
+      "path": "web/modules/model_roles.js",
+      "size": 82198,
+      "sha256": "8115eca220a66b835753e9f8426ba838746493f8a10c6ccdbc0c97e403f6e80c",
+      "git_blob": "12aa82d926c2b1ac46258eb0d83ac76c1357cee2"
+    },
+    {
+      "path": "web/modules/model_source_mark.js",
+      "size": 3069,
+      "sha256": "159f0d43e3b9203780115c11b8967cf37f9234aa3d526c5625a72647e593dc15",
+      "git_blob": "e9df8d58a98acbea3cd48447d8f7f49e2bdb8dd2"
+    },
+    {
+      "path": "web/modules/onboarding_wizard.js",
+      "size": 90773,
+      "sha256": "b63daab61b38ae71def944f635b1aa10b80ce3692a7956734281143140c77257",
+      "git_blob": "ae7670450dce255c83386a63603057adc9b1cc3a"
+    },
+    {
+      "path": "web/modules/page_icons.js",
+      "size": 9264,
+      "sha256": "75d81e04f3f39d22d5bf2a0a75a52344fc2eb4ea8698f91d1fbf29363321b48d",
+      "git_blob": "b58167f334dc324918b029f72c8614cd022353eb"
+    },
+    {
+      "path": "web/modules/remote_switch.js",
+      "size": 18012,
+      "sha256": "2783e9781ff8f767fad40cf612aad4279a76c1d0de4c10edb205deef0a53e3f2",
+      "git_blob": "779d3fdfa6af392f07f183d8c7ef152165263aa4"
+    },
+    {
+      "path": "web/modules/room_work.js",
+      "size": 71211,
+      "sha256": "f8d40d1a134a542178106e49ae7b717a686feb3f59740491ce92df235d51a926",
+      "git_blob": "10cf3f3da6121acb156dc2b46480924e881feb7a"
+    },
+    {
+      "path": "web/modules/route_editor_primitives.js",
+      "size": 56972,
+      "sha256": "223757437da13d889cccd05f727d973fb4278f47ea7f2796c270da2e8ebbb51e",
+      "git_blob": "eefd3d26ce30fd39477630050d8f3ce21d7cfe3d"
+    },
+    {
+      "path": "web/modules/settings_accounts.js",
+      "size": 33355,
+      "sha256": "4d108900a2d11af5fc087ea729dee3fb2451f0a48b239a369a52ea7cca303518",
+      "git_blob": "216e00991e22cf9e8068aa34709f5d2faeb7d20b"
+    },
+    {
+      "path": "web/modules/settings_connections.js",
+      "size": 52318,
+      "sha256": "5721342f895e3f7ac6071048d01e372db0cdd3f837bde4bb307c11b7e744713f",
+      "git_blob": "be1ca9a32d9fbbe4a3dbfa66a7b2c31a0219fbac"
+    },
+    {
+      "path": "web/modules/settings_engine_connections.js",
+      "size": 37319,
+      "sha256": "c21277b7b82d2d70b30eef1c1e67cc5cc2549a3d3dd8a383d8cd2ef5d3844f16",
+      "git_blob": "ba8e98dbdf9c87e0645e555c6b58c9592d64874a"
+    },
+    {
+      "path": "web/modules/settings_home.js",
+      "size": 35968,
+      "sha256": "b6b18e41310c13e8e8b1ee3e7eb99f54a3b4857984a4ea439d411790bd57a1ed",
+      "git_blob": "36df66bb77a1b60e2a92612634d5d29eae59ea09"
+    },
+    {
+      "path": "web/modules/settings_rows.js",
+      "size": 52216,
+      "sha256": "7a6afb0f4f8c0e89215309155832607f5ad2d4d99bc483772dd7d1b3bde57217",
+      "git_blob": "dc2f4eaa1c6dff4e5559a0b7956ca5c7f8a8f3ba"
+    },
+    {
+      "path": "web/modules/subagent_status_primitives.js",
+      "size": 23009,
+      "sha256": "51b69761805e83b86cf840ce6db35c3b6882294923fa20525202715951f881cb",
+      "git_blob": "7e7a688b524af4249a23593f95434ef6df91a356"
+    },
+    {
+      "path": "web/modules/subagents_settings.js",
+      "size": 104296,
+      "sha256": "b4ae4924ff53e4b29e45be3c42b43e146c0f47f4acae3aa67dc6b336d2b85b09",
+      "git_blob": "1ca97a483abac57c1a28aa6bd91fbeffe45cf19b"
+    },
+    {
+      "path": "web/modules/work_types.js",
+      "size": 8746,
+      "sha256": "78aa6971f8a3f26c6a2a9822e577d337f18ced95ef47efb4b95b0c5953b5f737",
+      "git_blob": "5285c1276dae2b287ccfc3cd4e5d8668f0ddb7a2"
+    },
+    {
+      "path": "web/style.css",
+      "size": 466394,
+      "sha256": "7fe7ecb1666f247e74abe58c6dacd08d1bcb4aa706fbe1d40223193af0dc3b77",
+      "git_blob": "b2a2bdb0c2fa7c047553c8873ecd3bba8dddb663"
+    },
+    {
+      "path": "web/tests/fixtures/subagent_handle_parity.json",
+      "size": 15725,
+      "sha256": "e618c86138046248e459e27524e769e0d845bc70792fae782f11ae68df690588",
+      "git_blob": "8d9b716174f2df55c7659c79a6aab9fbe9d3b38e"
+    },
+    {
+      "path": "web/tests/onboarding_wizard_render.test.js",
+      "size": 68132,
+      "sha256": "5aaa230af41b4f59ca2261d5d78c539c57d9b5f5e397247d4098f217bfa99bf3",
+      "git_blob": "2f48617fc54c8c87ae232b0c7f13da1627d8afb9"
+    },
+    {
+      "path": "web/tests/page_header.test.js",
+      "size": 18362,
+      "sha256": "c02432ab6606e6e6aff70aac4d7df8702504a549fbe384cf817c3f6673a838d9",
+      "git_blob": "2c7c72e440ca4a0e0354924d7930f971ea82b93d"
+    },
+    {
+      "path": "web/tests/remote_engines_ui.test.js",
+      "size": 41845,
+      "sha256": "45102c72837e1ff8ba4da129fc49e9d79a1575b41f1471752a3ae570f48e7a84",
+      "git_blob": "0111f1919b5850b4fe65e520f13c09b5b1dcd83f"
+    },
+    {
+      "path": "web/tests/remote_switch.test.js",
+      "size": 21484,
+      "sha256": "9581dfd7cc50efa3c2ccec9d54dd205c525ed08e2152c1b098b63a2e32cb46b8",
+      "git_blob": "2259b9f2c11d51da37d89e78c3e6724ed294ae3c"
+    },
+    {
+      "path": "web/tests/settings_accounts.test.js",
+      "size": 44290,
+      "sha256": "09a5c177ec8210bc7560f1459abe7d6266b48696a9b315b0f7ffc4d4e67bf003",
+      "git_blob": "ab48859f26d7f03b1a109043217183d65ef785d6"
+    }
+  ]
+}
